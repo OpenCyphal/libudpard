@@ -23,11 +23,11 @@
 
 #pragma once
 
-#include "ethard.h"
+#include "udpard.h"
 
-/// Modified for use with Libethard: use the same assertion check macro if provided.
-#ifdef ETHARD_ASSERT
-#    define CAVL_ASSERT ETHARD_ASSERT
+/// Modified for use with Libudpard: use the same assertion check macro if provided.
+#ifdef UDPARD_ASSERT
+#    define CAVL_ASSERT UDPARD_ASSERT
 #else
 // Intentional violation of MISRA: inclusion not at the top of the file to eliminate unnecessary dependency on assert.h.
 #    include <assert.h>  // NOSONAR
@@ -42,8 +42,8 @@ extern "C" {
 
 // ----------------------------------------         PUBLIC API SECTION         ----------------------------------------
 
-/// Modified for use with Libethard: expose the Cavl structure via public API as EthardTreeNode.
-typedef EthardTreeNode Cavl;
+/// Modified for use with Libudpard: expose the Cavl structure via public API as UdpardTreeNode.
+typedef UdpardTreeNode Cavl;
 
 /// Returns POSITIVE if the search target is GREATER than the provided node, negative if smaller, zero on match (found).
 /// Values other than {-1, 0, +1} are not recommended to avoid overflow during the narrowing conversion of the result.

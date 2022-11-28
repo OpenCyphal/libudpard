@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "../libethard/ethard.h"
+#include "../libudpard/udpard.h"
 #include "exposed.hpp"
 #include <algorithm>
 #include <atomic>
@@ -16,11 +16,11 @@
 #include <unordered_map>
 #include <vector>
 
-#if !(defined(ETHARD_VERSION_MAJOR) && defined(ETHARD_VERSION_MINOR))
+#if !(defined(UDPARD_VERSION_MAJOR) && defined(UDPARD_VERSION_MINOR))
 #    error "Library version not defined"
 #endif
 
-#if !(defined(ETHARD_CYPHAL_SPECIFICATION_VERSION_MAJOR) && defined(ETHARD_CYPHAL_SPECIFICATION_VERSION_MINOR))
+#if !(defined(UDPARD_CYPHAL_SPECIFICATION_VERSION_MAJOR) && defined(UDPARD_CYPHAL_SPECIFICATION_VERSION_MINOR))
 #    error "Cyphal specification version not defined"
 #endif
 
@@ -28,14 +28,14 @@ namespace helpers
 {
 namespace dummy_allocator
 {
-inline auto allocate(EthardInstance* const ins, const std::size_t amount) -> void*
+inline auto allocate(UdpardInstance* const ins, const std::size_t amount) -> void*
 {
     (void) ins;
     (void) amount;
     return nullptr;
 }
 
-inline void free(EthardInstance* const ins, void* const pointer)
+inline void free(UdpardInstance* const ins, void* const pointer)
 {
     (void) ins;
     (void) pointer;
@@ -50,7 +50,7 @@ inline auto getRandomNatural(const T upper_open) -> T
 }
 
 template <typename F>
-static inline void traverse(const EthardTreeNode* const root, const F& fun)  // NOLINT recursion
+static inline void traverse(const UdpardTreeNode* const root, const F& fun)  // NOLINT recursion
 {
     if (root != nullptr)
     {
@@ -168,7 +168,7 @@ private:
 class Instance
 {
 public:
-    Instance() { ethard_.user_reference = this; }
+    Instance() { udpard_.user_reference = this; }
 
     virtual ~Instance() = default;
 
@@ -177,14 +177,14 @@ public:
     auto operator=(const Instance&) -> Instance&  = delete;
     auto operator=(const Instance&&) -> Instance& = delete;
 
-    [[nodiscard]] auto rxAccept(const EthardMicrosecond      timestamp_usec,
-                                EthardFrame&                 frame,
+    [[nodiscard]] auto rxAccept(const UdpardMicrosecond      timestamp_usec,
+                                UdpardFrame&                 frame,
                                 const uint8_t                redundant_transport_index,
-                                EthardSessionSpecifier&      specifier,
-                                EthardRxTransfer&            out_transfer,
-                                EthardRxSubscription** const out_subscription)
+                                UdpardSessionSpecifier&      specifier,
+                                UdpardRxTransfer&            out_transfer,
+                                UdpardRxSubscription** const out_subscription)
     {
-        return ethardRxAccept(&ethard_,
+        return udpardRxAccept(&udpard_,
                               timestamp_usec,
                               &frame,
                               redundant_transport_index,
@@ -193,65 +193,65 @@ public:
                               out_subscription);
     }
 
-    [[nodiscard]] auto rxSubscribe(const EthardTransferKind transfer_kind,
-                                   const EthardPortID       port_id,
+    [[nodiscard]] auto rxSubscribe(const UdpardTransferKind transfer_kind,
+                                   const UdpardPortID       port_id,
                                    const std::size_t        extent,
-                                   const EthardMicrosecond  transfer_id_timeout_usec,
-                                   EthardRxSubscription&    out_subscription)
+                                   const UdpardMicrosecond  transfer_id_timeout_usec,
+                                   UdpardRxSubscription&    out_subscription)
     {
-        return ethardRxSubscribe(&ethard_, transfer_kind, port_id, extent, transfer_id_timeout_usec, &out_subscription);
+        return udpardRxSubscribe(&udpard_, transfer_kind, port_id, extent, transfer_id_timeout_usec, &out_subscription);
     }
 
-    [[nodiscard]] auto rxUnsubscribe(const EthardTransferKind transfer_kind, const EthardPortID port_id)
+    [[nodiscard]] auto rxUnsubscribe(const UdpardTransferKind transfer_kind, const UdpardPortID port_id)
     {
-        return ethardRxUnsubscribe(&ethard_, transfer_kind, port_id);
+        return udpardRxUnsubscribe(&udpard_, transfer_kind, port_id);
     }
 
     /// The items are sorted by port-ID.
-    [[nodiscard]] auto getSubs(const EthardTransferKind tk) const -> std::vector<const EthardRxSubscription*>
+    [[nodiscard]] auto getSubs(const UdpardTransferKind tk) const -> std::vector<const UdpardRxSubscription*>
     {
-        std::vector<const EthardRxSubscription*> out;
-        traverse(ethard_.rx_subscriptions[tk], [&](const EthardTreeNode* const item) {
-            out.push_back(reinterpret_cast<const EthardRxSubscription*>(item));
+        std::vector<const UdpardRxSubscription*> out;
+        traverse(udpard_.rx_subscriptions[tk], [&](const UdpardTreeNode* const item) {
+            out.push_back(reinterpret_cast<const UdpardRxSubscription*>(item));
         });
         return out;
     }
-    [[nodiscard]] auto getMessageSubs() const { return getSubs(EthardTransferKindMessage); }
-    [[nodiscard]] auto getResponseSubs() const { return getSubs(EthardTransferKindResponse); }
-    [[nodiscard]] auto getRequestSubs() const { return getSubs(EthardTransferKindRequest); }
+    [[nodiscard]] auto getMessageSubs() const { return getSubs(UdpardTransferKindMessage); }
+    [[nodiscard]] auto getResponseSubs() const { return getSubs(UdpardTransferKindResponse); }
+    [[nodiscard]] auto getRequestSubs() const { return getSubs(UdpardTransferKindRequest); }
 
-    [[nodiscard]] auto getNodeID() const { return ethard_.node_id; }
-    void               setNodeID(const std::uint8_t x) { ethard_.node_id = x; }
+    [[nodiscard]] auto getNodeID() const { return udpard_.node_id; }
+    void               setNodeID(const std::uint8_t x) { udpard_.node_id = x; }
 
-    [[nodiscard]] auto getNodeAddr() const { return ethard_.local_ip_addr; }
-    void               setNodeAddr(const std::uint32_t x) { ethard_.local_ip_addr = x; }
+    [[nodiscard]] auto getNodeAddr() const { return udpard_.local_ip_addr; }
+    void               setNodeAddr(const std::uint32_t x) { udpard_.local_ip_addr = x; }
 
     [[nodiscard]] auto getAllocator() -> TestAllocator& { return allocator_; }
 
-    [[nodiscard]] auto getInstance() -> EthardInstance& { return ethard_; }
-    [[nodiscard]] auto getInstance() const -> const EthardInstance& { return ethard_; }
+    [[nodiscard]] auto getInstance() -> UdpardInstance& { return udpard_; }
+    [[nodiscard]] auto getInstance() const -> const UdpardInstance& { return udpard_; }
 
 private:
-    static auto trampolineAllocate(EthardInstance* const ins, const std::size_t amount) -> void*
+    static auto trampolineAllocate(UdpardInstance* const ins, const std::size_t amount) -> void*
     {
         auto* p = reinterpret_cast<Instance*>(ins->user_reference);
         return p->allocator_.allocate(amount);
     }
 
-    static void trampolineDeallocate(EthardInstance* const ins, void* const pointer)
+    static void trampolineDeallocate(UdpardInstance* const ins, void* const pointer)
     {
         auto* p = reinterpret_cast<Instance*>(ins->user_reference);
         p->allocator_.deallocate(pointer);
     }
 
-    EthardInstance ethard_ = ethardInit(&Instance::trampolineAllocate, &Instance::trampolineDeallocate);
+    UdpardInstance udpard_ = udpardInit(&Instance::trampolineAllocate, &Instance::trampolineDeallocate);
     TestAllocator  allocator_;
 };
 
 class TxQueue
 {
 public:
-    explicit TxQueue(const std::size_t capacity, const std::size_t mtu_bytes) : que_(ethardTxInit(capacity, mtu_bytes))
+    explicit TxQueue(const std::size_t capacity, const std::size_t mtu_bytes) : que_(udpardTxInit(capacity, mtu_bytes))
     {
         enforce(que_.user_reference == nullptr, "Incorrect initialization of the user reference in TxQueue");
         enforce(que_.mtu_bytes == mtu_bytes, "Incorrect MTU");
@@ -268,15 +268,15 @@ public:
     [[nodiscard]] auto getMTU() const { return que_.mtu_bytes; }
     void               setMTU(const std::size_t x) { que_.mtu_bytes = x; }
 
-    [[nodiscard]] auto push(EthardInstance* const         ins,
-                            const EthardMicrosecond       transmission_deadline_usec,
-                            const EthardTransferMetadata& metadata,
+    [[nodiscard]] auto push(UdpardInstance* const         ins,
+                            const UdpardMicrosecond       transmission_deadline_usec,
+                            const UdpardTransferMetadata& metadata,
                             const size_t                  payload_size,
                             const void* const             payload)
     {
         checkInvariants();
         const auto size_before = que_.size;
-        const auto ret         = ethardTxPush(&que_, ins, transmission_deadline_usec, &metadata, payload_size, payload);
+        const auto ret         = udpardTxPush(&que_, ins, transmission_deadline_usec, &metadata, payload_size, payload);
         enforce((ret < 0) || ((size_before + static_cast<std::size_t>(ret)) == que_.size),
                 "Unexpected size change after push");
         checkInvariants();
@@ -287,18 +287,18 @@ public:
     {
         checkInvariants();
         const auto        before = que_.size;
-        const auto* const ret    = ethardTxPeek(&que_);
+        const auto* const ret    = udpardTxPeek(&que_);
         enforce(((ret == nullptr) ? (before == 0) : (before > 0)) && (que_.size == before), "Bad peek");
         checkInvariants();
         return static_cast<const exposed::TxItem*>(ret);  // NOLINT static downcast
     }
 
-    [[nodiscard]] auto pop(const EthardTxQueueItem* const which) -> exposed::TxItem*
+    [[nodiscard]] auto pop(const UdpardTxQueueItem* const which) -> exposed::TxItem*
     {
         checkInvariants();
         const auto size_before  = que_.size;
         const auto* volatile pk = peek();
-        auto* out               = ethardTxPop(&que_, which);
+        auto* out               = udpardTxPop(&que_, which);
         enforce(pk == out, "Peek/pop pointer mismatch");
         if (out == nullptr)
         {
@@ -326,15 +326,15 @@ public:
     [[nodiscard]] auto linearize() const -> std::vector<const exposed::TxItem*>
     {
         std::vector<const exposed::TxItem*> out;
-        traverse(que_.root, [&](const EthardTreeNode* const item) {
+        traverse(que_.root, [&](const UdpardTreeNode* const item) {
             out.push_back(reinterpret_cast<const exposed::TxItem*>(item));
         });
         enforce(out.size() == getSize(), "Internal error");
         return out;
     }
 
-    [[nodiscard]] auto getInstance() -> EthardTxQueue& { return que_; }
-    [[nodiscard]] auto getInstance() const -> const EthardTxQueue& { return que_; }
+    [[nodiscard]] auto getInstance() -> UdpardTxQueue& { return que_; }
+    [[nodiscard]] auto getInstance() const -> const UdpardTxQueue& { return que_; }
 
 private:
     static void enforce(const bool expect_true, const std::string& message)
@@ -351,7 +351,7 @@ private:
         enforce(que_.size == getSize(), "Size miscalculation");
     }
 
-    EthardTxQueue que_;
+    UdpardTxQueue que_;
 };
 
 }  // namespace helpers
