@@ -1,14 +1,14 @@
 # This software is distributed under the terms of the MIT License.
 # Copyright (c) 2016 OpenCyphal.
 # Author: Pavel Kirienko <pavel@opencyphal.org>
-# Contributors: https://github.com/OpenCyphal/libethard/contributors.
+# Contributors: https://github.com/OpenCyphal/libudpard/contributors.
 
 cmake_minimum_required(VERSION 3.12)
-project(ethard_tests C CXX)
+project(udpard_tests C CXX)
 enable_testing()
 
 set(CTEST_OUTPUT_ON_FAILURE ON)
-set(library_dir "${CMAKE_SOURCE_DIR}/../libethard")
+set(library_dir "${CMAKE_SOURCE_DIR}/../libudpard")
 
 # Use -DNO_STATIC_ANALYSIS=1 to suppress static analysis.
 # If not suppressed, the tools used here shall be available, otherwise the build will fail.
@@ -45,7 +45,7 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Woverloaded-virtual -Wnon-virtual-dtor 
 include_directories(catch ${library_dir})
 add_definitions(-DCATCH_CONFIG_FAST_COMPILE=1 -DCATCH_CONFIG_ENABLE_ALL_STRINGMAKERS=1)
 
-set(common_sources catch/main.cpp ${library_dir}/ethard.c)
+set(common_sources catch/main.cpp ${library_dir}/udpard.c)
 
 function(gen_test name files compile_definitions compile_flags link_flags c_standard)
     add_executable(${name} ${common_sources} ${files})
@@ -80,7 +80,7 @@ endfunction()
 # Disable missing declaration warning to allow exposure of private definitions.
 gen_test_matrix(test_private
         "test_private_crc.cpp;test_private_rx.cpp;test_private_tx.cpp;test_private_cavl.cpp;"
-        "-DETHARD_CONFIG_HEADER=\"${CMAKE_CURRENT_SOURCE_DIR}/ethard_config_private.h\""
+        "-DUDPARD_CONFIG_HEADER=\"${CMAKE_CURRENT_SOURCE_DIR}/udpard_config_private.h\""
         "-Wno-missing-declarations")
 
 gen_test_matrix(test_public

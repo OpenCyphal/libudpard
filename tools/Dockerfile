@@ -1,4 +1,4 @@
-# Development environment for libethard, based on Ubuntu 20.04 Focal.
+# Development environment for libudpard, based on Ubuntu 20.04 Focal.
 #
 # This software is distributed under the terms of the MIT License.
 # Copyright (c) 2021-2022 OpenCyphal Development Team.
@@ -28,4 +28,4 @@ COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
-WORKDIR "/home/user/libethard"
+WORKDIR "/home/user/libudpard"

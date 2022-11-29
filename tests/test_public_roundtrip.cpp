@@ -22,27 +22,27 @@ TEST_CASE("RoundtripSimple")
 
     struct TxState
     {
-        EthardTransferKind   transfer_kind{};
-        EthardPriority       priority{};
-        EthardPortID         port_id{};
+        UdpardTransferKind   transfer_kind{};
+        UdpardPriority       priority{};
+        UdpardPortID         port_id{};
         std::size_t          extent{};
-        EthardTransferID     transfer_id{};
-        EthardRxSubscription subscription{};
+        UdpardTransferID     transfer_id{};
+        UdpardRxSubscription subscription{};
     };
 
     helpers::Instance ins_rx;
     ins_rx.setNodeID(111);
 
     const auto get_random_priority = []() {
-        return static_cast<EthardPriority>(getRandomNatural(ETHARD_PRIORITY_MAX + 1U));
+        return static_cast<UdpardPriority>(getRandomNatural(UDPARD_PRIORITY_MAX + 1U));
     };
     std::array<TxState, 6> tx_states{
-        TxState{EthardTransferKindMessage, get_random_priority(), 8191, 1000},
-        TxState{EthardTransferKindMessage, get_random_priority(), 511, 0},
-        TxState{EthardTransferKindMessage, get_random_priority(), 0, 13},
-        TxState{EthardTransferKindRequest, get_random_priority(), 511, 900},
-        TxState{EthardTransferKindRequest, get_random_priority(), 0, 0},
-        TxState{EthardTransferKindResponse, get_random_priority(), 0, 1},
+        TxState{UdpardTransferKindMessage, get_random_priority(), 8191, 1000},
+        TxState{UdpardTransferKindMessage, get_random_priority(), 511, 0},
+        TxState{UdpardTransferKindMessage, get_random_priority(), 0, 13},
+        TxState{UdpardTransferKindRequest, get_random_priority(), 511, 900},
+        TxState{UdpardTransferKindRequest, get_random_priority(), 0, 0},
+        TxState{UdpardTransferKindResponse, get_random_priority(), 0, 1},
     };
     std::size_t rx_worst_case_memory_consumption = 0;
     for (auto& s : tx_states)
@@ -50,7 +50,7 @@ TEST_CASE("RoundtripSimple")
         REQUIRE(1 == ins_rx.rxSubscribe(s.transfer_kind,
                                         s.port_id,
                                         s.extent,
-                                        ETHARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC,
+                                        UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC,
                                         s.subscription));
         // The true worst case is 128 times larger, but there is only one transmitting node.
         rx_worst_case_memory_consumption += sizeof(exposed::RxSession) + s.extent;
@@ -58,15 +58,15 @@ TEST_CASE("RoundtripSimple")
     ins_rx.getAllocator().setAllocationCeiling(rx_worst_case_memory_consumption);  // This is guaranteed to be enough.
 
     helpers::Instance ins_tx;
-    helpers::TxQueue  que_tx(1024UL * 1024U * 1024U, ETHARD_MTU_MAX);
+    helpers::TxQueue  que_tx(1024UL * 1024U * 1024U, UDPARD_MTU_MAX);
     ins_tx.setNodeID(99);
     ins_tx.setNodeAddr(0xc0a80000);
     ins_tx.getAllocator().setAllocationCeiling(1024UL * 1024U * 1024U);
 
-    using Pending = std::tuple<EthardTransferMetadata, std::size_t, void*>;
-    std::unordered_map<EthardMicrosecond, Pending> pending_transfers;
+    using Pending = std::tuple<UdpardTransferMetadata, std::size_t, void*>;
+    std::unordered_map<UdpardMicrosecond, Pending> pending_transfers;
 
-    std::atomic<EthardMicrosecond> transfer_counter      = 0;
+    std::atomic<UdpardMicrosecond> transfer_counter      = 0;
     std::atomic<std::uint64_t>     frames_in_flight      = 0;
     std::uint64_t                  peak_frames_in_flight = 0;
 
@@ -86,21 +86,21 @@ TEST_CASE("RoundtripSimple")
             std::generate_n(payload, payload_size, [&]() { return static_cast<std::uint8_t>(getRandomNatural(256U)); });
 
             // Generate the transfer.
-            const EthardMicrosecond timestamp_usec = transfer_counter++;
-            EthardTransferMetadata  tran{};
+            const UdpardMicrosecond timestamp_usec = transfer_counter++;
+            UdpardTransferMetadata  tran{};
             tran.priority      = st.priority;
             tran.transfer_kind = st.transfer_kind;
             tran.port_id       = st.port_id;
             tran.remote_node_id =
-                (tran.transfer_kind == EthardTransferKindMessage) ? ETHARD_NODE_ID_UNSET : ins_rx.getNodeID();
-            tran.transfer_id = (st.transfer_id++) & ETHARD_TRANSFER_ID_MAX;
+                (tran.transfer_kind == UdpardTransferKindMessage) ? UDPARD_NODE_ID_UNSET : ins_rx.getNodeID();
+            tran.transfer_id = (st.transfer_id++) & UDPARD_TRANSFER_ID_MAX;
 
             /* We will use a random MTU when multiframe transfers are implemented.
             // Use a random MTU.
             que_tx.setMTU(static_cast<std::uint8_t>(getRandomNatural(256U)));
             */
             // Set the MTU to the max for testing
-            que_tx.setMTU(ETHARD_MTU_MAX);
+            que_tx.setMTU(UDPARD_MTU_MAX);
 
             // Push the transfer.
             bool sleep = false;
@@ -119,7 +119,7 @@ TEST_CASE("RoundtripSimple")
                 }
                 else
                 {
-                    if (result != -ETHARD_ERROR_OUT_OF_MEMORY)
+                    if (result != -UDPARD_ERROR_OUT_OF_MEMORY)
                     {
                         // Can't use REQUIRE because it is not thread-safe.
                         throw std::logic_error("Unexpected result: " + std::to_string(result));
@@ -147,7 +147,7 @@ TEST_CASE("RoundtripSimple")
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
         while (true)
         {
-            EthardTxQueueItem* ti = nullptr;
+            UdpardTxQueueItem* ti = nullptr;
             {
                 std::lock_guard locker(lock);
                 ti = que_tx.pop(que_tx.peek());
@@ -172,8 +172,8 @@ TEST_CASE("RoundtripSimple")
                          << '\n';
                 */
 
-                EthardRxTransfer      transfer{};
-                EthardRxSubscription* subscription = nullptr;
+                UdpardRxTransfer      transfer{};
+                UdpardRxSubscription* subscription = nullptr;
                 std::int8_t           result =
                     ins_rx.rxAccept(ti->tx_deadline_usec, ti->frame, 0, ti->specifier, transfer, &subscription);
                 REQUIRE(0 == ins_rx.rxAccept(ti->tx_deadline_usec,

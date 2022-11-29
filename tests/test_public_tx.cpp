@@ -12,7 +12,7 @@ TEST_CASE("TxBasic0")
     using exposed::TxItem;
 
     helpers::Instance ins;
-    helpers::TxQueue  que(200, ETHARD_MTU_UDP_IPV4);
+    helpers::TxQueue  que(200, UDPARD_MTU_UDP_IPV4);
 
     auto& alloc = ins.getAllocator();
 
@@ -22,22 +22,22 @@ TEST_CASE("TxBasic0")
         payload.at(i) = static_cast<std::uint8_t>(i & 0xFFU);
     }
 
-    REQUIRE(ETHARD_NODE_ID_UNSET == ins.getNodeID());
+    REQUIRE(UDPARD_NODE_ID_UNSET == ins.getNodeID());
     ins.setNodeAddr(0xc0a80000);
     REQUIRE(0xc0a80000 == ins.getNodeAddr());
-    REQUIRE(ETHARD_MTU_UDP_IPV4 == que.getMTU());
+    REQUIRE(UDPARD_MTU_UDP_IPV4 == que.getMTU());
     REQUIRE(0 == que.getSize());
     REQUIRE(0 == alloc.getNumAllocatedFragments());
 
     alloc.setAllocationCeiling(4000);
 
-    EthardTransferMetadata meta{};
+    UdpardTransferMetadata meta{};
 
     // Single-frame with padding.
-    meta.priority       = EthardPriorityNominal;
-    meta.transfer_kind  = EthardTransferKindMessage;
+    meta.priority       = UdpardPriorityNominal;
+    meta.transfer_kind  = UdpardTransferKindMessage;
     meta.port_id        = 321;
-    meta.remote_node_id = ETHARD_NODE_ID_UNSET;
+    meta.remote_node_id = UDPARD_NODE_ID_UNSET;
     meta.transfer_id    = 21;
     REQUIRE(1 == que.push(&ins.getInstance(), 1'000'000'000'000ULL, meta, 8, payload.data()));
     REQUIRE(1 == que.getSize());
@@ -57,7 +57,7 @@ TEST_CASE("TxBasic0")
     REQUIRE(que.peek()->isStartOfTransfer());     // Tail byte at the end.
     REQUIRE(que.peek()->isEndOfTransfer());
 
-    meta.priority    = EthardPriorityLow;
+    meta.priority    = UdpardPriorityLow;
     meta.transfer_id = 22;
     ins.setNodeID(42);
     REQUIRE(1 == que.push(&ins.getInstance(), 1'000'000'000'100ULL, meta, 8, payload.data()));  // 8 bytes --> 2 frames
@@ -83,16 +83,16 @@ TEST_CASE("TxBasic0")
 
     // Single-frame, OOM.
     alloc.setAllocationCeiling(alloc.getTotalAllocatedAmount());  // Seal up the heap at this level.
-    meta.priority    = EthardPriorityLow;
+    meta.priority    = UdpardPriorityLow;
     meta.transfer_id = 23;
-    REQUIRE(-ETHARD_ERROR_OUT_OF_MEMORY == que.push(&ins.getInstance(), 1'000'000'000'200ULL, meta, 1, payload.data()));
+    REQUIRE(-UDPARD_ERROR_OUT_OF_MEMORY == que.push(&ins.getInstance(), 1'000'000'000'200ULL, meta, 1, payload.data()));
     REQUIRE(2 == que.getSize());
     REQUIRE(2 == alloc.getNumAllocatedFragments());
 
     alloc.setAllocationCeiling(alloc.getTotalAllocatedAmount() + sizeof(TxItem) + 10U);
-    meta.priority    = EthardPriorityHigh;
+    meta.priority    = UdpardPriorityHigh;
     meta.transfer_id = 24;
-    REQUIRE(-ETHARD_ERROR_OUT_OF_MEMORY ==
+    REQUIRE(-UDPARD_ERROR_OUT_OF_MEMORY ==
             que.push(&ins.getInstance(), 1'000'000'000'300ULL, meta, 100, payload.data()));
     REQUIRE(2 == que.getSize());
     REQUIRE(2 == alloc.getNumAllocatedFragments());
@@ -100,7 +100,7 @@ TEST_CASE("TxBasic0")
     REQUIRE(400 > alloc.getTotalAllocatedAmount());
 
     // Pop the queue.
-    const EthardTxQueueItem* ti = que.peek();
+    const UdpardTxQueueItem* ti = que.peek();
     REQUIRE(nullptr != ti);
     REQUIRE(ti->frame.payload_size == 32);
     REQUIRE(0 == std::memcmp(reinterpret_cast<const std::uint8_t*>(ti->frame.payload) + 24, payload.data(), 8));
@@ -152,24 +152,24 @@ TEST_CASE("TxBasic0")
     REQUIRE(nullptr == ti);
 
     // Invalid transfer.
-    meta.transfer_kind  = EthardTransferKindMessage;
+    meta.transfer_kind  = UdpardTransferKindMessage;
     meta.remote_node_id = 42;
     meta.transfer_id    = 123;
-    REQUIRE(-ETHARD_ERROR_INVALID_ARGUMENT ==
+    REQUIRE(-UDPARD_ERROR_INVALID_ARGUMENT ==
             que.push(&ins.getInstance(), 1'000'000'005'000ULL, meta, 8, payload.data()));
     ti = que.peek();
     REQUIRE(nullptr == ti);
     // Error handling.
-    REQUIRE(-ETHARD_ERROR_INVALID_ARGUMENT == ethardTxPush(nullptr, nullptr, 0, nullptr, 0, nullptr));
-    REQUIRE(-ETHARD_ERROR_INVALID_ARGUMENT == ethardTxPush(nullptr, nullptr, 0, &meta, 0, nullptr));
-    REQUIRE(-ETHARD_ERROR_INVALID_ARGUMENT == ethardTxPush(nullptr, &ins.getInstance(), 0, &meta, 0, nullptr));
-    REQUIRE(-ETHARD_ERROR_INVALID_ARGUMENT ==
-            ethardTxPush(&que.getInstance(), &ins.getInstance(), 0, nullptr, 0, nullptr));
-    REQUIRE(-ETHARD_ERROR_INVALID_ARGUMENT == que.push(&ins.getInstance(), 1'000'000'006'000ULL, meta, 1, nullptr));
+    REQUIRE(-UDPARD_ERROR_INVALID_ARGUMENT == udpardTxPush(nullptr, nullptr, 0, nullptr, 0, nullptr));
+    REQUIRE(-UDPARD_ERROR_INVALID_ARGUMENT == udpardTxPush(nullptr, nullptr, 0, &meta, 0, nullptr));
+    REQUIRE(-UDPARD_ERROR_INVALID_ARGUMENT == udpardTxPush(nullptr, &ins.getInstance(), 0, &meta, 0, nullptr));
+    REQUIRE(-UDPARD_ERROR_INVALID_ARGUMENT ==
+            udpardTxPush(&que.getInstance(), &ins.getInstance(), 0, nullptr, 0, nullptr));
+    REQUIRE(-UDPARD_ERROR_INVALID_ARGUMENT == que.push(&ins.getInstance(), 1'000'000'006'000ULL, meta, 1, nullptr));
 
-    REQUIRE(nullptr == ethardTxPeek(nullptr));
-    REQUIRE(nullptr == ethardTxPop(nullptr, nullptr));             // No effect.
-    REQUIRE(nullptr == ethardTxPop(&que.getInstance(), nullptr));  // No effect.
+    REQUIRE(nullptr == udpardTxPeek(nullptr));
+    REQUIRE(nullptr == udpardTxPop(nullptr, nullptr));             // No effect.
+    REQUIRE(nullptr == udpardTxPop(&que.getInstance(), nullptr));  // No effect.
 }
 
 TEST_CASE("TxBasic1")

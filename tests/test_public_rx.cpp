@@ -7,7 +7,7 @@
 #include "catch/catch.hpp"
 #include <cstring>
 
-#define ETHARD_SUBJECT_ID_PORT 16383U
+#define UDPARD_SUBJECT_ID_PORT 16383U
 
 // clang-tidy mistakenly suggests to avoid C arrays here, which is clearly an error
 template <typename P, std::size_t N>
@@ -22,29 +22,29 @@ TEST_CASE("RxBasic0")
     using exposed::RxSession;
 
     Instance               ins;
-    EthardRxTransfer       transfer{};
-    EthardSessionSpecifier specifier{};
-    EthardFrameHeader      header{};
-    EthardRxSubscription*  subscription = nullptr;
+    UdpardRxTransfer       transfer{};
+    UdpardSessionSpecifier specifier{};
+    UdpardFrameHeader      header{};
+    UdpardRxSubscription*  subscription = nullptr;
 
     const auto accept = [&](const std::uint8_t               redundant_transport_index,
-                            const EthardMicrosecond          timestamp_usec,
-                            EthardFrameHeader                frame_header,
-                            EthardSessionSpecifier           session_specifier,
+                            const UdpardMicrosecond          timestamp_usec,
+                            UdpardFrameHeader                frame_header,
+                            UdpardSessionSpecifier           session_specifier,
                             const std::vector<std::uint8_t>& payload) {
         auto header_ptr      = reinterpret_cast<std::uint8_t*>(&frame_header);
         auto payload_storage = std::vector<std::uint8_t>(header_ptr, header_ptr + sizeof(frame_header));
         static std::vector<std::uint8_t> payload_buffer;
         payload_buffer = payload;
         payload_storage.insert(payload_storage.end(), payload_buffer.begin(), payload_buffer.end());
-        EthardFrame frame{};
+        UdpardFrame frame{};
         frame.payload_size = std::size(payload) + sizeof(frame_header);
         frame.payload      = payload_storage.data();
         return ins
             .rxAccept(timestamp_usec, frame, redundant_transport_index, session_specifier, transfer, &subscription);
     };
 
-    ins.getAllocator().setAllocationCeiling(sizeof(RxSession) + sizeof(EthardFrameHeader) +
+    ins.getAllocator().setAllocationCeiling(sizeof(RxSession) + sizeof(UdpardFrameHeader) +
                                             16);  // A session and a 16-byte payload buffer.
 
     // No subscriptions by default.
@@ -62,16 +62,16 @@ TEST_CASE("RxBasic0")
     header.frame_index_eot                = (1U << 31U) + 1U;
     header.priority                       = 0b001;
     header.transfer_id                    = 1;
-    specifier.data_specifier              = ETHARD_SUBJECT_ID_PORT;
+    specifier.data_specifier              = UDPARD_SUBJECT_ID_PORT;
     specifier.destination_route_specifier = 0b11101111'0'0101000'000'0110011001100;
     specifier.source_route_specifier      = 0b11000000'10101000'00000000'00100111;
     REQUIRE(0 == accept(0, 100'000'000, header, specifier, {}));
     REQUIRE(subscription == nullptr);
 
     // Create a message subscription.
-    EthardRxSubscription sub_msg{};
-    REQUIRE(1 == ins.rxSubscribe(EthardTransferKindMessage, 0b0110011001100, 32, 2'000'000, sub_msg));  // New.
-    REQUIRE(0 == ins.rxSubscribe(EthardTransferKindMessage, 0b0110011001100, 16, 1'000'000, sub_msg));  // Replaced.
+    UdpardRxSubscription sub_msg{};
+    REQUIRE(1 == ins.rxSubscribe(UdpardTransferKindMessage, 0b0110011001100, 32, 2'000'000, sub_msg));  // New.
+    REQUIRE(0 == ins.rxSubscribe(UdpardTransferKindMessage, 0b0110011001100, 16, 1'000'000, sub_msg));  // Replaced.
     REQUIRE(ins.getMessageSubs().at(0) == &sub_msg);
     REQUIRE(ins.getMessageSubs().at(0)->port_id == 0b0110011001100);
     REQUIRE(ins.getMessageSubs().at(0)->extent == 16);
@@ -81,8 +81,8 @@ TEST_CASE("RxBasic0")
     REQUIRE(ins.getRequestSubs().empty());
 
     // Create a request subscription.
-    EthardRxSubscription sub_req{};
-    REQUIRE(1 == ins.rxSubscribe(EthardTransferKindRequest, 0b0000110011, 20, 3'000'000, sub_req));
+    UdpardRxSubscription sub_req{};
+    REQUIRE(1 == ins.rxSubscribe(UdpardTransferKindRequest, 0b0000110011, 20, 3'000'000, sub_req));
     REQUIRE(ins.getMessageSubs().at(0) == &sub_msg);
     REQUIRE(ins.getResponseSubs().empty());
     REQUIRE(ins.getRequestSubs().at(0) == &sub_req);
@@ -92,8 +92,8 @@ TEST_CASE("RxBasic0")
     REQUIRE(ensureAllNullptr(ins.getRequestSubs().at(0)->sessions));
 
     // Create a response subscription.
-    EthardRxSubscription sub_res{};
-    REQUIRE(1 == ins.rxSubscribe(EthardTransferKindResponse, 0b0000111100, 10, 100'000, sub_res));
+    UdpardRxSubscription sub_res{};
+    REQUIRE(1 == ins.rxSubscribe(UdpardTransferKindResponse, 0b0000111100, 10, 100'000, sub_res));
     REQUIRE(ins.getMessageSubs().at(0) == &sub_msg);
     REQUIRE(ins.getResponseSubs().at(0) == &sub_res);
     REQUIRE(ins.getResponseSubs().at(0)->port_id == 0b0000111100);
@@ -103,8 +103,8 @@ TEST_CASE("RxBasic0")
     REQUIRE(ins.getRequestSubs().at(0) == &sub_req);
 
     // Create a second response subscription. It will come before the one we added above due to lower port-ID.
-    EthardRxSubscription sub_res2{};
-    REQUIRE(1 == ins.rxSubscribe(EthardTransferKindResponse, 0b0000000000, 10, 1'000, sub_res2));
+    UdpardRxSubscription sub_res2{};
+    REQUIRE(1 == ins.rxSubscribe(UdpardTransferKindResponse, 0b0000000000, 10, 1'000, sub_res2));
     REQUIRE(ins.getMessageSubs().at(0) == &sub_msg);
     REQUIRE(ins.getResponseSubs().at(0) == &sub_res2);
     REQUIRE(ins.getResponseSubs().at(0)->port_id == 0b0000000000);
@@ -118,15 +118,15 @@ TEST_CASE("RxBasic0")
     header.frame_index_eot                = (1U << 31U) + 1U;
     header.priority                       = 0b001;
     header.transfer_id                    = 0;
-    specifier.data_specifier              = ETHARD_SUBJECT_ID_PORT;
+    specifier.data_specifier              = UDPARD_SUBJECT_ID_PORT;
     specifier.destination_route_specifier = 0b11101111'0'0101000'000'0110011001100;
     specifier.source_route_specifier      = 0b11000000'10101000'00000000'00100111;
     REQUIRE(1 == accept(0, 100'000'001, header, specifier, {}));
     REQUIRE(subscription != nullptr);
     REQUIRE(subscription->port_id == 0b0110011001100);
     REQUIRE(transfer.timestamp_usec == 100'000'001);
-    REQUIRE(transfer.metadata.priority == EthardPriorityImmediate);
-    REQUIRE(transfer.metadata.transfer_kind == EthardTransferKindMessage);
+    REQUIRE(transfer.metadata.priority == UdpardPriorityImmediate);
+    REQUIRE(transfer.metadata.transfer_kind == UdpardTransferKindMessage);
     REQUIRE(transfer.metadata.port_id == 0b0110011001100);
     REQUIRE(transfer.metadata.remote_node_id == 0b0100111);
     REQUIRE(transfer.metadata.transfer_id == 0);
@@ -176,8 +176,8 @@ TEST_CASE("RxBasic0")
     REQUIRE(subscription != nullptr);
     REQUIRE(subscription->port_id == 0b0000110011);
     REQUIRE(transfer.timestamp_usec == 100'000'002);
-    REQUIRE(transfer.metadata.priority == EthardPriorityHigh);
-    REQUIRE(transfer.metadata.transfer_kind == EthardTransferKindRequest);
+    REQUIRE(transfer.metadata.priority == UdpardPriorityHigh);
+    REQUIRE(transfer.metadata.transfer_kind == UdpardTransferKindRequest);
     REQUIRE(transfer.metadata.port_id == 0b0000110011);
     REQUIRE(transfer.metadata.remote_node_id == 0b0100101);
     REQUIRE(transfer.metadata.transfer_id == 4);
@@ -207,7 +207,7 @@ TEST_CASE("RxBasic0")
     specifier.data_specifier              = 16505;
     specifier.source_route_specifier      = 0b11000000'10101000'00000000'00011011;
     specifier.destination_route_specifier = 0b11000000'10101000'00000000'00011010;
-    REQUIRE(-ETHARD_ERROR_OUT_OF_MEMORY == accept(0, 100'000'003, header, specifier, {5}));
+    REQUIRE(-UDPARD_ERROR_OUT_OF_MEMORY == accept(0, 100'000'003, header, specifier, {5}));
     REQUIRE(subscription != nullptr);  // Subscription get assigned before error code
     REQUIRE(ins.getAllocator().getNumAllocatedFragments() == 4);
     REQUIRE(ins.getAllocator().getTotalAllocatedAmount() == (2 * sizeof(RxSession) + 16 + 20));
@@ -221,14 +221,14 @@ TEST_CASE("RxBasic0")
     specifier.data_specifier              = 16505;
     specifier.source_route_specifier      = 0b11000000'10101000'00000000'00011011;
     specifier.destination_route_specifier = 0b11000000'10101000'00000000'00011010;
-    REQUIRE(-ETHARD_ERROR_OUT_OF_MEMORY == accept(0, 100'000'003, header, specifier, {5}));
+    REQUIRE(-UDPARD_ERROR_OUT_OF_MEMORY == accept(0, 100'000'003, header, specifier, {5}));
     REQUIRE(subscription != nullptr);  // Subscription get assigned before error code
     REQUIRE(ins.getAllocator().getNumAllocatedFragments() == 5);
     REQUIRE(ins.getAllocator().getTotalAllocatedAmount() == (3 * sizeof(RxSession) + 16 + 20));
 
     // Destroy the message subscription and the buffer to free up memory.
-    REQUIRE(1 == ins.rxUnsubscribe(EthardTransferKindMessage, 0b0110011001100));
-    REQUIRE(0 == ins.rxUnsubscribe(EthardTransferKindMessage, 0b0110011001100));  // Repeat, nothing to do.
+    REQUIRE(1 == ins.rxUnsubscribe(UdpardTransferKindMessage, 0b0110011001100));
+    REQUIRE(0 == ins.rxUnsubscribe(UdpardTransferKindMessage, 0b0110011001100));  // Repeat, nothing to do.
     REQUIRE(ins.getAllocator().getNumAllocatedFragments() == 4);
     REQUIRE(ins.getAllocator().getTotalAllocatedAmount() == (2 * sizeof(RxSession) + 16 + 20));
     ins.getAllocator().deallocate(msg_payload);
@@ -247,8 +247,8 @@ TEST_CASE("RxBasic0")
     REQUIRE(subscription != nullptr);
     REQUIRE(subscription->port_id == 0b0000111100);
     REQUIRE(transfer.timestamp_usec == 100'000'003);
-    REQUIRE(transfer.metadata.priority == EthardPriorityNominal);
-    REQUIRE(transfer.metadata.transfer_kind == EthardTransferKindResponse);
+    REQUIRE(transfer.metadata.priority == UdpardPriorityNominal);
+    REQUIRE(transfer.metadata.transfer_kind == UdpardTransferKindResponse);
     REQUIRE(transfer.metadata.port_id == 0b0000111100);
     REQUIRE(transfer.metadata.remote_node_id == 0b0011011);
     REQUIRE(transfer.metadata.transfer_id == 5);
@@ -271,12 +271,12 @@ TEST_CASE("RxBasic0")
     */
 
     // Unsubscribe.
-    REQUIRE(1 == ins.rxUnsubscribe(EthardTransferKindRequest, 0b0000110011));
-    REQUIRE(0 == ins.rxUnsubscribe(EthardTransferKindRequest, 0b0000110011));
-    REQUIRE(1 == ins.rxUnsubscribe(EthardTransferKindResponse, 0b0000111100));
-    REQUIRE(0 == ins.rxUnsubscribe(EthardTransferKindResponse, 0b0000111100));
-    REQUIRE(1 == ins.rxUnsubscribe(EthardTransferKindResponse, 0b0000000000));
-    REQUIRE(0 == ins.rxUnsubscribe(EthardTransferKindResponse, 0b0000000000));
+    REQUIRE(1 == ins.rxUnsubscribe(UdpardTransferKindRequest, 0b0000110011));
+    REQUIRE(0 == ins.rxUnsubscribe(UdpardTransferKindRequest, 0b0000110011));
+    REQUIRE(1 == ins.rxUnsubscribe(UdpardTransferKindResponse, 0b0000111100));
+    REQUIRE(0 == ins.rxUnsubscribe(UdpardTransferKindResponse, 0b0000111100));
+    REQUIRE(1 == ins.rxUnsubscribe(UdpardTransferKindResponse, 0b0000000000));
+    REQUIRE(0 == ins.rxUnsubscribe(UdpardTransferKindResponse, 0b0000000000));
 }
 
 TEST_CASE("RxAnonymous")
@@ -284,22 +284,22 @@ TEST_CASE("RxAnonymous")
     using helpers::Instance;
     using exposed::RxSession;
     Instance               ins;
-    EthardRxTransfer       transfer{};
-    EthardSessionSpecifier specifier{};
-    EthardFrameHeader      header{};
-    EthardRxSubscription*  subscription = nullptr;
+    UdpardRxTransfer       transfer{};
+    UdpardSessionSpecifier specifier{};
+    UdpardFrameHeader      header{};
+    UdpardRxSubscription*  subscription = nullptr;
 
     const auto accept = [&](const std::uint8_t               redundant_transport_index,
-                            const EthardMicrosecond          timestamp_usec,
-                            EthardFrameHeader                frame_header,
-                            EthardSessionSpecifier           session_specifier,
+                            const UdpardMicrosecond          timestamp_usec,
+                            UdpardFrameHeader                frame_header,
+                            UdpardSessionSpecifier           session_specifier,
                             const std::vector<std::uint8_t>& payload) {
         auto header_ptr      = reinterpret_cast<std::uint8_t*>(&frame_header);
         auto payload_storage = std::vector<std::uint8_t>(header_ptr, header_ptr + sizeof(frame_header));
         static std::vector<std::uint8_t> payload_buffer;
         payload_buffer = payload;
         payload_storage.insert(payload_storage.end(), payload_buffer.begin(), payload_buffer.end());
-        EthardFrame frame{};
+        UdpardFrame frame{};
         frame.payload_size = std::size(payload) + sizeof(frame_header);
         frame.payload      = payload_storage.data();
         return ins
@@ -318,7 +318,7 @@ TEST_CASE("RxAnonymous")
     header.frame_index_eot                = (1U << 31U) + 1U;
     header.priority                       = 0b001;
     header.transfer_id                    = 1;
-    specifier.data_specifier              = ETHARD_SUBJECT_ID_PORT;
+    specifier.data_specifier              = UDPARD_SUBJECT_ID_PORT;
     specifier.destination_route_specifier = 0b11101111'0'0101000'000'0110011001100;
     specifier.source_route_specifier      = 0b11000000'10101000'00000000'00000000;
     // REQUIRE(0 == exposed::txMakeMessageSessionSpecifier(0b0110011001100, 0b0, 0xc0a80000, &specifier));
@@ -327,16 +327,16 @@ TEST_CASE("RxAnonymous")
 
     // Create a message subscription.
     void* const          my_user_reference = &ins;
-    EthardRxSubscription sub_msg{};
+    UdpardRxSubscription sub_msg{};
     sub_msg.user_reference = my_user_reference;
-    REQUIRE(1 == ins.rxSubscribe(EthardTransferKindMessage, 0b0110011001100, 16, 2'000'000, sub_msg));  // New.
+    REQUIRE(1 == ins.rxSubscribe(UdpardTransferKindMessage, 0b0110011001100, 16, 2'000'000, sub_msg));  // New.
 
     // Accepted anonymous message.
     subscription                          = nullptr;
     header.frame_index_eot                = (1U << 31U) + 1U;
     header.priority                       = 0b001;
     header.transfer_id                    = 0;
-    specifier.data_specifier              = ETHARD_SUBJECT_ID_PORT;
+    specifier.data_specifier              = UDPARD_SUBJECT_ID_PORT;
     specifier.destination_route_specifier = 0b11101111'0'0101000'000'0110011001100;
     specifier.source_route_specifier      = 0b11000000'10101000'00000000'00000000;
     REQUIRE(1 == accept(0,
@@ -348,10 +348,10 @@ TEST_CASE("RxAnonymous")
     REQUIRE(subscription->port_id == 0b0110011001100);
     REQUIRE(subscription->user_reference == my_user_reference);
     REQUIRE(transfer.timestamp_usec == 100'000'001);
-    REQUIRE(transfer.metadata.priority == EthardPriorityImmediate);
-    REQUIRE(transfer.metadata.transfer_kind == EthardTransferKindMessage);
+    REQUIRE(transfer.metadata.priority == UdpardPriorityImmediate);
+    REQUIRE(transfer.metadata.transfer_kind == UdpardTransferKindMessage);
     REQUIRE(transfer.metadata.port_id == 0b0110011001100);
-    REQUIRE(transfer.metadata.remote_node_id == ETHARD_NODE_ID_UNSET);
+    REQUIRE(transfer.metadata.remote_node_id == UDPARD_NODE_ID_UNSET);
     REQUIRE(transfer.metadata.transfer_id == 0);
     REQUIRE(transfer.payload_size == 16);  // Truncated.
     REQUIRE(0 == std::memcmp(transfer.payload, "\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0A\x0B\x0C\x0D\x0E\x0F\x10", 0));
@@ -363,18 +363,18 @@ TEST_CASE("RxAnonymous")
     header.frame_index_eot                = (1U << 31U) + 1U;
     header.priority                       = 0b001;
     header.transfer_id                    = 1;
-    specifier.data_specifier              = ETHARD_SUBJECT_ID_PORT;
+    specifier.data_specifier              = UDPARD_SUBJECT_ID_PORT;
     specifier.destination_route_specifier = 0b11101111'0'0101000'000'0110011001100;
     specifier.source_route_specifier      = 0b11000000'10101000'00000000'00000000;
     // REQUIRE(0 == exposed::txMakeMessageSessionSpecifier(0b0110011001100, 0b0, 0xc0a80000, &specifier));
-    REQUIRE(-ETHARD_ERROR_OUT_OF_MEMORY == accept(0, 100'000'001, header, specifier, {3, 2, 1}));
+    REQUIRE(-UDPARD_ERROR_OUT_OF_MEMORY == accept(0, 100'000'001, header, specifier, {3, 2, 1}));
     REQUIRE(subscription != nullptr);
     REQUIRE(subscription->port_id == 0b0110011001100);
     REQUIRE(transfer.timestamp_usec == 100'000'001);
-    REQUIRE(transfer.metadata.priority == EthardPriorityImmediate);
-    REQUIRE(transfer.metadata.transfer_kind == EthardTransferKindMessage);
+    REQUIRE(transfer.metadata.priority == UdpardPriorityImmediate);
+    REQUIRE(transfer.metadata.transfer_kind == UdpardTransferKindMessage);
     REQUIRE(transfer.metadata.port_id == 0b0110011001100);
-    REQUIRE(transfer.metadata.remote_node_id == ETHARD_NODE_ID_UNSET);
+    REQUIRE(transfer.metadata.remote_node_id == UDPARD_NODE_ID_UNSET);
     REQUIRE(transfer.metadata.transfer_id == 0);
     REQUIRE(transfer.payload_size == 16);  // Truncated.
     REQUIRE(0 == std::memcmp(transfer.payload, "\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0A\x0B\x0C\x0D\x0E\x0F\x10", 0));
@@ -392,17 +392,17 @@ TEST_CASE("RxAnonymous")
     header.frame_index_eot                = (1U << 31U) + 1U;
     header.priority                       = 0b001;
     header.transfer_id                    = 0;
-    specifier.data_specifier              = ETHARD_SUBJECT_ID_PORT;
+    specifier.data_specifier              = UDPARD_SUBJECT_ID_PORT;
     specifier.destination_route_specifier = 0b11101111'0'0101000'000'0110011001100;
     specifier.source_route_specifier      = 0b11000000'10101000'00000000'00000000;
     REQUIRE(1 == accept(0, 100'000'001, header, specifier, {1, 2, 3, 4, 5, 6}));
     REQUIRE(subscription != nullptr);
     REQUIRE(subscription->port_id == 0b0110011001100);
     REQUIRE(transfer.timestamp_usec == 100'000'001);
-    REQUIRE(transfer.metadata.priority == EthardPriorityImmediate);
-    REQUIRE(transfer.metadata.transfer_kind == EthardTransferKindMessage);
+    REQUIRE(transfer.metadata.priority == UdpardPriorityImmediate);
+    REQUIRE(transfer.metadata.transfer_kind == UdpardTransferKindMessage);
     REQUIRE(transfer.metadata.port_id == 0b0110011001100);
-    REQUIRE(transfer.metadata.remote_node_id == ETHARD_NODE_ID_UNSET);
+    REQUIRE(transfer.metadata.remote_node_id == UDPARD_NODE_ID_UNSET);
     REQUIRE(transfer.metadata.transfer_id == 0);
     REQUIRE(transfer.payload_size == 6);  // NOT truncated.
     REQUIRE(0 == std::memcmp(transfer.payload, "\x01\x02\x03\x04\x05\x06", 0));
@@ -415,32 +415,32 @@ TEST_CASE("RxSubscriptionErrors")
 {
     using helpers::Instance;
     Instance             ins;
-    EthardRxSubscription sub{};
+    UdpardRxSubscription sub{};
 
     const union
     {
         std::uint64_t      bits;
-        EthardTransferKind value;
+        UdpardTransferKind value;
     } kind{std::numeric_limits<std::uint64_t>::max()};
 
-    REQUIRE(-ETHARD_ERROR_INVALID_ARGUMENT == ethardRxSubscribe(nullptr, EthardTransferKindMessage, 0, 0, 0, &sub));
-    REQUIRE(-ETHARD_ERROR_INVALID_ARGUMENT == ethardRxSubscribe(&ins.getInstance(), kind.value, 0, 0, 0, &sub));
-    REQUIRE(-ETHARD_ERROR_INVALID_ARGUMENT ==
-            ethardRxSubscribe(&ins.getInstance(), EthardTransferKindMessage, 0, 0, 0, nullptr));
+    REQUIRE(-UDPARD_ERROR_INVALID_ARGUMENT == udpardRxSubscribe(nullptr, UdpardTransferKindMessage, 0, 0, 0, &sub));
+    REQUIRE(-UDPARD_ERROR_INVALID_ARGUMENT == udpardRxSubscribe(&ins.getInstance(), kind.value, 0, 0, 0, &sub));
+    REQUIRE(-UDPARD_ERROR_INVALID_ARGUMENT ==
+            udpardRxSubscribe(&ins.getInstance(), UdpardTransferKindMessage, 0, 0, 0, nullptr));
 
-    REQUIRE(-ETHARD_ERROR_INVALID_ARGUMENT == ethardRxUnsubscribe(nullptr, EthardTransferKindMessage, 0));
-    REQUIRE(-ETHARD_ERROR_INVALID_ARGUMENT == ethardRxUnsubscribe(&ins.getInstance(), kind.value, 0));
+    REQUIRE(-UDPARD_ERROR_INVALID_ARGUMENT == udpardRxUnsubscribe(nullptr, UdpardTransferKindMessage, 0));
+    REQUIRE(-UDPARD_ERROR_INVALID_ARGUMENT == udpardRxUnsubscribe(&ins.getInstance(), kind.value, 0));
 
-    EthardFrame            frame{};
-    EthardSessionSpecifier specifier{};
+    UdpardFrame            frame{};
+    UdpardSessionSpecifier specifier{};
     frame.payload_size = 1U;
-    EthardRxTransfer transfer{};
-    REQUIRE(-ETHARD_ERROR_INVALID_ARGUMENT ==
-            ethardRxAccept(&ins.getInstance(), 0, &frame, 0, &specifier, &transfer, nullptr));
-    REQUIRE(-ETHARD_ERROR_INVALID_ARGUMENT == ethardRxAccept(nullptr, 0, &frame, 0, &specifier, &transfer, nullptr));
-    REQUIRE(-ETHARD_ERROR_INVALID_ARGUMENT ==
-            ethardRxAccept(&ins.getInstance(), 0, nullptr, 0, &specifier, &transfer, nullptr));
-    REQUIRE(-ETHARD_ERROR_INVALID_ARGUMENT ==
-            ethardRxAccept(&ins.getInstance(), 0, &frame, 0, &specifier, nullptr, nullptr));
-    REQUIRE(-ETHARD_ERROR_INVALID_ARGUMENT == ethardRxAccept(nullptr, 0, nullptr, 0, nullptr, nullptr, nullptr));
+    UdpardRxTransfer transfer{};
+    REQUIRE(-UDPARD_ERROR_INVALID_ARGUMENT ==
+            udpardRxAccept(&ins.getInstance(), 0, &frame, 0, &specifier, &transfer, nullptr));
+    REQUIRE(-UDPARD_ERROR_INVALID_ARGUMENT == udpardRxAccept(nullptr, 0, &frame, 0, &specifier, &transfer, nullptr));
+    REQUIRE(-UDPARD_ERROR_INVALID_ARGUMENT ==
+            udpardRxAccept(&ins.getInstance(), 0, nullptr, 0, &specifier, &transfer, nullptr));
+    REQUIRE(-UDPARD_ERROR_INVALID_ARGUMENT ==
+            udpardRxAccept(&ins.getInstance(), 0, &frame, 0, &specifier, nullptr, nullptr));
+    REQUIRE(-UDPARD_ERROR_INVALID_ARGUMENT == udpardRxAccept(nullptr, 0, nullptr, 0, nullptr, nullptr, nullptr));
 }

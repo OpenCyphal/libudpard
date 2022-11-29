@@ -4,36 +4,36 @@
 /// Author: Pavel Kirienko <pavel@opencyphal.org>
 /// Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
-#include "ethard.h"
+#include "udpard.h"
 #include "cavl.h"
 #include <string.h>
 
 // --------------------------------------------- BUILD CONFIGURATION ---------------------------------------------
 
 /// Define this macro to include build configuration header.
-/// Usage example with CMake: "-DETHARD_CONFIG_HEADER=\"${CMAKE_CURRENT_SOURCE_DIR}/my_ethard_config.h\""
-#ifdef ETHARD_CONFIG_HEADER
-#    include ETHARD_CONFIG_HEADER
+/// Usage example with CMake: "-DUDPARD_CONFIG_HEADER=\"${CMAKE_CURRENT_SOURCE_DIR}/my_udpard_config.h\""
+#ifdef UDPARD_CONFIG_HEADER
+#    include UDPARD_CONFIG_HEADER
 #endif
 
 /// By default, this macro resolves to the standard assert(). The user can redefine this if necessary.
 /// To disable assertion checks completely, make it expand into `(void)(0)`.
-#ifndef ETHARD_ASSERT
+#ifndef UDPARD_ASSERT
 // Intentional violation of MISRA: inclusion not at the top of the file to eliminate unnecessary dependency on assert.h.
 #    include <assert.h>  // NOSONAR
 // Intentional violation of MISRA: assertion macro cannot be replaced with a function definition.
-#    define ETHARD_ASSERT(x) assert(x)  // NOSONAR
+#    define UDPARD_ASSERT(x) assert(x)  // NOSONAR
 #endif
 
-/// Define ETHARD_CRC_TABLE=0 to use slow but ROM-efficient transfer-CRC computation algorithm.
+/// Define UDPARD_CRC_TABLE=0 to use slow but ROM-efficient transfer-CRC computation algorithm.
 /// Doing so is expected to save ca. 500 bytes of ROM and increase the cost of RX/TX transfer processing by ~half.
-#ifndef ETHARD_CRC_TABLE
-#    define ETHARD_CRC_TABLE 1
+#ifndef UDPARD_CRC_TABLE
+#    define UDPARD_CRC_TABLE 1
 #endif
 
 /// This macro is needed for testing and for library development.
-#ifndef ETHARD_PRIVATE
-#    define ETHARD_PRIVATE static inline
+#ifndef UDPARD_PRIVATE
+#    define UDPARD_PRIVATE static inline
 #endif
 
 #if !defined(__STDC_VERSION__) || (__STDC_VERSION__ < 199901L)
@@ -51,10 +51,10 @@
 
 #define PADDING_BYTE_VALUE 0U
 
-#define ETHARD_END_OF_TRANSFER_OFFSET 31U
-#define ETHARD_MAX_FRAME_INDEX ((1U << ETHARD_END_OF_TRANSFER_OFFSET) - 1U)
+#define UDPARD_END_OF_TRANSFER_OFFSET 31U
+#define UDPARD_MAX_FRAME_INDEX ((1U << UDPARD_END_OF_TRANSFER_OFFSET) - 1U)
 
-#define ETHARD_NODE_ID_MASK 255U  /// 8 bits for now
+#define UDPARD_NODE_ID_MASK 255U  /// 8 bits for now
 
 /*
        fixed         reserved
@@ -73,28 +73,28 @@
 */
 
 /// The multicast message transfer IP address node ID is formed of 3 reserved 0 bits and 13 bits for a subject id.
-#define ETHARD_SUBJECT_ID_MASK 8191U  /// 0x1FFF
-#define ETHARD_SUBNET_OFFSET 16U
-#define ETHARD_SUBNET_MASK (127U << ETHARD_SUBNET_OFFSET)
-#define ETHARD_RESERVED_3BITS_OFFSET 13U
-#define ETHARD_RESERVED_3BITS_MASK (7U << ETHARD_RESERVED_3BITS_OFFSET)
-#define ETHARD_MULTICAST_OFFSET 23U
-#define ETHARD_MULTICAST_PREFIX (478U << ETHARD_MULTICAST_OFFSET)
-#define ETHARD_MULTICAST_ADDRESS_MASK ((1U << ETHARD_MULTICAST_OFFSET) - 1U)
+#define UDPARD_SUBJECT_ID_MASK 8191U  /// 0x1FFF
+#define UDPARD_SUBNET_OFFSET 16U
+#define UDPARD_SUBNET_MASK (127U << UDPARD_SUBNET_OFFSET)
+#define UDPARD_RESERVED_3BITS_OFFSET 13U
+#define UDPARD_RESERVED_3BITS_MASK (7U << UDPARD_RESERVED_3BITS_OFFSET)
+#define UDPARD_MULTICAST_OFFSET 23U
+#define UDPARD_MULTICAST_PREFIX (478U << UDPARD_MULTICAST_OFFSET)
+#define UDPARD_MULTICAST_ADDRESS_MASK ((1U << UDPARD_MULTICAST_OFFSET) - 1U)
 
 /// Ports align with subject and service ids
 /// Subjects use multicast and always use port 16383
 /// Services use unicast and start with port 16384
 /// Unique service id request / response are identified by initial port + (service * 2) (+1 for response)
 /// A service response will always be > 16384 and will always be odd (port > initial && port % 2 == 1)
-#define ETHARD_SUBJECT_ID_PORT 16383U
-#define ETHARD_SERVICE_ID_INITIAL_PORT 16384U
-#define ETHARD_SERVICE_ID_RESPONSE_MASK 1U
+#define UDPARD_SUBJECT_ID_PORT 16383U
+#define UDPARD_SERVICE_ID_INITIAL_PORT 16384U
+#define UDPARD_SERVICE_ID_RESPONSE_MASK 1U
 
 /// Used for inserting new items into AVL trees.
-ETHARD_PRIVATE EthardTreeNode* avlTrivialFactory(void* const user_reference)
+UDPARD_PRIVATE UdpardTreeNode* avlTrivialFactory(void* const user_reference)
 {
-    return (EthardTreeNode*) user_reference;
+    return (UdpardTreeNode*) user_reference;
 }
 
 /// --------------------------------------------- TRANSFER CRC ---------------------------------------------
@@ -137,16 +137,16 @@ static const uint32_t CRCTable[256] =
      0xe03e9c81, 0x34f4f86a, 0xc69f7b69, 0xd5cf889d, 0x27a40b9e, 0x79b737ba, 0x8bdcb4b9, 0x988c474d, 0x6ae7c44e,
      0xbe2da0a5, 0x4c4623a6, 0x5f16d052, 0xad7d5351};
 
-ETHARD_PRIVATE TransferCRC crcAddByte(const TransferCRC crc, const uint8_t byte)
+UDPARD_PRIVATE TransferCRC crcAddByte(const TransferCRC crc, const uint8_t byte)
 {
     TransferCRC crc32c = (uint32_t) (crc ^ CRC_XOR);
     crc32c             = CRCTable[(uint32_t) ((uint32_t) (crc32c ^ byte) & BYTE_MAX)] ^ (crc32c >> BITS_PER_BYTE);
     return (uint32_t) (crc32c ^ CRC_XOR);
 }
 
-ETHARD_PRIVATE TransferCRC crcAdd(const TransferCRC crc, const size_t size, const void* const data)
+UDPARD_PRIVATE TransferCRC crcAdd(const TransferCRC crc, const size_t size, const void* const data)
 {
-    ETHARD_ASSERT((data != NULL) || (size == 0U));
+    UDPARD_ASSERT((data != NULL) || (size == 0U));
     TransferCRC    out = crc;
     const uint8_t* p   = (const uint8_t*) data;
     for (size_t i = 0; i < size; i++)
@@ -159,15 +159,15 @@ ETHARD_PRIVATE TransferCRC crcAdd(const TransferCRC crc, const size_t size, cons
 
 // --------------------------------------------- TRANSMISSION ---------------------------------------------
 
-/// This is a subclass of EthardTxQueueItem. A pointer to this type can be cast to EthardTxQueueItem safely.
+/// This is a subclass of UdpardTxQueueItem. A pointer to this type can be cast to UdpardTxQueueItem safely.
 /// This is standard-compliant. The paragraph 6.7.2.1.15 says:
 ///     A pointer to a structure object, suitably converted, points to its initial member (or if that member is a
 ///     bit-field, then to the unit in which it resides), and vice versa. There may be unnamed padding within a
 ///     structure object, but not at its beginning.
 typedef struct TxItem
 {
-    EthardTxQueueItem base;
-    uint8_t           payload_buffer[ETHARD_MTU_MAX];
+    UdpardTxQueueItem base;
+    uint8_t           payload_buffer[UDPARD_MTU_MAX];
 } TxItem;
 
 /// Chain of TX frames prepared for insertion into a TX queue.
@@ -179,108 +179,108 @@ typedef struct
 } TxChain;
 
 /// TODO - Determine what is needed for a Message Sessions Specifier
-ETHARD_PRIVATE int32_t txMakeMessageSessionSpecifier(const EthardPortID            subject_id,
-                                                     const EthardNodeID            src_node_id,
-                                                     const EthardIPv4Addr          local_node_addr,
-                                                     EthardSessionSpecifier* const out_spec)
+UDPARD_PRIVATE int32_t txMakeMessageSessionSpecifier(const UdpardPortID            subject_id,
+                                                     const UdpardNodeID            src_node_id,
+                                                     const UdpardIPv4Addr          local_node_addr,
+                                                     UdpardSessionSpecifier* const out_spec)
 {
-    ETHARD_ASSERT(src_node_id <= ETHARD_NODE_ID_MAX);
-    ETHARD_ASSERT(subject_id <= ETHARD_SUBJECT_ID_MAX);
+    UDPARD_ASSERT(src_node_id <= UDPARD_NODE_ID_MAX);
+    UDPARD_ASSERT(subject_id <= UDPARD_SUBJECT_ID_MAX);
     /// Just the local ip address + source node id
     out_spec->source_route_specifier =
-        (local_node_addr & ~(EthardIPv4Addr) ETHARD_NODE_ID_MASK) | (EthardIPv4Addr) src_node_id;
+        (local_node_addr & ~(UdpardIPv4Addr) UDPARD_NODE_ID_MASK) | (UdpardIPv4Addr) src_node_id;
     out_spec->destination_route_specifier =
-        ((local_node_addr & (EthardIPv4Addr) ETHARD_SUBNET_MASK) | (EthardIPv4Addr) ETHARD_MULTICAST_PREFIX |
-         ((EthardIPv4Addr) ETHARD_SUBJECT_ID_MASK & (EthardIPv4Addr) subject_id)) &
-        ~(EthardIPv4Addr) ETHARD_RESERVED_3BITS_MASK;
-    out_spec->data_specifier = (EthardUdpPortID) ETHARD_SUBJECT_ID_PORT;
-    return ETHARD_SUCCESS;
+        ((local_node_addr & (UdpardIPv4Addr) UDPARD_SUBNET_MASK) | (UdpardIPv4Addr) UDPARD_MULTICAST_PREFIX |
+         ((UdpardIPv4Addr) UDPARD_SUBJECT_ID_MASK & (UdpardIPv4Addr) subject_id)) &
+        ~(UdpardIPv4Addr) UDPARD_RESERVED_3BITS_MASK;
+    out_spec->data_specifier = (UdpardUdpPortID) UDPARD_SUBJECT_ID_PORT;
+    return UDPARD_SUCCESS;
 }
 
-ETHARD_PRIVATE int32_t txMakeServiceSessionSpecifier(const EthardPortID            service_id,
+UDPARD_PRIVATE int32_t txMakeServiceSessionSpecifier(const UdpardPortID            service_id,
                                                      const bool                    request_not_response,
-                                                     const EthardNodeID            src_node_id,
-                                                     const EthardNodeID            dst_node_id,
-                                                     const EthardIPv4Addr          local_node_addr,
-                                                     EthardSessionSpecifier* const out_spec)
+                                                     const UdpardNodeID            src_node_id,
+                                                     const UdpardNodeID            dst_node_id,
+                                                     const UdpardIPv4Addr          local_node_addr,
+                                                     UdpardSessionSpecifier* const out_spec)
 {
-    ETHARD_ASSERT(src_node_id <= ETHARD_NODE_ID_MAX);
-    ETHARD_ASSERT(service_id < ETHARD_SERVICE_ID_MAX);
+    UDPARD_ASSERT(src_node_id <= UDPARD_NODE_ID_MAX);
+    UDPARD_ASSERT(service_id < UDPARD_SERVICE_ID_MAX);
     /// Just the local ip address + source node id
     out_spec->source_route_specifier =
-        (local_node_addr & ~(EthardIPv4Addr) ETHARD_NODE_ID_MASK) | (EthardIPv4Addr) src_node_id;
+        (local_node_addr & ~(UdpardIPv4Addr) UDPARD_NODE_ID_MASK) | (UdpardIPv4Addr) src_node_id;
     out_spec->destination_route_specifier =
-        (local_node_addr & ~(EthardIPv4Addr) ETHARD_NODE_ID_MASK) | (EthardIPv4Addr) dst_node_id;
-    out_spec->data_specifier = (EthardUdpPortID) (ETHARD_SERVICE_ID_INITIAL_PORT + (EthardUdpPortID) (service_id * 2U) +
+        (local_node_addr & ~(UdpardIPv4Addr) UDPARD_NODE_ID_MASK) | (UdpardIPv4Addr) dst_node_id;
+    out_spec->data_specifier = (UdpardUdpPortID) (UDPARD_SERVICE_ID_INITIAL_PORT + (UdpardUdpPortID) (service_id * 2U) +
                                                   (request_not_response ? 0U : 1U));
-    return ETHARD_SUCCESS;
+    return UDPARD_SUCCESS;
 }
 
 // This may need to be adjusted...
-ETHARD_PRIVATE size_t adjustPresentationLayerMTU(const size_t mtu_bytes)
+UDPARD_PRIVATE size_t adjustPresentationLayerMTU(const size_t mtu_bytes)
 {
     size_t mtu = 0U;
-    if (mtu_bytes < ETHARD_MTU_UDP_IPV4)
+    if (mtu_bytes < UDPARD_MTU_UDP_IPV4)
     {
-        mtu = ETHARD_MTU_UDP_IPV4;
+        mtu = UDPARD_MTU_UDP_IPV4;
     }
     else
     {
-        mtu = ETHARD_MTU_MAX;
+        mtu = UDPARD_MTU_MAX;
     }
     return mtu;
 }
 
-ETHARD_PRIVATE int32_t txMakeSessionSpecifier(const EthardTransferMetadata* const tr,
-                                              const EthardNodeID                  local_node_id,
-                                              const EthardIPv4Addr                local_node_addr,
-                                              EthardSessionSpecifier* const       spec)
+UDPARD_PRIVATE int32_t txMakeSessionSpecifier(const UdpardTransferMetadata* const tr,
+                                              const UdpardNodeID                  local_node_id,
+                                              const UdpardIPv4Addr                local_node_addr,
+                                              UdpardSessionSpecifier* const       spec)
 {
-    ETHARD_ASSERT(tr != NULL);
-    int32_t out = -ETHARD_ERROR_INVALID_ARGUMENT;
-    if ((tr->transfer_kind == EthardTransferKindMessage) && (ETHARD_NODE_ID_UNSET == tr->remote_node_id) &&
-        (tr->port_id <= ETHARD_SUBJECT_ID_MAX))
+    UDPARD_ASSERT(tr != NULL);
+    int32_t out = -UDPARD_ERROR_INVALID_ARGUMENT;
+    if ((tr->transfer_kind == UdpardTransferKindMessage) && (UDPARD_NODE_ID_UNSET == tr->remote_node_id) &&
+        (tr->port_id <= UDPARD_SUBJECT_ID_MAX))
     {
-        if (local_node_id <= ETHARD_NODE_ID_MAX)
+        if (local_node_id <= UDPARD_NODE_ID_MAX)
         {
             out = txMakeMessageSessionSpecifier(tr->port_id, local_node_id, local_node_addr, spec);
-            ETHARD_ASSERT(out >= 0);
+            UDPARD_ASSERT(out >= 0);
         }
         else
         {
-            out = -ETHARD_ERROR_INVALID_ARGUMENT;  // Can't have a larger than max node id
+            out = -UDPARD_ERROR_INVALID_ARGUMENT;  // Can't have a larger than max node id
         }
     }
-    else if (((tr->transfer_kind == EthardTransferKindRequest) || (tr->transfer_kind == EthardTransferKindResponse)) &&
-             (tr->remote_node_id <= ETHARD_NODE_ID_MAX) && (tr->port_id < ETHARD_SERVICE_ID_MAX) &&
-             (tr->remote_node_id != ETHARD_NODE_ID_UNSET))
+    else if (((tr->transfer_kind == UdpardTransferKindRequest) || (tr->transfer_kind == UdpardTransferKindResponse)) &&
+             (tr->remote_node_id <= UDPARD_NODE_ID_MAX) && (tr->port_id < UDPARD_SERVICE_ID_MAX) &&
+             (tr->remote_node_id != UDPARD_NODE_ID_UNSET))
     {
-        if (local_node_id != ETHARD_NODE_ID_UNSET)
+        if (local_node_id != UDPARD_NODE_ID_UNSET)
         {
             out = txMakeServiceSessionSpecifier(tr->port_id,
-                                                tr->transfer_kind == EthardTransferKindRequest,
+                                                tr->transfer_kind == UdpardTransferKindRequest,
                                                 local_node_id,
                                                 tr->remote_node_id,
                                                 local_node_addr,
                                                 spec);
-            ETHARD_ASSERT(out >= 0);
+            UDPARD_ASSERT(out >= 0);
         }
         else
         {
-            out = -ETHARD_ERROR_INVALID_ARGUMENT;  // Anonymous service transfers are not allowed.
+            out = -UDPARD_ERROR_INVALID_ARGUMENT;  // Anonymous service transfers are not allowed.
         }
     }
     else
     {
-        out = -ETHARD_ERROR_INVALID_ARGUMENT;
+        out = -UDPARD_ERROR_INVALID_ARGUMENT;
     }
 
     if (out >= 0)
     {
         const uint32_t prio = (uint32_t) tr->priority;
-        if (prio > ETHARD_PRIORITY_MAX)
+        if (prio > UDPARD_PRIORITY_MAX)
         {
-            out = -ETHARD_ERROR_INVALID_ARGUMENT;  // Priority can't be greater than max value
+            out = -UDPARD_ERROR_INVALID_ARGUMENT;  // Priority can't be greater than max value
         }
     }
     return out;
@@ -288,34 +288,34 @@ ETHARD_PRIVATE int32_t txMakeSessionSpecifier(const EthardTransferMetadata* cons
 
 /// Takes a frame payload size, returns a new size that is >=x and is rounded up to the nearest valid DLC.
 /// Note: This is deprecated for UDP as there is no DLC for UDP
-ETHARD_PRIVATE size_t txRoundFramePayloadSizeUp(const size_t x)
+UDPARD_PRIVATE size_t txRoundFramePayloadSizeUp(const size_t x)
 {
     /// TODO - determine if there is a algorithm for rounding UDP payload size
     return x;
 }
 
-ETHARD_PRIVATE void txMakeFrameHeader(EthardFrameHeader* const header,
-                                      const EthardPriority     priority,
-                                      const EthardTransferID   transfer_id,
+UDPARD_PRIVATE void txMakeFrameHeader(UdpardFrameHeader* const header,
+                                      const UdpardPriority     priority,
+                                      const UdpardTransferID   transfer_id,
                                       const bool               end_of_transfer,
                                       const uint32_t           frame_index)
 {
-    ETHARD_ASSERT(frame_index <= ETHARD_MAX_FRAME_INDEX);
-    uint32_t end_of_transfer_mask = (uint32_t) (end_of_transfer ? 1 : 0) << (uint32_t) ETHARD_END_OF_TRANSFER_OFFSET;
+    UDPARD_ASSERT(frame_index <= UDPARD_MAX_FRAME_INDEX);
+    uint32_t end_of_transfer_mask = (uint32_t) (end_of_transfer ? 1 : 0) << (uint32_t) UDPARD_END_OF_TRANSFER_OFFSET;
     header->transfer_id           = transfer_id;
     header->priority              = (uint8_t) priority;
     header->frame_index_eot       = end_of_transfer_mask | frame_index;
 }
 
 /// The item is only allocated and initialized, but NOT included into the queue! The caller needs to do that.
-ETHARD_PRIVATE TxItem* txAllocateQueueItem(EthardInstance* const               ins,
-                                           const EthardSessionSpecifier* const spec,
-                                           const EthardMicrosecond             deadline_usec,
+UDPARD_PRIVATE TxItem* txAllocateQueueItem(UdpardInstance* const               ins,
+                                           const UdpardSessionSpecifier* const spec,
+                                           const UdpardMicrosecond             deadline_usec,
                                            const size_t                        payload_size)
 {
-    ETHARD_ASSERT(ins != NULL);
-    ETHARD_ASSERT(payload_size > 0U);
-    TxItem* const out = (TxItem*) ins->memory_allocate(ins, sizeof(TxItem) - ETHARD_MTU_MAX + payload_size);
+    UDPARD_ASSERT(ins != NULL);
+    UDPARD_ASSERT(payload_size > 0U);
+    TxItem* const out = (TxItem*) ins->memory_allocate(ins, sizeof(TxItem) - UDPARD_MTU_MAX + payload_size);
     if (out != NULL)
     {
         out->base.base.up    = NULL;
@@ -338,12 +338,12 @@ ETHARD_PRIVATE TxItem* txAllocateQueueItem(EthardInstance* const               i
 /// Frames with identical UDP ID that are added later always compare greater than their counterparts with same UDP ID.
 /// This ensures that UDP frames with the same UDP ID are transmitted in the FIFO order.
 /// Frames that should be transmitted earlier compare smaller (i.e., put on the left side of the tree).
-ETHARD_PRIVATE int8_t txAVLPredicate(void* const user_reference,  // NOSONAR Cavl API requires pointer to non-const.
-                                     const EthardTreeNode* const node)
+UDPARD_PRIVATE int8_t txAVLPredicate(void* const user_reference,  // NOSONAR Cavl API requires pointer to non-const.
+                                     const UdpardTreeNode* const node)
 {
-    const EthardTxQueueItem* const target = (const EthardTxQueueItem*) user_reference;
-    const EthardTxQueueItem* const other  = (const EthardTxQueueItem*) node;
-    ETHARD_ASSERT((target != NULL) && (other != NULL));
+    const UdpardTxQueueItem* const target = (const UdpardTxQueueItem*) user_reference;
+    const UdpardTxQueueItem* const other  = (const UdpardTxQueueItem*) node;
+    UDPARD_ASSERT((target != NULL) && (other != NULL));
     if (target->frame.udp_cyphal_header.priority > other->frame.udp_cyphal_header.priority)
     {
         return +1;
@@ -356,23 +356,23 @@ ETHARD_PRIVATE int8_t txAVLPredicate(void* const user_reference,  // NOSONAR Cav
 }
 
 /// Returns the number of frames enqueued or error (i.e., =1 or <0).
-ETHARD_PRIVATE int32_t txPushSingleFrame(EthardTxQueue* const                que,
-                                         EthardInstance* const               ins,
-                                         const EthardMicrosecond             deadline_usec,
-                                         const EthardSessionSpecifier* const specifier,
-                                         const EthardPriority                priority,
-                                         const EthardTransferID              transfer_id,
+UDPARD_PRIVATE int32_t txPushSingleFrame(UdpardTxQueue* const                que,
+                                         UdpardInstance* const               ins,
+                                         const UdpardMicrosecond             deadline_usec,
+                                         const UdpardSessionSpecifier* const specifier,
+                                         const UdpardPriority                priority,
+                                         const UdpardTransferID              transfer_id,
                                          const size_t                        payload_size,
                                          const void* const                   payload)
 {
-    ETHARD_ASSERT(ins != NULL);
-    ETHARD_ASSERT((payload != NULL) || (payload_size == 0));
+    UDPARD_ASSERT(ins != NULL);
+    UDPARD_ASSERT((payload != NULL) || (payload_size == 0));
     // The size of a Frame header shouldn't change, but best to check it is at least bigger than 0
-    ETHARD_ASSERT(sizeof(EthardFrameHeader) > 0);  // NOLINT
-    const size_t frame_payload_size = payload_size + sizeof(EthardFrameHeader);
-    ETHARD_ASSERT(frame_payload_size > payload_size);
-    const size_t padding_size = frame_payload_size - payload_size - sizeof(EthardFrameHeader);
-    ETHARD_ASSERT((padding_size + payload_size + sizeof(EthardFrameHeader)) == frame_payload_size);
+    UDPARD_ASSERT(sizeof(UdpardFrameHeader) > 0);  // NOLINT
+    const size_t frame_payload_size = payload_size + sizeof(UdpardFrameHeader);
+    UDPARD_ASSERT(frame_payload_size > payload_size);
+    const size_t padding_size = frame_payload_size - payload_size - sizeof(UdpardFrameHeader);
+    UDPARD_ASSERT((padding_size + payload_size + sizeof(UdpardFrameHeader)) == frame_payload_size);
     int32_t       out = 0;
     TxItem* const tqi =
         (que->size < que->capacity) ? txAllocateQueueItem(ins, specifier, deadline_usec, frame_payload_size) : NULL;
@@ -380,10 +380,10 @@ ETHARD_PRIVATE int32_t txPushSingleFrame(EthardTxQueue* const                que
     {
         if (payload_size > 0U)  // The check is needed to avoid calling memcpy() with a NULL pointer, it's an UB.
         {
-            ETHARD_ASSERT(payload != NULL);
+            UDPARD_ASSERT(payload != NULL);
             // Clang-Tidy raises an error recommending the use of memcpy_s() instead.
             // We ignore it because the safe functions are poorly supported; reliance on them may limit the portability.
-            (void) memcpy(&tqi->payload_buffer[sizeof(EthardFrameHeader)], payload, payload_size);  // NOLINT
+            (void) memcpy(&tqi->payload_buffer[sizeof(UdpardFrameHeader)], payload, payload_size);  // NOLINT
         }
         // Clang-Tidy raises an error recommending the use of memset_s() instead.
         // We ignore it because the safe functions are poorly supported; reliance on them may limit the portability.
@@ -394,125 +394,125 @@ ETHARD_PRIVATE int32_t txPushSingleFrame(EthardTxQueue* const                que
         // We ignore it because the safe functions are poorly supported; reliance on them may limit the portability.
         (void) memcpy(&tqi->payload_buffer[0],
                       &tqi->base.frame.udp_cyphal_header,
-                      sizeof(EthardFrameHeader));  // NOLINT
+                      sizeof(UdpardFrameHeader));  // NOLINT
         // Insert the newly created TX item into the queue.
-        const EthardTreeNode* const res = cavlSearch(&que->root, &tqi->base.base, &txAVLPredicate, &avlTrivialFactory);
+        const UdpardTreeNode* const res = cavlSearch(&que->root, &tqi->base.base, &txAVLPredicate, &avlTrivialFactory);
         (void) res;
-        ETHARD_ASSERT(res == &tqi->base.base);
+        UDPARD_ASSERT(res == &tqi->base.base);
         que->size++;
-        ETHARD_ASSERT(que->size <= que->capacity);
+        UDPARD_ASSERT(que->size <= que->capacity);
         out = 1;  // One frame enqueued.
     }
     else
     {
-        out = -ETHARD_ERROR_OUT_OF_MEMORY;
+        out = -UDPARD_ERROR_OUT_OF_MEMORY;
     }
-    ETHARD_ASSERT((out < 0) || (out == 1));
+    UDPARD_ASSERT((out < 0) || (out == 1));
     return out;
 }
 
 /// Returns the number of frames enqueued or error.
-ETHARD_PRIVATE int32_t txPushMultiFrame()
+UDPARD_PRIVATE int32_t txPushMultiFrame()
 {
-    int32_t out = -ETHARD_ERROR_INVALID_ARGUMENT;
+    int32_t out = -UDPARD_ERROR_INVALID_ARGUMENT;
     return out;
 }
 
 // --------------------------------------------- RECEPTION ---------------------------------------------
 
-#define RX_SESSIONS_PER_SUBSCRIPTION (ETHARD_NODE_ID_MAX + 1U)
+#define RX_SESSIONS_PER_SUBSCRIPTION (UDPARD_NODE_ID_MAX + 1U)
 
 /// The memory requirement model provided in the documentation assumes that the maximum size of this structure never
 /// exceeds 48 bytes on any conventional platform.
 /// A user that needs a detailed analysis of the worst-case memory consumption may compute the size of this
 /// structure for the particular platform at hand manually or by evaluating its sizeof(). The fields are ordered to
 /// minimize the amount of padding on all conventional platforms.
-typedef struct EthardInternalRxSession
+typedef struct UdpardInternalRxSession
 {
-    EthardMicrosecond transfer_timestamp_usec;  ///< Timestamp of the last received start-of-transfer.
+    UdpardMicrosecond transfer_timestamp_usec;  ///< Timestamp of the last received start-of-transfer.
     size_t            total_payload_size;       ///< The payload size before the implicit truncation, including the CRC.
     size_t            payload_size;             ///< How many bytes received so far.
     uint8_t*          payload;                  ///< Dynamically allocated and handed off to the application when done.
     TransferCRC       calculated_crc;           ///< Updated with the received payload in real time.
-    EthardTransferID  transfer_id;
+    UdpardTransferID  transfer_id;
     uint8_t           redundant_transport_index;  ///< Arbitrary value in [0, 255].
-} EthardInternalRxSession;
+} UdpardInternalRxSession;
 
 /// High-level transport frame model.
 typedef struct
 {
-    EthardMicrosecond  timestamp_usec;
-    EthardPriority     priority;
-    EthardTransferKind transfer_kind;
-    EthardPortID       port_id;
-    EthardNodeID       source_node_id;
-    EthardNodeID       destination_node_id;
-    EthardTransferID   transfer_id;
+    UdpardMicrosecond  timestamp_usec;
+    UdpardPriority     priority;
+    UdpardTransferKind transfer_kind;
+    UdpardPortID       port_id;
+    UdpardNodeID       source_node_id;
+    UdpardNodeID       destination_node_id;
+    UdpardTransferID   transfer_id;
     bool               start_of_transfer;
     bool               end_of_transfer;
     size_t             payload_size;
     const void*        payload;
 } RxFrameModel;
 
-ETHARD_PRIVATE EthardNodeID getNodeIdFromRouteSpecifier(EthardIPv4Addr src_ip_addr)
+UDPARD_PRIVATE UdpardNodeID getNodeIdFromRouteSpecifier(UdpardIPv4Addr src_ip_addr)
 {
-    EthardNodeID out = (EthardNodeID) (src_ip_addr & ETHARD_NODE_ID_MASK);
+    UdpardNodeID out = (UdpardNodeID) (src_ip_addr & UDPARD_NODE_ID_MASK);
     return out;
 }
 
-ETHARD_PRIVATE EthardNodeID getNodeIdFromRouteAndDataSpecifiers(EthardIPv4Addr  route_specifier,
-                                                                EthardUdpPortID data_specifier)
+UDPARD_PRIVATE UdpardNodeID getNodeIdFromRouteAndDataSpecifiers(UdpardIPv4Addr  route_specifier,
+                                                                UdpardUdpPortID data_specifier)
 {
-    EthardNodeID out = ETHARD_NODE_ID_UNSET;
-    if (data_specifier > ETHARD_SUBJECT_ID_PORT)
+    UdpardNodeID out = UDPARD_NODE_ID_UNSET;
+    if (data_specifier > UDPARD_SUBJECT_ID_PORT)
     {
         out = getNodeIdFromRouteSpecifier(route_specifier);
     }
     return out;
 }
 
-ETHARD_PRIVATE EthardPortID getPortIdFromRouteAndDataSpecifiers(EthardIPv4Addr  route_specifier,
-                                                                EthardUdpPortID data_specifier)
+UDPARD_PRIVATE UdpardPortID getPortIdFromRouteAndDataSpecifiers(UdpardIPv4Addr  route_specifier,
+                                                                UdpardUdpPortID data_specifier)
 {
-    ETHARD_ASSERT(data_specifier >= ETHARD_SUBJECT_ID_PORT);
-    if (data_specifier == ETHARD_SUBJECT_ID_PORT)
+    UDPARD_ASSERT(data_specifier >= UDPARD_SUBJECT_ID_PORT);
+    if (data_specifier == UDPARD_SUBJECT_ID_PORT)
     {
-        return (EthardPortID) (route_specifier & ETHARD_SUBJECT_ID_MASK);
+        return (UdpardPortID) (route_specifier & UDPARD_SUBJECT_ID_MASK);
     }
-    return (data_specifier % 2 == 1) ? (EthardPortID) ((data_specifier - ETHARD_SERVICE_ID_INITIAL_PORT - 1) / 2)
-                                     : (EthardPortID) ((data_specifier - ETHARD_SERVICE_ID_INITIAL_PORT) / 2);
+    return (data_specifier % 2 == 1) ? (UdpardPortID) ((data_specifier - UDPARD_SERVICE_ID_INITIAL_PORT - 1) / 2)
+                                     : (UdpardPortID) ((data_specifier - UDPARD_SERVICE_ID_INITIAL_PORT) / 2);
 }
 
-ETHARD_PRIVATE EthardTransferKind getTransferKindFromDataSpecifier(EthardUdpPortID data_specifier)
+UDPARD_PRIVATE UdpardTransferKind getTransferKindFromDataSpecifier(UdpardUdpPortID data_specifier)
 {
-    ETHARD_ASSERT(data_specifier >= ETHARD_SUBJECT_ID_PORT);
-    if (data_specifier == ETHARD_SUBJECT_ID_PORT)
+    UDPARD_ASSERT(data_specifier >= UDPARD_SUBJECT_ID_PORT);
+    if (data_specifier == UDPARD_SUBJECT_ID_PORT)
     {
-        return EthardTransferKindMessage;
+        return UdpardTransferKindMessage;
     }
-    return (data_specifier % 2 == 1) ? EthardTransferKindResponse : EthardTransferKindRequest;
+    return (data_specifier % 2 == 1) ? UdpardTransferKindResponse : UdpardTransferKindRequest;
 }
 
 /// Returns truth if the frame is valid and parsed successfully. False if the frame is not a valid Cyphal/UDP frame.
-ETHARD_PRIVATE bool rxTryParseFrame(const EthardMicrosecond             timestamp_usec,
-                                    const EthardSessionSpecifier* const specifier,
-                                    EthardFrame* const                  frame,
+UDPARD_PRIVATE bool rxTryParseFrame(const UdpardMicrosecond             timestamp_usec,
+                                    const UdpardSessionSpecifier* const specifier,
+                                    UdpardFrame* const                  frame,
                                     RxFrameModel* const                 out)
 {
-    ETHARD_ASSERT(frame != NULL);
-    ETHARD_ASSERT(out != NULL);
-    ETHARD_ASSERT(specifier != NULL);
+    UDPARD_ASSERT(frame != NULL);
+    UDPARD_ASSERT(out != NULL);
+    UDPARD_ASSERT(specifier != NULL);
     if (frame->payload_size < sizeof(frame->udp_cyphal_header))
     {
         return false;
     }
     bool valid = true;
     // Get the Header out of the frame
-    ETHARD_ASSERT(frame->payload != NULL);
+    UDPARD_ASSERT(frame->payload != NULL);
     (void) memcpy(&frame->udp_cyphal_header, frame->payload, sizeof(frame->udp_cyphal_header));  // NOLINT
     out->timestamp_usec = timestamp_usec;
 
-    out->priority       = (EthardPriority) frame->udp_cyphal_header.priority;
+    out->priority       = (UdpardPriority) frame->udp_cyphal_header.priority;
     out->source_node_id = getNodeIdFromRouteSpecifier(specifier->source_route_specifier);
     out->transfer_kind  = getTransferKindFromDataSpecifier(specifier->data_specifier);
     out->port_id =
@@ -524,26 +524,26 @@ ETHARD_PRIVATE bool rxTryParseFrame(const EthardMicrosecond             timestam
     out->payload      = (void*) ((uint8_t*) frame->payload + sizeof(frame->udp_cyphal_header));
 
     out->transfer_id       = frame->udp_cyphal_header.transfer_id;
-    out->start_of_transfer = (((frame->udp_cyphal_header.frame_index_eot) & (ETHARD_MAX_FRAME_INDEX)) == 1);
-    out->end_of_transfer   = ((frame->udp_cyphal_header.frame_index_eot >> ETHARD_END_OF_TRANSFER_OFFSET) == 1);
-    if (out->transfer_kind != EthardTransferKindMessage)
+    out->start_of_transfer = (((frame->udp_cyphal_header.frame_index_eot) & (UDPARD_MAX_FRAME_INDEX)) == 1);
+    out->end_of_transfer   = ((frame->udp_cyphal_header.frame_index_eot >> UDPARD_END_OF_TRANSFER_OFFSET) == 1);
+    if (out->transfer_kind != UdpardTransferKindMessage)
     {
         valid = valid && (out->source_node_id != out->destination_node_id);
     }
     // Anonymous transfers can be only single-frame transfers.
     valid =
-        valid && ((out->start_of_transfer && out->end_of_transfer) || (ETHARD_NODE_ID_UNSET != out->source_node_id));
+        valid && ((out->start_of_transfer && out->end_of_transfer) || (UDPARD_NODE_ID_UNSET != out->source_node_id));
     // A frame that is a part of a multi-frame transfer cannot be empty (tail byte not included).
     valid = valid && ((out->payload_size > 0) || (out->start_of_transfer && out->end_of_transfer));
     return valid;
 }
 
-ETHARD_PRIVATE void rxInitTransferMetadataFromFrame(const RxFrameModel* const     frame,
-                                                    EthardTransferMetadata* const out_transfer)
+UDPARD_PRIVATE void rxInitTransferMetadataFromFrame(const RxFrameModel* const     frame,
+                                                    UdpardTransferMetadata* const out_transfer)
 {
-    ETHARD_ASSERT(frame != NULL);
-    ETHARD_ASSERT(frame->payload != NULL);
-    ETHARD_ASSERT(out_transfer != NULL);
+    UDPARD_ASSERT(frame != NULL);
+    UDPARD_ASSERT(frame->payload != NULL);
+    UDPARD_ASSERT(out_transfer != NULL);
     out_transfer->priority       = frame->priority;
     out_transfer->transfer_kind  = frame->transfer_kind;
     out_transfer->port_id        = frame->port_id;
@@ -552,31 +552,31 @@ ETHARD_PRIVATE void rxInitTransferMetadataFromFrame(const RxFrameModel* const   
 }
 
 // Assume we will never roll over a transfer id with 64bits
-ETHARD_PRIVATE uint64_t rxComputeTransferIDDifference(const uint64_t a, const uint64_t b)
+UDPARD_PRIVATE uint64_t rxComputeTransferIDDifference(const uint64_t a, const uint64_t b)
 {
-    ETHARD_ASSERT(a <= ETHARD_TRANSFER_ID_MAX);
-    ETHARD_ASSERT(b <= ETHARD_TRANSFER_ID_MAX);
+    UDPARD_ASSERT(a <= UDPARD_TRANSFER_ID_MAX);
+    UDPARD_ASSERT(b <= UDPARD_TRANSFER_ID_MAX);
     return a - b;
 }
 
-ETHARD_PRIVATE int8_t rxSessionWritePayload(EthardInstance* const          ins,
-                                            EthardInternalRxSession* const rxs,
+UDPARD_PRIVATE int8_t rxSessionWritePayload(UdpardInstance* const          ins,
+                                            UdpardInternalRxSession* const rxs,
                                             const size_t                   extent,
                                             const size_t                   payload_size,
                                             const void* const              payload)
 {
-    ETHARD_ASSERT(ins != NULL);
-    ETHARD_ASSERT(rxs != NULL);
-    ETHARD_ASSERT((payload != NULL) || (payload_size == 0U));
-    ETHARD_ASSERT(rxs->payload_size <= extent);  // This invariant is enforced by the subscription logic.
-    ETHARD_ASSERT(rxs->payload_size <= rxs->total_payload_size);
+    UDPARD_ASSERT(ins != NULL);
+    UDPARD_ASSERT(rxs != NULL);
+    UDPARD_ASSERT((payload != NULL) || (payload_size == 0U));
+    UDPARD_ASSERT(rxs->payload_size <= extent);  // This invariant is enforced by the subscription logic.
+    UDPARD_ASSERT(rxs->payload_size <= rxs->total_payload_size);
 
     rxs->total_payload_size += payload_size;
 
     // Allocate the payload lazily, as late as possible.
     if ((NULL == rxs->payload) && (extent > 0U))
     {
-        ETHARD_ASSERT(rxs->payload_size == 0);
+        UDPARD_ASSERT(rxs->payload_size == 0);
         rxs->payload = ins->memory_allocate(ins, extent);
     }
 
@@ -587,10 +587,10 @@ ETHARD_PRIVATE int8_t rxSessionWritePayload(EthardInstance* const          ins,
         size_t bytes_to_copy = payload_size;
         if ((rxs->payload_size + bytes_to_copy) > extent)
         {
-            ETHARD_ASSERT(rxs->payload_size <= extent);
+            UDPARD_ASSERT(rxs->payload_size <= extent);
             bytes_to_copy = extent - rxs->payload_size;
-            ETHARD_ASSERT((rxs->payload_size + bytes_to_copy) == extent);
-            ETHARD_ASSERT(bytes_to_copy < payload_size);
+            UDPARD_ASSERT((rxs->payload_size + bytes_to_copy) == extent);
+            UDPARD_ASSERT(bytes_to_copy < payload_size);
         }
         // This memcpy() call here is one of the two variable-complexity operations in the RX pipeline;
         // the other one is the search of the matching subscription state.
@@ -600,41 +600,41 @@ ETHARD_PRIVATE int8_t rxSessionWritePayload(EthardInstance* const          ins,
         // We ignore it because the safe functions are poorly supported; reliance on them may limit the portability.
         (void) memcpy(&rxs->payload[rxs->payload_size], payload, bytes_to_copy);  // NOLINT NOSONAR
         rxs->payload_size += bytes_to_copy;
-        ETHARD_ASSERT(rxs->payload_size <= extent);
+        UDPARD_ASSERT(rxs->payload_size <= extent);
     }
     else
     {
-        ETHARD_ASSERT(rxs->payload_size == 0);
-        out = (extent > 0U) ? -ETHARD_ERROR_OUT_OF_MEMORY : 0;
+        UDPARD_ASSERT(rxs->payload_size == 0);
+        out = (extent > 0U) ? -UDPARD_ERROR_OUT_OF_MEMORY : 0;
     }
-    ETHARD_ASSERT(out <= 0);
+    UDPARD_ASSERT(out <= 0);
     return out;
 }
 
-ETHARD_PRIVATE void rxSessionRestart(EthardInstance* const ins, EthardInternalRxSession* const rxs)
+UDPARD_PRIVATE void rxSessionRestart(UdpardInstance* const ins, UdpardInternalRxSession* const rxs)
 {
-    ETHARD_ASSERT(ins != NULL);
-    ETHARD_ASSERT(rxs != NULL);
+    UDPARD_ASSERT(ins != NULL);
+    UDPARD_ASSERT(rxs != NULL);
     ins->memory_free(ins, rxs->payload);  // May be NULL, which is OK.
     rxs->total_payload_size = 0U;
     rxs->payload_size       = 0U;
     rxs->payload            = NULL;
     rxs->calculated_crc     = CRC_INITIAL;
-    rxs->transfer_id        = (EthardTransferID) (rxs->transfer_id + 1U) & ETHARD_TRANSFER_ID_MAX;
+    rxs->transfer_id        = (UdpardTransferID) (rxs->transfer_id + 1U) & UDPARD_TRANSFER_ID_MAX;
 }
 
-ETHARD_PRIVATE int8_t rxSessionAcceptFrame(EthardInstance* const          ins,
-                                           EthardInternalRxSession* const rxs,
+UDPARD_PRIVATE int8_t rxSessionAcceptFrame(UdpardInstance* const          ins,
+                                           UdpardInternalRxSession* const rxs,
                                            const RxFrameModel* const      frame,
                                            const size_t                   extent,
-                                           EthardRxTransfer* const        out_transfer)
+                                           UdpardRxTransfer* const        out_transfer)
 {
-    ETHARD_ASSERT(ins != NULL);
-    ETHARD_ASSERT(rxs != NULL);
-    ETHARD_ASSERT(frame != NULL);
-    ETHARD_ASSERT(frame->payload != NULL);
-    ETHARD_ASSERT(frame->transfer_id <= ETHARD_TRANSFER_ID_MAX);
-    ETHARD_ASSERT(out_transfer != NULL);
+    UDPARD_ASSERT(ins != NULL);
+    UDPARD_ASSERT(rxs != NULL);
+    UDPARD_ASSERT(frame != NULL);
+    UDPARD_ASSERT(frame->payload != NULL);
+    UDPARD_ASSERT(frame->transfer_id <= UDPARD_TRANSFER_ID_MAX);
+    UDPARD_ASSERT(out_transfer != NULL);
 
     if (frame->start_of_transfer)  // The transfer timestamp is the timestamp of its first frame.
     {
@@ -646,18 +646,18 @@ ETHARD_PRIVATE int8_t rxSessionAcceptFrame(EthardInstance* const          ins,
     {
         // Not currently supporting multiframe transfers
         rxSessionRestart(ins, rxs);
-        return -ETHARD_ERROR_INVALID_ARGUMENT;
+        return -UDPARD_ERROR_INVALID_ARGUMENT;
     }
 
     int8_t out = rxSessionWritePayload(ins, rxs, extent, frame->payload_size, frame->payload);
     if (out < 0)
     {
-        ETHARD_ASSERT(-ETHARD_ERROR_OUT_OF_MEMORY == out);
+        UDPARD_ASSERT(-UDPARD_ERROR_OUT_OF_MEMORY == out);
         rxSessionRestart(ins, rxs);  // Out-of-memory.
     }
     else if (frame->end_of_transfer)
     {
-        ETHARD_ASSERT(0 == out);
+        UDPARD_ASSERT(0 == out);
         if (single_frame || (CRC_RESIDUE == rxs->calculated_crc))
         {
             out = 1;  // One transfer received, notify the application.
@@ -668,11 +668,11 @@ ETHARD_PRIVATE int8_t rxSessionAcceptFrame(EthardInstance* const          ins,
 
             /* There is no CRC in single frame transfers and multiframe transfers are not supported yet
                   // Cut off the CRC from the payload if it's there -- we don't want to expose it to the user.
-                  ETHARD_ASSERT(rxs->total_payload_size >= rxs->payload_size);
+                  UDPARD_ASSERT(rxs->total_payload_size >= rxs->payload_size);
                   const size_t truncated_amount = rxs->total_payload_size - rxs->payload_size;
                   if ((!single_frame) && (CRC_SIZE_BYTES > truncated_amount))  // Single-frame transfers don't have CRC.
                   {
-                      ETHARD_ASSERT(out_transfer->payload_size >= (CRC_SIZE_BYTES - truncated_amount));
+                      UDPARD_ASSERT(out_transfer->payload_size >= (CRC_SIZE_BYTES - truncated_amount));
                       out_transfer->payload_size -= CRC_SIZE_BYTES - truncated_amount;
                   }
             */
@@ -692,20 +692,20 @@ ETHARD_PRIVATE int8_t rxSessionAcceptFrame(EthardInstance* const          ins,
 /// approach is much advantageous because it allows implementers to choose whatever solution works best for the
 /// specific application at hand, while the wire compatibility is still guaranteed by the high-level requirements
 /// given in the specification.
-ETHARD_PRIVATE int8_t rxSessionUpdate(EthardInstance* const          ins,
-                                      EthardInternalRxSession* const rxs,
+UDPARD_PRIVATE int8_t rxSessionUpdate(UdpardInstance* const          ins,
+                                      UdpardInternalRxSession* const rxs,
                                       const RxFrameModel* const      frame,
                                       const uint8_t                  redundant_transport_index,
-                                      const EthardMicrosecond        transfer_id_timeout_usec,
+                                      const UdpardMicrosecond        transfer_id_timeout_usec,
                                       const size_t                   extent,
-                                      EthardRxTransfer* const        out_transfer)
+                                      UdpardRxTransfer* const        out_transfer)
 {
-    ETHARD_ASSERT(ins != NULL);
-    ETHARD_ASSERT(rxs != NULL);
-    ETHARD_ASSERT(frame != NULL);
-    ETHARD_ASSERT(out_transfer != NULL);
-    ETHARD_ASSERT(rxs->transfer_id <= ETHARD_TRANSFER_ID_MAX);
-    ETHARD_ASSERT(frame->transfer_id <= ETHARD_TRANSFER_ID_MAX);
+    UDPARD_ASSERT(ins != NULL);
+    UDPARD_ASSERT(rxs != NULL);
+    UDPARD_ASSERT(frame != NULL);
+    UDPARD_ASSERT(out_transfer != NULL);
+    UDPARD_ASSERT(rxs->transfer_id <= UDPARD_TRANSFER_ID_MAX);
+    UDPARD_ASSERT(frame->transfer_id <= UDPARD_TRANSFER_ID_MAX);
 
     const bool tid_timed_out = (frame->timestamp_usec > rxs->transfer_timestamp_usec) &&
                                ((frame->timestamp_usec - rxs->transfer_timestamp_usec) > transfer_id_timeout_usec);
@@ -741,30 +741,30 @@ ETHARD_PRIVATE int8_t rxSessionUpdate(EthardInstance* const          ins,
     return out;
 }
 
-ETHARD_PRIVATE int8_t rxAcceptFrame(EthardInstance* const       ins,
-                                    EthardRxSubscription* const subscription,
+UDPARD_PRIVATE int8_t rxAcceptFrame(UdpardInstance* const       ins,
+                                    UdpardRxSubscription* const subscription,
                                     const RxFrameModel* const   frame,
                                     const uint8_t               redundant_transport_index,
-                                    EthardRxTransfer* const     out_transfer)
+                                    UdpardRxTransfer* const     out_transfer)
 {
-    ETHARD_ASSERT(ins != NULL);
-    ETHARD_ASSERT(subscription != NULL);
-    ETHARD_ASSERT(subscription->port_id == frame->port_id);
-    ETHARD_ASSERT(frame != NULL);
-    ETHARD_ASSERT(frame->payload != NULL);
-    ETHARD_ASSERT(frame->transfer_id <= ETHARD_TRANSFER_ID_MAX);
-    ETHARD_ASSERT((ETHARD_NODE_ID_UNSET == frame->destination_node_id) || (ins->node_id == frame->destination_node_id));
-    ETHARD_ASSERT(out_transfer != NULL);
+    UDPARD_ASSERT(ins != NULL);
+    UDPARD_ASSERT(subscription != NULL);
+    UDPARD_ASSERT(subscription->port_id == frame->port_id);
+    UDPARD_ASSERT(frame != NULL);
+    UDPARD_ASSERT(frame->payload != NULL);
+    UDPARD_ASSERT(frame->transfer_id <= UDPARD_TRANSFER_ID_MAX);
+    UDPARD_ASSERT((UDPARD_NODE_ID_UNSET == frame->destination_node_id) || (ins->node_id == frame->destination_node_id));
+    UDPARD_ASSERT(out_transfer != NULL);
 
     int8_t out = 0;
-    if ((frame->source_node_id <= ETHARD_NODE_ID_MAX) && (frame->source_node_id != ETHARD_NODE_ID_UNSET))
+    if ((frame->source_node_id <= UDPARD_NODE_ID_MAX) && (frame->source_node_id != UDPARD_NODE_ID_UNSET))
     {
         // If such session does not exist, create it. This only makes sense if this is the first frame of a
         // transfer, otherwise, we won't be able to receive the transfer anyway so we don't bother.
         if ((NULL == subscription->sessions[frame->source_node_id]) && frame->start_of_transfer)
         {
-            EthardInternalRxSession* const rxs =
-                (EthardInternalRxSession*) ins->memory_allocate(ins, sizeof(EthardInternalRxSession));
+            UdpardInternalRxSession* const rxs =
+                (UdpardInternalRxSession*) ins->memory_allocate(ins, sizeof(UdpardInternalRxSession));
             subscription->sessions[frame->source_node_id] = rxs;
             if (rxs != NULL)
             {
@@ -778,13 +778,13 @@ ETHARD_PRIVATE int8_t rxAcceptFrame(EthardInstance* const       ins,
             }
             else
             {
-                out = -ETHARD_ERROR_OUT_OF_MEMORY;
+                out = -UDPARD_ERROR_OUT_OF_MEMORY;
             }
         }
         // There are two possible reasons why the session may not exist: 1. OOM; 2. SOT-miss.
         if (subscription->sessions[frame->source_node_id] != NULL)
         {
-            ETHARD_ASSERT(out == 0);
+            UDPARD_ASSERT(out == 0);
             out = rxSessionUpdate(ins,
                                   subscription->sessions[frame->source_node_id],
                                   frame,
@@ -796,7 +796,7 @@ ETHARD_PRIVATE int8_t rxAcceptFrame(EthardInstance* const       ins,
     }
     else
     {
-        ETHARD_ASSERT(frame->source_node_id == ETHARD_NODE_ID_UNSET);
+        UDPARD_ASSERT(frame->source_node_id == UDPARD_NODE_ID_UNSET);
         // Anonymous transfers are stateless. No need to update the state machine, just blindly accept it.
         // We have to copy the data into an allocated storage because the API expects it: the lifetime shall be
         // independent of the input data and the memory shall be free-able.
@@ -817,39 +817,39 @@ ETHARD_PRIVATE int8_t rxAcceptFrame(EthardInstance* const       ins,
         }
         else
         {
-            out = -ETHARD_ERROR_OUT_OF_MEMORY;
+            out = -UDPARD_ERROR_OUT_OF_MEMORY;
         }
     }
     return out;
 }
 
-ETHARD_PRIVATE int8_t
+UDPARD_PRIVATE int8_t
 rxSubscriptionPredicateOnPortID(void* const user_reference,  // NOSONAR Cavl API requires pointer to non-const.
-                                const EthardTreeNode* const node)
+                                const UdpardTreeNode* const node)
 {
-    const EthardPortID  sought    = *((const EthardPortID*) user_reference);
-    const EthardPortID  other     = ((const EthardRxSubscription*) node)->port_id;
+    const UdpardPortID  sought    = *((const UdpardPortID*) user_reference);
+    const UdpardPortID  other     = ((const UdpardRxSubscription*) node)->port_id;
     static const int8_t NegPos[2] = {-1, +1};
     // Clang-Tidy mistakenly identifies a narrowing cast to int8_t here, which is incorrect.
     return (sought == other) ? 0 : NegPos[sought > other];  // NOLINT no narrowing conversion is taking place here
 }
 
-ETHARD_PRIVATE int8_t
+UDPARD_PRIVATE int8_t
 rxSubscriptionPredicateOnStruct(void* const user_reference,  // NOSONAR Cavl API requires pointer to non-const.
-                                const EthardTreeNode* const node)
+                                const UdpardTreeNode* const node)
 {
-    return rxSubscriptionPredicateOnPortID(&((EthardRxSubscription*) user_reference)->port_id, node);
+    return rxSubscriptionPredicateOnPortID(&((UdpardRxSubscription*) user_reference)->port_id, node);
 }
 
 // --------------------------------------------- PUBLIC API ---------------------------------------------
 
-EthardInstance ethardInit(const EthardMemoryAllocate memory_allocate, const EthardMemoryFree memory_free)
+UdpardInstance udpardInit(const UdpardMemoryAllocate memory_allocate, const UdpardMemoryFree memory_free)
 {
-    ETHARD_ASSERT(memory_allocate != NULL);
-    ETHARD_ASSERT(memory_free != NULL);
-    const EthardInstance out = {
+    UDPARD_ASSERT(memory_allocate != NULL);
+    UDPARD_ASSERT(memory_free != NULL);
+    const UdpardInstance out = {
         .user_reference   = NULL,
-        .node_id          = ETHARD_NODE_ID_UNSET,
+        .node_id          = UDPARD_NODE_ID_UNSET,
         .memory_allocate  = memory_allocate,
         .memory_free      = memory_free,
         .rx_subscriptions = {NULL, NULL, NULL},
@@ -857,9 +857,9 @@ EthardInstance ethardInit(const EthardMemoryAllocate memory_allocate, const Etha
     return out;
 }
 
-EthardTxQueue ethardTxInit(const size_t capacity, const size_t mtu_bytes)
+UdpardTxQueue udpardTxInit(const size_t capacity, const size_t mtu_bytes)
 {
-    EthardTxQueue out = {
+    UdpardTxQueue out = {
         .capacity       = capacity,
         .mtu_bytes      = mtu_bytes,
         .size           = 0,
@@ -869,18 +869,18 @@ EthardTxQueue ethardTxInit(const size_t capacity, const size_t mtu_bytes)
     return out;
 }
 
-int32_t ethardTxPush(EthardTxQueue* const                que,
-                     EthardInstance* const               ins,
-                     const EthardMicrosecond             tx_deadline_usec,
-                     const EthardTransferMetadata* const metadata,
+int32_t udpardTxPush(UdpardTxQueue* const                que,
+                     UdpardInstance* const               ins,
+                     const UdpardMicrosecond             tx_deadline_usec,
+                     const UdpardTransferMetadata* const metadata,
                      const size_t                        payload_size,
                      const void* const                   payload)
 {
-    int32_t out = -ETHARD_ERROR_INVALID_ARGUMENT;
+    int32_t out = -UDPARD_ERROR_INVALID_ARGUMENT;
     if ((ins != NULL) && (que != NULL) && (metadata != NULL) && ((payload != NULL) || (0U == payload_size)))
     {
         const size_t           pl_mtu = adjustPresentationLayerMTU(que->mtu_bytes);
-        EthardSessionSpecifier specifier;
+        UdpardSessionSpecifier specifier;
         const int32_t specifier_result = txMakeSessionSpecifier(metadata, ins->node_id, ins->local_ip_addr, &specifier);
         if (specifier_result >= 0)
         {
@@ -894,12 +894,12 @@ int32_t ethardTxPush(EthardTxQueue* const                que,
                                         metadata->transfer_id,
                                         payload_size,
                                         payload);
-                ETHARD_ASSERT((out < 0) || (out == 1));
+                UDPARD_ASSERT((out < 0) || (out == 1));
             }
             else
             {
                 out = txPushMultiFrame();
-                ETHARD_ASSERT((out < 0) || (out >= 2));
+                UDPARD_ASSERT((out < 0) || (out >= 2));
             }
         }
         else
@@ -907,31 +907,31 @@ int32_t ethardTxPush(EthardTxQueue* const                que,
             out = specifier_result;
         }
     }
-    ETHARD_ASSERT(out != 0);
+    UDPARD_ASSERT(out != 0);
     return out;
 }
 
-const EthardTxQueueItem* ethardTxPeek(const EthardTxQueue* const que)
+const UdpardTxQueueItem* udpardTxPeek(const UdpardTxQueue* const que)
 {
-    const EthardTxQueueItem* out = NULL;
+    const UdpardTxQueueItem* out = NULL;
     if (que != NULL)
     {
         // Paragraph 6.7.2.1.15 of the C standard says:
         //     A pointer to a structure object, suitably converted, points to its initial member, and vice versa.
-        out = (const EthardTxQueueItem*) cavlFindExtremum(que->root, false);
+        out = (const UdpardTxQueueItem*) cavlFindExtremum(que->root, false);
     }
     return out;
 }
 
-EthardTxQueueItem* ethardTxPop(EthardTxQueue* const que, const EthardTxQueueItem* const item)
+UdpardTxQueueItem* udpardTxPop(UdpardTxQueue* const que, const UdpardTxQueueItem* const item)
 {
-    EthardTxQueueItem* out = NULL;
+    UdpardTxQueueItem* out = NULL;
     if ((que != NULL) && (item != NULL))
     {
         // Intentional violation of MISRA: casting away const qualifier. This is considered safe because the API
         // contract dictates that the pointer shall point to a mutable entity in RAM previously allocated by the
         // memory manager. It is difficult to avoid this cast in this context.
-        out = (EthardTxQueueItem*) item;  // NOSONAR casting away const qualifier.
+        out = (UdpardTxQueueItem*) item;  // NOSONAR casting away const qualifier.
         // Paragraph 6.7.2.1.15 of the C standard says:
         //     A pointer to a structure object, suitably converted, points to its initial member, and vice versa.
         // Note that the highest-priority frame is always a leaf node in the AVL tree, which means that it is very
@@ -942,29 +942,29 @@ EthardTxQueueItem* ethardTxPop(EthardTxQueue* const que, const EthardTxQueueItem
     return out;
 }
 
-int8_t ethardRxAccept(EthardInstance* const         ins,
-                      const EthardMicrosecond       timestamp_usec,
-                      EthardFrame* const            frame,
+int8_t udpardRxAccept(UdpardInstance* const         ins,
+                      const UdpardMicrosecond       timestamp_usec,
+                      UdpardFrame* const            frame,
                       const uint8_t                 redundant_transport_index,
-                      EthardSessionSpecifier* const specifier,
-                      EthardRxTransfer* const       out_transfer,
-                      EthardRxSubscription** const  out_subscription)
+                      UdpardSessionSpecifier* const specifier,
+                      UdpardRxTransfer* const       out_transfer,
+                      UdpardRxSubscription** const  out_subscription)
 {
-    int8_t out = -ETHARD_ERROR_INVALID_ARGUMENT;
+    int8_t out = -UDPARD_ERROR_INVALID_ARGUMENT;
     if ((ins != NULL) && (out_transfer != NULL) && (frame != NULL) &&
         ((frame->payload != NULL) || (sizeof(frame->udp_cyphal_header) == frame->payload_size)))
     {
         RxFrameModel model = {0};
         if (rxTryParseFrame(timestamp_usec, specifier, frame, &model))
         {
-            if ((ETHARD_NODE_ID_UNSET == model.destination_node_id) || (ins->node_id == model.destination_node_id))
+            if ((UDPARD_NODE_ID_UNSET == model.destination_node_id) || (ins->node_id == model.destination_node_id))
             {
                 // This is the reason the function has a logarithmic time complexity of the number of subscriptions.
                 // Note also that this one of the two variable-complexity operations in the RX pipeline; the other
                 // one is memcpy(). Excepting these two cases, the entire RX pipeline contains neither loops nor
                 // recursion.
-                EthardRxSubscription* const sub =
-                    (EthardRxSubscription*) cavlSearch(&ins->rx_subscriptions[(size_t) model.transfer_kind],
+                UdpardRxSubscription* const sub =
+                    (UdpardRxSubscription*) cavlSearch(&ins->rx_subscriptions[(size_t) model.transfer_kind],
                                                        &model.port_id,
                                                        &rxSubscriptionPredicateOnPortID,
                                                        NULL);
@@ -974,7 +974,7 @@ int8_t ethardRxAccept(EthardInstance* const         ins,
                 }
                 if (sub != NULL)
                 {
-                    ETHARD_ASSERT(sub->port_id == model.port_id);
+                    UDPARD_ASSERT(sub->port_id == model.port_id);
                     out = rxAcceptFrame(ins, sub, &model, redundant_transport_index, out_transfer);
                 }
                 else
@@ -992,27 +992,27 @@ int8_t ethardRxAccept(EthardInstance* const         ins,
             out = 0;  // A non-Cyphal/UDP input frame.
         }
     }
-    ETHARD_ASSERT(out <= 1);
+    UDPARD_ASSERT(out <= 1);
     return out;
 }
 
-/// DONE -> This shouldn't change from canard to ethard
-int8_t ethardRxSubscribe(EthardInstance* const       ins,
-                         const EthardTransferKind    transfer_kind,
-                         const EthardPortID          port_id,
+/// DONE -> This shouldn't change from canard to udpard
+int8_t udpardRxSubscribe(UdpardInstance* const       ins,
+                         const UdpardTransferKind    transfer_kind,
+                         const UdpardPortID          port_id,
                          const size_t                extent,
-                         const EthardMicrosecond     transfer_id_timeout_usec,
-                         EthardRxSubscription* const out_subscription)
+                         const UdpardMicrosecond     transfer_id_timeout_usec,
+                         UdpardRxSubscription* const out_subscription)
 {
-    int8_t       out = -ETHARD_ERROR_INVALID_ARGUMENT;
+    int8_t       out = -UDPARD_ERROR_INVALID_ARGUMENT;
     const size_t tk  = (size_t) transfer_kind;
-    if ((ins != NULL) && (out_subscription != NULL) && (tk < ETHARD_NUM_TRANSFER_KINDS))
+    if ((ins != NULL) && (out_subscription != NULL) && (tk < UDPARD_NUM_TRANSFER_KINDS))
     {
         // Reset to the initial state. This is absolutely critical because the new payload size limit may be larger
         // than the old value; if there are any payload buffers allocated, we may overrun them because they are
         // shorter than the new payload limit. So we clear the subscription and thus ensure that no overrun may
         // occur.
-        out = ethardRxUnsubscribe(ins, transfer_kind, port_id);
+        out = udpardRxUnsubscribe(ins, transfer_kind, port_id);
         if (out >= 0)
         {
             out_subscription->transfer_id_timeout_usec = transfer_id_timeout_usec;
@@ -1025,34 +1025,34 @@ int8_t ethardRxSubscribe(EthardInstance* const       ins,
                 // We could accept an extra argument that would instruct us to pre-allocate sessions here?
                 out_subscription->sessions[i] = NULL;
             }
-            const EthardTreeNode* const res = cavlSearch(&ins->rx_subscriptions[tk],
+            const UdpardTreeNode* const res = cavlSearch(&ins->rx_subscriptions[tk],
                                                          out_subscription,
                                                          &rxSubscriptionPredicateOnStruct,
                                                          &avlTrivialFactory);
             (void) res;
-            ETHARD_ASSERT(res == &out_subscription->base);
+            UDPARD_ASSERT(res == &out_subscription->base);
             out = (out > 0) ? 0 : 1;
         }
     }
     return out;
 }
 
-/// DONE -> This shouldn't change from canard to ethard
-int8_t ethardRxUnsubscribe(EthardInstance* const    ins,
-                           const EthardTransferKind transfer_kind,
-                           const EthardPortID       port_id)
+/// DONE -> This shouldn't change from canard to udpard
+int8_t udpardRxUnsubscribe(UdpardInstance* const    ins,
+                           const UdpardTransferKind transfer_kind,
+                           const UdpardPortID       port_id)
 {
-    int8_t       out = -ETHARD_ERROR_INVALID_ARGUMENT;
+    int8_t       out = -UDPARD_ERROR_INVALID_ARGUMENT;
     const size_t tk  = (size_t) transfer_kind;
-    if ((ins != NULL) && (tk < ETHARD_NUM_TRANSFER_KINDS))
+    if ((ins != NULL) && (tk < UDPARD_NUM_TRANSFER_KINDS))
     {
-        EthardPortID                port_id_mutable = port_id;
-        EthardRxSubscription* const sub             = (EthardRxSubscription*)
+        UdpardPortID                port_id_mutable = port_id;
+        UdpardRxSubscription* const sub             = (UdpardRxSubscription*)
             cavlSearch(&ins->rx_subscriptions[tk], &port_id_mutable, &rxSubscriptionPredicateOnPortID, NULL);
         if (sub != NULL)
         {
             cavlRemove(&ins->rx_subscriptions[tk], &sub->base);
-            ETHARD_ASSERT(sub->port_id == port_id);
+            UDPARD_ASSERT(sub->port_id == port_id);
             out = 1;
             for (size_t i = 0; i < RX_SESSIONS_PER_SUBSCRIPTION; i++)
             {

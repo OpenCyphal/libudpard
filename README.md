@@ -1,14 +1,18 @@
+# NOTICE
+
+This package is a staging package to make changes before committing a pull request for the github repo: https://github.com/OpenCyphal-Garage/libudpard based on @schoberm's prototype work
+
 # Compact Cyphal/UDP v0 in C
 
-Libethard is a compact implementation of the Cyphal/UDP protocol stack in C99/C11 for high-integrity real-time
+Libudpard is a compact implementation of the Cyphal/UDP protocol stack in C99/C11 for high-integrity real-time
 embedded systems.
 
 [Cyphal](https://opencyphal.org) is an open lightweight data bus standard designed for reliable intravehicular
-communication in aerospace and robotic applications via CAN bus, Ethernet, and other robust transports.
+communication in aerospace and robotic applications via CAN bus, UDP, and other robust transports.
 
 ## WORK IN PROGRESS, NOT READY FOR FORMAL USE
 
-**Read the docs in [`libethard/ethard.h`](/libethard/ethard.h).**
+**Read the docs in [`libudpard/udpard.h`](/libudpard/udpard.h).**
 
 Building
 ```
@@ -17,6 +21,7 @@ cmake -B ./build -DCMAKE_BUILD_TYPE=Debug -DNO_STATIC_ANALYSIS=1 -DCMAKE_C_COMPI
 Testing
 ```
 cd build
+make
 make test
 ```
 

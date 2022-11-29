@@ -13,15 +13,15 @@ TEST_CASE("rxTryParseFrame")
     using exposed::rxTryParseFrame;
 
     RxFrameModel           model{};
-    EthardSessionSpecifier specifier{};
-    EthardFrameHeader      header{};
+    UdpardSessionSpecifier specifier{};
+    UdpardFrameHeader      header{};
 
-    const auto parse = [&](const EthardMicrosecond          timestamp_usec,
-                           EthardSessionSpecifier           session_specifier,
+    const auto parse = [&](const UdpardMicrosecond          timestamp_usec,
+                           UdpardSessionSpecifier           session_specifier,
                            const std::vector<std::uint8_t>& payload) {
         static std::vector<std::uint8_t> payload_storage;
         payload_storage = payload;
-        EthardFrame frame{};
+        UdpardFrame frame{};
         frame.payload_size = std::size(payload);
         frame.payload      = payload_storage.data();
         model              = RxFrameModel{};
@@ -65,11 +65,11 @@ TEST_CASE("rxTryParseFrame")
                       0,    1,    2,    3,    4,    5,    6,    7      // Payload
                   }));
     REQUIRE(model.timestamp_usec == 543210U);
-    REQUIRE(model.priority == EthardPriorityExceptional);
-    REQUIRE(model.transfer_kind == EthardTransferKindMessage);
+    REQUIRE(model.priority == UdpardPriorityExceptional);
+    REQUIRE(model.transfer_kind == UdpardTransferKindMessage);
     REQUIRE(model.port_id == 0U);
     REQUIRE(model.source_node_id == 0U);
-    REQUIRE(model.destination_node_id == ETHARD_NODE_ID_UNSET);
+    REQUIRE(model.destination_node_id == UDPARD_NODE_ID_UNSET);
     REQUIRE(model.transfer_id == 1U);
     // REQUIRE(model.frame_index == 1U);
     REQUIRE(model.start_of_transfer);
@@ -111,11 +111,11 @@ TEST_CASE("rxTryParseFrame")
                       0,    1,    2,    3,    4,    5,    6            // Payload
                   }));
     REQUIRE(model.timestamp_usec == 123456U);
-    REQUIRE(model.priority == EthardPriorityImmediate);
-    REQUIRE(model.transfer_kind == EthardTransferKindMessage);
+    REQUIRE(model.priority == UdpardPriorityImmediate);
+    REQUIRE(model.transfer_kind == UdpardTransferKindMessage);
     REQUIRE(model.port_id == 0b0110011001100U);
     REQUIRE(model.source_node_id == 0b0100111U);
-    REQUIRE(model.destination_node_id == ETHARD_NODE_ID_UNSET);
+    REQUIRE(model.destination_node_id == UDPARD_NODE_ID_UNSET);
     REQUIRE(model.transfer_id == 23U);
     REQUIRE(model.start_of_transfer);
     REQUIRE(!model.end_of_transfer);
@@ -158,11 +158,11 @@ TEST_CASE("rxTryParseFrame")
                       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Reserved b
                   }));
     REQUIRE(model.timestamp_usec == 12345U);
-    REQUIRE(model.priority == EthardPriorityFast);
-    REQUIRE(model.transfer_kind == EthardTransferKindMessage);
+    REQUIRE(model.priority == UdpardPriorityFast);
+    REQUIRE(model.transfer_kind == UdpardTransferKindMessage);
     REQUIRE(model.port_id == 0b0110011001101U);
-    REQUIRE(model.source_node_id == ETHARD_NODE_ID_UNSET);
-    REQUIRE(model.destination_node_id == ETHARD_NODE_ID_UNSET);
+    REQUIRE(model.source_node_id == UDPARD_NODE_ID_UNSET);
+    REQUIRE(model.destination_node_id == UDPARD_NODE_ID_UNSET);
     REQUIRE(model.transfer_id == 0U);
     REQUIRE(model.start_of_transfer);
     REQUIRE(model.end_of_transfer);
@@ -186,8 +186,8 @@ TEST_CASE("rxTryParseFrame")
                   }));
 
     REQUIRE(model.timestamp_usec == 999'999U);
-    REQUIRE(model.priority == EthardPriorityHigh);
-    REQUIRE(model.transfer_kind == EthardTransferKindRequest);
+    REQUIRE(model.priority == UdpardPriorityHigh);
+    REQUIRE(model.transfer_kind == UdpardTransferKindRequest);
     REQUIRE(model.port_id == 0b0000110011U);
     REQUIRE(model.source_node_id == 0b0100111U);
     REQUIRE(model.destination_node_id == 0b0011010U);
@@ -230,8 +230,8 @@ TEST_CASE("rxTryParseFrame")
                       255                                              // Payload
                   }));
     REQUIRE(model.timestamp_usec == 888'888U);
-    REQUIRE(model.priority == EthardPriorityNominal);
-    REQUIRE(model.transfer_kind == EthardTransferKindResponse);
+    REQUIRE(model.priority == UdpardPriorityNominal);
+    REQUIRE(model.transfer_kind == UdpardTransferKindResponse);
     REQUIRE(model.port_id == 0b0000110011U);
     REQUIRE(model.source_node_id == 0b0011010U);
     REQUIRE(model.destination_node_id == 0b0100111U);
@@ -373,7 +373,7 @@ TEST_CASE("rxSessionWritePayload")
 
     // Write with OOM.
     ins.getAllocator().setAllocationCeiling(5);
-    REQUIRE(-ETHARD_ERROR_OUT_OF_MEMORY == rxSessionWritePayload(&ins.getInstance(), &rxs, 10, 3, "\x00\x01\x02"));
+    REQUIRE(-UDPARD_ERROR_OUT_OF_MEMORY == rxSessionWritePayload(&ins.getInstance(), &rxs, 10, 3, "\x00\x01\x02"));
     REQUIRE(ins.getAllocator().getNumAllocatedFragments() == 0);
     REQUIRE(ins.getAllocator().getTotalAllocatedAmount() == 0);
     REQUIRE(rxs.payload_size == 0);
@@ -393,11 +393,11 @@ TEST_CASE("rxSessionUpdate")
 
     RxFrameModel frame;
     frame.timestamp_usec      = 10'000'000;
-    frame.priority            = EthardPrioritySlow;
-    frame.transfer_kind       = EthardTransferKindMessage;
+    frame.priority            = UdpardPrioritySlow;
+    frame.transfer_kind       = UdpardTransferKindMessage;
     frame.port_id             = 2'222;
     frame.source_node_id      = 55;
-    frame.destination_node_id = ETHARD_NODE_ID_UNSET;
+    frame.destination_node_id = UDPARD_NODE_ID_UNSET;
     frame.transfer_id         = 11;
     frame.start_of_transfer   = true;
     frame.end_of_transfer     = true;
@@ -408,7 +408,7 @@ TEST_CASE("rxSessionUpdate")
     rxs.transfer_id               = 31;
     rxs.redundant_transport_index = 1;
 
-    EthardRxTransfer transfer{};
+    UdpardRxTransfer transfer{};
 
     const auto update = [&](const std::uint8_t  redundant_transport_index,
                             const std::uint64_t tid_timeout_usec,
@@ -433,8 +433,8 @@ TEST_CASE("rxSessionUpdate")
     REQUIRE(rxs.transfer_id == 12U);  // Incremented.
     REQUIRE(rxs.redundant_transport_index == 1);
     REQUIRE(transfer.timestamp_usec == 10'000'000);
-    REQUIRE(transfer.metadata.priority == EthardPrioritySlow);
-    REQUIRE(transfer.metadata.transfer_kind == EthardTransferKindMessage);
+    REQUIRE(transfer.metadata.priority == UdpardPrioritySlow);
+    REQUIRE(transfer.metadata.transfer_kind == UdpardTransferKindMessage);
     REQUIRE(transfer.metadata.port_id == 2'222);
     REQUIRE(transfer.metadata.remote_node_id == 55);
     REQUIRE(transfer.metadata.transfer_id == 11);
@@ -467,8 +467,8 @@ TEST_CASE("rxSessionUpdate")
     REQUIRE(rxs.transfer_id == 13U);
     REQUIRE(rxs.redundant_transport_index == 1);
     REQUIRE(transfer.timestamp_usec == 10'000'050);
-    REQUIRE(transfer.metadata.priority == EthardPrioritySlow);
-    REQUIRE(transfer.metadata.transfer_kind == EthardTransferKindMessage);
+    REQUIRE(transfer.metadata.priority == UdpardPrioritySlow);
+    REQUIRE(transfer.metadata.transfer_kind == UdpardTransferKindMessage);
     REQUIRE(transfer.metadata.port_id == 2'222);
     REQUIRE(transfer.metadata.remote_node_id == 55);
     REQUIRE(transfer.metadata.transfer_id == 12);
@@ -502,8 +502,8 @@ TEST_CASE("rxSessionUpdate")
     REQUIRE(rxs.transfer_id == 13U);
     REQUIRE(rxs.redundant_transport_index == 0);
     REQUIRE(transfer.timestamp_usec == 20'000'000);
-    REQUIRE(transfer.metadata.priority == EthardPrioritySlow);
-    REQUIRE(transfer.metadata.transfer_kind == EthardTransferKindMessage);
+    REQUIRE(transfer.metadata.priority == UdpardPrioritySlow);
+    REQUIRE(transfer.metadata.transfer_kind == UdpardTransferKindMessage);
     REQUIRE(transfer.metadata.port_id == 2'222);
     REQUIRE(transfer.metadata.remote_node_id == 55);
     REQUIRE(transfer.metadata.transfer_id == 12);
@@ -537,7 +537,7 @@ TEST_CASE("rxSessionUpdate")
     frame.end_of_transfer   = true;
     frame.payload_size      = 8;
     frame.payload           = reinterpret_cast<const uint8_t*>("\x0E\x0E\x0E\x0E\x0E\x0E\x0E\xF7");
-    REQUIRE((-ETHARD_ERROR_OUT_OF_MEMORY) == update(2, 1'000'000, 17));  // Exceeds the heap quota.
+    REQUIRE((-UDPARD_ERROR_OUT_OF_MEMORY) == update(2, 1'000'000, 17));  // Exceeds the heap quota.
     REQUIRE(rxs.transfer_timestamp_usec == 20'000'200);
     REQUIRE(rxs.payload_size == 0);
     REQUIRE(rxs.payload == nullptr);
