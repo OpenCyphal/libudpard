@@ -339,7 +339,7 @@ TEST_CASE("rxSessionWritePayload")
     REQUIRE(ins.getAllocator().getTotalAllocatedAmount() == 0);
     REQUIRE(rxs.payload_size == 0);
     REQUIRE(rxs.payload == nullptr);
-    REQUIRE(rxs.calculated_crc == 0xFFFFU);
+    REQUIRE(rxs.calculated_crc == 0xFFFFFFFFU);
     REQUIRE(rxs.transfer_id == 1);
 
     // Double restart has no effect on memory.
@@ -350,7 +350,7 @@ TEST_CASE("rxSessionWritePayload")
     REQUIRE(ins.getAllocator().getTotalAllocatedAmount() == 0);
     REQUIRE(rxs.payload_size == 0);
     REQUIRE(rxs.payload == nullptr);
-    REQUIRE(rxs.calculated_crc == 0xFFFFU);
+    REQUIRE(rxs.calculated_crc == 0xFFFFFFFFU);
     REQUIRE(rxs.transfer_id == 24U);
 
     // Restart with a transfer-ID overflow.
@@ -361,7 +361,7 @@ TEST_CASE("rxSessionWritePayload")
     REQUIRE(ins.getAllocator().getTotalAllocatedAmount() == 0);
     REQUIRE(rxs.payload_size == 0);
     REQUIRE(rxs.payload == nullptr);
-    REQUIRE(rxs.calculated_crc == 0xFFFFU);
+    REQUIRE(rxs.calculated_crc == 0xFFFFFFFFU);
     REQUIRE(rxs.transfer_id == 0U);
 
     // Write into a zero-capacity storage. NULL at the output.
@@ -429,7 +429,7 @@ TEST_CASE("rxSessionUpdate")
     REQUIRE(rxs.transfer_timestamp_usec == 10'000'000);
     REQUIRE(rxs.payload_size == 0);   // Handed over to the output transfer.
     REQUIRE(rxs.payload == nullptr);  // Handed over to the output transfer.
-    REQUIRE(rxs.calculated_crc == 0xFFFF);
+    REQUIRE(rxs.calculated_crc == 0xFFFFFFFFU);
     REQUIRE(rxs.transfer_id == 12U);  // Incremented.
     REQUIRE(rxs.redundant_transport_index == 1);
     REQUIRE(transfer.timestamp_usec == 10'000'000);
@@ -452,7 +452,7 @@ TEST_CASE("rxSessionUpdate")
     REQUIRE(rxs.transfer_timestamp_usec == 10'000'000);
     REQUIRE(rxs.payload_size == 0);   // Handed over to the output transfer.
     REQUIRE(rxs.payload == nullptr);  // Handed over to the output transfer.
-    REQUIRE(rxs.calculated_crc == 0xFFFF);
+    REQUIRE(rxs.calculated_crc == 0xFFFFFFFFU);
     REQUIRE(rxs.transfer_id == 12U);  // Incremented.
     REQUIRE(rxs.redundant_transport_index == 1);
 
@@ -463,7 +463,7 @@ TEST_CASE("rxSessionUpdate")
     REQUIRE(rxs.transfer_timestamp_usec == 10'000'050);
     REQUIRE(rxs.payload_size == 0);
     REQUIRE(rxs.payload == nullptr);
-    REQUIRE(rxs.calculated_crc == 0xFFFF);
+    REQUIRE(rxs.calculated_crc == 0xFFFFFFFFU);
     REQUIRE(rxs.transfer_id == 13U);
     REQUIRE(rxs.redundant_transport_index == 1);
     REQUIRE(transfer.timestamp_usec == 10'000'050);
@@ -486,7 +486,7 @@ TEST_CASE("rxSessionUpdate")
     REQUIRE(rxs.transfer_timestamp_usec == 10'000'050);
     REQUIRE(rxs.payload_size == 0);
     REQUIRE(rxs.payload == nullptr);
-    REQUIRE(rxs.calculated_crc == 0xFFFF);
+    REQUIRE(rxs.calculated_crc == 0xFFFFFFFFU);
     REQUIRE(rxs.transfer_id == 13U);
     REQUIRE(rxs.redundant_transport_index == 1);
 
@@ -498,7 +498,7 @@ TEST_CASE("rxSessionUpdate")
     REQUIRE(rxs.transfer_timestamp_usec == 20'000'000);
     REQUIRE(rxs.payload_size == 0);
     REQUIRE(rxs.payload == nullptr);
-    REQUIRE(rxs.calculated_crc == 0xFFFF);
+    REQUIRE(rxs.calculated_crc == 0xFFFFFFFFU);
     REQUIRE(rxs.transfer_id == 13U);
     REQUIRE(rxs.redundant_transport_index == 0);
     REQUIRE(transfer.timestamp_usec == 20'000'000);
@@ -524,7 +524,7 @@ TEST_CASE("rxSessionUpdate")
     REQUIRE(rxs.transfer_timestamp_usec == 20'000'000);  // No change.
     REQUIRE(rxs.payload_size == 0);
     REQUIRE(rxs.payload == nullptr);
-    REQUIRE(rxs.calculated_crc == 0xFFFF);
+    REQUIRE(rxs.calculated_crc == 0xFFFFFFFFU);
     REQUIRE(rxs.transfer_id == 13U);
     REQUIRE(rxs.redundant_transport_index == 2);
     REQUIRE(ins.getAllocator().getNumAllocatedFragments() == 0);
@@ -541,7 +541,7 @@ TEST_CASE("rxSessionUpdate")
     REQUIRE(rxs.transfer_timestamp_usec == 20'000'200);
     REQUIRE(rxs.payload_size == 0);
     REQUIRE(rxs.payload == nullptr);
-    REQUIRE(rxs.calculated_crc == 0xFFFF);
+    REQUIRE(rxs.calculated_crc == 0xFFFFFFFFU);
     REQUIRE(rxs.transfer_id == 31U);  // Reset.
     REQUIRE(rxs.redundant_transport_index == 2);
     REQUIRE(ins.getAllocator().getNumAllocatedFragments() == 0);

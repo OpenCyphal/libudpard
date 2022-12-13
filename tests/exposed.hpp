@@ -14,7 +14,7 @@
 /// Please keep them in sync with the library by manually updating as necessary.
 namespace exposed
 {
-using TransferCRC = std::uint16_t;
+using TransferCRC = std::uint32_t;
 
 struct TxItem final : UdpardTxQueueItem
 {
@@ -76,7 +76,7 @@ struct RxFrameModel
 // Extern C effectively discards the outer namespaces.
 extern "C" {
 
-auto crcAdd(const std::uint16_t crc, const std::size_t size, const void* const bytes) -> std::uint16_t;
+auto crcAdd(const std::uint32_t crc, const std::size_t size, const void* const bytes) -> std::uint32_t;
 
 auto txMakeMessageSessionSpecifier(const UdpardPortID            subject_id,
                                    const UdpardNodeID            src_node_id,
