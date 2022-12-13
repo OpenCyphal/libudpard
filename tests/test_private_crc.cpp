@@ -1,3 +1,4 @@
+// This software is distributed under the terms of the MIT License.
 // Copyright (c) 2016-2020 OpenCyphal Development Team.
 // Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
