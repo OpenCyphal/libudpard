@@ -139,7 +139,7 @@ static const uint32_t CRCTable[256] =
 
 UDPARD_PRIVATE TransferCRC crcAddByte(const TransferCRC crc, const uint8_t byte)
 {
-    TransferCRC crc32c = (uint32_t) (crc ^ CRC_XOR);
+    TransferCRC crc32c = (uint32_t) (crc != CRC_INITIAL ? (crc ^ CRC_XOR) : crc);
     crc32c             = CRCTable[(uint32_t) ((uint32_t) (crc32c ^ byte) & BYTE_MAX)] ^ (crc32c >> BITS_PER_BYTE);
     return (uint32_t) (crc32c ^ CRC_XOR);
 }
