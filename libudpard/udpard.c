@@ -95,6 +95,9 @@ IRNR - Is Request, Not Response
 #define UDPARD_SERVICE_NOT_MESSAGE_DATA_SPECIFIER_OFFSET 15U
 #define UDPARD_IRNR_DATA_SPECIFIER_OFFSET 14U
 #define UDPARD_SERVICE_ID_MASK 16383U  /// 0x3FFF
+#define UPDARD_DATA_SPECIFIER_MESSAGE (0xFFFF >> 1) // SNM (0) + SubjectID
+#define UDPARD_DATA_SPECIFIER_SERVICE_RESPONSE (2U << UDPARD_IRNR_DATA_SPECIFIER_OFFSET)  // Set SNM in Cyphal data specifier - SNM (1) + IRNR (0) + ServiceID
+#define UDPARD_DATA_SPECIFIER_SERVICE_REQUEST (3U << UDPARD_IRNR_DATA_SPECIFIER_OFFSET) // Set SNM and IRNR in Cyphal data specifier - SNM (1) + IRNR (1) + ServiceID
 
 /// Ports align with subject and service ids
 /// Subjects use multicast and always use port 16383
@@ -335,13 +338,13 @@ UDPARD_PRIVATE void txMakeFrameHeader(UdpardFrameHeader* const header,
     header->destination_node_id   = dst_node_id;
     if (transfer_kind == UdpardTransferKindMessage)
     {
-        header->data_specifier = (uint16_t) (0xFFFF >> 1) & port_id;  // SNM (0) + Subject ID
+        header->data_specifier = (uint16_t) UPDARD_DATA_SPECIFIER_MESSAGE & port_id;  // SNM (0) + Subject ID
     }
     else
     {
         header->data_specifier =
-            (transfer_kind == UdpardTransferKindRequest) ? (3U << UDPARD_IRNR_DATA_SPECIFIER_OFFSET) | port_id
-                                                         : (2U << UDPARD_IRNR_DATA_SPECIFIER_OFFSET) | port_id;  // SNM (1) + IRNR + ServiceID
+            (transfer_kind == UdpardTransferKindRequest) ? UDPARD_DATA_SPECIFIER_SERVICE_REQUEST | port_id
+                                                         : UDPARD_DATA_SPECIFIER_SERVICE_RESPONSE | port_id;  // SNM (1) + IRNR + ServiceID
     }
 }
 
