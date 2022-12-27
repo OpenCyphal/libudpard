@@ -29,19 +29,27 @@ TEST_CASE("rxTryParseFrame")
     };
 
     // Some initial header setup and payload test
-    header._reserved_a                       = 0x1234;
-    header._reserved_b                       = 0x0123456789ABCDEF;
-    header.version                           = 0xFF;
-    header.frame_index_eot                   = (1U << 31U) + 1U;
+    header.version                           = 0x01;
     header.priority                          = 0x07;
-    header.transfer_id                       = 0x00000001;
+    header.source_node_id                    = 0x0000;
+    header.destination_node_id               = 0xFFFF;
+    header.data_specifier                    = 0x0000;
+    header.transfer_id                       = 0x0000000000000001;
+    header.frame_index_eot                   = (1U << 31U) + 1U;
+    header._opaque                           = 0x0000;
+    header.cyphal_header_checksum            = 0x0000;
+
+
     const std::vector<uint8_t>& test_payload = {
-        0xFF,                                            // Version
+        0x01,                                            // Version
         0x07,                                            // Priority
-        0x34, 0x12,                                      // Reserved a
-        0x01, 0x00, 0x00, 0x80,                          // Frame EOT
+        0x00, 0x00,                                      // Source Node ID
+        0xFF, 0xFF,                                      // Destination Node ID
+        0x00, 0x00,                                      // Data Specifier
         0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Transfer ID
-        0xEF, 0xCD, 0xAB, 0x89, 0x67, 0x45, 0x23, 0x01   // Reserved b
+        0x01, 0x00, 0x00, 0x80,                          // Frame EOT
+        0x00, 0x00,                                      // Opaque Data
+        0x00, 0x00,                                      // Transfer CRC
     };
 
     REQUIRE(sizeof(header) == 24U);
@@ -56,12 +64,15 @@ TEST_CASE("rxTryParseFrame")
     REQUIRE(parse(543210U,
                   specifier,
                   {
-                      0x00,                                            // Version
+                      0x01,                                            // Version
                       0x00,                                            // Priority
-                      0x00, 0x00,                                      // Reserved a
-                      0x01, 0x00, 0x00, 0x80,                          // Frame EOT
+                      0x00, 0x00,                                      // Source Node ID
+                      0xFF, 0xFF,                                      // Destination Node ID
+                      0x00, 0x00,                                      // Data Specifier
                       0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Transfer ID
-                      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Reserved b
+                      0x01, 0x00, 0x00, 0x80,                          // Frame EOT
+                      0x00, 0x00,                                      // Opaque Data
+                      0x00, 0x00,                                      // Transfer CRC
                       0,    1,    2,    3,    4,    5,    6,    7      // Payload
                   }));
     REQUIRE(model.timestamp_usec == 543210U);
@@ -89,12 +100,15 @@ TEST_CASE("rxTryParseFrame")
     REQUIRE(!parse(543210U,
                    specifier,
                    {
-                       0x00,                                            // Version
+                       0x01,                                            // Version
                        0x00,                                            // Priority
-                       0x00, 0x00,                                      // Reserved a
-                       0x00, 0x00, 0x00, 0x00,                          // Frame EOT
+                       0x00, 0x00,                                      // Source Node ID
+                       0xFF, 0xFF,                                      // Destination Node ID
+                       0x00, 0x00,                                      // Data Specifier
                        0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Transfer ID
-                       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00   // Reserved b
+                       0x00, 0x00, 0x00, 0x80,                          // Frame EOT
+                       0x00, 0x00,                                      // Opaque Data
+                       0x00, 0x00,                                      // Transfer CRC
                    }));                                                 // MFT FRAMES REQUIRE PAYLOAD
 
     // MESSAGE
@@ -102,12 +116,15 @@ TEST_CASE("rxTryParseFrame")
     REQUIRE(parse(123456U,
                   specifier,
                   {
-                      0x00,                                            // Version
+                      0x01,                                            // Version
                       0x01,                                            // Priority
-                      0x00, 0x00,                                      // Reserved a
-                      0x01, 0x00, 0x00, 0x00,                          // Frame EOT
+                      0x27, 0x00,                                      // Source Node ID
+                      0xFF, 0xFF,                                      // Destination Node ID
+                      0xCC, 0x0C,                                      // Data Specifier
                       0x17, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Transfer ID
-                      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Reserved b
+                      0x01, 0x00, 0x00, 0x00,                          // Frame EOT
+                      0x00, 0x00,                                      // Opaque Data
+                      0x00, 0x00,                                      // Transfer CRC
                       0,    1,    2,    3,    4,    5,    6            // Payload
                   }));
     REQUIRE(model.timestamp_usec == 123456U);
@@ -132,30 +149,36 @@ TEST_CASE("rxTryParseFrame")
     // NO HEADER
     REQUIRE(!parse(123456U, specifier, {}));
     // ANON NOT SINGLE FRAME
-    REQUIRE(0 == exposed::txMakeMessageSessionSpecifier(0b0110011001100, 0b0, 0xc0a80000, &specifier));
+    REQUIRE(0 == exposed::txMakeMessageSessionSpecifier(0b0110011001100, 0b1111111111111111, 0xc0a80000, &specifier));
     REQUIRE(!parse(123456U,
                    specifier,
                    {
-                       0x00,                                            // Version
+                       0x01,                                            // Version
                        0x01,                                            // Priority
-                       0x00, 0x00,                                      // Reserved a
-                       0x17, 0x00, 0x00, 0x80,                          // Frame EOT
+                       0xFF, 0xFF,                                      // Source Node ID
+                       0xFF, 0xFF,                                      // Destination Node ID
+                       0xCC, 0x0C,                                      // Data Specifier
                        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Transfer ID
-                       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Reserved b
+                       0x17, 0x00, 0x00, 0x80,                          // Frame EOT
+                       0x00, 0x00,                                      // Opaque Data
+                       0x00, 0x00,                                      // Transfer CRC
                        0,    1,    2,    3,    4,    5,    6            // Payload
                    }));
 
     // ANONYMOUS MESSAGE
-    REQUIRE(0 == exposed::txMakeMessageSessionSpecifier(0b0110011001101, 0b0, 0xc0a80000, &specifier));
+    REQUIRE(0 == exposed::txMakeMessageSessionSpecifier(0b0110011001101, 0b1111111111111111, 0xc0a80000, &specifier));
     REQUIRE(parse(12345U,
                   specifier,
                   {
-                      0x00,                                            // Version
+                      0x01,                                            // Version
                       0x02,                                            // Priority
-                      0x00, 0x00,                                      // Reserved a
-                      0x01, 0x00, 0x00, 0x80,                          // Frame EOT
+                      0xFF, 0xFF,                                      // Source Node ID
+                      0xFF, 0xFF,                                      // Destination Node ID
+                      0xCD, 0x0C,                                      // Data Specifier
                       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Transfer ID
-                      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Reserved b
+                      0x01, 0x00, 0x00, 0x80,                          // Frame EOT
+                      0x00, 0x00,                                      // Opaque Data
+                      0x00, 0x00,                                      // Transfer CRC
                   }));
     REQUIRE(model.timestamp_usec == 12345U);
     REQUIRE(model.priority == UdpardPriorityFast);
@@ -176,12 +199,15 @@ TEST_CASE("rxTryParseFrame")
     REQUIRE(parse(999'999U,
                   specifier,
                   {
-                      0x00,                                            // Version
+                      0x01,                                            // Version
                       0x03,                                            // Priority
-                      0x00, 0x00,                                      // Reserved a
-                      0xFF, 0x00, 0x00, 0x80,                          // Frame EOT
+                      0x27, 0x00,                                      // Source Node ID
+                      0x1A, 0x00,                                      // Destination Node ID
+                      0x33, 0xC0,                                      // Data Specifier
                       0x1F, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Transfer ID
-                      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Reserved b
+                      0xFF, 0x00, 0x00, 0x80,                          // Frame EOT
+                      0x00, 0x00,                                      // Opaque Data
+                      0x00, 0x00,                                      // Transfer CRC
                       0,    1,    2,    3                              // Payload
                   }));
 
@@ -199,19 +225,22 @@ TEST_CASE("rxTryParseFrame")
     REQUIRE(model.payload[1] == 1);
     REQUIRE(model.payload[2] == 2);
     REQUIRE(model.payload[3] == 3);
-    // SIMILAR BUT INVALID
+    // SIMILAR BUT INVALID (Source Node ID cant be equal to Destination Node ID)
     REQUIRE(!parse(999'999U, specifier, {}));  // NO HEADER
     REQUIRE(0 ==
             exposed::txMakeServiceSessionSpecifier(0b0000110011, true, 0b0100111, 0b0100111, 0xc0a80000, &specifier));
     REQUIRE(!parse(999'999U,
                    specifier,
                    {
-                       0x00,                                            // Version
+                       0x01,                                            // Version
                        0x03,                                            // Priority
-                       0x00, 0x00,                                      // Reserved a
-                       0xFF, 0x00, 0x00, 0x80,                          // Frame EOT
+                       0x27, 0x00,                                      // Source Node ID
+                       0x27, 0x00,                                      // Destination Node ID
+                       0x33, 0xC0,                                      // Data Specifier
                        0x1F, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Transfer ID
-                       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Reserved b
+                       0xFF, 0x00, 0x00, 0x80,                          // Frame EOT
+                       0x00, 0x00,                                      // Opaque Data
+                       0x00, 0x00,                                      // Transfer CRC
                        0,    1,    2,    3                              // Payload
                    }));
 
@@ -221,12 +250,15 @@ TEST_CASE("rxTryParseFrame")
     REQUIRE(parse(888'888,
                   specifier,
                   {
-                      0x00,                                            // Version
+                      0x01,                                            // Version
                       0x04,                                            // Priority
-                      0x00, 0x00,                                      // Reserved a
-                      0xFF, 0x00, 0x00, 0x80,                          // Frame EOT
+                      0x1A, 0x00,                                      // Source Node ID
+                      0x27, 0x00,                                      // Destination Node ID
+                      0x33, 0x80,                                      // Data Specifier
                       0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Transfer ID
-                      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Reserved b
+                      0xFF, 0x00, 0x00, 0x80,                          // Frame EOT
+                      0x00, 0x00,                                      // Opaque Data
+                      0x00, 0x00,                                      // Transfer CRC
                       255                                              // Payload
                   }));
     REQUIRE(model.timestamp_usec == 888'888U);
@@ -240,7 +272,7 @@ TEST_CASE("rxTryParseFrame")
     REQUIRE(model.end_of_transfer);
     REQUIRE(model.payload_size == 1);
     REQUIRE(model.payload[0] == 255);
-    // SIMILAR BUT INVALID
+    // SIMILAR BUT INVALID (Source Node ID cant be equal to Destination Node ID)
     REQUIRE(!parse(888'888U, specifier, {}));  // NO TAIL BYTE
     REQUIRE(
         0 ==
@@ -248,12 +280,15 @@ TEST_CASE("rxTryParseFrame")
     REQUIRE(!parse(888'888,
                    specifier,
                    {
-                       0x00,                                            // Version
+                       0x01,                                            // Version
                        0x04,                                            // Priority
-                       0x00, 0x00,                                      // Reserved a
-                       0xFF, 0x00, 0x00, 0x80,                          // Frame EOT
+                       0x1A, 0x00,                                      // Source Node ID
+                       0x1A, 0x00,                                      // Destination Node ID
+                       0x33, 0x80,                                      // Data Specifier
                        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Transfer ID
-                       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Reserved b
+                       0xFF, 0x00, 0x00, 0x80,                          // Frame EOT
+                       0x00, 0x00,                                      // Opaque Data
+                       0x00, 0x00,                                      // Transfer CRC
                        255                                              // Payload
                    }));
 }

@@ -7,26 +7,27 @@
 #include "catch/catch.hpp"
 
 #define UDPARD_SUBJECT_ID_PORT 16383U
+#define UDPARD_UDP_PORT 9382U
 
 TEST_CASE("SessionSpecifier")
 {
     // Message
     UdpardSessionSpecifier specifier = {};
     REQUIRE(0 == exposed::txMakeMessageSessionSpecifier(0b0110011001100, 0b0100111, 0xc0a80000, &specifier));
-    REQUIRE(UDPARD_SUBJECT_ID_PORT == specifier.data_specifier);
-    REQUIRE(0b11101111'0'0101000'000'0110011001100 == specifier.destination_route_specifier);
+    REQUIRE(UDPARD_UDP_PORT == specifier.data_specifier);
+    REQUIRE(0b11101111'00'10100'0'0'0001100'11001100 == specifier.destination_route_specifier);
     REQUIRE(0b11000000'10101000'00000000'00100111 == specifier.source_route_specifier);
     // Service Request
     REQUIRE(0 ==
             exposed::txMakeServiceSessionSpecifier(0b0100110011, true, 0b1010101, 0b0101010, 0xc0a80000, &specifier));
-    REQUIRE(16998 == specifier.data_specifier);
-    REQUIRE(0b11000000'10101000'00000000'00101010 == specifier.destination_route_specifier);
+    REQUIRE(UDPARD_UDP_PORT == specifier.data_specifier);
+    REQUIRE(0b11101111'00'10100'1'00000000'00101010 == specifier.destination_route_specifier);
     REQUIRE(0b11000000'10101000'00000000'01010101 == specifier.source_route_specifier);
     // Service Response
     REQUIRE(0 ==
             exposed::txMakeServiceSessionSpecifier(0b0100110011, false, 0b1010101, 0b0101010, 0xc0a80000, &specifier));
-    REQUIRE(16999 == specifier.data_specifier);
-    REQUIRE(0b11000000'10101000'00000000'00101010 == specifier.destination_route_specifier);
+    REQUIRE(UDPARD_UDP_PORT == specifier.data_specifier);
+    REQUIRE(0b11101111'00'10100'1'00000000'00101010 == specifier.destination_route_specifier);
     REQUIRE(0b11000000'10101000'00000000'01010101 == specifier.source_route_specifier);
 }
 
@@ -42,7 +43,7 @@ TEST_CASE("txMakeSessionSpecifier")
     const auto mk_meta = [&](const UdpardPriority     priority,
                              const UdpardTransferKind kind,
                              const std::uint16_t      port_id,
-                             const std::uint8_t       remote_node_id) {
+                             const std::uint16_t       remote_node_id) {
         meta.priority       = priority;
         meta.transfer_kind  = kind;
         meta.port_id        = port_id;
@@ -73,17 +74,9 @@ TEST_CASE("txMakeSessionSpecifier")
                                    0xc0a80000,
                                    &specifier));
 
-    REQUIRE(UDPARD_SUBJECT_ID_PORT == specifier.data_specifier);
-    REQUIRE(0b11101111'0'0101000'000'1001100110011 == specifier.destination_route_specifier);
+    REQUIRE(UDPARD_UDP_PORT == specifier.data_specifier);
+    REQUIRE(0b11101111'00'10100'0'0'0010011'00110011 == specifier.destination_route_specifier);
     REQUIRE(0b11000000'10101000'00000000'01010101 == specifier.source_route_specifier);
-    REQUIRE(-UDPARD_ERROR_INVALID_ARGUMENT ==  // Invalid node-ID
-            txMakeSessionSpecifier(mk_meta(UdpardPriorityImmediate,
-                                           UdpardTransferKindMessage,
-                                           0b1001100110011,
-                                           UDPARD_NODE_ID_UNSET),
-                                   0xBEEF,  // node-ID too large
-                                   0xc0a80000,
-                                   &specifier));
     REQUIRE(-UDPARD_ERROR_INVALID_ARGUMENT ==  // Bad subject-ID.
             txMakeSessionSpecifier(mk_meta(UdpardPriorityExceptional,
                                            UdpardTransferKindMessage,

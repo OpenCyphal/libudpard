@@ -52,16 +52,15 @@ extern "C" {
 #define UDPARD_MTU_MAX UDPARD_MTU_UDP_IPV6  /// We may want to set this to 1400/1500 for Ethernet MTU
 
 /// Parameter ranges are inclusive; the lower bound is zero for all. See Cyphal/UDP Specification for background.
-#define UDPARD_SUBJECT_ID_MAX 8191U   /// 13 bits subject ID
-#define UDPARD_SERVICE_ID_MAX 65535U  /// The hard limit for ports
-#define UDPARD_NODE_SUBNET_MAX 128U   /// 7 bits for subnet
-// #define UDPARD_NODE_ID_MAX 65535U     /// 16 bits is the hard limit. But this may change pending implementations
-#define UDPARD_NODE_ID_MAX 255U  /// Setting to a lower value until we can determine a way to pre-allocate sessions
+#define UDPARD_SUBJECT_ID_MAX 32767U   /// 15 bits subject ID
+#define UDPARD_SERVICE_ID_MAX 65535U   /// The hard limit for ports
+#define UDPARD_NODE_SUBNET_MAX 31U     /// 5 bits for subnet
+#define UDPARD_NODE_ID_MAX 65535U      /// 16 bits is the hard limit. But this may change pending implementations
 #define UDPARD_PRIORITY_MAX 7U
 #define UDPARD_TRANSFER_ID_BIT_LENGTH 63ULL
 #define UDPARD_TRANSFER_ID_MAX ((1ULL << UDPARD_TRANSFER_ID_BIT_LENGTH) - 1ULL)
 
-#define UDPARD_NODE_ID_UNSET 0U  /// For UDP No ID is the anonymous ID
+#define UDPARD_NODE_ID_UNSET 65535U  /// For UDP 0xFFFF is the anonymous ID
 
 /// This is the recommended transfer-ID timeout value given in the Cyphal Specification. The application may choose
 /// different values per subscription (i.e., per data specifier) depending on its timing requirements.
@@ -114,10 +113,13 @@ typedef struct
 {
     uint8_t  version;
     uint8_t  priority;
-    uint16_t _reserved_a;
-    uint32_t frame_index_eot;
+    uint16_t source_node_id;
+    uint16_t destination_node_id;
+    uint16_t data_specifier;
     uint64_t transfer_id;
-    uint64_t _reserved_b;
+    uint32_t frame_index_eot;
+    uint16_t _opaque;
+    uint16_t cyphal_header_checksum;
 } UdpardFrameHeader;
 
 typedef struct
