@@ -71,12 +71,15 @@ struct RxFrameModel
     bool                end_of_transfer     = false;
     std::size_t         payload_size        = 0U;
     const std::uint8_t* payload             = nullptr;
+    uint32_t            frame_index         = 0U;
 };
 
 // Extern C effectively discards the outer namespaces.
 extern "C" {
 
 auto crcAdd(const std::uint32_t crc, const std::size_t size, const void* const bytes) -> std::uint32_t;
+
+auto crcValue(const std::uint32_t crc) -> std::uint32_t;
 
 auto txMakeMessageSessionSpecifier(const UdpardPortID            subject_id,
                                    const UdpardNodeID            src_node_id,

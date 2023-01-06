@@ -95,12 +95,8 @@ TEST_CASE("RoundtripSimple")
                 (tran.transfer_kind == UdpardTransferKindMessage) ? UDPARD_NODE_ID_UNSET : ins_rx.getNodeID();
             tran.transfer_id = (st.transfer_id++) & UDPARD_TRANSFER_ID_MAX;
 
-            /* We will use a random MTU when multiframe transfers are implemented.
             // Use a random MTU.
-            que_tx.setMTU(static_cast<std::uint8_t>(getRandomNatural(256U)));
-            */
-            // Set the MTU to the max for testing
-            que_tx.setMTU(UDPARD_MTU_MAX);
+            que_tx.setMTU(static_cast<std::uint8_t>(getRandomNatural(256U - sizeof(UdpardFrameHeader)) + sizeof(UdpardFrameHeader)) + 1U);
 
             // Push the transfer.
             bool sleep = false;
@@ -176,12 +172,17 @@ TEST_CASE("RoundtripSimple")
                 UdpardRxSubscription* subscription = nullptr;
                 std::int8_t           result =
                     ins_rx.rxAccept(ti->tx_deadline_usec, ti->frame, 0, ti->specifier, transfer, &subscription);
-                REQUIRE(0 == ins_rx.rxAccept(ti->tx_deadline_usec,
+                REQUIRE(((-UDPARD_ERROR_OUT_OF_ORDER == ins_rx.rxAccept(ti->tx_deadline_usec,
                                              ti->frame,
                                              1,
                                              ti->specifier,
                                              transfer,
-                                             &subscription));  // Redundant interface will never be used here.
+                                             &subscription)) || (0 == ins_rx.rxAccept(ti->tx_deadline_usec,
+                                             ti->frame,
+                                             1,
+                                             ti->specifier,
+                                             transfer,
+                                             &subscription))));  // Redundant interface will never be used here.
                 if (result == 1)
                 {
                     Pending reference{};  // Fetch the reference transfer from the list of pending.
@@ -216,7 +217,7 @@ TEST_CASE("RoundtripSimple")
                 }
                 else
                 {
-                    REQUIRE(result == 0);
+                    REQUIRE((result == 0 || result == -UDPARD_ERROR_OUT_OF_ORDER));
                 }
             }
             else

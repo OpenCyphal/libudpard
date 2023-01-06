@@ -23,6 +23,7 @@ TEST_CASE("RxBasic0")
     using exposed::RxSession;
 
     Instance               ins;
+    Instance               ins_new;
     UdpardRxTransfer       transfer{};
     UdpardSessionSpecifier specifier{};
     UdpardFrameHeader      header{};
