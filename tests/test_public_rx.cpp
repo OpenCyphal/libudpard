@@ -8,6 +8,7 @@
 #include <cstring>
 
 #define UDPARD_SUBJECT_ID_PORT 16383U
+#define UDPARD_UDP_PORT 9382U
 
 // clang-tidy mistakenly suggests to avoid C arrays here, which is clearly an error
 template <typename P, std::size_t N>
@@ -53,17 +54,18 @@ TEST_CASE("RxBasic0")
     REQUIRE(ins.getRequestSubs().empty());
 
     // Some initial header setup
-    header._reserved_a = 0;
-    header._reserved_b = 0;
-    header.version     = 0;
+    header.version     = 1;
 
     // A valid single-frame transfer for which there is no subscription.
     subscription                          = nullptr;
-    header.frame_index_eot                = (1U << 31U) + 1U;
     header.priority                       = 0b001;
+    header.source_node_id                 = 0b0000000000100111;
+    header.destination_node_id            = 0b1111111111111111;
+    header.data_specifier                 = 0b0000110011001100;
     header.transfer_id                    = 1;
-    specifier.data_specifier              = UDPARD_SUBJECT_ID_PORT;
-    specifier.destination_route_specifier = 0b11101111'0'0101000'000'0110011001100;
+    header.frame_index_eot                = (1U << 31U) + 1U;
+    specifier.data_specifier              = UDPARD_UDP_PORT;
+    specifier.destination_route_specifier = 0b11101111'00'01000'0'0'000110011001100;
     specifier.source_route_specifier      = 0b11000000'10101000'00000000'00100111;
     REQUIRE(0 == accept(0, 100'000'000, header, specifier, {}));
     REQUIRE(subscription == nullptr);
@@ -118,8 +120,9 @@ TEST_CASE("RxBasic0")
     header.frame_index_eot                = (1U << 31U) + 1U;
     header.priority                       = 0b001;
     header.transfer_id                    = 0;
-    specifier.data_specifier              = UDPARD_SUBJECT_ID_PORT;
-    specifier.destination_route_specifier = 0b11101111'0'0101000'000'0110011001100;
+    header.data_specifier                 = 0b0000110011001100;
+    specifier.data_specifier              = UDPARD_UDP_PORT;
+    specifier.destination_route_specifier = 0b11101111'00'01000'0'0'000110011001100;
     specifier.source_route_specifier      = 0b11000000'10101000'00000000'00100111;
     REQUIRE(1 == accept(0, 100'000'001, header, specifier, {}));
     REQUIRE(subscription != nullptr);
@@ -145,8 +148,11 @@ TEST_CASE("RxBasic0")
     header.frame_index_eot                = (1U << 31U) + 1U;
     header.priority                       = 0b011;
     header.transfer_id                    = 1;
-    specifier.data_specifier              = 16486;
-    specifier.destination_route_specifier = 0b11000000'10101000'00000000'00011010;
+    header.source_node_id                 = 0b00000000'00100111;
+    header.destination_node_id            = 0b00000000'00011010;
+    header.data_specifier                 = 0b1100000000110011;  // Service ID = 51
+    specifier.data_specifier              = UDPARD_UDP_PORT;
+    specifier.destination_route_specifier = 0b11101111'00'01000'1'00000000'00011010;
     specifier.source_route_specifier      = 0b11000000'10101000'00000000'00100111;
 
     REQUIRE(0 == accept(0, 100'000'002, header, specifier, {}));
@@ -158,8 +164,10 @@ TEST_CASE("RxBasic0")
     header.frame_index_eot                = (1U << 31U) + 1U;
     header.priority                       = 0b011;
     header.transfer_id                    = 1;
-    specifier.data_specifier              = 16486;
-    specifier.destination_route_specifier = 0b11000000'10101000'00000000'00011011;
+    header.source_node_id                 = 0b00000000'00100111;
+    header.destination_node_id            = 0b00000000'00011011;
+    specifier.data_specifier              = UDPARD_UDP_PORT;
+    specifier.destination_route_specifier = 0b11101111'00'01000'1'00000000'00011011;
     specifier.source_route_specifier      = 0b11000000'10101000'00000000'00100111;
     REQUIRE(0 == accept(0, 100'000'002, header, specifier, {}));
     REQUIRE(subscription == nullptr);
@@ -169,8 +177,10 @@ TEST_CASE("RxBasic0")
     header.frame_index_eot                = (1U << 31U) + 1U;
     header.priority                       = 0b011;
     header.transfer_id                    = 4;
-    specifier.data_specifier              = 16486;
-    specifier.destination_route_specifier = 0b11000000'10101000'00000000'00011010;
+    header.destination_node_id            = 0b00000000'00011010;
+    header.source_node_id                 = 0b00000000'00100101;
+    specifier.data_specifier              = UDPARD_UDP_PORT;
+    specifier.destination_route_specifier = 0b11101111'00'01000'1'00000000'00011010;
     specifier.source_route_specifier      = 0b11000000'10101000'00000000'00100101;
     REQUIRE(1 == accept(0, 100'000'002, header, specifier, {1, 2, 3}));
     REQUIRE(subscription != nullptr);
@@ -193,9 +203,12 @@ TEST_CASE("RxBasic0")
     header.frame_index_eot                = (1U << 31U) + 1U;
     header.priority                       = 0b100;
     header.transfer_id                    = 1;
-    specifier.data_specifier              = 16487;
+    header.source_node_id                 = 0b00000000'00011011;
+    header.destination_node_id            = 0b00000000'00100111;
+    header.data_specifier                 = 0b1000000000111100;  // Service ID = 60
+    specifier.data_specifier              = UDPARD_UDP_PORT;
     specifier.source_route_specifier      = 0b11000000'10101000'00000000'00011011;
-    specifier.destination_route_specifier = 0b11000000'10101000'00000000'00100111;
+    specifier.destination_route_specifier = 0b11101111'00'01000'1'00000000'00100111;
     REQUIRE(0 == accept(0, 100'000'002, header, specifier, {10, 20, 30}));
     REQUIRE(subscription == nullptr);
 
@@ -204,9 +217,12 @@ TEST_CASE("RxBasic0")
     header.frame_index_eot                = (1U << 31U) + 1U;
     header.priority                       = 0b100;
     header.transfer_id                    = 1;
-    specifier.data_specifier              = 16505;
+    header.source_node_id                 = 0b00000000'00011011;
+    header.destination_node_id            = 0b00000000'00011010;
+    header.data_specifier                 = 0b1000000000111100;
+    specifier.data_specifier              = UDPARD_UDP_PORT;
     specifier.source_route_specifier      = 0b11000000'10101000'00000000'00011011;
-    specifier.destination_route_specifier = 0b11000000'10101000'00000000'00011010;
+    specifier.destination_route_specifier = 0b11101111'00'01000'1'00000000'00011010;
     REQUIRE(-UDPARD_ERROR_OUT_OF_MEMORY == accept(0, 100'000'003, header, specifier, {5}));
     REQUIRE(subscription != nullptr);  // Subscription get assigned before error code
     REQUIRE(ins.getAllocator().getNumAllocatedFragments() == 4);
@@ -218,9 +234,12 @@ TEST_CASE("RxBasic0")
     header.frame_index_eot                = (1U << 31U) + 1U;
     header.priority                       = 0b100;
     header.transfer_id                    = 1;
-    specifier.data_specifier              = 16505;
+    header.source_node_id                 = 0b00000000'00011011;
+    header.destination_node_id            = 0b00000000'00011010;
+    header.data_specifier                 = 0b1000000000111100;
+    specifier.data_specifier              = UDPARD_UDP_PORT;
     specifier.source_route_specifier      = 0b11000000'10101000'00000000'00011011;
-    specifier.destination_route_specifier = 0b11000000'10101000'00000000'00011010;
+    specifier.destination_route_specifier = 0b11101111'00'01000'1'00000000'00011010;
     REQUIRE(-UDPARD_ERROR_OUT_OF_MEMORY == accept(0, 100'000'003, header, specifier, {5}));
     REQUIRE(subscription != nullptr);  // Subscription get assigned before error code
     REQUIRE(ins.getAllocator().getNumAllocatedFragments() == 5);
@@ -240,9 +259,12 @@ TEST_CASE("RxBasic0")
     header.frame_index_eot                = (1U << 31U) + 1U;
     header.priority                       = 0b100;
     header.transfer_id                    = 5;
-    specifier.data_specifier              = 16505;
+    header.source_node_id                 = 0b00000000'00011011;
+    header.destination_node_id            = 0b00000000'00011010;
+    header.data_specifier                 = 0b1000000000111100;
+    specifier.data_specifier              = UDPARD_UDP_PORT;
     specifier.source_route_specifier      = 0b11000000'10101000'00000000'00011011;
-    specifier.destination_route_specifier = 0b11000000'10101000'00000000'00011010;
+    specifier.destination_route_specifier = 0b11101111'00'01000'1'00000000'00011010;
     REQUIRE(1 == accept(0, 100'000'003, header, specifier, {5}));
     REQUIRE(subscription != nullptr);
     REQUIRE(subscription->port_id == 0b0000111100);
@@ -309,17 +331,18 @@ TEST_CASE("RxAnonymous")
     ins.getAllocator().setAllocationCeiling(16);
 
     // Some initial header setup
-    header._reserved_a = 0;
-    header._reserved_b = 0;
-    header.version     = 0;
+    header.version     = 1;
 
     // A valid anonymous transfer for which there is no subscription.
     subscription                          = nullptr;
-    header.frame_index_eot                = (1U << 31U) + 1U;
     header.priority                       = 0b001;
+    header.source_node_id                 = 0b1111111111111111;
+    header.destination_node_id            = 0b1111111111111111;
+    header.data_specifier                 = 0b0000110011001100;
     header.transfer_id                    = 1;
-    specifier.data_specifier              = UDPARD_SUBJECT_ID_PORT;
-    specifier.destination_route_specifier = 0b11101111'0'0101000'000'0110011001100;
+    header.frame_index_eot                = (1U << 31U) + 1U;
+    specifier.data_specifier              = UDPARD_UDP_PORT;
+    specifier.destination_route_specifier = 0b11101111'00'01000'0'0'000110011001100;
     specifier.source_route_specifier      = 0b11000000'10101000'00000000'00000000;
     // REQUIRE(0 == exposed::txMakeMessageSessionSpecifier(0b0110011001100, 0b0, 0xc0a80000, &specifier));
     REQUIRE(0 == accept(0, 100'000'000, header, specifier, {}));
@@ -335,9 +358,12 @@ TEST_CASE("RxAnonymous")
     subscription                          = nullptr;
     header.frame_index_eot                = (1U << 31U) + 1U;
     header.priority                       = 0b001;
+    header.source_node_id                 = 0b1111111111111111;
+    header.destination_node_id            = 0b1111111111111111;
+    header.data_specifier                 = 0b0000110011001100;
     header.transfer_id                    = 0;
-    specifier.data_specifier              = UDPARD_SUBJECT_ID_PORT;
-    specifier.destination_route_specifier = 0b11101111'0'0101000'000'0110011001100;
+    specifier.data_specifier              = UDPARD_UDP_PORT;
+    specifier.destination_route_specifier = 0b11101111'00'01000'0'0'000110011001100;
     specifier.source_route_specifier      = 0b11000000'10101000'00000000'00000000;
     REQUIRE(1 == accept(0,
                         100'000'001,
@@ -363,8 +389,8 @@ TEST_CASE("RxAnonymous")
     header.frame_index_eot                = (1U << 31U) + 1U;
     header.priority                       = 0b001;
     header.transfer_id                    = 1;
-    specifier.data_specifier              = UDPARD_SUBJECT_ID_PORT;
-    specifier.destination_route_specifier = 0b11101111'0'0101000'000'0110011001100;
+    specifier.data_specifier              = UDPARD_UDP_PORT;
+    specifier.destination_route_specifier = 0b11101111'00'01000'0'0'000110011001100;
     specifier.source_route_specifier      = 0b11000000'10101000'00000000'00000000;
     // REQUIRE(0 == exposed::txMakeMessageSessionSpecifier(0b0110011001100, 0b0, 0xc0a80000, &specifier));
     REQUIRE(-UDPARD_ERROR_OUT_OF_MEMORY == accept(0, 100'000'001, header, specifier, {3, 2, 1}));
@@ -393,7 +419,7 @@ TEST_CASE("RxAnonymous")
     header.priority                       = 0b001;
     header.transfer_id                    = 0;
     specifier.data_specifier              = UDPARD_SUBJECT_ID_PORT;
-    specifier.destination_route_specifier = 0b11101111'0'0101000'000'0110011001100;
+    specifier.destination_route_specifier = 0b11101111'00'01000'0'0'000110011001100;
     specifier.source_route_specifier      = 0b11000000'10101000'00000000'00000000;
     REQUIRE(1 == accept(0, 100'000'001, header, specifier, {1, 2, 3, 4, 5, 6}));
     REQUIRE(subscription != nullptr);
