@@ -42,6 +42,7 @@ extern "C" {
 /// The error code 1 is not used because -1 is often used as a generic error code in 3rd-party code.
 #define UDPARD_ERROR_INVALID_ARGUMENT 2
 #define UDPARD_ERROR_OUT_OF_MEMORY 3
+#define UDPARD_ERROR_OUT_OF_ORDER 4
 
 /// In the case that we still need error codes but need to mutate an input we will default to a success code
 #define UDPARD_SUCCESS 0
@@ -49,6 +50,7 @@ extern "C" {
 /// MTU values for the supported protocols.
 #define UDPARD_MTU_UDP_IPV4 576U
 #define UDPARD_MTU_UDP_IPV6 1280U
+#define UDPARD_MTU_UDP_IPV4_TEMP 64U
 #define UDPARD_MTU_MAX UDPARD_MTU_UDP_IPV6  /// We may want to set this to 1400/1500 for Ethernet MTU
 
 /// Parameter ranges are inclusive; the lower bound is zero for all. See Cyphal/UDP Specification for background.

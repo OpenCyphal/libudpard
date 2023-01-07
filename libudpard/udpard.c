@@ -120,8 +120,9 @@ UDPARD_PRIVATE UdpardTreeNode* avlTrivialFactory(void* const user_reference)
 
 typedef uint32_t TransferCRC;
 
+// Those crc values come from https://crc32c.machinezoo.com/
 #define CRC_INITIAL 0xFFFFFFFFU
-#define CRC_RESIDUE 0x00000000U
+#define CRC_RESIDUE 0xB798B438U
 #define CRC_XOR 0xFFFFFFFFU
 #define CRC_SIZE_BYTES 4U
 
@@ -158,9 +159,7 @@ static const uint32_t CRCTable[256] =
 
 UDPARD_PRIVATE TransferCRC crcAddByte(const TransferCRC crc, const uint8_t byte)
 {
-    TransferCRC crc32c = (uint32_t) (crc != CRC_INITIAL ? (crc ^ CRC_XOR) : crc);
-    crc32c             = CRCTable[(uint32_t) ((uint32_t) (crc32c ^ byte) & BYTE_MAX)] ^ (crc32c >> BITS_PER_BYTE);
-    return (uint32_t) (crc32c ^ CRC_XOR);
+    return CRCTable[(uint32_t) ( byte ^ (crc & BYTE_MAX))] ^ (crc >> BITS_PER_BYTE);
 }
 
 UDPARD_PRIVATE TransferCRC crcAdd(const TransferCRC crc, const size_t size, const void* const data)
@@ -174,6 +173,11 @@ UDPARD_PRIVATE TransferCRC crcAdd(const TransferCRC crc, const size_t size, cons
         ++p;
     }
     return out;
+}
+
+UDPARD_PRIVATE TransferCRC crcValue(const TransferCRC crc)
+{
+    return (uint32_t) (crc ^ CRC_XOR);
 }
 
 // --------------------------------------------- TRANSMISSION ---------------------------------------------
@@ -244,16 +248,11 @@ UDPARD_PRIVATE int32_t txMakeServiceSessionSpecifier(const UdpardPortID         
 // This may need to be adjusted...
 UDPARD_PRIVATE size_t adjustPresentationLayerMTU(const size_t mtu_bytes)
 {
-    size_t mtu = 0U;
-    if (mtu_bytes < UDPARD_MTU_UDP_IPV4)
+    if (mtu_bytes >= UDPARD_MTU_UDP_IPV4)
     {
-        mtu = UDPARD_MTU_UDP_IPV4;
+        return UDPARD_MTU_UDP_IPV4;
     }
-    else
-    {
-        mtu = UDPARD_MTU_MAX;
-    }
-    return mtu;
+    return mtu_bytes;
 }
 
 UDPARD_PRIVATE int32_t txMakeSessionSpecifier(const UdpardTransferMetadata* const tr,
@@ -309,14 +308,6 @@ UDPARD_PRIVATE int32_t txMakeSessionSpecifier(const UdpardTransferMetadata* cons
         }
     }
     return out;
-}
-
-/// Takes a frame payload size, returns a new size that is >=x and is rounded up to the nearest valid DLC.
-/// Note: This is deprecated for UDP as there is no DLC for UDP
-UDPARD_PRIVATE size_t txRoundFramePayloadSizeUp(const size_t x)
-{
-    /// TODO - determine if there is a algorithm for rounding UDP payload size
-    return x;
 }
 
 UDPARD_PRIVATE void txMakeFrameHeader(UdpardFrameHeader* const header,
@@ -456,10 +447,201 @@ UDPARD_PRIVATE int32_t txPushSingleFrame(UdpardTxQueue* const                que
     return out;
 }
 
-/// Returns the number of frames enqueued or error.
-UDPARD_PRIVATE int32_t txPushMultiFrame()
+// Produces a chain of Tx queue items for later insertion into the Tx queue. The tail is NULL if OOM.
+UDPARD_PRIVATE TxChain txGenerateMultiFrameChain(UdpardInstance* const        ins,
+                                                 const size_t                 presentation_layer_mtu,
+                                                 const                        UdpardMicrosecond deadline_usec,
+                                                 const UdpardSessionSpecifier* const specifier,
+                                                 const UdpardNodeID           src_node_id,
+                                                 const UdpardNodeID           dst_node_id,
+                                                 const UdpardPortID           port_id,
+                                                 const UdpardTransferKind     transfer_kind,
+                                                 const UdpardPriority         priority,
+                                                 const UdpardTransferID       transfer_id,
+                                                 const size_t                 payload_size,
+                                                 const void* const            payload)
 {
-    int32_t out = -UDPARD_ERROR_INVALID_ARGUMENT;
+    UDPARD_ASSERT(ins != NULL);
+    UDPARD_ASSERT(presentation_layer_mtu > sizeof(UdpardFrameHeader));
+    UDPARD_ASSERT(payload_size > presentation_layer_mtu - sizeof(UdpardFrameHeader));  // Otherwise, a single-frame transfer should be used.
+    UDPARD_ASSERT(payload != NULL);
+
+    TxChain        out                   = {NULL, NULL, 0};
+    const size_t   payload_size_with_crc = payload_size + CRC_SIZE_BYTES;
+    size_t         offset                = 0U;
+    TransferCRC    crc                   = crcValue(crcAdd(CRC_INITIAL, payload_size, payload));
+    const uint8_t* payload_ptr           = (const uint8_t*) payload;
+    uint32_t       frame_index           = 0U;
+    uint8_t        crc_as_byte[]         = {(uint8_t)(crc & BYTE_MAX), (uint8_t)(crc >> 8U), (uint8_t)(crc >> 16U), (uint8_t)(crc >> 24U)};
+    size_t         last_crc_index        = 0U;
+    size_t         inserted_crc_amount   = 0;
+    while (offset < payload_size_with_crc)
+    {
+        out.size++;
+        size_t frame_payload_size_with_header = 0U;
+        frame_payload_size_with_header =
+                ((payload_size_with_crc - offset + sizeof(UdpardFrameHeader)) < presentation_layer_mtu)
+                ? (payload_size_with_crc - offset + sizeof(UdpardFrameHeader))
+                : (presentation_layer_mtu);
+
+        TxItem* const tqi = txAllocateQueueItem(ins, specifier, deadline_usec, frame_payload_size_with_header);
+        if (NULL == out.head)
+        {
+            out.head = tqi;
+        }
+        else
+        {
+            out.tail->base.next_in_transfer = (UdpardTxQueueItem*) tqi;
+        }
+        out.tail = tqi;
+        // If the queue item is not generated successfully,
+        // we'll end the while loop early to stop the chain
+        // generation.
+        // We'll do the memory clean up after this function is done.
+        if (NULL == out.tail)
+        {
+            break;
+        }
+        const size_t frame_payload_size = frame_payload_size_with_header;
+        size_t frame_offset = 0U;
+        // Index to start copying payload to the frame.
+        size_t start_index = offset;
+        // Size of remaining payload + CRC
+        // We'll compare the size of remaining payload+crc and available size of current frame
+        // and set the move_size_with_crc to the smaller one.
+        size_t move_size_with_crc = payload_size_with_crc - offset 
+                                    >= frame_payload_size - sizeof(UdpardFrameHeader)
+                                    ? frame_payload_size - sizeof(UdpardFrameHeader)
+                                    : payload_size_with_crc - offset;
+        // Index referring the end of copied payload with CRC.
+        size_t end_index = start_index + move_size_with_crc;
+        // True if all payload has been process and is ready to insert CRC
+        bool initial_payload_overrun = (end_index >= payload_size);
+        // Number of CRC byte that has been inserted.
+        size_t overrun_amount = ((initial_payload_overrun) ? end_index - payload_size : inserted_crc_amount) - inserted_crc_amount;
+        inserted_crc_amount += overrun_amount;
+        // Size of remaining payload without CRC
+        size_t payload_move_size = move_size_with_crc - overrun_amount;
+
+        txMakeFrameHeader(&out.tail->base.frame.udp_cyphal_header, src_node_id, dst_node_id, port_id, transfer_kind, priority, transfer_id, false, ++frame_index);
+        if(initial_payload_overrun)
+        {
+            // Insert payload and header
+            // Clang-Tidy raises an error recommending the use of memcpy_s() instead.
+            // We ignore it because the safe functions are poorly supported; reliance on them may limit the portability.
+            (void) memcpy(&out.tail->payload_buffer[0], &out.tail->base.frame.udp_cyphal_header, sizeof(UdpardFrameHeader)); // NOLINT
+            (void) memcpy(&out.tail->payload_buffer[sizeof(UdpardFrameHeader)], payload_ptr, payload_move_size); // NOLINT
+            frame_offset += sizeof(UdpardFrameHeader) + payload_move_size;
+            // Insert crc into same frame
+            for(int i = 0; i < overrun_amount; i++)
+            {
+                out.tail->payload_buffer[frame_offset++] = crc_as_byte[i+last_crc_index];
+            }
+            last_crc_index += overrun_amount;
+        }
+        else
+        {
+            // Clang-Tidy raises an error recommending the use of memcpy_s() instead.
+            // We ignore it because the safe functions are poorly supported; reliance on them may limit the portability.
+            (void) memcpy(&out.tail->payload_buffer[0], &out.tail->base.frame.udp_cyphal_header, sizeof(UdpardFrameHeader)); // NOLINT
+            (void) memcpy(&out.tail->payload_buffer[sizeof(UdpardFrameHeader)], payload_ptr, payload_move_size); // NOLINT
+            frame_offset += sizeof(UdpardFrameHeader) + payload_move_size;
+        }
+        payload_ptr += payload_move_size;
+        offset += move_size_with_crc;
+
+        // Deal with last frame after inserting all payload and crc
+        if(end_index == payload_size_with_crc)
+        {
+            out.tail->base.frame.udp_cyphal_header.frame_index_eot = (uint32_t) (1U << (uint32_t) UDPARD_END_OF_TRANSFER_OFFSET) + frame_index;
+            // Clang-Tidy raises an error recommending the use of memcpy_s() instead.
+            // We ignore it because the safe functions are poorly supported; reliance on them may limit the portability.
+            (void) memcpy(&out.tail->payload_buffer[0], &out.tail->base.frame.udp_cyphal_header, sizeof(UdpardFrameHeader)); // NOLINT
+            UDPARD_ASSERT((frame_offset) == out.tail->base.frame.payload_size);
+        }
+    }
+    return out;
+}
+
+/// Returns the number of frames enqueued or error.
+UDPARD_PRIVATE int32_t txPushMultiFrame(UdpardTxQueue* const    que,
+                                        UdpardInstance* const   ins,
+                                        const size_t            presentation_layer_mtu,
+                                        const UdpardMicrosecond deadline_usec,
+                                        const UdpardSessionSpecifier* const specifier,
+                                        const UdpardNodeID      src_node_id,
+                                        const UdpardNodeID      dst_node_id,
+                                        const UdpardPortID      port_id,
+                                        const UdpardTransferKind transfer_kind,
+                                        const UdpardPriority    priority,
+                                        const UdpardTransferID  transfer_id,
+                                        const size_t            payload_size,
+                                        const void* const       payload)
+{
+
+    UDPARD_ASSERT((ins != NULL) && (que != NULL));
+    UDPARD_ASSERT(presentation_layer_mtu > sizeof(UdpardFrameHeader));
+    UDPARD_ASSERT(payload_size > presentation_layer_mtu - sizeof(UdpardFrameHeader));
+    const size_t payload_size_with_crc = payload_size + CRC_SIZE_BYTES;
+    const size_t num_frames = (payload_size_with_crc
+                               + presentation_layer_mtu 
+                               - sizeof(UdpardFrameHeader) - 1)
+                               / (presentation_layer_mtu 
+                               - sizeof(UdpardFrameHeader));
+    UDPARD_ASSERT(num_frames >= 2);
+
+    int32_t out = 0;
+    if ((que->size + num_frames) <= que->capacity)
+    {
+        const TxChain sq = txGenerateMultiFrameChain(ins,
+                                                     presentation_layer_mtu,
+                                                     deadline_usec,
+                                                     specifier,
+                                                     src_node_id,
+                                                     dst_node_id,
+                                                     port_id,
+                                                     transfer_kind,
+                                                     priority,
+                                                     transfer_id,
+                                                     payload_size,
+                                                     payload);
+        if (sq.tail != NULL)
+        {
+            UdpardTxQueueItem* next = &sq.head->base;
+            do
+            {
+               const UdpardTreeNode* const res = cavlSearch(&que->root, &next->base, &txAVLPredicate, &avlTrivialFactory);
+               (void) res;
+               UDPARD_ASSERT(res == &next->base);
+               UDPARD_ASSERT(que->root != NULL);
+               next = next->next_in_transfer;
+            } while (next != NULL);
+            UDPARD_ASSERT(num_frames == sq.size);
+            que->size += sq.size;
+            UDPARD_ASSERT(que->size <= que->capacity);
+            UDPARD_ASSERT((sq.size + 0ULL) <= INT32_MAX);
+            out = (int32_t) sq.size;
+        }
+        else
+        {
+            out = -UDPARD_ERROR_OUT_OF_MEMORY;
+            UdpardTxQueueItem* head = &sq.head->base;
+            // We'll clean up the memory after txGenerateMultiFrameChain is done
+            // with an UDPARD_ERROR_OUT_OF_MEMORY error raised.
+            while (head != NULL)
+            {
+                UdpardTxQueueItem* const next = head->next_in_transfer;
+                ins->memory_free(ins, head);
+                head = next;
+            }
+        }
+
+    }
+    else  // We predict that we're going to run out of queue, don't bother serializing the transfer.
+    {
+        out = -UDPARD_ERROR_OUT_OF_MEMORY;
+    }
+    UDPARD_ASSERT((out < 0) || (out >= 2));
     return out;
 }
 
@@ -481,6 +663,7 @@ typedef struct UdpardInternalRxSession
     TransferCRC       calculated_crc;           ///< Updated with the received payload in real time.
     UdpardTransferID  transfer_id;
     uint8_t           redundant_transport_index;  ///< Arbitrary value in [0, 255].
+    uint32_t          last_udp_header_index;
 } UdpardInternalRxSession;
 
 /// High-level transport frame model.
@@ -497,6 +680,7 @@ typedef struct
     bool               end_of_transfer;
     size_t             payload_size;
     const void*        payload;
+    uint32_t           frame_index;
 } RxFrameModel;
 
 UDPARD_PRIVATE UdpardNodeID getNodeIdFromRouteSpecifier(UdpardIPv4Addr src_ip_addr)
@@ -564,6 +748,8 @@ UDPARD_PRIVATE bool rxTryParseFrame(const UdpardMicrosecond             timestam
 
     // Get the Header out of the frame
     UDPARD_ASSERT(frame->payload != NULL);
+    // Clang-Tidy raises an error recommending the use of memcpy_s() instead.
+    // We ignore it because the safe functions are poorly supported; reliance on them may limit the portability.
     (void) memcpy(&frame->udp_cyphal_header, frame->payload, sizeof(frame->udp_cyphal_header));  // NOLINT
     out->timestamp_usec = timestamp_usec;
 
@@ -579,6 +765,7 @@ UDPARD_PRIVATE bool rxTryParseFrame(const UdpardMicrosecond             timestam
     out->transfer_id       = frame->udp_cyphal_header.transfer_id;
     out->start_of_transfer = (((frame->udp_cyphal_header.frame_index_eot) & (UDPARD_MAX_FRAME_INDEX)) == 1);
     out->end_of_transfer   = ((frame->udp_cyphal_header.frame_index_eot >> UDPARD_END_OF_TRANSFER_OFFSET) == 1);
+    out->frame_index       = frame->udp_cyphal_header.frame_index_eot;
     if (out->transfer_kind != UdpardTransferKindMessage)
     {
         valid = valid && (out->source_node_id != out->destination_node_id);
@@ -697,9 +884,7 @@ UDPARD_PRIVATE int8_t rxSessionAcceptFrame(UdpardInstance* const          ins,
     const bool single_frame = frame->start_of_transfer && frame->end_of_transfer;
     if (!single_frame)
     {
-        // Not currently supporting multiframe transfers
-        rxSessionRestart(ins, rxs);
-        return -UDPARD_ERROR_INVALID_ARGUMENT;
+        rxs->calculated_crc = crcAdd(rxs->calculated_crc, frame->payload_size, frame->payload);
     }
 
     int8_t out = rxSessionWritePayload(ins, rxs, extent, frame->payload_size, frame->payload);
@@ -713,22 +898,21 @@ UDPARD_PRIVATE int8_t rxSessionAcceptFrame(UdpardInstance* const          ins,
         UDPARD_ASSERT(0 == out);
         if (single_frame || (CRC_RESIDUE == rxs->calculated_crc))
         {
+
             out = 1;  // One transfer received, notify the application.
             rxInitTransferMetadataFromFrame(frame, &out_transfer->metadata);
             out_transfer->timestamp_usec = rxs->transfer_timestamp_usec;
             out_transfer->payload_size   = rxs->payload_size;
             out_transfer->payload        = rxs->payload;
 
-            /* There is no CRC in single frame transfers and multiframe transfers are not supported yet
-                  // Cut off the CRC from the payload if it's there -- we don't want to expose it to the user.
-                  UDPARD_ASSERT(rxs->total_payload_size >= rxs->payload_size);
-                  const size_t truncated_amount = rxs->total_payload_size - rxs->payload_size;
-                  if ((!single_frame) && (CRC_SIZE_BYTES > truncated_amount))  // Single-frame transfers don't have CRC.
-                  {
-                      UDPARD_ASSERT(out_transfer->payload_size >= (CRC_SIZE_BYTES - truncated_amount));
-                      out_transfer->payload_size -= CRC_SIZE_BYTES - truncated_amount;
-                  }
-            */
+            // Cut off the CRC from the payload if it's there -- we don't want to expose it to the user.
+            UDPARD_ASSERT(rxs->total_payload_size >= rxs->payload_size);
+            const size_t truncated_amount = rxs->total_payload_size - rxs->payload_size;
+            if ((!single_frame) && (CRC_SIZE_BYTES > truncated_amount))  // Single-frame transfers don't have CRC.
+            {
+                UDPARD_ASSERT(out_transfer->payload_size >= (CRC_SIZE_BYTES - truncated_amount));
+                out_transfer->payload_size -= CRC_SIZE_BYTES - truncated_amount;
+            }
 
             rxs->payload = NULL;  // Ownership passed over to the application, nullify to prevent freeing.
         }
@@ -775,6 +959,7 @@ UDPARD_PRIVATE int8_t rxSessionUpdate(UdpardInstance* const          ins,
         rxs->calculated_crc            = CRC_INITIAL;
         rxs->transfer_id               = frame->transfer_id;
         rxs->redundant_transport_index = redundant_transport_index;
+        rxs->last_udp_header_index     = 0U;
     }
 
     int8_t out = 0;
@@ -784,6 +969,31 @@ UDPARD_PRIVATE int8_t rxSessionUpdate(UdpardInstance* const          ins,
     }
     else
     {
+        // multi-frame transfer
+        if (!(frame->start_of_transfer && frame->end_of_transfer))
+        {
+            if (frame->end_of_transfer){
+                if (frame->frame_index !=
+                    (uint32_t) (1U << (uint32_t) UDPARD_END_OF_TRANSFER_OFFSET)
+                    + rxs->last_udp_header_index + 1)
+                    {
+                        // Not the expected index
+                        int8_t out = -UDPARD_ERROR_OUT_OF_ORDER;
+                        // reset index to 0
+                        rxs->last_udp_header_index = 0U;
+                        return out;
+                    }
+                    rxs->last_udp_header_index = 0U;
+            }
+            else
+            {
+                if ((!frame->start_of_transfer && frame->frame_index != rxs->last_udp_header_index+1) || (frame->start_of_transfer && frame->frame_index != 1U))
+                {
+                    return -UDPARD_ERROR_OUT_OF_ORDER;
+                }
+                rxs->last_udp_header_index = frame->frame_index;
+            }
+        }
         const bool correct_transport = (rxs->redundant_transport_index == redundant_transport_index);
         const bool correct_tid       = (frame->transfer_id == rxs->transfer_id);
         if (correct_transport && correct_tid)
@@ -955,7 +1165,19 @@ int32_t udpardTxPush(UdpardTxQueue* const                que,
             }
             else
             {
-                out = txPushMultiFrame();
+                out = txPushMultiFrame(que,
+                                       ins,
+                                       pl_mtu,
+                                       tx_deadline_usec,
+                                       &specifier,
+                                       ins->node_id,
+                                       metadata->remote_node_id,
+                                       metadata->port_id,
+                                       metadata->transfer_kind,
+                                       metadata->priority,
+                                       metadata->transfer_id,
+                                       payload_size,
+                                       payload);
                 UDPARD_ASSERT((out < 0) || (out >= 2));
             }
         }
