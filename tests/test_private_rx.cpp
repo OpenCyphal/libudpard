@@ -439,8 +439,8 @@ TEST_CASE("rxSessionUpdate")
     frame.transfer_id         = 11;
     frame.start_of_transfer   = true;
     frame.end_of_transfer     = true;
-    frame.payload_size        = 3;
-    frame.payload             = reinterpret_cast<const uint8_t*>("\x01\x01\x01");
+    frame.payload_size        = 3 + 4; // 3 payload + 4 CRC
+    frame.payload             = reinterpret_cast<const uint8_t*>("\x01\x01\x01\x70\x2A\xEC\x24"); // \x70\x2A\xEC\x24 is CRC
 
     RxSession rxs;
     RxSession rxs_1;
@@ -491,7 +491,7 @@ TEST_CASE("rxSessionUpdate")
     REQUIRE(transfer.metadata.port_id == 2'222);
     REQUIRE(transfer.metadata.remote_node_id == 55);
     REQUIRE(transfer.metadata.transfer_id == 11);
-    REQUIRE(transfer.payload_size == 3);
+    REQUIRE(transfer.payload_size == 7);
     REQUIRE(0 == std::memcmp(transfer.payload, "\x01\x01\x01", 3));
     REQUIRE(ins.getAllocator().getNumAllocatedFragments() == 1);
     REQUIRE(ins.getAllocator().getTotalAllocatedAmount() == 16);
@@ -500,7 +500,7 @@ TEST_CASE("rxSessionUpdate")
     // Valid next transfer, wrong transport.
     frame.timestamp_usec = 10'000'100;
     frame.transfer_id    = 12;
-    frame.payload        = reinterpret_cast<const uint8_t*>("\x02\x02\x02");
+    frame.payload        = reinterpret_cast<const uint8_t*>("\x02\x02\x02\x6E\xB1\x75\xE9");
     REQUIRE(0 == update(2, 1'000'000, 16));
     REQUIRE(rxs.transfer_timestamp_usec == 10'000'000);
     REQUIRE(rxs.payload_size == 0);   // Handed over to the output transfer.
@@ -511,7 +511,7 @@ TEST_CASE("rxSessionUpdate")
 
     // Correct transport.
     frame.timestamp_usec = 10'000'050;
-    frame.payload        = reinterpret_cast<const uint8_t*>("\x03\x03\x03");
+    frame.payload        = reinterpret_cast<const uint8_t*>("\x03\x03\x03\x64\x38\xFD\xAD");
     REQUIRE(1 == update(1, 1'000'000, 16));
     REQUIRE(rxs.transfer_timestamp_usec == 10'000'050);
     REQUIRE(rxs.payload_size == 0);
@@ -525,7 +525,7 @@ TEST_CASE("rxSessionUpdate")
     REQUIRE(transfer.metadata.port_id == 2'222);
     REQUIRE(transfer.metadata.remote_node_id == 55);
     REQUIRE(transfer.metadata.transfer_id == 12);
-    REQUIRE(transfer.payload_size == 3);
+    REQUIRE(transfer.payload_size == 7);
     REQUIRE(0 == std::memcmp(transfer.payload, "\x03\x03\x03", 3));
     REQUIRE(ins.getAllocator().getNumAllocatedFragments() == 1);
     REQUIRE(ins.getAllocator().getTotalAllocatedAmount() == 16);
@@ -534,7 +534,7 @@ TEST_CASE("rxSessionUpdate")
     // Same TID.
     frame.timestamp_usec = 10'000'200;
     frame.transfer_id    = 12;
-    frame.payload        = reinterpret_cast<const uint8_t*>("\x04\x04\x04");
+    frame.payload        = reinterpret_cast<const uint8_t*>("\x04\x04\x04\xA3\xF1\xAA\x77");
     REQUIRE(0 == update(1, 1'000'200, 16));
     REQUIRE(rxs.transfer_timestamp_usec == 10'000'050);
     REQUIRE(rxs.payload_size == 0);
@@ -546,7 +546,7 @@ TEST_CASE("rxSessionUpdate")
     // Restart due to TID timeout, switch iface.
     frame.timestamp_usec = 20'000'000;
     frame.transfer_id    = 12;
-    frame.payload        = reinterpret_cast<const uint8_t*>("\x05\x05\x05");
+    frame.payload        = reinterpret_cast<const uint8_t*>("\x05\x05\x05\xA9\x78\x22\x33");
     REQUIRE(1 == update(0, 1'000'000, 16));
     REQUIRE(rxs.transfer_timestamp_usec == 20'000'000);
     REQUIRE(rxs.payload_size == 0);
@@ -560,7 +560,7 @@ TEST_CASE("rxSessionUpdate")
     REQUIRE(transfer.metadata.port_id == 2'222);
     REQUIRE(transfer.metadata.remote_node_id == 55);
     REQUIRE(transfer.metadata.transfer_id == 12);
-    REQUIRE(transfer.payload_size == 3);
+    REQUIRE(transfer.payload_size == 7);
     REQUIRE(0 == std::memcmp(transfer.payload, "\x05\x05\x05", 3));
     REQUIRE(ins.getAllocator().getNumAllocatedFragments() == 1);
     REQUIRE(ins.getAllocator().getTotalAllocatedAmount() == 16);

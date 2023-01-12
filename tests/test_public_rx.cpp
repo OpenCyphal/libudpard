@@ -68,7 +68,8 @@ TEST_CASE("RxBasic0")
     specifier.data_specifier              = UDPARD_UDP_PORT;
     specifier.destination_route_specifier = 0b11101111'00'01000'0'0'000110011001100;
     specifier.source_route_specifier      = 0b11000000'10101000'00000000'00100111;
-    REQUIRE(0 == accept(0, 100'000'000, header, specifier, {}));
+    // This is an empty payload, the last four bytes are CRC.
+    REQUIRE(0 == accept(0, 100'000'000, header, specifier, {0, 0, 0, 0}));
     REQUIRE(subscription == nullptr);
 
     // Create a message subscription.
@@ -125,7 +126,7 @@ TEST_CASE("RxBasic0")
     specifier.data_specifier              = UDPARD_UDP_PORT;
     specifier.destination_route_specifier = 0b11101111'00'01000'0'0'000110011001100;
     specifier.source_route_specifier      = 0b11000000'10101000'00000000'00100111;
-    REQUIRE(1 == accept(0, 100'000'001, header, specifier, {}));
+    REQUIRE(1 == accept(0, 100'000'001, header, specifier, {0, 0, 0, 0}));
     REQUIRE(subscription != nullptr);
     REQUIRE(subscription->port_id == 0b0110011001100);
     REQUIRE(transfer.timestamp_usec == 100'000'001);
@@ -134,7 +135,7 @@ TEST_CASE("RxBasic0")
     REQUIRE(transfer.metadata.port_id == 0b0110011001100);
     REQUIRE(transfer.metadata.remote_node_id == 0b0100111);
     REQUIRE(transfer.metadata.transfer_id == 0);
-    REQUIRE(transfer.payload_size == 0);
+    REQUIRE(transfer.payload_size == 4);
     REQUIRE(0 == std::memcmp(transfer.payload, "", 0));
     REQUIRE(ins.getAllocator().getNumAllocatedFragments() == 2);  // The SESSION and the PAYLOAD BUFFER.
     REQUIRE(ins.getAllocator().getTotalAllocatedAmount() == (sizeof(RxSession) + 16));
@@ -156,7 +157,7 @@ TEST_CASE("RxBasic0")
     specifier.destination_route_specifier = 0b11101111'00'01000'1'00000000'00011010;
     specifier.source_route_specifier      = 0b11000000'10101000'00000000'00100111;
 
-    REQUIRE(0 == accept(0, 100'000'002, header, specifier, {}));
+    REQUIRE(0 == accept(0, 100'000'002, header, specifier, {0, 0, 0, 0}));
     REQUIRE(subscription == nullptr);
 
     // Dropped request because the local node has a different node-ID.
@@ -170,7 +171,7 @@ TEST_CASE("RxBasic0")
     specifier.data_specifier              = UDPARD_UDP_PORT;
     specifier.destination_route_specifier = 0b11101111'00'01000'1'00000000'00011011;
     specifier.source_route_specifier      = 0b11000000'10101000'00000000'00100111;
-    REQUIRE(0 == accept(0, 100'000'002, header, specifier, {}));
+    REQUIRE(0 == accept(0, 100'000'002, header, specifier, {0, 0, 0, 0}));
     REQUIRE(subscription == nullptr);
 
     // Same request accepted now.
@@ -183,7 +184,7 @@ TEST_CASE("RxBasic0")
     specifier.data_specifier              = UDPARD_UDP_PORT;
     specifier.destination_route_specifier = 0b11101111'00'01000'1'00000000'00011010;
     specifier.source_route_specifier      = 0b11000000'10101000'00000000'00100101;
-    REQUIRE(1 == accept(0, 100'000'002, header, specifier, {1, 2, 3}));
+    REQUIRE(1 == accept(0, 100'000'002, header, specifier, {1, 2, 3, 30, 242, 48, 241}));
     REQUIRE(subscription != nullptr);
     REQUIRE(subscription->port_id == 0b0000110011);
     REQUIRE(transfer.timestamp_usec == 100'000'002);
@@ -192,8 +193,8 @@ TEST_CASE("RxBasic0")
     REQUIRE(transfer.metadata.port_id == 0b0000110011);
     REQUIRE(transfer.metadata.remote_node_id == 0b0100101);
     REQUIRE(transfer.metadata.transfer_id == 4);
-    REQUIRE(transfer.payload_size == 3);
-    REQUIRE(0 == std::memcmp(transfer.payload, "\x01\x02\x03", 3));
+    REQUIRE(transfer.payload_size == 7);
+    REQUIRE(0 == std::memcmp(transfer.payload, "\x01\x02\x03\x1E\xF2\x30\xF1", 7));
     REQUIRE(ins.getAllocator().getNumAllocatedFragments() == 4);  // Two SESSIONS and two PAYLOAD BUFFERS.
     REQUIRE(ins.getAllocator().getTotalAllocatedAmount() == (2 * sizeof(RxSession) + 16 + 20));
     REQUIRE(ins.getRequestSubs().at(0)->sessions[0b0100101] != nullptr);
@@ -210,7 +211,7 @@ TEST_CASE("RxBasic0")
     specifier.data_specifier              = UDPARD_UDP_PORT;
     specifier.source_route_specifier      = 0b11000000'10101000'00000000'00011011;
     specifier.destination_route_specifier = 0b11101111'00'01000'1'00000000'00100111;
-    REQUIRE(0 == accept(0, 100'000'002, header, specifier, {10, 20, 30}));
+    REQUIRE(0 == accept(0, 100'000'002, header, specifier, {10, 20, 30, 167, 39, 51, 218}));
     REQUIRE(subscription == nullptr);
 
     // Response transfer not accepted due to OOM -- can't allocate RX session.
@@ -224,7 +225,7 @@ TEST_CASE("RxBasic0")
     specifier.data_specifier              = UDPARD_UDP_PORT;
     specifier.source_route_specifier      = 0b11000000'10101000'00000000'00011011;
     specifier.destination_route_specifier = 0b11101111'00'01000'1'00000000'00011010;
-    REQUIRE(-UDPARD_ERROR_OUT_OF_MEMORY == accept(0, 100'000'003, header, specifier, {5}));
+    REQUIRE(-UDPARD_ERROR_OUT_OF_MEMORY == accept(0, 100'000'003, header, specifier, {5, 77, 71, 140, 103}));
     REQUIRE(subscription != nullptr);  // Subscription get assigned before error code
     REQUIRE(ins.getAllocator().getNumAllocatedFragments() == 4);
     REQUIRE(ins.getAllocator().getTotalAllocatedAmount() == (2 * sizeof(RxSession) + 16 + 20));
@@ -241,7 +242,7 @@ TEST_CASE("RxBasic0")
     specifier.data_specifier              = UDPARD_UDP_PORT;
     specifier.source_route_specifier      = 0b11000000'10101000'00000000'00011011;
     specifier.destination_route_specifier = 0b11101111'00'01000'1'00000000'00011010;
-    REQUIRE(-UDPARD_ERROR_OUT_OF_MEMORY == accept(0, 100'000'003, header, specifier, {5}));
+    REQUIRE(-UDPARD_ERROR_OUT_OF_MEMORY == accept(0, 100'000'003, header, specifier, {5, 77, 71, 140, 103}));
     REQUIRE(subscription != nullptr);  // Subscription get assigned before error code
     REQUIRE(ins.getAllocator().getNumAllocatedFragments() == 5);
     REQUIRE(ins.getAllocator().getTotalAllocatedAmount() == (3 * sizeof(RxSession) + 16 + 20));
@@ -266,7 +267,7 @@ TEST_CASE("RxBasic0")
     specifier.data_specifier              = UDPARD_UDP_PORT;
     specifier.source_route_specifier      = 0b11000000'10101000'00000000'00011011;
     specifier.destination_route_specifier = 0b11101111'00'01000'1'00000000'00011010;
-    REQUIRE(1 == accept(0, 100'000'003, header, specifier, {5}));
+    REQUIRE(1 == accept(0, 100'000'003, header, specifier, {5, 77, 71, 140, 103}));
     REQUIRE(subscription != nullptr);
     REQUIRE(subscription->port_id == 0b0000111100);
     REQUIRE(transfer.timestamp_usec == 100'000'003);
@@ -275,8 +276,8 @@ TEST_CASE("RxBasic0")
     REQUIRE(transfer.metadata.port_id == 0b0000111100);
     REQUIRE(transfer.metadata.remote_node_id == 0b0011011);
     REQUIRE(transfer.metadata.transfer_id == 5);
-    REQUIRE(transfer.payload_size == 1);
-    REQUIRE(0 == std::memcmp(transfer.payload, "\x05", 1));
+    REQUIRE(transfer.payload_size == 5);
+    REQUIRE(0 == std::memcmp(transfer.payload, "\x05\x4D\x47\x8C\x67", 5));
     REQUIRE(ins.getAllocator().getNumAllocatedFragments() == 4);
     REQUIRE(ins.getAllocator().getTotalAllocatedAmount() == (2 * sizeof(RxSession) + 10 + 20));
 
@@ -346,7 +347,7 @@ TEST_CASE("RxAnonymous")
     specifier.destination_route_specifier = 0b11101111'00'01000'0'0'000110011001100;
     specifier.source_route_specifier      = 0b11000000'10101000'00000000'00000000;
     // REQUIRE(0 == exposed::txMakeMessageSessionSpecifier(0b0110011001100, 0b0, 0xc0a80000, &specifier));
-    REQUIRE(0 == accept(0, 100'000'000, header, specifier, {}));
+    REQUIRE(0 == accept(0, 100'000'000, header, specifier, {0, 0, 0, 0}));
     REQUIRE(subscription == nullptr);
 
     // Create a message subscription.
@@ -370,7 +371,7 @@ TEST_CASE("RxAnonymous")
                         100'000'001,
                         header,
                         specifier,  //
-                        {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19}));
+                        {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 133, 210, 47, 197}));
     REQUIRE(subscription != nullptr);
     REQUIRE(subscription->port_id == 0b0110011001100);
     REQUIRE(subscription->user_reference == my_user_reference);
@@ -394,7 +395,7 @@ TEST_CASE("RxAnonymous")
     specifier.destination_route_specifier = 0b11101111'00'01000'0'0'000110011001100;
     specifier.source_route_specifier      = 0b11000000'10101000'00000000'00000000;
     // REQUIRE(0 == exposed::txMakeMessageSessionSpecifier(0b0110011001100, 0b0, 0xc0a80000, &specifier));
-    REQUIRE(-UDPARD_ERROR_OUT_OF_MEMORY == accept(0, 100'000'001, header, specifier, {3, 2, 1}));
+    REQUIRE(-UDPARD_ERROR_OUT_OF_MEMORY == accept(0, 100'000'001, header, specifier, {3, 2, 1, 228, 208, 100, 95}));
     REQUIRE(subscription != nullptr);
     REQUIRE(subscription->port_id == 0b0110011001100);
     REQUIRE(transfer.timestamp_usec == 100'000'001);
@@ -422,7 +423,7 @@ TEST_CASE("RxAnonymous")
     specifier.data_specifier              = UDPARD_SUBJECT_ID_PORT;
     specifier.destination_route_specifier = 0b11101111'00'01000'0'0'000110011001100;
     specifier.source_route_specifier      = 0b11000000'10101000'00000000'00000000;
-    REQUIRE(1 == accept(0, 100'000'001, header, specifier, {1, 2, 3, 4, 5, 6}));
+    REQUIRE(1 == accept(0, 100'000'001, header, specifier, {1, 2, 3, 4, 5, 6, 171, 251, 77, 79}));
     REQUIRE(subscription != nullptr);
     REQUIRE(subscription->port_id == 0b0110011001100);
     REQUIRE(transfer.timestamp_usec == 100'000'001);
@@ -431,10 +432,10 @@ TEST_CASE("RxAnonymous")
     REQUIRE(transfer.metadata.port_id == 0b0110011001100);
     REQUIRE(transfer.metadata.remote_node_id == UDPARD_NODE_ID_UNSET);
     REQUIRE(transfer.metadata.transfer_id == 0);
-    REQUIRE(transfer.payload_size == 6);  // NOT truncated.
-    REQUIRE(0 == std::memcmp(transfer.payload, "\x01\x02\x03\x04\x05\x06", 0));
+    REQUIRE(transfer.payload_size == 10);  // NOT truncated.
+    REQUIRE(0 == std::memcmp(transfer.payload, "\x01\x02\x03\x04\x05\x06\xAB\xFB\x4D\x4F", 0));
     REQUIRE(ins.getAllocator().getNumAllocatedFragments() == 1);      // The PAYLOAD BUFFER only! No session for anons.
-    REQUIRE(ins.getAllocator().getTotalAllocatedAmount() == 6);       // Smaller allocation.
+    REQUIRE(ins.getAllocator().getTotalAllocatedAmount() == 10);       // Smaller allocation.
     REQUIRE(ensureAllNullptr(ins.getMessageSubs().at(0)->sessions));  // No RX states!
 }
 

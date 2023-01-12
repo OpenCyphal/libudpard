@@ -33,7 +33,7 @@ TEST_CASE("TxBasic0")
 
     UdpardTransferMetadata meta{};
 
-    // Single-frame with padding.
+    // Single-frame with crc.
     meta.priority       = UdpardPriorityNominal;
     meta.transfer_kind  = UdpardTransferKindMessage;
     meta.port_id        = 321;
@@ -45,7 +45,7 @@ TEST_CASE("TxBasic0")
     REQUIRE(10 < alloc.getTotalAllocatedAmount());
     REQUIRE(160 > alloc.getTotalAllocatedAmount());
     REQUIRE(que.peek()->tx_deadline_usec == 1'000'000'000'000ULL);
-    REQUIRE(que.peek()->frame.payload_size == 32);  // 8 + 24 header
+    REQUIRE(que.peek()->frame.payload_size == 36);  // 8 + 24 header + 4 CRC
     REQUIRE(que.peek()->getPayloadByte(0) == 0);    // Payload start. (starts after header)
     REQUIRE(que.peek()->getPayloadByte(1) == 1);
     REQUIRE(que.peek()->getPayloadByte(2) == 2);
@@ -71,12 +71,12 @@ TEST_CASE("TxBasic0")
         const auto q = que.linearize();
         REQUIRE(2 == q.size());
         REQUIRE(q.at(0)->tx_deadline_usec == 1'000'000'000'000ULL);
-        REQUIRE(q.at(0)->frame.payload_size == 32);
+        REQUIRE(q.at(0)->frame.payload_size == 36);
         REQUIRE(q.at(0)->isStartOfTransfer());
         REQUIRE(q.at(0)->isEndOfTransfer());
         //
         REQUIRE(q.at(1)->tx_deadline_usec == 1'000'000'000'100ULL);
-        REQUIRE(q.at(1)->frame.payload_size == 32);
+        REQUIRE(q.at(1)->frame.payload_size == 36);
         REQUIRE(q.at(1)->isStartOfTransfer());
         REQUIRE(q.at(1)->isEndOfTransfer());
     }
@@ -102,12 +102,12 @@ TEST_CASE("TxBasic0")
     // Pop the queue.
     const UdpardTxQueueItem* ti = que.peek();
     REQUIRE(nullptr != ti);
-    REQUIRE(ti->frame.payload_size == 32);
+    REQUIRE(ti->frame.payload_size == 36);
     REQUIRE(0 == std::memcmp(reinterpret_cast<const std::uint8_t*>(ti->frame.payload) + 24, payload.data(), 8));
     REQUIRE(ti->tx_deadline_usec == 1'000'000'000'000ULL);
     ti = que.peek();
     REQUIRE(nullptr != ti);  // Make sure we get the same frame again.
-    REQUIRE(ti->frame.payload_size == 32);
+    REQUIRE(ti->frame.payload_size == 36);
     REQUIRE(0 == std::memcmp(reinterpret_cast<const std::uint8_t*>(ti->frame.payload) + 24, payload.data(), 8));
     REQUIRE(ti->tx_deadline_usec == 1'000'000'000'000ULL);
     ins.getAllocator().deallocate(que.pop(ti));
@@ -115,7 +115,7 @@ TEST_CASE("TxBasic0")
     REQUIRE(1 == alloc.getNumAllocatedFragments());
     ti = que.peek();
     REQUIRE(nullptr != ti);
-    REQUIRE(ti->frame.payload_size == 32);
+    REQUIRE(ti->frame.payload_size == 36);
     REQUIRE(ti->tx_deadline_usec == 1'000'000'000'100ULL);
     ins.getAllocator().deallocate(que.pop(ti));
     REQUIRE(0 == que.getSize());
@@ -134,14 +134,14 @@ TEST_CASE("TxBasic0")
     REQUIRE(1 == que.push(&ins.getInstance(), 1'000'000'004'000ULL, meta, 0, nullptr));
     REQUIRE(1 == que.getSize());
     REQUIRE(1 == alloc.getNumAllocatedFragments());
-    REQUIRE(130 > alloc.getTotalAllocatedAmount());
+    REQUIRE(140 > alloc.getTotalAllocatedAmount());
     REQUIRE(que.peek()->tx_deadline_usec == 1'000'000'004'000ULL);
-    REQUIRE(que.peek()->frame.payload_size == 24);
+    REQUIRE(que.peek()->frame.payload_size == 28);
     REQUIRE(que.peek()->isStartOfTransfer());
     REQUIRE(que.peek()->isEndOfTransfer());
     ti = que.peek();
     REQUIRE(nullptr != ti);
-    REQUIRE(ti->frame.payload_size == 24);
+    REQUIRE(ti->frame.payload_size == 28);
     REQUIRE(ti->tx_deadline_usec == 1'000'000'004'000ULL);
     ins.getAllocator().deallocate(que.pop(ti));
     REQUIRE(0 == que.getSize());
@@ -211,7 +211,7 @@ TEST_CASE("TxBasic1")
     REQUIRE(10 < alloc.getTotalAllocatedAmount());
     REQUIRE(160 > alloc.getTotalAllocatedAmount());
     REQUIRE(que.peek()->tx_deadline_usec == 1'000'000'000'000ULL);
-    REQUIRE(que.peek()->frame.payload_size == 32);  // 8 + 24 header
+    REQUIRE(que.peek()->frame.payload_size == 36);  // 8 + 24 header + 4 CRC
     REQUIRE(que.peek()->getPayloadByte(0) == 0);    // Payload start. (starts after header)
     REQUIRE(que.peek()->getPayloadByte(1) == 1);
     REQUIRE(que.peek()->getPayloadByte(2) == 2);
@@ -240,7 +240,7 @@ REQUIRE(que.peek()->getPayloadByte(3) == 3);
         const auto q = que.linearize();
         REQUIRE(3 == q.size());
         REQUIRE(q.at(0)->tx_deadline_usec == 1'000'000'000'000ULL);
-        REQUIRE(q.at(0)->frame.payload_size == 32);
+        REQUIRE(q.at(0)->frame.payload_size == 36);
         REQUIRE(q.at(0)->isStartOfTransfer());
         REQUIRE(q.at(0)->isEndOfTransfer());
 
@@ -249,7 +249,7 @@ REQUIRE(que.peek()->getPayloadByte(3) == 3);
         REQUIRE(q.at(1)->isStartOfTransfer());
         REQUIRE(!q.at(1)->isEndOfTransfer());
 
-	REQUIRE(q.at(2)->tx_deadline_usec == 1'000'000'000'100ULL);
+        REQUIRE(q.at(2)->tx_deadline_usec == 1'000'000'000'100ULL);
         REQUIRE(q.at(2)->frame.payload_size == 56); // mtu(= 28 data + 24 header + 4 crc)
         REQUIRE(!q.at(2)->isStartOfTransfer());
         REQUIRE(q.at(2)->isEndOfTransfer());
@@ -276,13 +276,13 @@ REQUIRE(-UDPARD_ERROR_OUT_OF_MEMORY == que.push(&ins.getInstance(), 1'000'000'00
     // Pop the queue.
     const UdpardTxQueueItem* ti = que.peek();
     REQUIRE(nullptr != ti);
-    REQUIRE(ti->frame.payload_size == 32);
+    REQUIRE(ti->frame.payload_size == 36);
     REQUIRE(0 == std::memcmp(reinterpret_cast<const std::uint8_t*>(ti->frame.payload) + 24, payload.data(), 8));
     REQUIRE(ti->tx_deadline_usec == 1'000'000'000'000ULL);
 
     ti = que.peek(); // Make sure we get the same frame again.
     REQUIRE(nullptr != ti);
-    REQUIRE(ti->frame.payload_size == 32);
+    REQUIRE(ti->frame.payload_size == 36);
     REQUIRE(0 == std::memcmp(reinterpret_cast<const std::uint8_t*>(ti->frame.payload) + 24, payload.data(), 8));
     REQUIRE(ti->tx_deadline_usec == 1'000'000'000'000ULL);
     ins.getAllocator().deallocate(que.pop(ti));
@@ -316,14 +316,14 @@ REQUIRE(-UDPARD_ERROR_OUT_OF_MEMORY == que.push(&ins.getInstance(), 1'000'000'00
     REQUIRE(1 == que.push(&ins.getInstance(), 1'000'000'004'000ULL, meta, 0, nullptr));
     REQUIRE(1 == que.getSize());
     REQUIRE(1 == alloc.getNumAllocatedFragments());
-    REQUIRE(130 > alloc.getTotalAllocatedAmount());
+    REQUIRE(140 > alloc.getTotalAllocatedAmount());
     REQUIRE(que.peek()->tx_deadline_usec == 1'000'000'004'000ULL);
-    REQUIRE(que.peek()->frame.payload_size == 24);
+    REQUIRE(que.peek()->frame.payload_size == 28);
     REQUIRE(que.peek()->isStartOfTransfer());
     REQUIRE(que.peek()->isEndOfTransfer());
     ti = que.peek();
     REQUIRE(nullptr != ti);
-    REQUIRE(ti->frame.payload_size == 24);
+    REQUIRE(ti->frame.payload_size == 28);
     REQUIRE(ti->tx_deadline_usec == 1'000'000'004'000ULL);
     ins.getAllocator().deallocate(que.pop(ti));
     REQUIRE(0 == que.getSize());

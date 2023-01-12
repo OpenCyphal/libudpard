@@ -126,6 +126,8 @@ typedef uint32_t TransferCRC;
 #define CRC_XOR 0xFFFFFFFFU
 #define CRC_SIZE_BYTES 4U
 
+#define CRC_BYTE_MASK 0xFFU
+
 static const uint32_t CRCTable[256] =
     {0x00000000, 0xf26b8303, 0xe13b70f7, 0x1350f3f4, 0xc79a971f, 0x35f1141c, 0x26a1e7e8, 0xd4ca64eb, 0x8ad958cf,
      0x78b2dbcc, 0x6be22838, 0x9989ab3b, 0x4d43cfd0, 0xbf284cd3, 0xac78bf27, 0x5e133c24, 0x105ec76f, 0xe235446c,
@@ -405,10 +407,8 @@ UDPARD_PRIVATE int32_t txPushSingleFrame(UdpardTxQueue* const                que
     UDPARD_ASSERT((payload != NULL) || (payload_size == 0));
     // The size of a Frame header shouldn't change, but best to check it is at least bigger than 0
     UDPARD_ASSERT(sizeof(UdpardFrameHeader) > 0);  // NOLINT
-    const size_t frame_payload_size = payload_size + sizeof(UdpardFrameHeader);
+    const size_t frame_payload_size = payload_size + sizeof(UdpardFrameHeader) + CRC_SIZE_BYTES;
     UDPARD_ASSERT(frame_payload_size > payload_size);
-    const size_t padding_size = frame_payload_size - payload_size - sizeof(UdpardFrameHeader);
-    UDPARD_ASSERT((padding_size + payload_size + sizeof(UdpardFrameHeader)) == frame_payload_size);
     int32_t       out = 0;
     TxItem* const tqi =
         (que->size < que->capacity) ? txAllocateQueueItem(ins, specifier, deadline_usec, frame_payload_size) : NULL;
@@ -421,9 +421,6 @@ UDPARD_PRIVATE int32_t txPushSingleFrame(UdpardTxQueue* const                que
             // We ignore it because the safe functions are poorly supported; reliance on them may limit the portability.
             (void) memcpy(&tqi->payload_buffer[sizeof(UdpardFrameHeader)], payload, payload_size);  // NOLINT
         }
-        // Clang-Tidy raises an error recommending the use of memset_s() instead.
-        // We ignore it because the safe functions are poorly supported; reliance on them may limit the portability.
-        (void) memset(&tqi->payload_buffer[payload_size], PADDING_BYTE_VALUE, padding_size);  // NOLINT
         /// Create the FrameHeader
         txMakeFrameHeader(&tqi->base.frame.udp_cyphal_header, src_node_id, dst_node_id, port_id, transfer_kind, priority, transfer_id, true, 1);
         // Clang-Tidy raises an error recommending the use of memcpy_s() instead.
@@ -431,6 +428,19 @@ UDPARD_PRIVATE int32_t txPushSingleFrame(UdpardTxQueue* const                que
         (void) memcpy(&tqi->payload_buffer[0],
                       &tqi->base.frame.udp_cyphal_header,
                       sizeof(UdpardFrameHeader));  // NOLINT
+ 
+        // Insert CRC
+        size_t frame_offset = payload_size + sizeof(UdpardFrameHeader);
+        TransferCRC crc = crcValue(crcAdd(CRC_INITIAL, payload_size, payload));
+        uint8_t crc_as_byte[] = {(uint8_t)(crc & BYTE_MAX & CRC_BYTE_MASK),
+                                 (uint8_t)(crc >> 8U & CRC_BYTE_MASK),
+                                 (uint8_t)(crc >> 16U & CRC_BYTE_MASK),
+                                 (uint8_t)(crc >> 24U & CRC_BYTE_MASK)};
+        for (int i = 0; i < sizeof(crc_as_byte); i++)
+        {
+            tqi->payload_buffer[frame_offset++] = crc_as_byte[i];
+        }
+
         // Insert the newly created TX item into the queue.
         const UdpardTreeNode* const res = cavlSearch(&que->root, &tqi->base.base, &txAVLPredicate, &avlTrivialFactory);
         (void) res;
@@ -463,7 +473,10 @@ UDPARD_PRIVATE TxChain txGenerateMultiFrameChain(UdpardInstance* const        in
 {
     UDPARD_ASSERT(ins != NULL);
     UDPARD_ASSERT(presentation_layer_mtu > sizeof(UdpardFrameHeader));
-    UDPARD_ASSERT(payload_size > presentation_layer_mtu - sizeof(UdpardFrameHeader));  // Otherwise, a single-frame transfer should be used.
+    
+    // Otherwise, a single-frame transfer should be used.
+    // CRC_SIZE_BYTES 
+    UDPARD_ASSERT(payload_size + CRC_SIZE_BYTES > presentation_layer_mtu - sizeof(UdpardFrameHeader)); 
     UDPARD_ASSERT(payload != NULL);
 
     TxChain        out                   = {NULL, NULL, 0};
@@ -472,7 +485,10 @@ UDPARD_PRIVATE TxChain txGenerateMultiFrameChain(UdpardInstance* const        in
     TransferCRC    crc                   = crcValue(crcAdd(CRC_INITIAL, payload_size, payload));
     const uint8_t* payload_ptr           = (const uint8_t*) payload;
     uint32_t       frame_index           = 0U;
-    uint8_t        crc_as_byte[]         = {(uint8_t)(crc & BYTE_MAX), (uint8_t)(crc >> 8U), (uint8_t)(crc >> 16U), (uint8_t)(crc >> 24U)};
+    uint8_t        crc_as_byte[]         = {(uint8_t)(crc & BYTE_MAX & CRC_BYTE_MASK), 
+                                            (uint8_t)(crc >> 8U & CRC_BYTE_MASK),
+                                            (uint8_t)(crc >> 16U & CRC_BYTE_MASK),
+                                            (uint8_t)(crc >> 24U & CRC_BYTE_MASK)};
     size_t         last_crc_index        = 0U;
     size_t         inserted_crc_amount   = 0;
     while (offset < payload_size_with_crc)
@@ -581,7 +597,7 @@ UDPARD_PRIVATE int32_t txPushMultiFrame(UdpardTxQueue* const    que,
 
     UDPARD_ASSERT((ins != NULL) && (que != NULL));
     UDPARD_ASSERT(presentation_layer_mtu > sizeof(UdpardFrameHeader));
-    UDPARD_ASSERT(payload_size > presentation_layer_mtu - sizeof(UdpardFrameHeader));
+    UDPARD_ASSERT(payload_size + CRC_SIZE_BYTES > presentation_layer_mtu - sizeof(UdpardFrameHeader));
     const size_t payload_size_with_crc = payload_size + CRC_SIZE_BYTES;
     const size_t num_frames = (payload_size_with_crc
                                + presentation_layer_mtu 
@@ -882,10 +898,8 @@ UDPARD_PRIVATE int8_t rxSessionAcceptFrame(UdpardInstance* const          ins,
     }
 
     const bool single_frame = frame->start_of_transfer && frame->end_of_transfer;
-    if (!single_frame)
-    {
-        rxs->calculated_crc = crcAdd(rxs->calculated_crc, frame->payload_size, frame->payload);
-    }
+
+    rxs->calculated_crc = crcAdd(rxs->calculated_crc, frame->payload_size, frame->payload);
 
     int8_t out = rxSessionWritePayload(ins, rxs, extent, frame->payload_size, frame->payload);
     if (out < 0)
@@ -896,7 +910,7 @@ UDPARD_PRIVATE int8_t rxSessionAcceptFrame(UdpardInstance* const          ins,
     else if (frame->end_of_transfer)
     {
         UDPARD_ASSERT(0 == out);
-        if (single_frame || (CRC_RESIDUE == rxs->calculated_crc))
+        if (CRC_RESIDUE == rxs->calculated_crc)
         {
 
             out = 1;  // One transfer received, notify the application.
@@ -1147,7 +1161,7 @@ int32_t udpardTxPush(UdpardTxQueue* const                que,
         const int32_t specifier_result = txMakeSessionSpecifier(metadata, ins->node_id, ins->local_ip_addr, &specifier);
         if (specifier_result >= 0)
         {
-            if (payload_size <= pl_mtu)
+            if (payload_size + CRC_SIZE_BYTES <= pl_mtu - sizeof(UdpardFrameHeader))
             {
                 out = txPushSingleFrame(que,
                                         ins,
