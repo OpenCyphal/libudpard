@@ -2,7 +2,7 @@
 
 This package is a staging package to make changes before committing a pull request for the github repo: https://github.com/OpenCyphal-Garage/libudpard based on @schoberm's prototype work
 
-# Compact Cyphal/UDP v0 in C
+# Compact Cyphal/UDP v1 in C
 
 Libudpard is a compact implementation of the Cyphal/UDP protocol stack in C99/C11 for high-integrity real-time
 embedded systems.
@@ -23,6 +23,10 @@ Testing
 cd build
 make
 make test
+```
+Or to debug
+```
+TEST_OUTPUT_ON_FAILURE=TRUE make test
 ```
 
 ## Features, Description, and Usage

@@ -61,6 +61,7 @@ struct RxSession
 struct RxFrameModel
 {
     UdpardMicrosecond   timestamp_usec      = std::numeric_limits<std::uint64_t>::max();
+    UdpardHeaderVersion version             = 1U;
     UdpardPriority      priority            = UdpardPriorityOptional;
     UdpardTransferKind  transfer_kind       = UdpardTransferKindMessage;
     UdpardPortID        port_id             = std::numeric_limits<std::uint16_t>::max();
@@ -89,9 +90,7 @@ auto txMakeMessageSessionSpecifier(const UdpardPortID            subject_id,
                                    UdpardSessionSpecifier* const out_spec) -> std::uint32_t;
 
 auto txMakeServiceSessionSpecifier(const UdpardPortID            service_id,
-                                   const bool                    request_not_response,
                                    const UdpardNodeID            src_node_id,
-                                   const UdpardNodeID            dst_node_id,
                                    const UdpardIPv4Addr          local_node_addr,
                                    UdpardSessionSpecifier* const out_spec) -> std::uint32_t;
 

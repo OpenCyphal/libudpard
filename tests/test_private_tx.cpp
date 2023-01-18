@@ -15,19 +15,19 @@ TEST_CASE("SessionSpecifier")
     UdpardSessionSpecifier specifier = {};
     REQUIRE(0 == exposed::txMakeMessageSessionSpecifier(0b0110011001100, 0b0100111, 0xc0a80000, &specifier));
     REQUIRE(UDPARD_UDP_PORT == specifier.data_specifier);
-    REQUIRE(0b11101111'00'10100'0'0'0001100'11001100 == specifier.destination_route_specifier);
+    REQUIRE(0b11101111'0'0'00000'0'0'0001100'11001100 == specifier.destination_route_specifier);
     REQUIRE(0b11000000'10101000'00000000'00100111 == specifier.source_route_specifier);
     // Service Request
     REQUIRE(0 ==
-            exposed::txMakeServiceSessionSpecifier(0b0100110011, true, 0b1010101, 0b0101010, 0xc0a80000, &specifier));
+            exposed::txMakeServiceSessionSpecifier(0b0100110011, 0b1010101, 0xc0a80000, &specifier));
     REQUIRE(UDPARD_UDP_PORT == specifier.data_specifier);
-    REQUIRE(0b11101111'00'10100'1'00000000'00101010 == specifier.destination_route_specifier);
+    REQUIRE(0b11101111'0'0'00000'1'0'0000001'00110011 == specifier.destination_route_specifier);
     REQUIRE(0b11000000'10101000'00000000'01010101 == specifier.source_route_specifier);
     // Service Response
     REQUIRE(0 ==
-            exposed::txMakeServiceSessionSpecifier(0b0100110011, false, 0b1010101, 0b0101010, 0xc0a80000, &specifier));
+            exposed::txMakeServiceSessionSpecifier(0b0100110011, 0b1010101, 0xc0a80000, &specifier));
     REQUIRE(UDPARD_UDP_PORT == specifier.data_specifier);
-    REQUIRE(0b11101111'00'10100'1'00000000'00101010 == specifier.destination_route_specifier);
+    REQUIRE(0b11101111'0'0'00000'1'0'0000001'00110011 == specifier.destination_route_specifier);
     REQUIRE(0b11000000'10101000'00000000'01010101 == specifier.source_route_specifier);
 }
 
@@ -75,7 +75,7 @@ TEST_CASE("txMakeSessionSpecifier")
                                    &specifier));
 
     REQUIRE(UDPARD_UDP_PORT == specifier.data_specifier);
-    REQUIRE(0b11101111'00'10100'0'0'0010011'00110011 == specifier.destination_route_specifier);
+    REQUIRE(0b11101111'0'0'00000'0'0'0010011'00110011 == specifier.destination_route_specifier);
     REQUIRE(0b11000000'10101000'00000000'01010101 == specifier.source_route_specifier);
     REQUIRE(-UDPARD_ERROR_INVALID_ARGUMENT ==  // Bad subject-ID.
             txMakeSessionSpecifier(mk_meta(UdpardPriorityExceptional,
