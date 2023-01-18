@@ -182,6 +182,45 @@ UDPARD_PRIVATE TransferCRC crcValue(const TransferCRC crc)
     return (uint32_t) (crc ^ CRC_XOR);
 }
 
+/// --------------------------------------------- CYPHAL HEADER CRC ---------------------------------------------
+
+typedef uint16_t CyphalHeaderCRC;
+
+// Based on CRC-16-CCITT-FALSE Function
+#define CYPHAL_HEADER_CRC_INITIAL 0xFFFFU
+#define CYPHAL_HEADER_CRC_SIZE_BYTES 2U
+
+UDPARD_PRIVATE CyphalHeaderCRC cyphalHeaderCrcAddByte(const CyphalHeaderCRC crc, const uint8_t byte)
+{
+    // Based on CRC-16-CCITT-FALSE Function
+    static const CyphalHeaderCRC Top  = 0x8000U;
+    static const CyphalHeaderCRC Poly = 0x1021U;
+    CyphalHeaderCRC              out  = crc ^ (uint16_t) ((uint16_t) (byte) << BITS_PER_BYTE);
+    // Do not fold this into a loop because a size-optimizing compiler won't unroll it degrading the performance.
+    out = (uint16_t) ((uint16_t) (out << 1U) ^ (((out & Top) != 0U) ? Poly : 0U));
+    out = (uint16_t) ((uint16_t) (out << 1U) ^ (((out & Top) != 0U) ? Poly : 0U));
+    out = (uint16_t) ((uint16_t) (out << 1U) ^ (((out & Top) != 0U) ? Poly : 0U));
+    out = (uint16_t) ((uint16_t) (out << 1U) ^ (((out & Top) != 0U) ? Poly : 0U));
+    out = (uint16_t) ((uint16_t) (out << 1U) ^ (((out & Top) != 0U) ? Poly : 0U));
+    out = (uint16_t) ((uint16_t) (out << 1U) ^ (((out & Top) != 0U) ? Poly : 0U));
+    out = (uint16_t) ((uint16_t) (out << 1U) ^ (((out & Top) != 0U) ? Poly : 0U));
+    out = (uint16_t) ((uint16_t) (out << 1U) ^ (((out & Top) != 0U) ? Poly : 0U));
+    return out;
+}
+
+UDPARD_PRIVATE CyphalHeaderCRC cyphalHeaderCrcAdd(const CyphalHeaderCRC crc, const size_t size, const void* const header)
+{
+    UDPARD_ASSERT(header != NULL);
+    CyphalHeaderCRC    out = crc;
+    const uint8_t* p   = (const uint8_t*) header;
+    for (size_t i = 0; i < size; i++)
+    {
+        out = cyphalHeaderCrcAddByte(out, *p);
+        ++p;
+    }
+    return out;
+}
+
 // --------------------------------------------- TRANSMISSION ---------------------------------------------
 
 /// This is a subclass of UdpardTxQueueItem. A pointer to this type can be cast to UdpardTxQueueItem safely.
@@ -324,11 +363,13 @@ UDPARD_PRIVATE void txMakeFrameHeader(UdpardFrameHeader* const header,
 {
     UDPARD_ASSERT(frame_index <= UDPARD_MAX_FRAME_INDEX);
     uint32_t end_of_transfer_mask = (uint32_t) (end_of_transfer ? 1 : 0) << (uint32_t) UDPARD_END_OF_TRANSFER_OFFSET;
+    size_t cyphal_header_size_without_crc = sizeof(UdpardFrameHeader) - CYPHAL_HEADER_CRC_SIZE_BYTES;
     header->transfer_id           = transfer_id;
     header->priority              = (uint8_t) priority;
     header->frame_index_eot       = end_of_transfer_mask | frame_index;
     header->source_node_id        = src_node_id;
     header->destination_node_id   = dst_node_id;
+    header->cyphal_header_checksum = cyphalHeaderCrcAdd(CYPHAL_HEADER_CRC_INITIAL, cyphal_header_size_without_crc, header);
     if (transfer_kind == UdpardTransferKindMessage)
     {
         header->data_specifier = (uint16_t) UPDARD_DATA_SPECIFIER_MESSAGE & port_id;  // SNM (0) + Subject ID
