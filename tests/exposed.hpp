@@ -79,7 +79,7 @@ extern "C" {
 
 auto crcAdd(const std::uint32_t crc, const std::size_t size, const void* const bytes) -> std::uint32_t;
 
-auto CyphalHeaderCrcAdd(const std::uint16_t crc, const void* const bytes) -> std::uint16_t;
+auto cyphalHeaderCrcAdd(const std::uint16_t crc, const std::size_t size, const void* const bytes) -> std::uint16_t;
 
 auto crcValue(const std::uint32_t crc) -> std::uint32_t;
 
