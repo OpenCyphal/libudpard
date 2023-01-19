@@ -195,7 +195,7 @@ TEST_CASE("rxTryParseFrame")
 
     // REQUEST
     REQUIRE(0 ==
-            exposed::txMakeServiceSessionSpecifier(0b0000110011, true, 0b0100111, 0b0011010, 0xc0a80000, &specifier));
+            exposed::txMakeServiceSessionSpecifier(0b0000110011, 0b0100111, 0xc0a80000, &specifier));
     REQUIRE(parse(999'999U,
                   specifier,
                   {
@@ -228,7 +228,7 @@ TEST_CASE("rxTryParseFrame")
     // SIMILAR BUT INVALID (Source Node ID cant be equal to Destination Node ID)
     REQUIRE(!parse(999'999U, specifier, {}));  // NO HEADER
     REQUIRE(0 ==
-            exposed::txMakeServiceSessionSpecifier(0b0000110011, true, 0b0100111, 0b0100111, 0xc0a80000, &specifier));
+            exposed::txMakeServiceSessionSpecifier(0b0000110011, 0b0100111, 0xc0a80000, &specifier));
     REQUIRE(!parse(999'999U,
                    specifier,
                    {
@@ -246,7 +246,7 @@ TEST_CASE("rxTryParseFrame")
 
     // RESPONSE
     REQUIRE(0 ==
-            exposed::txMakeServiceSessionSpecifier(0b0000110011, false, 0b00011010, 0b0100111, 0xc0a80000, &specifier));
+            exposed::txMakeServiceSessionSpecifier(0b0000110011, 0b00011010, 0xc0a80000, &specifier));
     REQUIRE(parse(888'888,
                   specifier,
                   {
@@ -276,7 +276,7 @@ TEST_CASE("rxTryParseFrame")
     REQUIRE(!parse(888'888U, specifier, {}));  // NO TAIL BYTE
     REQUIRE(
         0 ==
-        exposed::txMakeServiceSessionSpecifier(0b0000110011, false, 0b00011010, 0b00011010, 0xc0a80000, &specifier));
+        exposed::txMakeServiceSessionSpecifier(0b0000110011, 0b00011010, 0xc0a80000, &specifier));
     REQUIRE(!parse(888'888,
                    specifier,
                    {

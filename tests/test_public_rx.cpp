@@ -437,6 +437,12 @@ TEST_CASE("RxAnonymous")
     REQUIRE(ins.getAllocator().getNumAllocatedFragments() == 1);      // The PAYLOAD BUFFER only! No session for anons.
     REQUIRE(ins.getAllocator().getTotalAllocatedAmount() == 10);       // Smaller allocation.
     REQUIRE(ensureAllNullptr(ins.getMessageSubs().at(0)->sessions));  // No RX states!
+
+    // Version mismatch will be ignored
+    header.version = 0;
+    specifier.destination_route_specifier = 0b11101111'00'01000'0'0'000110011001100;
+    specifier.source_route_specifier      = 0b11000000'10101000'00000000'00000000;
+    REQUIRE(0 == accept(0, 100'000'001, header, specifier, {1, 2, 3, 4, 5, 6, 171, 251, 77, 79}));
 }
 
 TEST_CASE("RxSubscriptionErrors")

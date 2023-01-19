@@ -77,6 +77,7 @@
 #define UDPARD_SUBJECT_ID_MASK 32767U  /// 0x7FFF
 #define UDPARD_SUBNET_OFFSET 17U
 #define UDPARD_SUBNET_MASK (31U << UDPARD_SUBNET_OFFSET)
+#define UDPARD_TRANSMIT_SUBNET_VALUE 0U
 #define UDPARD_RESERVED_1BIT_OFFSET 15U
 #define UDPARD_RESERVED_1BIT_MASK (1U << UDPARD_RESERVED_1BIT_OFFSET)
 #define UDPARD_SERVICE_NOT_MESSAGE_OFFSET 16U
@@ -97,7 +98,7 @@ IRNR - Is Request, Not Response
 #define UDPARD_SERVICE_ID_MASK 16383U  /// 0x3FFF
 #define UPDARD_DATA_SPECIFIER_MESSAGE (0xFFFF >> 1) // SNM (0) + SubjectID
 #define UDPARD_DATA_SPECIFIER_SERVICE_RESPONSE (2U << UDPARD_IRNR_DATA_SPECIFIER_OFFSET)  // Set SNM in Cyphal data specifier - SNM (1) + IRNR (0) + ServiceID
-#define UDPARD_DATA_SPECIFIER_SERVICE_REQUEST (3U << UDPARD_IRNR_DATA_SPECIFIER_OFFSET) // Set SNM and IRNR in Cyphal data specifier - SNM (1) + IRNR (1) + ServiceID
+#define UDPARD_DATA_SPECIFIER_SERVICE_REQUEST (3U << UDPARD_IRNR_DATA_SPECIFIER_OFFSET)   // Set SNM and IRNR in Cyphal data specifier - SNM (1) + IRNR (1) + ServiceID
 
 /// Ports align with subject and service ids
 /// Subjects use multicast and always use port 16383
@@ -255,7 +256,7 @@ UDPARD_PRIVATE int32_t txMakeMessageSessionSpecifier(const UdpardPortID         
         (local_node_addr & ~(UdpardIPv4Addr) UDPARD_NODE_ID_MASK) |
         (UdpardIPv4Addr) src_node_id;
     out_spec->destination_route_specifier =
-        ((local_node_addr & (UdpardIPv4Addr) UDPARD_SUBNET_MASK) |
+        ((UDPARD_TRANSMIT_SUBNET_VALUE & (UdpardIPv4Addr) UDPARD_SUBNET_MASK) |
         (UdpardIPv4Addr) UDPARD_MULTICAST_PREFIX |
         ((UdpardIPv4Addr) UDPARD_SUBJECT_ID_MASK & (UdpardIPv4Addr) subject_id)) &
         ~(UdpardIPv4Addr) UDPARD_SERVICE_NOT_MESSAGE_MASK &
@@ -265,9 +266,7 @@ UDPARD_PRIVATE int32_t txMakeMessageSessionSpecifier(const UdpardPortID         
 }
 
 UDPARD_PRIVATE int32_t txMakeServiceSessionSpecifier(const UdpardPortID            service_id,
-                                                     const bool                    request_not_response,
                                                      const UdpardNodeID            src_node_id,
-                                                     const UdpardNodeID            dst_node_id,
                                                      const UdpardIPv4Addr          local_node_addr,
                                                      UdpardSessionSpecifier* const out_spec)
 {
@@ -278,9 +277,9 @@ UDPARD_PRIVATE int32_t txMakeServiceSessionSpecifier(const UdpardPortID         
         (local_node_addr & ~(UdpardIPv4Addr) UDPARD_NODE_ID_MASK) |
         (UdpardIPv4Addr) src_node_id;
     out_spec->destination_route_specifier =
-        ((local_node_addr & (UdpardIPv4Addr) UDPARD_SUBNET_MASK) |
+        ((UDPARD_TRANSMIT_SUBNET_VALUE & (UdpardIPv4Addr) UDPARD_SUBNET_MASK) |
         (UdpardIPv4Addr) UDPARD_MULTICAST_PREFIX |
-        ((UdpardIPv4Addr) UDPARD_NODE_ID_MASK & (UdpardIPv4Addr) dst_node_id)) |
+        ((UdpardIPv4Addr) UDPARD_NODE_ID_MASK & (UdpardIPv4Addr) service_id)) |
         (UdpardIPv4Addr) UDPARD_SERVICE_NOT_MESSAGE_MASK;
     out_spec->data_specifier = (UdpardUdpPortID) UDPARD_UDP_PORT;
     return UDPARD_SUCCESS;
@@ -323,9 +322,7 @@ UDPARD_PRIVATE int32_t txMakeSessionSpecifier(const UdpardTransferMetadata* cons
         if (local_node_id != UDPARD_NODE_ID_UNSET)
         {
             out = txMakeServiceSessionSpecifier(tr->port_id,
-                                                tr->transfer_kind == UdpardTransferKindRequest,
                                                 local_node_id,
-                                                tr->remote_node_id,
                                                 local_node_addr,
                                                 spec);
             UDPARD_ASSERT(out >= 0);
@@ -365,6 +362,7 @@ UDPARD_PRIVATE void txMakeFrameHeader(UdpardFrameHeader* const header,
     uint32_t end_of_transfer_mask = (uint32_t) (end_of_transfer ? 1 : 0) << (uint32_t) UDPARD_END_OF_TRANSFER_OFFSET;
     size_t cyphal_header_size_without_crc = sizeof(UdpardFrameHeader) - CYPHAL_HEADER_CRC_SIZE_BYTES;
     header->transfer_id           = transfer_id;
+    header->version               = (uint8_t) UDPARD_CYPHAL_HEADER_VERSION;
     header->priority              = (uint8_t) priority;
     header->frame_index_eot       = end_of_transfer_mask | frame_index;
     header->source_node_id        = src_node_id;
@@ -372,13 +370,12 @@ UDPARD_PRIVATE void txMakeFrameHeader(UdpardFrameHeader* const header,
     header->cyphal_header_checksum = cyphalHeaderCrcAdd(CYPHAL_HEADER_CRC_INITIAL, cyphal_header_size_without_crc, header);
     if (transfer_kind == UdpardTransferKindMessage)
     {
-        header->data_specifier = (uint16_t) UPDARD_DATA_SPECIFIER_MESSAGE & port_id;  // SNM (0) + Subject ID
+        header->data_specifier = (uint16_t) UPDARD_DATA_SPECIFIER_MESSAGE & port_id  & UDPARD_SUBJECT_ID_MASK;  // SNM (0) + Subject ID
     }
     else
     {
         header->data_specifier =
-            (transfer_kind == UdpardTransferKindRequest) ? UDPARD_DATA_SPECIFIER_SERVICE_REQUEST | port_id
-                                                         : UDPARD_DATA_SPECIFIER_SERVICE_RESPONSE | port_id;  // SNM (1) + IRNR + ServiceID
+            ((transfer_kind == UdpardTransferKindRequest) ? UDPARD_DATA_SPECIFIER_SERVICE_REQUEST : UDPARD_DATA_SPECIFIER_SERVICE_RESPONSE) | port_id;  // SNM (1) + IRNR + ServiceID
     }
 }
 
@@ -435,10 +432,10 @@ UDPARD_PRIVATE int32_t txPushSingleFrame(UdpardTxQueue* const                que
                                          UdpardInstance* const               ins,
                                          const UdpardMicrosecond             deadline_usec,
                                          const UdpardSessionSpecifier* const specifier,
-                                         const UdpardNodeID       src_node_id,
-                                         const UdpardNodeID       dst_node_id,
-                                         const UdpardPortID       port_id,
-                                         const UdpardTransferKind transfer_kind,
+                                         const UdpardNodeID                  src_node_id,
+                                         const UdpardNodeID                  dst_node_id,
+                                         const UdpardPortID                  port_id,
+                                         const UdpardTransferKind            transfer_kind,
                                          const UdpardPriority                priority,
                                          const UdpardTransferID              transfer_id,
                                          const size_t                        payload_size,
@@ -477,7 +474,7 @@ UDPARD_PRIVATE int32_t txPushSingleFrame(UdpardTxQueue* const                que
                                  (uint8_t)(crc >> 8U & CRC_BYTE_MASK),
                                  (uint8_t)(crc >> 16U & CRC_BYTE_MASK),
                                  (uint8_t)(crc >> 24U & CRC_BYTE_MASK)};
-        for (int i = 0; i < sizeof(crc_as_byte); i++)
+        for (unsigned int i = 0; i < sizeof(crc_as_byte); i++)
         {
             tqi->payload_buffer[frame_offset++] = crc_as_byte[i];
         }
@@ -590,9 +587,9 @@ UDPARD_PRIVATE TxChain txGenerateMultiFrameChain(UdpardInstance* const        in
             (void) memcpy(&out.tail->payload_buffer[sizeof(UdpardFrameHeader)], payload_ptr, payload_move_size); // NOLINT
             frame_offset += sizeof(UdpardFrameHeader) + payload_move_size;
             // Insert crc into same frame
-            for(int i = 0; i < overrun_amount; i++)
+            for(unsigned int i = 0; i < overrun_amount; i++)
             {
-                out.tail->payload_buffer[frame_offset++] = crc_as_byte[i+last_crc_index];
+                out.tail->payload_buffer[frame_offset++] = crc_as_byte[i + last_crc_index];
             }
             last_crc_index += overrun_amount;
         }
@@ -727,6 +724,7 @@ typedef struct UdpardInternalRxSession
 typedef struct
 {
     UdpardMicrosecond  timestamp_usec;
+    UdpardHeaderVersion version;
     UdpardPriority     priority;
     UdpardTransferKind transfer_kind;
     UdpardPortID       port_id;
@@ -810,19 +808,22 @@ UDPARD_PRIVATE bool rxTryParseFrame(const UdpardMicrosecond             timestam
     (void) memcpy(&frame->udp_cyphal_header, frame->payload, sizeof(frame->udp_cyphal_header));  // NOLINT
     out->timestamp_usec = timestamp_usec;
 
-    out->priority       = (UdpardPriority) frame->udp_cyphal_header.priority;
-    out -> source_node_id = frame->udp_cyphal_header.source_node_id;
-    out->transfer_kind  = getTransferKindFromDataSpecifier(frame->udp_cyphal_header.data_specifier);
-    out ->port_id = getPortIdFromDataSpecifiers(frame->udp_cyphal_header.data_specifier);
-    out ->destination_node_id = frame->udp_cyphal_header.destination_node_id;
+    out->version             = frame->udp_cyphal_header.version;
+    out->priority            = (UdpardPriority) frame->udp_cyphal_header.priority;
+    out-> source_node_id     = frame->udp_cyphal_header.source_node_id;
+    out->transfer_kind       = getTransferKindFromDataSpecifier(frame->udp_cyphal_header.data_specifier);
+    out->port_id             = getPortIdFromDataSpecifiers(frame->udp_cyphal_header.data_specifier);
+    out->destination_node_id = frame->udp_cyphal_header.destination_node_id;
     // Payload parsing.
-    out->payload_size = frame->payload_size - sizeof(frame->udp_cyphal_header);  // Cut off the header size.
-    out->payload      = (void*) ((uint8_t*) frame->payload + sizeof(frame->udp_cyphal_header));
+    out->payload_size        = frame->payload_size - sizeof(frame->udp_cyphal_header);  // Cut off the header size.
+    out->payload             = (void*) ((uint8_t*) frame->payload + sizeof(frame->udp_cyphal_header));
 
-    out->transfer_id       = frame->udp_cyphal_header.transfer_id;
-    out->start_of_transfer = (((frame->udp_cyphal_header.frame_index_eot) & (UDPARD_MAX_FRAME_INDEX)) == 1);
-    out->end_of_transfer   = ((frame->udp_cyphal_header.frame_index_eot >> UDPARD_END_OF_TRANSFER_OFFSET) == 1);
-    out->frame_index       = frame->udp_cyphal_header.frame_index_eot;
+    out->transfer_id         = frame->udp_cyphal_header.transfer_id;
+    out->start_of_transfer   = (((frame->udp_cyphal_header.frame_index_eot) & (UDPARD_MAX_FRAME_INDEX)) == 1);
+    out->end_of_transfer     = ((frame->udp_cyphal_header.frame_index_eot >> UDPARD_END_OF_TRANSFER_OFFSET) == 1);
+    out->frame_index         = frame->udp_cyphal_header.frame_index_eot;
+    // Make sure header version is supported
+    valid = valid && (out->version >= UDPARD_CYPHAL_HEADER_VERSION);
     if (out->transfer_kind != UdpardTransferKindMessage)
     {
         valid = valid && (out->source_node_id != out->destination_node_id);

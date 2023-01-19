@@ -34,6 +34,9 @@ extern "C" {
 #define UDPARD_CYPHAL_SPECIFICATION_VERSION_MAJOR 1
 #define UDPARD_CYPHAL_SPECIFICATION_VERSION_MINOR 0
 
+/// The version number of the Cyphal Header supported by this library
+#define UDPARD_CYPHAL_HEADER_VERSION 1
+
 /// These error codes may be returned from the library API calls whose return type is a signed integer in the negated
 /// form (e.g., error code 2 returned as -2). A non-negative return value represents success.
 /// API calls whose return type is not a signed integer cannot fail by contract.
@@ -79,6 +82,7 @@ typedef uint16_t                 UdpardPortID;
 typedef uint16_t                 UdpardUdpPortID;
 typedef uint16_t                 UdpardNodeID;
 typedef uint64_t                 UdpardTransferID;  /// TODO - This may need to be broken up for 32bit systems?
+typedef uint8_t                  UdpardHeaderVersion;
 
 /// Transfer priority level mnemonics per the recommendations given in the Cyphal Specification.
 typedef enum
