@@ -79,3 +79,14 @@ jobs:
           name: ${{github.job}}
           path: ${{github.workspace}}/**/*
           retention-days: 2
+          
+  style_check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: DoozyX/clang-format-lint-action@v0.13
+        with:
+          source: './libudpard ./tests'
+          exclude: './tests/catch'
+          extensions: 'c,h,cpp,hpp'
+          clangFormatVersion: ${{ env.LLVM_VERSION }}
