@@ -226,7 +226,7 @@ REQUIRE(que.peek()->getPayloadByte(3) == 3);
     // Multi-frame transfer
     meta.priority    = UdpardPriorityLow;
     meta.transfer_id = 22;
-    que.setMTU(UDPARD_MTU_UDP_IPV4_TEMP);
+    que.setMTU(64U);
     ins.setNodeID(42);
     REQUIRE(64U == que.getMTU());
     REQUIRE(2 == que.push(&ins.getInstance(), 1'000'000'000'100ULL, meta, 68, payload.data()));  // 68 bytes --> 2 frames

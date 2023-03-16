@@ -14,6 +14,8 @@
 /// Author: Pavel Kirienko <pavel@opencyphal.org>
 /// Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
+/// @todo Replace with subrepo of official libudpard
+
 #ifndef UDPARD_H_INCLUDED
 #define UDPARD_H_INCLUDED
 
@@ -51,10 +53,9 @@ extern "C" {
 #define UDPARD_SUCCESS 0
 
 /// MTU values for the supported protocols.
-#define UDPARD_MTU_UDP_IPV4 576U
-#define UDPARD_MTU_UDP_IPV6 1280U
-#define UDPARD_MTU_UDP_IPV4_TEMP 64U
-#define UDPARD_MTU_MAX UDPARD_MTU_UDP_IPV6  /// We may want to set this to 1400/1500 for Ethernet MTU
+#define UDPARD_MTU_MAX 1400U /// Can update up to 1500. 
+#define UDPARD_MTU_UDP_IPV4 UDPARD_MTU_MAX // Minimum MTU for IPv4 for the internet is 576
+#define UDPARD_MTU_UDP_IPV6 UDPARD_MTU_MAX
 
 /// Parameter ranges are inclusive; the lower bound is zero for all. See Cyphal/UDP Specification for background.
 #define UDPARD_SUBJECT_ID_MAX 32767U   /// 15 bits subject ID
@@ -541,7 +542,6 @@ int8_t udpardRxAccept(UdpardInstance* const         ins,
                       const UdpardMicrosecond       timestamp_usec,
                       UdpardFrame* const            frame,
                       const uint8_t                 redundant_transport_index,
-                      UdpardSessionSpecifier* const specifier,
                       UdpardRxTransfer* const       out_transfer,
                       UdpardRxSubscription** const  out_subscription);
 
