@@ -4,7 +4,7 @@
 
 #include "exposed.hpp"
 #include "helpers.hpp"
-#include "catch/catch.hpp"
+#include "catch.hpp"
 #include <cstring>
 
 TEST_CASE("rxTryParseFrame")

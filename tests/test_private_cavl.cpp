@@ -3,9 +3,8 @@
 // These tests have been adapted from the Cavl test suite that you can find at https://github.com/pavel-kirienko/cavl
 
 //#include <cavl.h>
-//#include "catch.hpp"
+#include "catch.hpp"
 #include "../libudpard/cavl.h"
-#include "catch/catch.hpp"
 #include <algorithm>
 #include <array>
 #include <cstdint>
