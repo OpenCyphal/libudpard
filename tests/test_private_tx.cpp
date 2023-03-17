@@ -6,8 +6,8 @@
 #include "helpers.hpp"
 #include "catch/catch.hpp"
 
-#define UDPARD_SUBJECT_ID_PORT 16383U
-#define UDPARD_UDP_PORT 9382U
+constexpr uint16_t UDPARD_SUBJECT_ID_PORT = 16383U;
+constexpr uint16_t UDPARD_UDP_PORT = 9382U;
 
 TEST_CASE("SessionSpecifier")
 {
