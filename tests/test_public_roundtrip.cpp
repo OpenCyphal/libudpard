@@ -4,7 +4,7 @@
 
 #include "helpers.hpp"
 #include "exposed.hpp"
-#include "catch.hpp"
+#include "catch/catch.hpp"
 #include <array>
 #include <atomic>
 #include <chrono>

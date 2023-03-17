@@ -4,11 +4,11 @@
 
 #include "exposed.hpp"
 #include "helpers.hpp"
-#include "catch.hpp"
+#include "catch/catch.hpp"
 #include <cstring>
 
-#define UDPARD_SUBJECT_ID_PORT 16383U
-#define UDPARD_UDP_PORT 9382U
+constexpr uint16_t UDPARD_SUBJECT_ID_PORT = 16383U;
+constexpr uint16_t UDPARD_UDP_PORT = 9382U;
 
 // clang-tidy mistakenly suggests to avoid C arrays here, which is clearly an error
 template <typename P, std::size_t N>

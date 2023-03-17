@@ -99,14 +99,6 @@ static const uint16_t UPDARD_DATA_SPECIFIER_MESSAGE = 0x7FFFU; // SNM (0) + Subj
 static const uint16_t UDPARD_DATA_SPECIFIER_SERVICE_RESPONSE = 0x8000; // (2U << UDPARD_IRNR_DATA_SPECIFIER_OFFSET)  // Set SNM in Cyphal data specifier - SNM (1) + IRNR (0) + ServiceID
 static const uint16_t UDPARD_DATA_SPECIFIER_SERVICE_REQUEST = 0xC000; // (3U << UDPARD_IRNR_DATA_SPECIFIER_OFFSET)   // Set SNM and IRNR in Cyphal data specifier - SNM (1) + IRNR (1) + ServiceID
 
-/// Ports align with subject and service ids
-/// Subjects use multicast and always use port 16383
-/// Services use unicast and start with port 16384
-/// Unique service id request / response are identified by initial port + (service * 2) (+1 for response)
-/// A service response will always be > 16384 and will always be odd (port > initial && port % 2 == 1)
-static const uint16_t UDPARD_SUBJECT_ID_PORT = 16383U;
-static const uint16_t UDPARD_SERVICE_ID_INITIAL_PORT = 16384U;
-
 static const uint16_t UDPARD_UDP_PORT = 9382U;
 
 /// Used for inserting new items into AVL trees.
@@ -358,7 +350,7 @@ UDPARD_PRIVATE void txMakeFrameHeader(UdpardFrameHeader* const header,
     header->cyphal_header_checksum = cyphalHeaderCrcAdd(CYPHAL_HEADER_CRC_INITIAL, cyphal_header_size_without_crc, header);
     if (transfer_kind == UdpardTransferKindMessage)
     {
-        header->data_specifier =  port_id & UDPARD_SUBJECT_ID_MASK & UPDARD_DATA_SPECIFIER_MESSAGE;  // SNM (0) + Subject ID
+        header->data_specifier =  (uint16_t)(port_id & UDPARD_SUBJECT_ID_MASK) & UPDARD_DATA_SPECIFIER_MESSAGE;  // SNM (0) + Subject ID
     }
     else
     {
@@ -458,17 +450,15 @@ UDPARD_PRIVATE int32_t txPushSingleFrame(UdpardTxQueue* const                que
         txMakeFrameHeader(&tqi->base.frame.udp_cyphal_header, src_node_id, dst_node_id, port_id, transfer_kind, priority, transfer_id, true, 1);
         // Clang-Tidy raises an error recommending the use of memcpy_s() instead.
         // We ignore it because the safe functions are poorly supported; reliance on them may limit the portability.
-        (void) memcpy(&tqi->payload_buffer[0],
-                      &tqi->base.frame.udp_cyphal_header,
-                      sizeof(UdpardFrameHeader));  // NOLINT
+        (void) memcpy(&tqi->payload_buffer[0], &tqi->base.frame.udp_cyphal_header, sizeof(UdpardFrameHeader));  // NOLINT
  
         // Insert CRC
         size_t frame_offset = payload_size + sizeof(UdpardFrameHeader);
         TransferCRC crc = crcValue(crcAdd(CRC_INITIAL, payload_size, payload));
         uint8_t crc_as_byte[] = {(uint8_t)(crc & BYTE_MAX & CRC_BYTE_MASK),
-                                 (uint8_t)(crc >> (BITS_PER_BYTE * 1) & CRC_BYTE_MASK),
-                                 (uint8_t)(crc >> (BITS_PER_BYTE * 2) & CRC_BYTE_MASK),
-                                 (uint8_t)(crc >> (BITS_PER_BYTE * 3) & CRC_BYTE_MASK)};
+                                 (uint8_t)(crc >> (BITS_PER_BYTE * 1U) & CRC_BYTE_MASK),
+                                 (uint8_t)(crc >> (BITS_PER_BYTE * 2U) & CRC_BYTE_MASK),
+                                 (uint8_t)(crc >> (BITS_PER_BYTE * 3U) & CRC_BYTE_MASK)};
         for (unsigned int i = 0; i < sizeof(crc_as_byte); i++)
         {
             tqi->payload_buffer[frame_offset++] = crc_as_byte[i];
@@ -519,9 +509,9 @@ UDPARD_PRIVATE TxChain txGenerateMultiFrameChain(UdpardInstance* const        in
     const uint8_t* payload_ptr           = (const uint8_t*) payload;
     uint32_t       frame_index           = 0U;
     uint8_t        crc_as_byte[]         = {(uint8_t)(crc & BYTE_MAX & CRC_BYTE_MASK), 
-                                            (uint8_t)(crc >> (BITS_PER_BYTE * 1) & CRC_BYTE_MASK),
-                                            (uint8_t)(crc >> (BITS_PER_BYTE * 2) & CRC_BYTE_MASK),
-                                            (uint8_t)(crc >> (BITS_PER_BYTE * 3) & CRC_BYTE_MASK)};
+                                            (uint8_t)(crc >> (BITS_PER_BYTE * 1U) & CRC_BYTE_MASK),
+                                            (uint8_t)(crc >> (BITS_PER_BYTE * 2U) & CRC_BYTE_MASK),
+                                            (uint8_t)(crc >> (BITS_PER_BYTE * 3U) & CRC_BYTE_MASK)};
     size_t         last_crc_index        = 0U;
     size_t         inserted_crc_amount   = 0;
     while (offset < payload_size_with_crc)
@@ -732,35 +722,6 @@ typedef struct
     const void*        payload;
     uint32_t           frame_index;
 } RxFrameModel;
-
-UDPARD_PRIVATE UdpardNodeID getNodeIdFromRouteSpecifier(UdpardIPv4Addr src_ip_addr)
-{
-    UdpardNodeID out = (UdpardNodeID) (src_ip_addr & UDPARD_NODE_ID_MASK);
-    return out;
-}
-
-UDPARD_PRIVATE UdpardNodeID getNodeIdFromRouteAndDataSpecifiers(UdpardIPv4Addr  route_specifier,
-                                                                UdpardUdpPortID data_specifier)
-{
-    UdpardNodeID out = UDPARD_NODE_ID_UNSET;
-    if (data_specifier > UDPARD_SUBJECT_ID_PORT)
-    {
-        out = getNodeIdFromRouteSpecifier(route_specifier);
-    }
-    return out;
-}
-
-UDPARD_PRIVATE UdpardPortID getPortIdFromRouteAndDataSpecifiers(UdpardIPv4Addr  route_specifier,
-                                                                UdpardUdpPortID data_specifier)
-{
-    UDPARD_ASSERT(data_specifier >= UDPARD_SUBJECT_ID_PORT);
-    if (data_specifier == UDPARD_SUBJECT_ID_PORT)
-    {
-        return (UdpardPortID) (route_specifier & UDPARD_SUBJECT_ID_MASK);
-    }
-    return (data_specifier % 2 == 1) ? (UdpardPortID) ((data_specifier - UDPARD_SERVICE_ID_INITIAL_PORT - 1) / 2)
-                                     : (UdpardPortID) ((data_specifier - UDPARD_SERVICE_ID_INITIAL_PORT) / 2);
-}
 
 UDPARD_PRIVATE UdpardPortID getPortIdFromDataSpecifiers(UdpardUdpPortID data_specifier)
 {
