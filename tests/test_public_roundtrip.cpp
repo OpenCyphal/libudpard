@@ -258,9 +258,13 @@ TEST_CASE("RoundtripSimple")
     std::size_t i = 0;
     for (const auto& [k, v] : pending_transfers)
     {
-        const auto [ref_meta, ref_payload_size, ref_payload] = v;
+      
+        UdpardTransferMetadata ref_meta;
+        uint64_t ref_payload_size {};
+        std::tie(ref_meta, ref_payload_size, std::ignore) = v;
         std::cout << "#" << i++ << "/" << std::size(pending_transfers) << ":"        //
                   << " ts=" << k                                                     //
+                  << " prio=" << static_cast<std::uint16_t>(ref_meta.priority)       //
                   << " prio=" << static_cast<std::uint16_t>(ref_meta.priority)       //
                   << " kind=" << static_cast<std::uint16_t>(ref_meta.transfer_kind)  //
                   << " port=" << ref_meta.port_id                                    //

@@ -37,7 +37,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CXX_EXTENSIONS OFF)
 add_compile_options(
         -Wall -Wextra -pedantic -fstrict-aliasing -Wdouble-promotion -Wswitch-enum -Wfloat-equal -Wundef
-        # -Werror 
+        -Werror 
         -Wconversion -Wtype-limits -Wsign-conversion -Wcast-align
 )
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Woverloaded-virtual -Wnon-virtual-dtor -Wsign-promo")

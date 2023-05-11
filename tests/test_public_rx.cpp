@@ -7,8 +7,8 @@
 #include "catch/catch.hpp"
 #include <cstring>
 
-#define UDPARD_SUBJECT_ID_PORT 16383U
-#define UDPARD_UDP_PORT 9382U
+constexpr uint16_t UDPARD_SUBJECT_ID_PORT = 16383U;
+constexpr uint16_t UDPARD_UDP_PORT = 9382U;
 
 // clang-tidy mistakenly suggests to avoid C arrays here, which is clearly an error
 template <typename P, std::size_t N>
@@ -34,7 +34,7 @@ TEST_CASE("RxBasic0")
                             UdpardFrameHeader                frame_header,
                             UdpardSessionSpecifier           session_specifier,
                             const std::vector<std::uint8_t>& payload) {
-        auto header_ptr      = reinterpret_cast<std::uint8_t*>(&frame_header);
+        auto *header_ptr      = reinterpret_cast<std::uint8_t*>(&frame_header);
         auto payload_storage = std::vector<std::uint8_t>(header_ptr, header_ptr + sizeof(frame_header));
         static std::vector<std::uint8_t> payload_buffer;
         payload_buffer = payload;
@@ -318,7 +318,7 @@ TEST_CASE("RxAnonymous")
                             UdpardFrameHeader                frame_header,
                             UdpardSessionSpecifier           session_specifier,
                             const std::vector<std::uint8_t>& payload) {
-        auto header_ptr      = reinterpret_cast<std::uint8_t*>(&frame_header);
+        auto *header_ptr      = reinterpret_cast<std::uint8_t*>(&frame_header);
         auto payload_storage = std::vector<std::uint8_t>(header_ptr, header_ptr + sizeof(frame_header));
         static std::vector<std::uint8_t> payload_buffer;
         payload_buffer = payload;
@@ -466,15 +466,14 @@ TEST_CASE("RxSubscriptionErrors")
     REQUIRE(-UDPARD_ERROR_INVALID_ARGUMENT == udpardRxUnsubscribe(&ins.getInstance(), kind.value, 0));
 
     UdpardFrame            frame{};
-    UdpardSessionSpecifier specifier{};
     frame.payload_size = 1U;
     UdpardRxTransfer transfer{};
     REQUIRE(-UDPARD_ERROR_INVALID_ARGUMENT ==
-            udpardRxAccept(&ins.getInstance(), 0, &frame, 0, &specifier, &transfer, nullptr));
-    REQUIRE(-UDPARD_ERROR_INVALID_ARGUMENT == udpardRxAccept(nullptr, 0, &frame, 0, &specifier, &transfer, nullptr));
+            udpardRxAccept(&ins.getInstance(), 0, &frame, 0, &transfer, nullptr));
+    REQUIRE(-UDPARD_ERROR_INVALID_ARGUMENT == udpardRxAccept(nullptr, 0, &frame, 0, &transfer, nullptr));
     REQUIRE(-UDPARD_ERROR_INVALID_ARGUMENT ==
-            udpardRxAccept(&ins.getInstance(), 0, nullptr, 0, &specifier, &transfer, nullptr));
+            udpardRxAccept(&ins.getInstance(), 0, nullptr, 0, &transfer, nullptr));
     REQUIRE(-UDPARD_ERROR_INVALID_ARGUMENT ==
-            udpardRxAccept(&ins.getInstance(), 0, &frame, 0, &specifier, nullptr, nullptr));
-    REQUIRE(-UDPARD_ERROR_INVALID_ARGUMENT == udpardRxAccept(nullptr, 0, nullptr, 0, nullptr, nullptr, nullptr));
+            udpardRxAccept(&ins.getInstance(), 0, &frame, 0, nullptr, nullptr));
+    REQUIRE(-UDPARD_ERROR_INVALID_ARGUMENT == udpardRxAccept(nullptr, 0, nullptr, 0, nullptr, nullptr));
 }

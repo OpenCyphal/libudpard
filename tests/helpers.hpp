@@ -74,10 +74,10 @@ public:
     virtual ~TestAllocator()
     {
         std::unique_lock locker(lock_);
-        for (auto [ptr, _] : allocated_)
+        for (const auto& pair : allocated_)
         {
             // Clang-tidy complains about manual memory management. Suppressed because we need it for testing purposes.
-            std::free(ptr - canary_.size());  // NOLINT
+            std::free(pair.first - canary_.size());  // NOLINT
         }
     }
 
@@ -139,9 +139,9 @@ public:
     {
         std::unique_lock locker(lock_);
         std::size_t      out = 0U;
-        for (auto [_, size] : allocated_)
+        for (const auto& pair : allocated_)
         {
-            out += size;
+            out += pair.second;
         }
         return out;
     }
@@ -180,7 +180,7 @@ public:
     [[nodiscard]] auto rxAccept(const UdpardMicrosecond      timestamp_usec,
                                 UdpardFrame&                 frame,
                                 const uint8_t                redundant_transport_index,
-                                UdpardSessionSpecifier&      specifier,
+                                UdpardSessionSpecifier&       /*specifier*/,
                                 UdpardRxTransfer&            out_transfer,
                                 UdpardRxSubscription** const out_subscription)
     {
@@ -188,7 +188,6 @@ public:
                               timestamp_usec,
                               &frame,
                               redundant_transport_index,
-                              &specifier,
                               &out_transfer,
                               out_subscription);
     }
@@ -277,7 +276,8 @@ public:
         checkInvariants();
         const auto size_before = que_.size;
         const auto ret         = udpardTxPush(&que_, ins, transmission_deadline_usec, &metadata, payload_size, payload);
-        enforce((ret < 0) || ((size_before + static_cast<std::size_t>(ret)) == que_.size),
+        const auto num_added = static_cast<std::size_t>(ret);
+        enforce((ret < 0) || ((size_before + num_added) == que_.size),
                 "Unexpected size change after push");
         checkInvariants();
         return ret;

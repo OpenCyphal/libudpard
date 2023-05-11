@@ -31,7 +31,7 @@ TEST_CASE("CyphalHeaderCRC")
     // Standard use case. Header size = 24; CRC is calculated from the first 22 bytes.
     // The last two bytes (CRC) are ignored in the calculation.
     std::uint16_t crc = 0xFFFFU;
-    const uint8_t* header = reinterpret_cast<const uint8_t*>("\x01\x02\x03\x04\x05\x06\x07\x08\x09\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x20\x21\x22\x23\x24");
+    const auto* header = reinterpret_cast<const uint8_t*>("\x01\x02\x03\x04\x05\x06\x07\x08\x09\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x20\x21\x22\x23\x24");
     crc = cyphalHeaderCrcAdd(crc, 22, header);
     REQUIRE(0xB731 == crc);
 

@@ -17,7 +17,6 @@ TEST_CASE("rxTryParseFrame")
     UdpardFrameHeader      header{};
 
     const auto parse = [&](const UdpardMicrosecond          timestamp_usec,
-                           UdpardSessionSpecifier           session_specifier,
                            const std::vector<std::uint8_t>& payload) {
         static std::vector<std::uint8_t> payload_storage;
         payload_storage = payload;
@@ -25,7 +24,7 @@ TEST_CASE("rxTryParseFrame")
         frame.payload_size = std::size(payload);
         frame.payload      = payload_storage.data();
         model              = RxFrameModel{};
-        return rxTryParseFrame(timestamp_usec, &session_specifier, &frame, &model);
+        return rxTryParseFrame(timestamp_usec, &frame, &model);
     };
 
     // Some initial header setup and payload test
@@ -55,14 +54,13 @@ TEST_CASE("rxTryParseFrame")
     REQUIRE(sizeof(header) == 24U);
     REQUIRE(std::size(test_payload) == 24U);
 
-    auto test_header_ptr      = reinterpret_cast<std::uint8_t*>(&header);
+    auto *test_header_ptr      = reinterpret_cast<std::uint8_t*>(&header);
     auto test_payload_storage = std::vector<std::uint8_t>(test_header_ptr, test_header_ptr + sizeof(header));
     REQUIRE(test_payload_storage == test_payload);
 
     // MESSAGE
     REQUIRE(0 == exposed::txMakeMessageSessionSpecifier(0b0, 0b0, 0xc0a80000, &specifier));
     REQUIRE(parse(543210U,
-                  specifier,
                   {
                       0x01,                                            // Version
                       0x00,                                            // Priority
@@ -98,7 +96,6 @@ TEST_CASE("rxTryParseFrame")
     // SIMILAR BUT INVALID
     REQUIRE(0 == exposed::txMakeMessageSessionSpecifier(0b0, 0b0, 0xc0a80000, &specifier));
     REQUIRE(!parse(543210U,
-                   specifier,
                    {
                        0x01,                                            // Version
                        0x00,                                            // Priority
@@ -114,7 +111,6 @@ TEST_CASE("rxTryParseFrame")
     // MESSAGE
     REQUIRE(0 == exposed::txMakeMessageSessionSpecifier(0b0110011001100, 0b0100111, 0xc0a80000, &specifier));
     REQUIRE(parse(123456U,
-                  specifier,
                   {
                       0x01,                                            // Version
                       0x01,                                            // Priority
@@ -147,11 +143,10 @@ TEST_CASE("rxTryParseFrame")
     // SIMILAR BUT INVALID
     REQUIRE(0 == exposed::txMakeMessageSessionSpecifier(0b0110011001100, 0b0100111, 0xc0a80000, &specifier));
     // NO HEADER
-    REQUIRE(!parse(123456U, specifier, {}));
+    REQUIRE(!parse(123456U, {}));
     // ANON NOT SINGLE FRAME
     REQUIRE(0 == exposed::txMakeMessageSessionSpecifier(0b0110011001100, 0b1111111111111111, 0xc0a80000, &specifier));
     REQUIRE(!parse(123456U,
-                   specifier,
                    {
                        0x01,                                            // Version
                        0x01,                                            // Priority
@@ -168,7 +163,6 @@ TEST_CASE("rxTryParseFrame")
     // ANONYMOUS MESSAGE
     REQUIRE(0 == exposed::txMakeMessageSessionSpecifier(0b0110011001101, 0b1111111111111111, 0xc0a80000, &specifier));
     REQUIRE(parse(12345U,
-                  specifier,
                   {
                       0x01,                                            // Version
                       0x02,                                            // Priority
@@ -191,13 +185,12 @@ TEST_CASE("rxTryParseFrame")
     REQUIRE(model.end_of_transfer);
     REQUIRE(model.payload_size == 0);
     // SIMILAR BUT INVALID
-    REQUIRE(!parse(12345U, specifier, {}));  // NO HEADER
+    REQUIRE(!parse(12345U, {}));  // NO HEADER
 
     // REQUEST
     REQUIRE(0 ==
             exposed::txMakeServiceSessionSpecifier(0b0000110011, 0b0100111, 0xc0a80000, &specifier));
     REQUIRE(parse(999'999U,
-                  specifier,
                   {
                       0x01,                                            // Version
                       0x03,                                            // Priority
@@ -226,11 +219,10 @@ TEST_CASE("rxTryParseFrame")
     REQUIRE(model.payload[2] == 2);
     REQUIRE(model.payload[3] == 3);
     // SIMILAR BUT INVALID (Source Node ID cant be equal to Destination Node ID)
-    REQUIRE(!parse(999'999U, specifier, {}));  // NO HEADER
+    REQUIRE(!parse(999'999U, {}));  // NO HEADER
     REQUIRE(0 ==
             exposed::txMakeServiceSessionSpecifier(0b0000110011, 0b0100111, 0xc0a80000, &specifier));
     REQUIRE(!parse(999'999U,
-                   specifier,
                    {
                        0x01,                                            // Version
                        0x03,                                            // Priority
@@ -248,7 +240,6 @@ TEST_CASE("rxTryParseFrame")
     REQUIRE(0 ==
             exposed::txMakeServiceSessionSpecifier(0b0000110011, 0b00011010, 0xc0a80000, &specifier));
     REQUIRE(parse(888'888,
-                  specifier,
                   {
                       0x01,                                            // Version
                       0x04,                                            // Priority
@@ -273,12 +264,11 @@ TEST_CASE("rxTryParseFrame")
     REQUIRE(model.payload_size == 1);
     REQUIRE(model.payload[0] == 255);
     // SIMILAR BUT INVALID (Source Node ID cant be equal to Destination Node ID)
-    REQUIRE(!parse(888'888U, specifier, {}));  // NO TAIL BYTE
+    REQUIRE(!parse(888'888U, {}));  // NO TAIL BYTE
     REQUIRE(
         0 ==
         exposed::txMakeServiceSessionSpecifier(0b0000110011, 0b00011010, 0xc0a80000, &specifier));
     REQUIRE(!parse(888'888,
-                   specifier,
                    {
                        0x01,                                            // Version
                        0x04,                                            // Priority
@@ -599,7 +589,7 @@ TEST_CASE("rxSessionUpdate")
     frame.timestamp_usec    = 20'000'200;
     frame.start_of_transfer = false;
     frame.end_of_transfer   = false;
-    frame.frame_index       = 3 + (uint32_t) (1U << (uint32_t) 31U);
+    frame.frame_index       = 3 + static_cast<uint32_t>(1U << static_cast<uint32_t>(31U));
     frame.payload_size      = 2;
     frame.payload           = reinterpret_cast<const uint8_t*>("\x09\x09");
     REQUIRE(-UDPARD_ERROR_OUT_OF_ORDER == update(0, 1'000'000, 16));
@@ -638,7 +628,7 @@ TEST_CASE("rxSessionUpdate")
     frame.timestamp_usec    = 20'000'400;
     frame.start_of_transfer = false;
     frame.end_of_transfer   = true;
-    frame.frame_index       = 3 + (uint32_t) (1U << (uint32_t) 31U);
+    frame.frame_index       = 3 + static_cast<uint32_t>(1U << static_cast<uint32_t>(31U));
     frame.payload_size      = 8;  // The payload is IMPLICITLY TRUNCATED, and the CRC IS STILL VALIDATED.
     frame.payload           = reinterpret_cast<const uint8_t*>("\x09\x09\x09\x09\x32\x98\x04\x7B");
     REQUIRE(1 == update(0, 1'000'000, 16));
