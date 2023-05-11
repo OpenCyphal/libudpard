@@ -4,8 +4,6 @@
 /// Author: Pavel Kirienko <pavel@opencyphal.org>
 /// Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
-/// @todo Replace with subrepo of official libudpard
-
 #include "udpard.h"
 #include "cavl.h"
 #include <string.h>
@@ -47,12 +45,8 @@
 static const uint8_t BITS_PER_BYTE = 8U;
 static const uint8_t BYTE_MAX = 0xFFU;
 
-/// TODO - determine the minimum payload size for udp non-last frame. It should be similar if not the same as CAN
-/// #define MFT_NON_LAST_FRAME_PAYLOAD_MIN 7U  /// The minimum payload size for the non-last frame in a multi-frame
-/// transfer
-
 static const uint8_t UDPARD_END_OF_TRANSFER_OFFSET = 31U;
-static const uint32_t UDPARD_MAX_FRAME_INDEX = 0x7FFFFFFF; // ((1U << UDPARD_END_OF_TRANSFER_OFFSET) - 1U);
+static const uint32_t UDPARD_MAX_FRAME_INDEX = 0x7FFFFFFFU; // ((1U << UDPARD_END_OF_TRANSFER_OFFSET) - 1U);
 static const uint16_t UDPARD_NODE_ID_MASK = 65535U;  /// 0xFFFF
 
 /*
@@ -73,17 +67,12 @@ static const uint16_t UDPARD_NODE_ID_MASK = 65535U;  /// 0xFFFF
 */
 
 /// The multicast message transfer IP address node ID is formed of 1 reserved 0 bits and 15 bits for a subject id.
-static const uint16_t UDPARD_SUBJECT_ID_MASK = 32767U;  /// 0x7FFF
-// static const uint32_t UDPARD_SUBNET_OFFSET = 17U;
-static const uint32_t UDPARD_SUBNET_MASK = 0x3E0000; // (31U << UDPARD_SUBNET_OFFSET);
+static const uint16_t UDPARD_SUBJECT_ID_MASK = 0x7FFFU;
+static const uint32_t UDPARD_SUBNET_MASK = 0x3E0000U; // (31U << UDPARD_SUBNET_OFFSET (17));
 static const uint8_t UDPARD_TRANSMIT_SUBNET_VALUE = 0U;
-// static const uint8_t UDPARD_RESERVED_1BIT_OFFSET = 15U;
-static const uint16_t UDPARD_RESERVED_1BIT_MASK = 0x8000; // (1U << UDPARD_RESERVED_1BIT_OFFSET);
-// static const uint8_t UDPARD_SERVICE_NOT_MESSAGE_OFFSET = 16U;
-static const uint32_t UDPARD_SERVICE_NOT_MESSAGE_MASK = 0x10000; // (1U << UDPARD_SERVICE_NOT_MESSAGE_OFFSET);
-// static const uint8_t UDPARD_MULTICAST_OFFSET = 23U;
-static const uint32_t UDPARD_MULTICAST_PREFIX = 0xEF000000; // (478U << UDPARD_MULTICAST_OFFSET)
-// static const uint32_t UDPARD_MULTICAST_ADDRESS_MASK = 0x7fffff; // ((1U << UDPARD_MULTICAST_OFFSET) - 1U)
+static const uint16_t UDPARD_RESERVED_1BIT_MASK = 0x8000U; // (1U << UDPARD_RESERVED_1BIT_OFFSET (15));
+static const uint32_t UDPARD_SERVICE_NOT_MESSAGE_MASK = 0x10000U; // (1U << UDPARD_SERVICE_NOT_MESSAGE_OFFSET (16));
+static const uint32_t UDPARD_MULTICAST_PREFIX = 0xEF000000U; // (478U << UDPARD_MULTICAST_OFFSET (23))
 
 /* The 16 bit data specifier in the Cyphal header consists of
 SNM + 15 bit Subject-ID (Message)
@@ -94,10 +83,10 @@ IRNR - Is Request, Not Response
 */
 static const uint16_t UDPARD_SERVICE_NOT_MESSAGE_DATA_SPECIFIER_OFFSET = 15U;
 static const uint16_t UDPARD_IRNR_DATA_SPECIFIER_OFFSET = 14U;
-static const uint16_t UDPARD_SERVICE_ID_MASK = 16383U;  // 0x3FFF
-static const uint16_t UPDARD_DATA_SPECIFIER_MESSAGE = 0x7FFFU; // SNM (0) + SubjectID
-static const uint16_t UDPARD_DATA_SPECIFIER_SERVICE_RESPONSE = 0x8000; // (2U << UDPARD_IRNR_DATA_SPECIFIER_OFFSET)  // Set SNM in Cyphal data specifier - SNM (1) + IRNR (0) + ServiceID
-static const uint16_t UDPARD_DATA_SPECIFIER_SERVICE_REQUEST = 0xC000; // (3U << UDPARD_IRNR_DATA_SPECIFIER_OFFSET)   // Set SNM and IRNR in Cyphal data specifier - SNM (1) + IRNR (1) + ServiceID
+static const uint16_t UDPARD_SERVICE_ID_MASK = 0x3FFFU;
+static const uint16_t UDPARD_DATA_SPECIFIER_MESSAGE_MASK = 0x7FFFU; // SNM (0) + SubjectID
+static const uint16_t UDPARD_DATA_SPECIFIER_SERVICE_RESPONSE = 0x8000U; // (2U << UDPARD_IRNR_DATA_SPECIFIER_OFFSET)  // Set SNM in Cyphal data specifier - SNM (1) + IRNR (0) + ServiceID
+static const uint16_t UDPARD_DATA_SPECIFIER_SERVICE_REQUEST = 0xC000U; // (3U << UDPARD_IRNR_DATA_SPECIFIER_OFFSET)   // Set SNM and IRNR in Cyphal data specifier - SNM (1) + IRNR (1) + ServiceID
 
 static const uint16_t UDPARD_UDP_PORT = 9382U;
 
@@ -293,8 +282,13 @@ UDPARD_PRIVATE int32_t txMakeSessionSpecifier(const UdpardTransferMetadata* cons
     if ((tr->transfer_kind == UdpardTransferKindMessage) && (UDPARD_NODE_ID_UNSET == tr->remote_node_id) &&
         (tr->port_id <= UDPARD_SUBJECT_ID_MAX))
     {
-        out = txMakeMessageSessionSpecifier(tr->port_id, local_node_id, local_node_addr, spec);
-        UDPARD_ASSERT(out >= 0);
+        if ((local_node_id == UDPARD_NODE_ID_UNSET) || (local_node_id <= UDPARD_NODE_ID_MAX)) {
+
+            out = txMakeMessageSessionSpecifier(tr->port_id, local_node_id, local_node_addr, spec);
+            UDPARD_ASSERT(out >= 0);
+        } else {
+            out = -UDPARD_ERROR_INVALID_ARGUMENT; // Node must be at least 1 less than the unset id
+        }
     }
     else if (((tr->transfer_kind == UdpardTransferKindRequest) || (tr->transfer_kind == UdpardTransferKindResponse)) &&
              (tr->port_id < UDPARD_SERVICE_ID_MAX) && (tr->remote_node_id != UDPARD_NODE_ID_UNSET))
@@ -350,7 +344,8 @@ UDPARD_PRIVATE void txMakeFrameHeader(UdpardFrameHeader* const header,
     header->cyphal_header_checksum = cyphalHeaderCrcAdd(CYPHAL_HEADER_CRC_INITIAL, cyphal_header_size_without_crc, header);
     if (transfer_kind == UdpardTransferKindMessage)
     {
-        header->data_specifier =  (uint16_t)(port_id & UDPARD_SUBJECT_ID_MASK) & UPDARD_DATA_SPECIFIER_MESSAGE;  // SNM (0) + Subject ID
+        // both port_id and the data_specifier start at bit-0. No shift of the port_id value is necessary.
+        header->data_specifier = port_id & UDPARD_DATA_SPECIFIER_MESSAGE_MASK;
     }
     else
     {
@@ -1030,7 +1025,7 @@ UDPARD_PRIVATE int8_t rxAcceptFrame(UdpardInstance* const       ins,
     UDPARD_ASSERT(out_transfer != NULL);
 
     int8_t out = 0;
-    if (frame->source_node_id != UDPARD_NODE_ID_UNSET)
+    if ((frame->source_node_id <= UDPARD_NODE_ID_MAX) && (frame->source_node_id != UDPARD_NODE_ID_UNSET))
     {
         // If such session does not exist, create it. This only makes sense if this is the first frame of a
         // transfer, otherwise, we won't be able to receive the transfer anyway so we don't bother.
