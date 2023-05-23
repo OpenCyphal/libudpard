@@ -888,8 +888,6 @@ UDPARD_PRIVATE int8_t rxSessionAcceptFrame(UdpardInstance* const          ins,
         rxs->transfer_timestamp_usec = frame->timestamp_usec;
     }
 
-    const bool single_frame = frame->start_of_transfer && frame->end_of_transfer;
-
     rxs->calculated_crc = crcAdd(rxs->calculated_crc, frame->payload_size, frame->payload);
 
     int8_t out = rxSessionWritePayload(ins, rxs, extent, frame->payload_size, frame->payload);
@@ -912,8 +910,9 @@ UDPARD_PRIVATE int8_t rxSessionAcceptFrame(UdpardInstance* const          ins,
 
             // Cut off the CRC from the payload if it's there -- we don't want to expose it to the user.
             UDPARD_ASSERT(rxs->total_payload_size >= rxs->payload_size);
+            // For single frame transfers, the truncated amount will be 0 (total_payload_size == payload_size)
             const size_t truncated_amount = rxs->total_payload_size - rxs->payload_size;
-            if ((!single_frame) && (CRC_SIZE_BYTES > truncated_amount))  // Single-frame transfers don't have CRC.
+            if (CRC_SIZE_BYTES > truncated_amount)
             {
                 UDPARD_ASSERT(out_transfer->payload_size >= (CRC_SIZE_BYTES - truncated_amount));
                 out_transfer->payload_size -= CRC_SIZE_BYTES - truncated_amount;

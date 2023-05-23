@@ -122,10 +122,11 @@ TEST_CASE("RxBasic0")
     header.frame_index_eot                = (1U << 31U) + 1U;
     header.priority                       = 0b001;
     header.transfer_id                    = 0;
-    header.data_specifier                 = 0b0000110011001100;
+    header.data_specifier                 = 0b0000110011001100; // Subject ID = 3276
     specifier.data_specifier              = UDPARD_UDP_PORT;
     specifier.destination_route_specifier = 0b11101111'00'01000'0'0'000110011001100;
     specifier.source_route_specifier      = 0b11000000'10101000'00000000'00100111;
+    // This is an empty payload, the last four bytes are CRC.
     REQUIRE(1 == accept(0, 100'000'001, header, specifier, {0, 0, 0, 0}));
     REQUIRE(subscription != nullptr);
     REQUIRE(subscription->port_id == 0b0110011001100);
@@ -135,7 +136,7 @@ TEST_CASE("RxBasic0")
     REQUIRE(transfer.metadata.port_id == 0b0110011001100);
     REQUIRE(transfer.metadata.remote_node_id == 0b0100111);
     REQUIRE(transfer.metadata.transfer_id == 0);
-    REQUIRE(transfer.payload_size == 4);
+    REQUIRE(transfer.payload_size == 0); // Payload size should not include the CRC (0 byte payload + 4 byte CRC)
     REQUIRE(0 == std::memcmp(transfer.payload, "", 0));
     REQUIRE(ins.getAllocator().getNumAllocatedFragments() == 2);  // The SESSION and the PAYLOAD BUFFER.
     REQUIRE(ins.getAllocator().getTotalAllocatedAmount() == (sizeof(RxSession) + 16));
@@ -156,7 +157,6 @@ TEST_CASE("RxBasic0")
     specifier.data_specifier              = UDPARD_UDP_PORT;
     specifier.destination_route_specifier = 0b11101111'00'01000'1'00000000'00011010;
     specifier.source_route_specifier      = 0b11000000'10101000'00000000'00100111;
-
     REQUIRE(0 == accept(0, 100'000'002, header, specifier, {0, 0, 0, 0}));
     REQUIRE(subscription == nullptr);
 
@@ -193,7 +193,7 @@ TEST_CASE("RxBasic0")
     REQUIRE(transfer.metadata.port_id == 0b0000110011);
     REQUIRE(transfer.metadata.remote_node_id == 0b0100101);
     REQUIRE(transfer.metadata.transfer_id == 4);
-    REQUIRE(transfer.payload_size == 7);
+    REQUIRE(transfer.payload_size == 3); // Payload size should not include the CRC (3 byte payload + 4 byte CRC)
     REQUIRE(0 == std::memcmp(transfer.payload, "\x01\x02\x03\x1E\xF2\x30\xF1", 7));
     REQUIRE(ins.getAllocator().getNumAllocatedFragments() == 4);  // Two SESSIONS and two PAYLOAD BUFFERS.
     REQUIRE(ins.getAllocator().getTotalAllocatedAmount() == (2 * sizeof(RxSession) + 16 + 20));
@@ -276,7 +276,7 @@ TEST_CASE("RxBasic0")
     REQUIRE(transfer.metadata.port_id == 0b0000111100);
     REQUIRE(transfer.metadata.remote_node_id == 0b0011011);
     REQUIRE(transfer.metadata.transfer_id == 5);
-    REQUIRE(transfer.payload_size == 5);
+    REQUIRE(transfer.payload_size == 1); // Payload size should not include the CRC (1 byte payload + 4 byte CRC)
     REQUIRE(0 == std::memcmp(transfer.payload, "\x05\x4D\x47\x8C\x67", 5));
     REQUIRE(ins.getAllocator().getNumAllocatedFragments() == 4);
     REQUIRE(ins.getAllocator().getTotalAllocatedAmount() == (2 * sizeof(RxSession) + 10 + 20));

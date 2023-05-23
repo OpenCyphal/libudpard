@@ -107,7 +107,7 @@ TEST_CASE("RoundtripSimple")
                 {
                     if (result > 1)
                     {
-                        std::cout << "Warning: Multiframe transfer" << std::endl;
+                        // std::cout << "Warning: Multiframe transfer" << std::endl;
                     }
                     pending_transfers.emplace(timestamp_usec, Pending{tran, payload_size, payload});
                     frames_in_flight += static_cast<std::uint64_t>(result);
