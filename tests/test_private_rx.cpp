@@ -481,7 +481,7 @@ TEST_CASE("rxSessionUpdate")
     REQUIRE(transfer.metadata.port_id == 2'222);
     REQUIRE(transfer.metadata.remote_node_id == 55);
     REQUIRE(transfer.metadata.transfer_id == 11);
-    REQUIRE(transfer.payload_size == 7);
+    REQUIRE(transfer.payload_size == 3); // Payload size should not include the CRC (3 byte payload + 4 byte CRC)
     REQUIRE(0 == std::memcmp(transfer.payload, "\x01\x01\x01", 3));
     REQUIRE(ins.getAllocator().getNumAllocatedFragments() == 1);
     REQUIRE(ins.getAllocator().getTotalAllocatedAmount() == 16);
@@ -515,7 +515,7 @@ TEST_CASE("rxSessionUpdate")
     REQUIRE(transfer.metadata.port_id == 2'222);
     REQUIRE(transfer.metadata.remote_node_id == 55);
     REQUIRE(transfer.metadata.transfer_id == 12);
-    REQUIRE(transfer.payload_size == 7);
+    REQUIRE(transfer.payload_size == 3); // Payload size should not include the CRC (3 byte payload + 4 byte CRC)
     REQUIRE(0 == std::memcmp(transfer.payload, "\x03\x03\x03", 3));
     REQUIRE(ins.getAllocator().getNumAllocatedFragments() == 1);
     REQUIRE(ins.getAllocator().getTotalAllocatedAmount() == 16);
@@ -550,7 +550,7 @@ TEST_CASE("rxSessionUpdate")
     REQUIRE(transfer.metadata.port_id == 2'222);
     REQUIRE(transfer.metadata.remote_node_id == 55);
     REQUIRE(transfer.metadata.transfer_id == 12);
-    REQUIRE(transfer.payload_size == 7);
+    REQUIRE(transfer.payload_size == 3); // Payload size should not include the CRC (3 byte payload + 4 byte CRC)
     REQUIRE(0 == std::memcmp(transfer.payload, "\x05\x05\x05", 3));
     REQUIRE(ins.getAllocator().getNumAllocatedFragments() == 1);
     REQUIRE(ins.getAllocator().getTotalAllocatedAmount() == 16);
