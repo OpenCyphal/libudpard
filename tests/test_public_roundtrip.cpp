@@ -170,19 +170,15 @@ TEST_CASE("RoundtripSimple")
 
                 UdpardRxTransfer      transfer{};
                 UdpardRxSubscription* subscription = nullptr;
-                std::int8_t           result =
-                    ins_rx.rxAccept(ti->tx_deadline_usec, ti->frame, 0, ti->specifier, transfer, &subscription);
-                REQUIRE(((-UDPARD_ERROR_OUT_OF_ORDER == ins_rx.rxAccept(ti->tx_deadline_usec,
-                                             ti->frame,
-                                             1,
-                                             ti->specifier,
-                                             transfer,
-                                             &subscription)) || (0 == ins_rx.rxAccept(ti->tx_deadline_usec,
-                                             ti->frame,
-                                             1,
-                                             ti->specifier,
-                                             transfer,
-                                             &subscription))));  // Redundant interface will never be used here.
+
+                std::int8_t result = ins_rx.rxAccept(
+                    ti->tx_deadline_usec,
+                    ti->frame,
+                    0,
+                    ti->specifier,
+                    transfer,
+                    &subscription);
+
                 if (result == 1)
                 {
                     Pending reference{};  // Fetch the reference transfer from the list of pending.

@@ -976,24 +976,29 @@ UDPARD_PRIVATE int8_t rxSessionUpdate(UdpardInstance* const          ins,
         // multi-frame transfer
         if (!(frame->start_of_transfer && frame->end_of_transfer))
         {
-            if (frame->end_of_transfer) {
-                if (frame->frame_index !=
-                    (uint32_t) (1U << (uint32_t) UDPARD_END_OF_TRANSFER_OFFSET)
-                    + rxs->last_udp_header_index + 1)
-                    {
-                        // Not the expected index
-                        int8_t out = -UDPARD_ERROR_OUT_OF_ORDER;
-                        // reset index to 0
-                        rxs->last_udp_header_index = 0U;
-                        return out;
-                    }
+            uint32_t next_expected_frame_index = (1U << UDPARD_END_OF_TRANSFER_OFFSET) + rxs->last_udp_header_index + 1;
+            if (frame->end_of_transfer)
+            {
+                if (frame->frame_index != next_expected_frame_index)
+                {
+                    // Out of order multiframe packet received
+                    out = -UDPARD_ERROR_OUT_OF_ORDER;
+                    // Reset previous frame index to 0
                     rxs->last_udp_header_index = 0U;
+                    rxSessionRestart(ins, rxs);
+                    return out;
+                }
+                rxs->last_udp_header_index = 0U;
             }
             else
             {
-                if ((!frame->start_of_transfer && frame->frame_index != rxs->last_udp_header_index+1) || (frame->start_of_transfer && frame->frame_index != 1U))
+                if ((!frame->start_of_transfer && frame->frame_index != rxs->last_udp_header_index + 1)
+                    || (frame->start_of_transfer && frame->frame_index != 1U))
                 {
-                    return -UDPARD_ERROR_OUT_OF_ORDER;
+                    // Out of order multiframe packet received
+                    out = -UDPARD_ERROR_OUT_OF_ORDER;
+                    rxSessionRestart(ins, rxs);
+                    return out;
                 }
                 rxs->last_udp_header_index = frame->frame_index;
             }
