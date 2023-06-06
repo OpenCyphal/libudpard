@@ -7,6 +7,8 @@
 #include "catch/catch.hpp"
 #include <cstring>
 
+static const uint32_t CRC_INITIAL = 0xFFFFFFFFU;
+
 TEST_CASE("rxTryParseFrame")
 {
     using exposed::RxFrameModel;
@@ -593,57 +595,99 @@ TEST_CASE("rxSessionUpdate")
     frame.payload_size      = 2;
     frame.payload           = reinterpret_cast<const uint8_t*>("\x09\x09");
     REQUIRE(-UDPARD_ERROR_OUT_OF_ORDER == update(0, 1'000'000, 16));
+    // The session should be restarted if an out of order frame is received
+    // and the entire transfer will be dropped. Verify that all variables have
+    // been set back to defaults by rxSessionRestart.
+    REQUIRE(rxs.total_payload_size == 0U);
+    REQUIRE(rxs.payload_size == 0U);
+    REQUIRE(rxs.payload == NULL);
+    REQUIRE(rxs.calculated_crc == CRC_INITIAL);
     // Update another session using same frame, fail.
     REQUIRE(-UDPARD_ERROR_OUT_OF_ORDER == updateAnotherSession(1, 1'000'000, 16));
+    REQUIRE(rxs_1.total_payload_size == 0U);
+    REQUIRE(rxs_1.payload_size == 0U);
+    REQUIRE(rxs_1.payload == NULL);
+    REQUIRE(rxs_1.calculated_crc == CRC_INITIAL);
+
+    // Once you get an out-of-order frame in a multiframe transfer,
+    // the entire payload needs to be resent, so start over.
+
+    // Multi-frame, first frame
+    frame.timestamp_usec  = 20'000'300;
+    frame.transfer_id     = 14;
+    frame.start_of_transfer = true;
+    frame.end_of_transfer = false;
+    frame.payload_size    = 7;
+    frame.frame_index     = 1;
+    frame.payload         = reinterpret_cast<const uint8_t*>("\x06\x06\x06\x06\x06\x06\x06");
+    REQUIRE(0 == update(0, 1'000'000, 16));
+
+    REQUIRE(rxs.transfer_timestamp_usec == 20'000'300);
+    REQUIRE(rxs.payload_size == 7);
+    REQUIRE(0 == std::memcmp(rxs.payload, "\x06\x06\x06\x06\x06\x06\x06", 7));
+    REQUIRE(rxs.calculated_crc == crc("\x06\x06\x06\x06\x06\x06\x06"));
+    REQUIRE(rxs.transfer_id == 14U);
+    REQUIRE(rxs.redundant_transport_index == 0);
+    REQUIRE(ins.getAllocator().getNumAllocatedFragments() == 1);
+    REQUIRE(ins.getAllocator().getTotalAllocatedAmount() == 16);
+
+    // Update another session using same frame.
+    REQUIRE(0 == updateAnotherSession(1, 1'000'000, 16));
+    REQUIRE(rxs_1.transfer_timestamp_usec == 20'000'300);
+    REQUIRE(rxs_1.payload_size == 7);
+    REQUIRE(0 == std::memcmp(rxs_1.payload, "\x06\x06\x06\x06\x06\x06\x06", 7));
+    REQUIRE(rxs_1.calculated_crc == crc("\x06\x06\x06\x06\x06\x06\x06"));
+    REQUIRE(rxs_1.transfer_id == 14U);
+    REQUIRE(rxs_1.redundant_transport_index == 1);
+    REQUIRE(ins_1.getAllocator().getNumAllocatedFragments() == 1);
+    REQUIRE(ins_1.getAllocator().getTotalAllocatedAmount() == 16);
 
     // Multi-frame, middle.
-    frame.timestamp_usec    = 20'000'200;
     frame.start_of_transfer = false;
     frame.end_of_transfer   = false;
     frame.frame_index       = 2;
     frame.payload_size      = 7;
     frame.payload           = reinterpret_cast<const uint8_t*>("\x07\x07\x07\x07\x07\x07\x07");
     REQUIRE(0 == update(0, 1'000'000, 16));
-    REQUIRE(rxs.transfer_timestamp_usec == 20'000'100);
+    REQUIRE(rxs.transfer_timestamp_usec == 20'000'300);
     REQUIRE(rxs.payload_size == 14);
     REQUIRE(0 == std::memcmp(rxs.payload, "\x06\x06\x06\x06\x06\x06\x06\x07\x07\x07\x07\x07\x07\x07", 14));
     REQUIRE(rxs.calculated_crc == crc("\x06\x06\x06\x06\x06\x06\x06\x07\x07\x07\x07\x07\x07\x07"));
-    REQUIRE(rxs.transfer_id == 13U);
+    REQUIRE(rxs.transfer_id == 14U);
     REQUIRE(rxs.redundant_transport_index == 0);
     REQUIRE(ins.getAllocator().getNumAllocatedFragments() == 1);
     REQUIRE(ins.getAllocator().getTotalAllocatedAmount() == 16);
     
     // Update another session using same frame.
     REQUIRE(0 == updateAnotherSession(1, 1'000'000, 16));
-    REQUIRE(rxs_1.transfer_timestamp_usec == 20'000'100);
+    REQUIRE(rxs_1.transfer_timestamp_usec == 20'000'300);
     REQUIRE(rxs_1.payload_size == 14);
     REQUIRE(0 == std::memcmp(rxs_1.payload, "\x06\x06\x06\x06\x06\x06\x06\x07\x07\x07\x07\x07\x07\x07", 14));
     REQUIRE(rxs_1.calculated_crc == crc("\x06\x06\x06\x06\x06\x06\x06\x07\x07\x07\x07\x07\x07\x07"));
-    REQUIRE(rxs_1.transfer_id == 13U);
+    REQUIRE(rxs_1.transfer_id == 14U);
     REQUIRE(rxs_1.redundant_transport_index == 1);
     REQUIRE(ins_1.getAllocator().getNumAllocatedFragments() == 1);
     REQUIRE(ins_1.getAllocator().getTotalAllocatedAmount() == 16);
     
     // Multi-frame, last.
-    frame.timestamp_usec    = 20'000'400;
     frame.start_of_transfer = false;
     frame.end_of_transfer   = true;
     frame.frame_index       = 3 + static_cast<uint32_t>(1U << static_cast<uint32_t>(31U));
     frame.payload_size      = 8;  // The payload is IMPLICITLY TRUNCATED, and the CRC IS STILL VALIDATED.
     frame.payload           = reinterpret_cast<const uint8_t*>("\x09\x09\x09\x09\x32\x98\x04\x7B");
     REQUIRE(1 == update(0, 1'000'000, 16));
-    REQUIRE(rxs.transfer_timestamp_usec == 20'000'100);  // First frame.
+    REQUIRE(rxs.transfer_timestamp_usec == 20'000'300);  // The timestamp is the same as the first frame.
     REQUIRE(rxs.payload_size == 0);
     REQUIRE(rxs.payload == nullptr);
     REQUIRE(rxs.calculated_crc == 0xFFFFFFFFU);
-    REQUIRE(rxs.transfer_id == 14U);
+    REQUIRE(rxs.transfer_id == 15U);
     REQUIRE(rxs.redundant_transport_index == 0);
-    REQUIRE(transfer.timestamp_usec == 20'000'100);
+    REQUIRE(transfer.timestamp_usec == 20'000'300);
     REQUIRE(transfer.metadata.priority == UdpardPrioritySlow);
     REQUIRE(transfer.metadata.transfer_kind == UdpardTransferKindMessage);
     REQUIRE(transfer.metadata.port_id == 2'222);
     REQUIRE(transfer.metadata.remote_node_id == 55);
-    REQUIRE(transfer.metadata.transfer_id == 13);
+    REQUIRE(transfer.metadata.transfer_id == 14);
     REQUIRE(transfer.payload_size == 16);
     REQUIRE(0 == std::memcmp(transfer.payload, "\x06\x06\x06\x06\x06\x06\x06\x07\x07\x07\x07\x07\x07\x07\x09\x09", 16));
     REQUIRE(ins.getAllocator().getNumAllocatedFragments() == 1);
@@ -652,18 +696,18 @@ TEST_CASE("rxSessionUpdate")
 
     // Update another session using same frame.
     REQUIRE(1 == updateAnotherSession(1, 1'000'000, 16));
-    REQUIRE(rxs_1.transfer_timestamp_usec == 20'000'100);  // First frame.
+    REQUIRE(rxs_1.transfer_timestamp_usec == 20'000'300); // The timestamp is the same as the first frame.
     REQUIRE(rxs_1.payload_size == 0);
     REQUIRE(rxs_1.payload == nullptr);
     REQUIRE(rxs_1.calculated_crc == 0xFFFFFFFFU);
-    REQUIRE(rxs_1.transfer_id == 14U);
+    REQUIRE(rxs_1.transfer_id == 15U);
     REQUIRE(rxs_1.redundant_transport_index == 1);
-    REQUIRE(transfer.timestamp_usec == 20'000'100);
+    REQUIRE(transfer.timestamp_usec == 20'000'300);
     REQUIRE(transfer.metadata.priority == UdpardPrioritySlow);
     REQUIRE(transfer.metadata.transfer_kind == UdpardTransferKindMessage);
     REQUIRE(transfer.metadata.port_id == 2'222);
     REQUIRE(transfer.metadata.remote_node_id == 55);
-    REQUIRE(transfer.metadata.transfer_id == 13);
+    REQUIRE(transfer.metadata.transfer_id == 14);
     REQUIRE(transfer.payload_size == 16);
     REQUIRE(0 == std::memcmp(transfer.payload, "\x06\x06\x06\x06\x06\x06\x06\x07\x07\x07\x07\x07\x07\x07\x09\x09", 16));
     REQUIRE(ins_1.getAllocator().getNumAllocatedFragments() == 1);
@@ -678,7 +722,7 @@ TEST_CASE("rxSessionUpdate")
     frame.payload_size      = 7;
     frame.payload           = reinterpret_cast<const uint8_t*>("\x0A\x0A\x0A\x0A\x0A\x0A\x0A");
     REQUIRE(0 == update(2, 1'000'000, 16));
-    REQUIRE(rxs.transfer_timestamp_usec == 20'000'100);  // No change.
+    REQUIRE(rxs.transfer_timestamp_usec == 20'000'300);  // No change.
     REQUIRE(rxs.payload_size == 0);
     REQUIRE(rxs.payload == nullptr);
     REQUIRE(rxs.calculated_crc == 0xFFFFFFFFU);
@@ -688,14 +732,14 @@ TEST_CASE("rxSessionUpdate")
     REQUIRE(ins.getAllocator().getTotalAllocatedAmount() == 0);
 
     // OOM -- reset on error.
-    frame.timestamp_usec    = 20'000'200;
+    frame.timestamp_usec    = 20'000'400;
     frame.transfer_id       = 30;
     frame.start_of_transfer = true;
     frame.end_of_transfer   = true;
     frame.payload_size      = 8;
     frame.payload           = reinterpret_cast<const uint8_t*>("\x0E\x0E\x0E\x0E\x0E\x0E\x0E\xF7");
     REQUIRE((-UDPARD_ERROR_OUT_OF_MEMORY) == update(2, 1'000'000, 17));  // Exceeds the heap quota.
-    REQUIRE(rxs.transfer_timestamp_usec == 20'000'200);
+    REQUIRE(rxs.transfer_timestamp_usec == 20'000'400);
     REQUIRE(rxs.payload_size == 0);
     REQUIRE(rxs.payload == nullptr);
     REQUIRE(rxs.calculated_crc == 0xFFFFFFFFU);
