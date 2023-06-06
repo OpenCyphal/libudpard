@@ -976,9 +976,9 @@ UDPARD_PRIVATE int8_t rxSessionUpdate(UdpardInstance* const          ins,
         // multi-frame transfer
         if (!(frame->start_of_transfer && frame->end_of_transfer))
         {
-            uint32_t next_expected_frame_index = (1U << UDPARD_END_OF_TRANSFER_OFFSET) + rxs->last_udp_header_index + 1;
             if (frame->end_of_transfer)
             {
+                uint32_t next_expected_frame_index = (1U << UDPARD_END_OF_TRANSFER_OFFSET) + rxs->last_udp_header_index + 1;
                 if (frame->frame_index != next_expected_frame_index)
                 {
                     // Out of order multiframe packet received
