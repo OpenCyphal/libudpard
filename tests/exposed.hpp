@@ -36,7 +36,7 @@ struct TxItem final : UdpardTxQueueItem
 
     [[nodiscard]] auto isStartOfTransfer() const
     {
-        return (getFrameHeader()->frame_index_eot & ((1U << 31U) - 1U)) == 1;
+        return (getFrameHeader()->frame_index_eot & ((1U << 31U) - 1U)) == 0;
     }
     [[nodiscard]] auto isEndOfTransfer() const { return (getFrameHeader()->frame_index_eot >> 31U) == 1; }
 

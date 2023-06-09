@@ -64,7 +64,7 @@ TEST_CASE("RxBasic0")
     header.destination_node_id            = 0b1111111111111111;
     header.data_specifier                 = 0b0000110011001100;
     header.transfer_id                    = 1;
-    header.frame_index_eot                = (1U << 31U) + 1U;
+    header.frame_index_eot                = 1U << 31U;
     specifier.data_specifier              = UDPARD_UDP_PORT;
     specifier.destination_route_specifier = 0b11101111'00'01000'0'0'000110011001100;
     specifier.source_route_specifier      = 0b11000000'10101000'00000000'00100111;
@@ -119,7 +119,7 @@ TEST_CASE("RxBasic0")
 
     // Accepted message.
     subscription                          = nullptr;
-    header.frame_index_eot                = (1U << 31U) + 1U;
+    header.frame_index_eot                = 1U << 31U;
     header.priority                       = 0b001;
     header.transfer_id                    = 0;
     header.data_specifier                 = 0b0000110011001100; // Subject ID = 3276
@@ -148,7 +148,7 @@ TEST_CASE("RxBasic0")
 
     // Dropped request because the local node does not have a node-ID.
     subscription                          = nullptr;
-    header.frame_index_eot                = (1U << 31U) + 1U;
+    header.frame_index_eot                = 1U << 31U;
     header.priority                       = 0b011;
     header.transfer_id                    = 1;
     header.source_node_id                 = 0b00000000'00100111;
@@ -163,7 +163,7 @@ TEST_CASE("RxBasic0")
     // Dropped request because the local node has a different node-ID.
     ins.setNodeID(0b0011010);
     subscription                          = nullptr;
-    header.frame_index_eot                = (1U << 31U) + 1U;
+    header.frame_index_eot                = 1U << 31U;
     header.priority                       = 0b011;
     header.transfer_id                    = 1;
     header.source_node_id                 = 0b00000000'00100111;
@@ -176,7 +176,7 @@ TEST_CASE("RxBasic0")
 
     // Same request accepted now.
     subscription                          = nullptr;
-    header.frame_index_eot                = (1U << 31U) + 1U;
+    header.frame_index_eot                = 1U << 31U;
     header.priority                       = 0b011;
     header.transfer_id                    = 4;
     header.destination_node_id            = 0b00000000'00011010;
@@ -202,7 +202,7 @@ TEST_CASE("RxBasic0")
     // Response transfer not accepted because the local node has a different node-ID.
     // There is no dynamic memory available, but it doesn't matter because a rejection does not require allocation.
     subscription                          = nullptr;
-    header.frame_index_eot                = (1U << 31U) + 1U;
+    header.frame_index_eot                = 1U << 31U;
     header.priority                       = 0b100;
     header.transfer_id                    = 1;
     header.source_node_id                 = 0b00000000'00011011;
@@ -216,7 +216,7 @@ TEST_CASE("RxBasic0")
 
     // Response transfer not accepted due to OOM -- can't allocate RX session.
     subscription                          = nullptr;
-    header.frame_index_eot                = (1U << 31U) + 1U;
+    header.frame_index_eot                = 1U << 31U;
     header.priority                       = 0b100;
     header.transfer_id                    = 1;
     header.source_node_id                 = 0b00000000'00011011;
@@ -233,7 +233,7 @@ TEST_CASE("RxBasic0")
     // Response transfer not accepted due to OOM -- can't allocate the buffer (RX session is allocated OK).
     ins.getAllocator().setAllocationCeiling(3 * sizeof(RxSession) + 16 + 20);
     subscription                          = nullptr;
-    header.frame_index_eot                = (1U << 31U) + 1U;
+    header.frame_index_eot                = 1U << 31U;
     header.priority                       = 0b100;
     header.transfer_id                    = 1;
     header.source_node_id                 = 0b00000000'00011011;
@@ -258,7 +258,7 @@ TEST_CASE("RxBasic0")
 
     // Same response accepted now. We have to keep incrementing the transfer-ID though because it's tracked.
     subscription                          = nullptr;
-    header.frame_index_eot                = (1U << 31U) + 1U;
+    header.frame_index_eot                = 1U << 31U;
     header.priority                       = 0b100;
     header.transfer_id                    = 5;
     header.source_node_id                 = 0b00000000'00011011;
@@ -342,7 +342,7 @@ TEST_CASE("RxAnonymous")
     header.destination_node_id            = 0b1111111111111111;
     header.data_specifier                 = 0b0000110011001100;
     header.transfer_id                    = 1;
-    header.frame_index_eot                = (1U << 31U) + 1U;
+    header.frame_index_eot                = 1U << 31U;
     specifier.data_specifier              = UDPARD_UDP_PORT;
     specifier.destination_route_specifier = 0b11101111'00'01000'0'0'000110011001100;
     specifier.source_route_specifier      = 0b11000000'10101000'00000000'00000000;
@@ -358,7 +358,7 @@ TEST_CASE("RxAnonymous")
 
     // Accepted anonymous message.
     subscription                          = nullptr;
-    header.frame_index_eot                = (1U << 31U) + 1U;
+    header.frame_index_eot                = 1U << 31U;
     header.priority                       = 0b001;
     header.source_node_id                 = 0b1111111111111111;
     header.destination_node_id            = 0b1111111111111111;
@@ -388,7 +388,7 @@ TEST_CASE("RxAnonymous")
     REQUIRE(ensureAllNullptr(ins.getMessageSubs().at(0)->sessions));  // No RX states!
 
     // Anonymous message not accepted because OOM. The transfer shall remain unmodified by the call, so we re-check it.
-    header.frame_index_eot                = (1U << 31U) + 1U;
+    header.frame_index_eot                = 1U << 31U;
     header.priority                       = 0b001;
     header.transfer_id                    = 1;
     specifier.data_specifier              = UDPARD_UDP_PORT;
@@ -417,7 +417,7 @@ TEST_CASE("RxAnonymous")
 
     // Accepted anonymous message with small payload.
     subscription                          = nullptr;
-    header.frame_index_eot                = (1U << 31U) + 1U;
+    header.frame_index_eot                = 1U << 31U;
     header.priority                       = 0b001;
     header.transfer_id                    = 0;
     specifier.data_specifier              = UDPARD_SUBJECT_ID_PORT;

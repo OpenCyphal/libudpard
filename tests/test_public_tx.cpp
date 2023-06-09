@@ -215,7 +215,7 @@ TEST_CASE("TxBasic1")
     REQUIRE(que.peek()->getPayloadByte(0) == 0);    // Payload start. (starts after header)
     REQUIRE(que.peek()->getPayloadByte(1) == 1);
     REQUIRE(que.peek()->getPayloadByte(2) == 2);
-REQUIRE(que.peek()->getPayloadByte(3) == 3);
+    REQUIRE(que.peek()->getPayloadByte(3) == 3);
     REQUIRE(que.peek()->getPayloadByte(4) == 4);
     REQUIRE(que.peek()->getPayloadByte(5) == 5);
     REQUIRE(que.peek()->getPayloadByte(6) == 6);

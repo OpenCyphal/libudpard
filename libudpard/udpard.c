@@ -429,7 +429,11 @@ UDPARD_PRIVATE int32_t txPushSingleFrame(UdpardTxQueue* const                que
     UDPARD_ASSERT(sizeof(UdpardFrameHeader) > 0);  // NOLINT
     const size_t frame_payload_size = payload_size + sizeof(UdpardFrameHeader) + CRC_SIZE_BYTES;
     UDPARD_ASSERT(frame_payload_size > payload_size);
-    int32_t       out = 0;
+
+    int32_t  out             = 0;
+    uint32_t frame_index     = 0U;
+    bool     end_of_transfer = true;
+
     TxItem* const tqi =
         (que->size < que->capacity) ? txAllocateQueueItem(ins, specifier, deadline_usec, frame_payload_size) : NULL;
     if (tqi != NULL)
@@ -442,7 +446,17 @@ UDPARD_PRIVATE int32_t txPushSingleFrame(UdpardTxQueue* const                que
             (void) memcpy(&tqi->payload_buffer[sizeof(UdpardFrameHeader)], payload, payload_size);  // NOLINT
         }
         /// Create the FrameHeader
-        txMakeFrameHeader(&tqi->base.frame.udp_cyphal_header, src_node_id, dst_node_id, port_id, transfer_kind, priority, transfer_id, true, 1);
+        txMakeFrameHeader(
+            &tqi->base.frame.udp_cyphal_header,
+            src_node_id,
+            dst_node_id,
+            port_id,
+            transfer_kind,
+            priority,
+            transfer_id,
+            end_of_transfer,
+            frame_index);
+
         // Clang-Tidy raises an error recommending the use of memcpy_s() instead.
         // We ignore it because the safe functions are poorly supported; reliance on them may limit the portability.
         (void) memcpy(&tqi->payload_buffer[0], &tqi->base.frame.udp_cyphal_header, sizeof(UdpardFrameHeader));  // NOLINT
@@ -557,7 +571,17 @@ UDPARD_PRIVATE TxChain txGenerateMultiFrameChain(UdpardInstance* const        in
         // Size of remaining payload without CRC
         size_t payload_move_size = move_size_with_crc - overrun_amount;
 
-        txMakeFrameHeader(&out.tail->base.frame.udp_cyphal_header, src_node_id, dst_node_id, port_id, transfer_kind, priority, transfer_id, false, ++frame_index);
+        txMakeFrameHeader(
+            &out.tail->base.frame.udp_cyphal_header,
+            src_node_id,
+            dst_node_id,
+            port_id,
+            transfer_kind,
+            priority,
+            transfer_id,
+            false,
+            frame_index);
+
         if(initial_payload_overrun)
         {
             // Insert payload and header
@@ -593,6 +617,7 @@ UDPARD_PRIVATE TxChain txGenerateMultiFrameChain(UdpardInstance* const        in
             (void) memcpy(&out.tail->payload_buffer[0], &out.tail->base.frame.udp_cyphal_header, sizeof(UdpardFrameHeader)); // NOLINT
             UDPARD_ASSERT((frame_offset) == out.tail->base.frame.payload_size);
         }
+        ++frame_index;
     }
     return out;
 }
@@ -768,7 +793,7 @@ UDPARD_PRIVATE bool rxTryParseFrame(const UdpardMicrosecond             timestam
     out->payload             = (void*) ((uint8_t*) frame->payload + sizeof(frame->udp_cyphal_header));
 
     out->transfer_id         = frame->udp_cyphal_header.transfer_id;
-    out->start_of_transfer   = (((frame->udp_cyphal_header.frame_index_eot) & (UDPARD_MAX_FRAME_INDEX)) == 1);
+    out->start_of_transfer   = (((frame->udp_cyphal_header.frame_index_eot) & (UDPARD_MAX_FRAME_INDEX)) == 0);
     out->end_of_transfer     = ((frame->udp_cyphal_header.frame_index_eot >> UDPARD_END_OF_TRANSFER_OFFSET) == 1);
     out->frame_index         = frame->udp_cyphal_header.frame_index_eot;
     // Make sure header version is supported
@@ -997,7 +1022,7 @@ UDPARD_PRIVATE int8_t rxSessionUpdate(UdpardInstance* const          ins,
             else
             {
                 if ((!frame->start_of_transfer && frame->frame_index != rxs->last_udp_header_index + 1)
-                    || (frame->start_of_transfer && frame->frame_index != 1U))
+                    || (frame->start_of_transfer && frame->frame_index != 0U))
                 {
                     // Out of order multiframe packet received
                     out = -UDPARD_ERROR_OUT_OF_ORDER;
