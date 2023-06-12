@@ -541,7 +541,6 @@ UdpardTxQueueItem* udpardTxPop(UdpardTxQueue* const que, const UdpardTxQueueItem
 ///     - The received frame is a valid Cyphal/UDP transport frame, but there is no matching subscription,
 ///       the frame did not complete a transfer, the frame forms an invalid frame sequence, the frame is a duplicate,
 ///       the frame is unicast to a different node (address mismatch).
-///     - The redundant transport index does match the transport index for the RX session.
 int8_t udpardRxAccept(UdpardInstance* const         ins,
                       const UdpardMicrosecond       timestamp_usec,
                       UdpardFrame* const            frame,

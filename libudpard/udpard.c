@@ -973,18 +973,13 @@ UDPARD_PRIVATE int8_t rxSessionUpdate(UdpardInstance* const          ins,
     UDPARD_ASSERT(rxs->transfer_id <= UDPARD_TRANSFER_ID_MAX);
     UDPARD_ASSERT(frame->transfer_id <= UDPARD_TRANSFER_ID_MAX);
 
-    int8_t out = 0;
-    if(rxs->redundant_transport_index != redundant_transport_index)
-    {
-        return out;
-    }
-
     const bool tid_timed_out = (frame->timestamp_usec > rxs->transfer_timestamp_usec) &&
                                ((frame->timestamp_usec - rxs->transfer_timestamp_usec) > transfer_id_timeout_usec);
 
     const bool not_previous_tid = rxComputeTransferIDDifference(rxs->transfer_id, frame->transfer_id) > 1;
 
-    const bool need_restart = tid_timed_out || (frame->start_of_transfer && not_previous_tid);
+    const bool need_restart = tid_timed_out || ((rxs->redundant_transport_index == redundant_transport_index) &&
+                                                frame->start_of_transfer && not_previous_tid);
 
     if (need_restart)
     {
@@ -996,6 +991,7 @@ UDPARD_PRIVATE int8_t rxSessionUpdate(UdpardInstance* const          ins,
         rxs->last_udp_header_index     = 0U;
     }
 
+    int8_t out = 0;
     if (need_restart && (!frame->start_of_transfer))
     {
         rxSessionRestart(ins, rxs);  // SOT-miss, no point going further.
@@ -1032,9 +1028,9 @@ UDPARD_PRIVATE int8_t rxSessionUpdate(UdpardInstance* const          ins,
                 rxs->last_udp_header_index = frame->frame_index;
             }
         }
-
-        const bool correct_tid = (frame->transfer_id == rxs->transfer_id);
-        if (correct_tid)
+        const bool correct_transport = (rxs->redundant_transport_index == redundant_transport_index);
+        const bool correct_tid       = (frame->transfer_id == rxs->transfer_id);
+        if (correct_transport && correct_tid)
         {
             out = rxSessionAcceptFrame(ins, rxs, frame, extent, out_transfer);
         }

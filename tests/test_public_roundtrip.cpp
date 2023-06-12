@@ -171,7 +171,7 @@ TEST_CASE("RoundtripSimple")
                 UdpardRxTransfer      transfer{};
                 UdpardRxSubscription* subscription = nullptr;
 
-                std::int8_t result_transport_index_0 = ins_rx.rxAccept(
+                std::int8_t result = ins_rx.rxAccept(
                     ti->tx_deadline_usec,
                     ti->frame,
                     0,
@@ -179,17 +179,7 @@ TEST_CASE("RoundtripSimple")
                     transfer,
                     &subscription);
 
-                std::int8_t result_transport_index_1 = ins_rx.rxAccept(
-                    ti->tx_deadline_usec,
-                    ti->frame,
-                    1,
-                    ti->specifier,
-                    transfer,
-                    &subscription);
-
-                REQUIRE(result_transport_index_1 == 0);
-
-                if (result_transport_index_0 == 1)
+                if (result == 1)
                 {
                     Pending reference{};  // Fetch the reference transfer from the list of pending.
                     {
@@ -223,7 +213,7 @@ TEST_CASE("RoundtripSimple")
                 }
                 else
                 {
-                    REQUIRE(result_transport_index_0 == 0);
+                    REQUIRE((result == 0 || result == -UDPARD_ERROR_OUT_OF_ORDER));
                 }
             }
             else
