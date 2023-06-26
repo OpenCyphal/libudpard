@@ -1,7 +1,6 @@
 # This software is distributed under the terms of the MIT License.
 # Copyright (c) 2016 OpenCyphal.
 # Author: Pavel Kirienko <pavel@opencyphal.org>
-# Contributors: https://github.com/OpenCyphal/libudpard/contributors.
 
 cmake_minimum_required(VERSION 3.12)
 project(udpard_tests C CXX)
@@ -9,6 +8,8 @@ enable_testing()
 
 set(CTEST_OUTPUT_ON_FAILURE ON)
 set(library_dir "${CMAKE_SOURCE_DIR}/../libudpard")
+
+set(NO_STATIC_ANALYSIS OFF CACHE BOOL "disable udpard static analysis")
 
 # Use -DNO_STATIC_ANALYSIS=1 to suppress static analysis.
 # If not suppressed, the tools used here shall be available, otherwise the build will fail.
@@ -36,16 +37,15 @@ endif ()
 set(CMAKE_CXX_STANDARD 17)
 set(CXX_EXTENSIONS OFF)
 add_compile_options(
-        -Wall -Wextra -pedantic -fstrict-aliasing -Wdouble-promotion -Wswitch-enum -Wfloat-equal -Wundef
-        -Werror 
+        -Wall -Wextra -Werror -pedantic -fstrict-aliasing -Wdouble-promotion -Wswitch-enum -Wfloat-equal -Wundef
         -Wconversion -Wtype-limits -Wsign-conversion -Wcast-align
 )
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Woverloaded-virtual -Wnon-virtual-dtor -Wsign-promo")
 
-include_directories(catch ${library_dir})
-add_definitions(-DCATCH_CONFIG_FAST_COMPILE=1 -DCATCH_CONFIG_ENABLE_ALL_STRINGMAKERS=1)
+include_directories(${library_dir})
+include_directories(SYSTEM catch)
 
-set(common_sources catch/main.cpp ${library_dir}/udpard.c)
+set(common_sources ${CMAKE_SOURCE_DIR}/main.cpp ${library_dir}/udpard.c)
 
 function(gen_test name files compile_definitions compile_flags link_flags c_standard)
     add_executable(${name} ${common_sources} ${files})
@@ -61,11 +61,13 @@ function(gen_test name files compile_definitions compile_flags link_flags c_stan
     add_test("run_${name}" "${name}" --rng-seed time)
 endfunction()
 
-function(gen_test_matrix name files compile_definitions compile_flags)
-    gen_test("${name}_x64_c99" "${files}" "${compile_definitions}" "${compile_flags} -m64" "-m64" "99")
-    # gen_test("${name}_x32_c99" "${files}" "${compile_definitions}" "${compile_flags} -m32" "-m32" "99")
-    gen_test("${name}_x64_c11" "${files}" "${compile_definitions}" "${compile_flags} -m64" "-m64" "11")
-    # gen_test("${name}_x32_c11" "${files}" "${compile_definitions}" "${compile_flags} -m32" "-m32" "11")
+function(gen_test_matrix name files compile_definitions compile_flags link_flags)
+    gen_test("${name}_x64_c99" "${files}" "${compile_definitions}" "${compile_flags} -m64" "-m64 ${link_flags}" "99")
+    gen_test("${name}_x32_c99" "${files}" "${compile_definitions}" "${compile_flags} -m32" "-m32 ${link_flags}" "99")
+    target_link_libraries("${name}_x32_c99" ${ADDITIONAL_LIBS_32})
+    gen_test("${name}_x64_c11" "${files}" "${compile_definitions}" "${compile_flags} -m64" "-m64 ${link_flags}" "11")
+    gen_test("${name}_x32_c11" "${files}" "${compile_definitions}" "${compile_flags} -m32" "-m32 ${link_flags}" "11")
+    target_link_libraries("${name}_x32_c11" ${ADDITIONAL_LIBS_32})
     # Coverage is only available for GCC builds.
     if ((CMAKE_CXX_COMPILER_ID STREQUAL "GNU") AND (CMAKE_BUILD_TYPE STREQUAL "Debug"))
         gen_test("${name}_cov"
@@ -79,11 +81,13 @@ endfunction()
 
 # Disable missing declaration warning to allow exposure of private definitions.
 gen_test_matrix(test_private
-        "test_private_crc.cpp;test_private_rx.cpp;test_private_tx.cpp;test_private_cavl.cpp;"
+        "test_private_cavl.cpp;"
         "-DUDPARD_CONFIG_HEADER=\"${CMAKE_CURRENT_SOURCE_DIR}/udpard_config_private.h\""
-        "-Wno-missing-declarations")
+        "-Wno-missing-declarations"
+        "")
 
 gen_test_matrix(test_public
-        "test_public_tx.cpp;test_public_rx.cpp;test_public_roundtrip.cpp;test_self.cpp;"
+        "test_self.cpp"
         ""
-        "-Wmissing-declarations")
+        "-Wmissing-declarations"
+        "")

@@ -42,7 +42,7 @@ extern "C" {
 
 // ----------------------------------------         PUBLIC API SECTION         ----------------------------------------
 
-/// Modified for use with Libudpard: expose the Cavl structure via public API as UdpardTreeNode.
+/// Modified for use with LibUDPard: expose the Cavl structure via public API as UdpardTreeNode.
 typedef UdpardTreeNode Cavl;
 
 /// Returns POSITIVE if the search target is GREATER than the provided node, negative if smaller, zero on match (found).
