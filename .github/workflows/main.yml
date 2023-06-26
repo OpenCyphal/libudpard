@@ -1,14 +1,15 @@
 name: Main Workflow
-on: [push, pull_request]
+on: [ push, pull_request ]
 env:
-  LLVM_VERSION: 13
+  LLVM_VERSION: 15
 jobs:
   debug:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
-    container: ghcr.io/opencyphal/toolshed:ts20.4.1
+    container: ghcr.io/opencyphal/toolshed:ts22.4.3
     strategy:
       matrix:
-        toolchain: ['clang', 'gcc']
+        toolchain: [ 'clang', 'gcc' ]
         include:
           - toolchain: gcc
             c-compiler: gcc
@@ -18,6 +19,10 @@ jobs:
             cxx-compiler: clang++
     steps:
       - uses: actions/checkout@v3
+      - run: |
+          gcc --version
+          clang --version
+          clang-tidy --version
       - run: >
           cmake
           -B ${{ github.workspace }}/build
@@ -30,7 +35,7 @@ jobs:
           cd ${{ github.workspace }}/build
           make VERBOSE=1
           make test
-      - uses: actions/upload-artifact@v2
+      - uses: actions/upload-artifact@v3
         if: always()
         with:
           name: ${{github.job}}
@@ -38,12 +43,13 @@ jobs:
           retention-days: 2
 
   optimizations:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
-    container: ghcr.io/opencyphal/toolshed:ts20.4.1
+    container: ghcr.io/opencyphal/toolshed:ts22.4.3
     strategy:
       matrix:
-        toolchain: ['clang', 'gcc']
-        build_type: [Release, MinSizeRel]
+        toolchain: [ 'clang', 'gcc' ]
+        build_type: [ Release, MinSizeRel ]
         include:
           - toolchain: gcc
             c-compiler: gcc
@@ -66,9 +72,53 @@ jobs:
           cd ${{ github.workspace }}/build
           make VERBOSE=1
           make test
-      - uses: actions/upload-artifact@v2
+      - uses: actions/upload-artifact@v3
         if: always()
         with:
           name: ${{github.job}}
           path: ${{github.workspace}}/**/*
           retention-days: 2
+
+  avr:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    env:
+      mcu: at90can64
+      flags: -Wall -Wextra -Werror -pedantic -Wconversion -Wtype-limits
+    strategy:
+      matrix:
+        std: [ 'c99', 'c11', 'gnu99', 'gnu11' ]
+    steps:
+      - uses: actions/checkout@v3
+      - run: |
+          sudo apt update -y && sudo apt upgrade -y
+          sudo apt install gcc-avr avr-libc
+          avr-gcc --version
+      - run: avr-gcc libudpard/*.c -c -std=${{matrix.std}} -mmcu=${{env.mcu}} ${{env.flags}}
+
+  arm:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    env:
+      flags: -Wall -Wextra -Werror -pedantic -Wconversion -Wtype-limits -Wcast-align -Wfatal-errors
+    strategy:
+      matrix:
+        std: [ 'c99', 'c11', 'gnu99', 'gnu11' ]
+    steps:
+      - uses: actions/checkout@v3
+      - run: |
+          sudo apt update -y && sudo apt upgrade -y
+          sudo apt-get install -y gcc-arm-none-eabi
+      - run: arm-none-eabi-gcc libudpard/*.c -c -std=${{matrix.std}} ${{ env.flags }}
+
+  style_check:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: DoozyX/clang-format-lint-action@v0.15
+        with:
+          source: './libudpard ./tests'
+          exclude: './tests/catch'
+          extensions: 'c,h,cpp,hpp'
+          clangFormatVersion: ${{ env.LLVM_VERSION }}
