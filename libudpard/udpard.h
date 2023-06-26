@@ -53,18 +53,19 @@ extern "C" {
 /// MTU values for the supported protocols.
 /// RFC 791 states that hosts must be prepared to accept datagrams of up to 576 octets and it is expected that this
 /// library will receive non ip-fragmented datagrams thus the minimum MTU should be larger than 576.
-/// That being said, the MTU here is set to 1408 which is derived from 
+/// That being said, the MTU here is set to 1408 which is derived from
 /// A 1500B Ethernet MTU RFC 894  - 60B IPv4 max header - 8B UDP Header - 24B Cyphal header which is equal to 1408B
-#define UDPARD_MTU_MAX 1408U // Note that to guarantee a single frame transfer your max payload size shall be 1404
-                             // This value is to accomodate for a 4B CRC which is appended to the transfer.
+#define UDPARD_MTU_MAX \
+    1408U  // Note that to guarantee a single frame transfer your max payload size shall be 1404
+           // This value is to accomodate for a 4B CRC which is appended to the transfer.
 #define UDPARD_MTU_UDP_IPV4 UDPARD_MTU_MAX
 #define UDPARD_MTU_UDP_IPV6 UDPARD_MTU_MAX
 
 /// Parameter ranges are inclusive; the lower bound is zero for all. See Cyphal/UDP Specification for background.
-#define UDPARD_SUBJECT_ID_MAX 32767U   /// 15 bits subject ID
-#define UDPARD_SERVICE_ID_MAX 65535U   /// The hard limit for ports
-#define UDPARD_NODE_SUBNET_MAX 31U     /// 5 bits for subnet
-#define UDPARD_NODE_ID_MAX 65534U      /// 16 bits - 1 is the hard limit. But this may change pending implementations
+#define UDPARD_SUBJECT_ID_MAX 32767U  /// 15 bits subject ID
+#define UDPARD_SERVICE_ID_MAX 65535U  /// The hard limit for ports
+#define UDPARD_NODE_SUBNET_MAX 31U    /// 5 bits for subnet
+#define UDPARD_NODE_ID_MAX 65534U     /// 16 bits - 1 is the hard limit. But this may change pending implementations
 #define UDPARD_PRIORITY_MAX 7U
 #define UDPARD_TRANSFER_ID_BIT_LENGTH 63ULL
 #define UDPARD_TRANSFER_ID_MAX ((1ULL << UDPARD_TRANSFER_ID_BIT_LENGTH) - 1ULL)
@@ -541,12 +542,12 @@ UdpardTxQueueItem* udpardTxPop(UdpardTxQueue* const que, const UdpardTxQueueItem
 ///     - The received frame is a valid Cyphal/UDP transport frame, but there is no matching subscription,
 ///       the frame did not complete a transfer, the frame forms an invalid frame sequence, the frame is a duplicate,
 ///       the frame is unicast to a different node (address mismatch).
-int8_t udpardRxAccept(UdpardInstance* const         ins,
-                      const UdpardMicrosecond       timestamp_usec,
-                      UdpardFrame* const            frame,
-                      const uint8_t                 redundant_transport_index,
-                      UdpardRxTransfer* const       out_transfer,
-                      UdpardRxSubscription** const  out_subscription);
+int8_t udpardRxAccept(UdpardInstance* const        ins,
+                      const UdpardMicrosecond      timestamp_usec,
+                      UdpardFrame* const           frame,
+                      const uint8_t                redundant_transport_index,
+                      UdpardRxTransfer* const      out_transfer,
+                      UdpardRxSubscription** const out_subscription);
 
 /// This function creates a new subscription, allowing the application to register its interest in a particular
 /// category of transfers. The library will reject all transport frames for which there is no active subscription.

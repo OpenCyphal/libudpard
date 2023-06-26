@@ -177,10 +177,10 @@ public:
     auto operator=(const Instance&) -> Instance&  = delete;
     auto operator=(const Instance&&) -> Instance& = delete;
 
-    [[nodiscard]] auto rxAccept(const UdpardMicrosecond      timestamp_usec,
-                                UdpardFrame&                 frame,
-                                const uint8_t                redundant_transport_index,
-                                UdpardSessionSpecifier&       /*specifier*/,
+    [[nodiscard]] auto rxAccept(const UdpardMicrosecond timestamp_usec,
+                                UdpardFrame&            frame,
+                                const uint8_t           redundant_transport_index,
+                                UdpardSessionSpecifier& /*specifier*/,
                                 UdpardRxTransfer&            out_transfer,
                                 UdpardRxSubscription** const out_subscription)
     {
@@ -276,9 +276,8 @@ public:
         checkInvariants();
         const auto size_before = que_.size;
         const auto ret         = udpardTxPush(&que_, ins, transmission_deadline_usec, &metadata, payload_size, payload);
-        const auto num_added = static_cast<std::size_t>(ret);
-        enforce((ret < 0) || ((size_before + num_added) == que_.size),
-                "Unexpected size change after push");
+        const auto num_added   = static_cast<std::size_t>(ret);
+        enforce((ret < 0) || ((size_before + num_added) == que_.size), "Unexpected size change after push");
         checkInvariants();
         return ret;
     }

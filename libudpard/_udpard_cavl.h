@@ -118,7 +118,7 @@ static inline Cavl* cavlPrivateAdjustBalance(Cavl* const x, const bool increment
 {
     CAVL_ASSERT((x != NULL) && ((x->bf >= -1) && (x->bf <= +1)));
     Cavl*        out    = x;
-    const int8_t new_bf = (int8_t)(x->bf + (increment ? +1 : -1));
+    const int8_t new_bf = (int8_t) (x->bf + (increment ? +1 : -1));
     if ((new_bf < -1) || (new_bf > 1))
     {
         const bool   r    = new_bf < 0;   // bf<0 if left-heavy --> right rotation is needed.
@@ -131,8 +131,8 @@ static inline Cavl* cavlPrivateAdjustBalance(Cavl* const x, const bool increment
             cavlPrivateRotate(x, r);
             if (0 == z->bf)
             {
-                x->bf = (int8_t)(-sign);
-                z->bf = (int8_t)(+sign);
+                x->bf = (int8_t) (-sign);
+                z->bf = (int8_t) (+sign);
             }
             else
             {
@@ -149,7 +149,7 @@ static inline Cavl* cavlPrivateAdjustBalance(Cavl* const x, const bool increment
             cavlPrivateRotate(x, r);
             if ((y->bf * sign) < 0)
             {
-                x->bf = (int8_t)(+sign);
+                x->bf = (int8_t) (+sign);
                 y->bf = 0;
                 z->bf = 0;
             }
@@ -157,7 +157,7 @@ static inline Cavl* cavlPrivateAdjustBalance(Cavl* const x, const bool increment
             {
                 x->bf = 0;
                 y->bf = 0;
-                z->bf = (int8_t)(-sign);
+                z->bf = (int8_t) (-sign);
             }
             else
             {

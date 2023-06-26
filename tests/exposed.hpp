@@ -109,9 +109,7 @@ void txMakeFrameHeader(UdpardFrameHeader* const header,
 
 auto txRoundFramePayloadSizeUp(const std::size_t x) -> std::size_t;
 
-auto rxTryParseFrame(const UdpardMicrosecond             timestamp_usec,
-                     UdpardFrame* const                  frame,
-                     RxFrameModel* const                 out) -> bool;
+auto rxTryParseFrame(const UdpardMicrosecond timestamp_usec, UdpardFrame* const frame, RxFrameModel* const out) -> bool;
 
 auto rxSessionWritePayload(UdpardInstance* const ins,
                            RxSession* const      rxs,
