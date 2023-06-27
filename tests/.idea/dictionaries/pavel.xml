@@ -1,6 +1,9 @@
 <component name="ProjectDictionaryState">
   <dictionary name="pavel">
     <words>
+      <w>deallocation</w>
+      <w>discardment</w>
+      <w>dscp</w>
       <w>dudpard</w>
       <w>ghcr</w>
       <w>libudpard</w>
@@ -9,6 +12,9 @@
       <w>opencyphal</w>
       <w>stringmakers</w>
       <w>udpard</w>
+      <w>udpip</w>
+      <w>unicast</w>
+      <w>usec</w>
       <w>wconversion</w>
       <w>wextra</w>
       <w>wtype</w>
