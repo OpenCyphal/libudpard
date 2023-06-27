@@ -8,6 +8,7 @@
 #include <cstring>
 
 static const uint32_t CRC_INITIAL = 0xFFFFFFFFU;
+static const uint32_t UDPARD_MAX_FRAME_INDEX = 0x7FFFFFFFU;
 
 TEST_CASE("rxTryParseFrame")
 {
@@ -36,7 +37,7 @@ TEST_CASE("rxTryParseFrame")
     header.destination_node_id               = 0xFFFF;
     header.data_specifier                    = 0x0000;
     header.transfer_id                       = 0x0000000000000001;
-    header.frame_index_eot                   = (1U << 31U) + 1U;
+    header.frame_index_eot                   = 1U << 31U;
     header._opaque                           = 0x0000;
     header.cyphal_header_checksum            = 0x0000;
 
@@ -48,7 +49,7 @@ TEST_CASE("rxTryParseFrame")
         0xFF, 0xFF,                                      // Destination Node ID
         0x00, 0x00,                                      // Data Specifier
         0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Transfer ID
-        0x01, 0x00, 0x00, 0x80,                          // Frame EOT
+        0x00, 0x00, 0x00, 0x80,                          // Frame EOT
         0x00, 0x00,                                      // Opaque Data
         0x00, 0x00,                                      // Transfer CRC
     };
@@ -70,7 +71,7 @@ TEST_CASE("rxTryParseFrame")
                       0xFF, 0xFF,                                      // Destination Node ID
                       0x00, 0x00,                                      // Data Specifier
                       0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Transfer ID
-                      0x01, 0x00, 0x00, 0x80,                          // Frame EOT
+                      0x00, 0x00, 0x00, 0x80,                          // Frame EOT
                       0x00, 0x00,                                      // Opaque Data
                       0x00, 0x00,                                      // Transfer CRC
                       0,    1,    2,    3,    4,    5,    6,    7      // Payload
@@ -82,7 +83,7 @@ TEST_CASE("rxTryParseFrame")
     REQUIRE(model.source_node_id == 0U);
     REQUIRE(model.destination_node_id == UDPARD_NODE_ID_UNSET);
     REQUIRE(model.transfer_id == 1U);
-    // REQUIRE(model.frame_index == 1U);
+    REQUIRE((model.frame_index & UDPARD_MAX_FRAME_INDEX) == 0U);
     REQUIRE(model.start_of_transfer);
     REQUIRE(model.end_of_transfer);
     REQUIRE(model.payload_size == 8);
@@ -105,7 +106,7 @@ TEST_CASE("rxTryParseFrame")
                        0xFF, 0xFF,                                      // Destination Node ID
                        0x00, 0x00,                                      // Data Specifier
                        0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Transfer ID
-                       0x00, 0x00, 0x00, 0x80,                          // Frame EOT
+                       0x02, 0x00, 0x00, 0x80,                          // Frame EOT
                        0x00, 0x00,                                      // Opaque Data
                        0x00, 0x00,                                      // Transfer CRC
                    }));                                                 // MFT FRAMES REQUIRE PAYLOAD
@@ -120,7 +121,7 @@ TEST_CASE("rxTryParseFrame")
                       0xFF, 0xFF,                                      // Destination Node ID
                       0xCC, 0x0C,                                      // Data Specifier
                       0x17, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Transfer ID
-                      0x01, 0x00, 0x00, 0x00,                          // Frame EOT
+                      0x00, 0x00, 0x00, 0x00,                          // Frame EOT
                       0x00, 0x00,                                      // Opaque Data
                       0x00, 0x00,                                      // Transfer CRC
                       0,    1,    2,    3,    4,    5,    6            // Payload
@@ -132,6 +133,7 @@ TEST_CASE("rxTryParseFrame")
     REQUIRE(model.source_node_id == 0b0100111U);
     REQUIRE(model.destination_node_id == UDPARD_NODE_ID_UNSET);
     REQUIRE(model.transfer_id == 23U);
+    REQUIRE((model.frame_index & UDPARD_MAX_FRAME_INDEX) == 0U);
     REQUIRE(model.start_of_transfer);
     REQUIRE(!model.end_of_transfer);
     REQUIRE(model.payload_size == 7);
@@ -172,7 +174,7 @@ TEST_CASE("rxTryParseFrame")
                       0xFF, 0xFF,                                      // Destination Node ID
                       0xCD, 0x0C,                                      // Data Specifier
                       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Transfer ID
-                      0x01, 0x00, 0x00, 0x80,                          // Frame EOT
+                      0x00, 0x00, 0x00, 0x80,                          // Frame EOT
                       0x00, 0x00,                                      // Opaque Data
                       0x00, 0x00,                                      // Transfer CRC
                   }));
@@ -183,6 +185,7 @@ TEST_CASE("rxTryParseFrame")
     REQUIRE(model.source_node_id == UDPARD_NODE_ID_UNSET);
     REQUIRE(model.destination_node_id == UDPARD_NODE_ID_UNSET);
     REQUIRE(model.transfer_id == 0U);
+    REQUIRE((model.frame_index & UDPARD_MAX_FRAME_INDEX) == 0U);
     REQUIRE(model.start_of_transfer);
     REQUIRE(model.end_of_transfer);
     REQUIRE(model.payload_size == 0);
@@ -591,7 +594,7 @@ TEST_CASE("rxSessionUpdate")
     frame.timestamp_usec    = 20'000'200;
     frame.start_of_transfer = false;
     frame.end_of_transfer   = false;
-    frame.frame_index       = 3 + static_cast<uint32_t>(1U << static_cast<uint32_t>(31U));
+    frame.frame_index       = 2 + static_cast<uint32_t>(1U << static_cast<uint32_t>(31U));
     frame.payload_size      = 2;
     frame.payload           = reinterpret_cast<const uint8_t*>("\x09\x09");
     REQUIRE(-UDPARD_ERROR_OUT_OF_ORDER == update(1, 1'000'000, 16));
@@ -618,7 +621,7 @@ TEST_CASE("rxSessionUpdate")
     frame.start_of_transfer = true;
     frame.end_of_transfer = false;
     frame.payload_size    = 7;
-    frame.frame_index     = 1;
+    frame.frame_index     = 0;
     frame.payload         = reinterpret_cast<const uint8_t*>("\x06\x06\x06\x06\x06\x06\x06");
     REQUIRE(0 == update(1, 1'000'000, 16));
 
@@ -645,7 +648,7 @@ TEST_CASE("rxSessionUpdate")
     // Multi-frame, middle.
     frame.start_of_transfer = false;
     frame.end_of_transfer   = false;
-    frame.frame_index       = 2;
+    frame.frame_index       = 1;
     frame.payload_size      = 7;
     frame.payload           = reinterpret_cast<const uint8_t*>("\x07\x07\x07\x07\x07\x07\x07");
     REQUIRE(0 == update(1, 1'000'000, 16));
@@ -672,7 +675,7 @@ TEST_CASE("rxSessionUpdate")
     // Multi-frame, last.
     frame.start_of_transfer = false;
     frame.end_of_transfer   = true;
-    frame.frame_index       = 3 + static_cast<uint32_t>(1U << static_cast<uint32_t>(31U));
+    frame.frame_index       = 2 + static_cast<uint32_t>(1U << static_cast<uint32_t>(31U));
     frame.payload_size      = 8;  // The payload is IMPLICITLY TRUNCATED, and the CRC IS STILL VALIDATED.
     frame.payload           = reinterpret_cast<const uint8_t*>("\x09\x09\x09\x09\x32\x98\x04\x7B");
     REQUIRE(1 == update(1, 1'000'000, 16));
