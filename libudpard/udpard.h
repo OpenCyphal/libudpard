@@ -7,6 +7,20 @@
 ///
 /// description tbd
 ///
+/// Two decoupled parts of the library: TX pipeline and RX pipeline.
+/// The following sockets (or similar abstractions) are needed to use the library:
+///
+/// - One unconnected and unbound transmission socket used for all outgoing transfers:
+///   publications, RPC-requests, and RPC-responses.
+///
+/// - One bound socket per subscription.
+///
+/// - One bound socket shared for all incoming RPC transfers
+///   (responses for the local RPC-clients and requests for the local RPC-servers).
+///
+/// Therefore, an application with X subscriptions requires X+2 sockets, unless it is not interested in publishing
+/// and/or using RPC-services.
+///
 /// --------------------------------------------------------------------------------------------------------------------
 ///
 /// This software is distributed under the terms of the MIT License.
@@ -68,10 +82,13 @@ extern "C" {
 /// different values per subscription (i.e., per data specifier) depending on its timing requirements.
 #define UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC 2000000UL
 
+/// The library supports at most this many redundant network interfaces per Cyphal node.
+#define UDPARD_NETWORK_INTERFACE_COUNT_MAX 3U
+
 // Forward declarations.
 typedef struct UdpardInstance       UdpardInstance;
 typedef struct UdpardTreeNode       UdpardTreeNode;
-typedef struct UdpardTxQueueItem    UdpardTxQueueItem;
+typedef struct UdpardTxItem         UdpardTxItem;
 typedef struct UdpardMemoryResource UdpardMemoryResource;
 typedef uint64_t                    UdpardMicrosecond;
 typedef uint16_t                    UdpardPortID;
@@ -100,27 +117,23 @@ struct UdpardTreeNode
     int8_t          bf;     ///< Do not access this field.
 };
 
-// =============================================================================================================
-// ===============================================  UDP/IP LAYER  ==============================================
-// =============================================================================================================
+typedef struct
+{
+    size_t size;
+    void*  data;
+} UdpardMutablePayload;
+
+typedef struct
+{
+    size_t      size;
+    const void* data;
+} UdpardConstPayload;
 
 typedef struct
 {
     uint32_t ip_address;
     uint16_t udp_port;
 } UdpardUDPIPEndpoint;
-
-/// LibUDPard operates on top of UDP/IP, consuming and emitting raw UDP frames.
-/// This structure represents a UDP frame as it is received from or sent to the network.
-typedef struct
-{
-    /// The source endpoint is irrelevant for the Cyphal/UDP protocol, so it is not modeled here. It can be arbitrary.
-    UdpardUDPIPEndpoint destination;
-
-    /// The raw UDP/IP payload. This includes the Cyphal header as well, as it is managed entirely by LibUDPard.
-    size_t      payload_size;
-    const void* payload;
-} UdpardFrame;
 
 // =============================================================================================================
 // =============================================  MEMORY RESOURCE  =============================================
@@ -167,7 +180,7 @@ struct UdpardMemoryResource
 /// Applications that are not interested in transmission may have zero such instances.
 ///
 /// All operations (push, peek, pop) are O(log n) in the worst case; there is exactly one memory allocation per element.
-/// The size of each allocation is sizeof(UdpardTxQueueItem) + payload_size.
+/// The size of each allocation is sizeof(UdpardTxItem) + payload_size.
 /// Once initialized, instances cannot be copied.
 ///
 /// API functions that work with this type are named "udpardTx*()", find them below.
@@ -202,7 +215,7 @@ typedef struct
     /// The memory resource used by this queue for allocating the enqueued items (UDP datagrams).
     /// There is exactly one allocation per enqueued datagram.
     /// In a simple application there would be just one memory resource shared by all queues.
-    UdpardMemoryResource memory_resource;
+    UdpardMemoryResource memory;
 
     /// The number of frames that are currently contained in the queue, initially zero.
     /// READ-ONLY FIELD
@@ -213,8 +226,8 @@ typedef struct
     UdpardTreeNode* root;
 } UdpardTx;
 
-/// One frame stored in the transmission queue along with its metadata.
-struct UdpardTxQueueItem
+/// One frame (UDP datagram) stored in the transmission queue along with its metadata.
+struct UdpardTxItem
 {
     /// Internal use only; do not access this field.
     UdpardTreeNode base;
@@ -224,7 +237,7 @@ struct UdpardTxQueueItem
     /// It can be useful though for pulling pending frames from the TX queue if at least one frame of their transfer
     /// failed to transmit; the idea is that if at least one frame is missing, the transfer will not be received by
     /// remote nodes anyway, so all its remaining frames can be dropped from the queue at once using udpardTxPop().
-    UdpardTxQueueItem* next_in_transfer;
+    UdpardTxItem* next_in_transfer;
 
     /// This is the same value that is passed to udpardTxPublish/Request/Respond.
     /// Frames whose transmission deadline is in the past shall be dropped.
@@ -235,15 +248,18 @@ struct UdpardTxQueueItem
     /// Refer to the IP specification for details.
     uint8_t dscp;
 
+    /// The UDP/IP datagram compiled by libudpard should be sent to this endpoint, which is always a multicast address.
+    UdpardUDPIPEndpoint destination;
+
+    /// The UDP/IP datagram payload. This includes the Cyphal header as well and all required CRC-s.
+    /// It should be sent to the socket (or equivalent abstraction) verbatim.
+    UdpardMutablePayload datagram_payload;
+
     /// This opaque pointer is assigned the value that is passed to udpardTxPush().
     /// The library itself does not make use of it but the application can use it to provide continuity between
     /// its high-level transfer objects and the low-level frame objects.
     /// If not needed, the application can set it to NULL.
     void* user_transfer_reference;
-
-    /// The actual UDP/IP datagram compiled by libudpard.
-    /// The application should forward this frame to the underlying UDP/IP stack.
-    UdpardFrame frame;
 };
 
 /// Construct a new transmission pipeline with the specified queue capacity and memory resource.
@@ -255,9 +271,10 @@ struct UdpardTxQueueItem
 /// To safely discard it, simply pop all items from the queue.
 ///
 /// The time complexity is constant. This function does not invoke the dynamic memory manager.
-UdpardTx udpardTxInit(const UdpardNodeID* const  local_node_id,
-                      const size_t               queue_capacity,
-                      const UdpardMemoryResource memory_resource);
+int8_t udpardTxInit(UdpardTx* const            self,
+                    const UdpardNodeID* const  local_node_id,
+                    const size_t               queue_capacity,
+                    const UdpardMemoryResource memory_resource);
 
 /// This function serializes a transfer into a sequence of transport frames and inserts them into the prioritized
 /// transmission queue at the appropriate position. Afterwards, the application is supposed to take the enqueued frames
@@ -307,33 +324,32 @@ UdpardTx udpardTxInit(const UdpardNodeID* const  local_node_id,
 ///
 /// The memory allocation requirement is one allocation per transport frame. A single-frame transfer takes one
 /// allocation; a multi-frame transfer of N frames takes N allocations. The size of each allocation is
-/// (sizeof(udpardTxQueueItem) + MTU).
-int32_t udpardTxPublish(UdpardTx* const         self,
-                        void* const             user_transfer_reference,
-                        const UdpardMicrosecond deadline_usec,
-                        const UdpardPriority    priority,
-                        const UdpardPortID      subject_id,
-                        UdpardTransferID* const transfer_id,
-                        const size_t            payload_size,
-                        const void* const       payload);
-int32_t udpardTxRequest(UdpardTx* const         self,
-                        void* const             user_transfer_reference,
-                        const UdpardMicrosecond deadline_usec,
-                        const UdpardPriority    priority,
-                        const UdpardPortID      service_id,
-                        const UdpardNodeID      client_node_id,
-                        UdpardTransferID* const transfer_id,
-                        const size_t            payload_size,
-                        const void* const       payload);
-int32_t udpardTxRespond(UdpardTx* const         self,
-                        void* const             user_transfer_reference,
-                        const UdpardMicrosecond deadline_usec,
-                        const UdpardPriority    priority,
-                        const UdpardPortID      service_id,
-                        const UdpardNodeID      server_node_id,
-                        const UdpardTransferID  transfer_id,
-                        const size_t            payload_size,
-                        const void* const       payload);
+/// (sizeof(UdpardTxItem) + MTU).
+int32_t udpardTxPublish(UdpardTx* const          self,
+                        void* const              user_transfer_reference,
+                        const UdpardMicrosecond  deadline_usec,
+                        const UdpardPriority     priority,
+                        const UdpardPortID       subject_id,
+                        UdpardTransferID* const  transfer_id,
+                        const UdpardConstPayload payload);
+
+int32_t udpardTxRequest(UdpardTx* const          self,
+                        void* const              user_transfer_reference,
+                        const UdpardMicrosecond  deadline_usec,
+                        const UdpardPriority     priority,
+                        const UdpardPortID       service_id,
+                        const UdpardNodeID       server_node_id,
+                        UdpardTransferID* const  transfer_id,
+                        const UdpardConstPayload payload);
+
+int32_t udpardTxRespond(UdpardTx* const          self,
+                        void* const              user_transfer_reference,
+                        const UdpardMicrosecond  deadline_usec,
+                        const UdpardPriority     priority,
+                        const UdpardPortID       service_id,
+                        const UdpardNodeID       client_node_id,
+                        const UdpardTransferID   transfer_id,
+                        const UdpardConstPayload payload);
 
 /// This function accesses the top element of the prioritized transmission queue. The queue itself is not modified
 /// (i.e., the accessed element is not removed). The application should invoke this function to collect the transport
@@ -357,7 +373,7 @@ int32_t udpardTxRespond(UdpardTx* const         self,
 /// not attempt to free it.
 ///
 /// The time complexity is logarithmic of the queue size. This function does not invoke the dynamic memory manager.
-const UdpardTxQueueItem* udpardTxPeek(const UdpardTx* const self);
+const UdpardTxItem* udpardTxPeek(const UdpardTx* const self);
 
 /// This function transfers the ownership of the specified element of the prioritized transmission queue from the queue
 /// to the application. The element does not necessarily need to be the top one -- it is safe to dequeue any element.
@@ -368,51 +384,45 @@ const UdpardTxQueueItem* udpardTxPeek(const UdpardTx* const self);
 /// If any of the arguments are NULL, the function has no effect and returns NULL.
 ///
 /// The time complexity is logarithmic of the queue size. This function does not invoke the dynamic memory manager.
-UdpardTxQueueItem* udpardTxPop(UdpardTx* const self, const UdpardTxQueueItem* const item);
+UdpardTxItem* udpardTxPop(UdpardTx* const self, const UdpardTxItem* const item);
 
 // =============================================================================================================
 // =============================================    RX PIPELINE    =============================================
 // =============================================================================================================
 
+/// This type represents an open input port, such as a subscription to a subject (topic), a service server port
+/// that accepts RPC-service requests, or a service client port that accepts RPC-service responses.
+/// It is not meant to be accessed by the application directly except if advanced introspection is required.
 typedef struct
 {
-    /// The IP address and UDP port number where UDP/IP datagrams matching this Cyphal session will be sent.
-    /// The application should initialize a multicast socket bound to this endpoint
-    /// (i.e., the multicast group address and the UDP port number).
+    /// For subject ports this is the subject-ID. For RPC-service ports this is the service-ID.
     /// READ-ONLY FIELD
-    UdpardUDPIPEndpoint udpip_endpoint;
+    UdpardPortID port_id;
 
+    /// The maximum payload size that can be accepted at this port.
+    /// The rest will be truncated away following the implicit truncation rule defined in the Cyphal specification.
+    /// READ-ONLY FIELD
+    size_t extent;
+
+    /// Refer to the Cyphal specification for the description of the transfer-ID timeout.
+    /// See UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC.
+    /// This field can be adjusted at runtime arbitrarily; e.g., this is useful to implement adaptive timeouts.
     UdpardMicrosecond transfer_id_timeout_usec;
-    size_t            extent;
-    UdpardPortID      port_id;
 
-    /// This field can be arbitrarily mutated by the user. It is never accessed by the library.
-    /// Its purpose is to simplify integration with OOP interfaces.
-    void* user_reference;
-
-    UdpardMemoryResource memory_resource_for_sessions;
-    UdpardMemoryResource memory_resource_for_payloads;
-
-    /// READ-ONLY FIELD
-    UdpardTransferID next_transfer_id;
-
-    /// READ-ONLY FIELD
-    UdpardMicrosecond last_accepted_transfer_timestamp_usec;
-
-    /// A new session state instance is created per remote node-ID that emits transfers matching this session specifier
+    /// A new session state instance is created per remote node-ID that emits transfers matching this port
     /// per redundant interface.
-    /// For example, if the local node is subscribed to a certain subject, has T local network interfaces,
-    /// and there are X nodes publishing transfers under that subject, then there will be X times T sessions
-    /// created for that subject. Same applies to RPC-services as well.
+    /// For example, if the local node is subscribed to a certain subject and there are X nodes publishing
+    /// transfers on that subject, then there will be X sessions created for that subject.
+    /// Same applies to RPC-services as well.
     ///
-    /// Once a session is created, it is never freed again until its subscription (this structure) is destroyed.
+    /// Once a session is created, it is never freed again until the port that owns it (this structure) is destroyed.
     /// This is in line with the assumption that the network configuration is usually static, and that
-    /// once a node has started emitting data under a certain session specifier, it is likely to continue doing so.
-    /// Applications where this is not the case may consider cycling their subscriptions periodically
-    /// by unsubscribing and re-subscribing immediately.
+    /// once a node has started emitting data on a certain port, it is likely to continue doing so.
+    /// Applications where this is not the case may consider cycling their ports periodically
+    /// by destroying and re-creating them immediately.
     ///
     /// Each session instance takes sizeof(UdpardInternalRxSession) bytes of heap memory,
-    /// which is at most 64 bytes on most platforms (on small word size platforms it may be much smaller).
+    /// which is at most 128 bytes on most platforms (on small word size platforms it may be much smaller).
     /// On top of that, each session instance may have one payload buffer allocated for the reassembled transfer;
     /// the size of that buffer is determined by the application at the time of subscription.
     /// The payload buffer is only allocated while reassembly is in progress; when the subscription is idle,
@@ -421,21 +431,119 @@ typedef struct
     /// From the above one can deduce that the worst situation from the memory management standpoint is when
     /// there is a large number of nodes emitting data under a certain session specifier (e.g., publishing on a subject)
     /// such that each node begins a multi-frame transfer while never completing it.
-    UdpardTreeNode* sessions;  ///< Read-only DO NOT MODIFY THIS
-} UdpardRx;
+    ///
+    /// READ-ONLY FIELD
+    UdpardTreeNode* sessions;
+} UdpardRxPort;
 
-UdpardRx udpardRxSubscribe(const UdpardPortID         subject_id,
-                           const size_t               extent,
-                           const UdpardMemoryResource memory_resource_for_sessions,
-                           const UdpardMemoryResource memory_resource_for_payloads);
+/// Represents a received Cyphal transfer.
+/// The payload is owned by this instance, so the application is required to free it after use.
+typedef struct
+{
+    UdpardMicrosecond    timestamp_usec;
+    UdpardPriority       priority;
+    UdpardNodeID         remote_node_id;
+    UdpardTransferID     transfer_id;
+    UdpardMutablePayload payload;
+} UdpardRxTransfer;
 
-// TODO: services?
+// ---------------------------------------------  SUBJECTS  ---------------------------------------------
 
-int8_t udpardRxAccept(UdpardRx* const          self,
-                      const UdpardMicrosecond  timestamp_usec,
-                      const UdpardFrame* const frame,
-                      const uint8_t            redundant_iface_index,
-                      UdpardRxTransfer* const  out_transfer);
+/// This is a specialization of a port for subject (topic) subscriptions.
+/// In Cyphal/UDP, each subject (topic) has a specific IP multicast group address associated with it.
+/// This address is available here in a dedicated field.
+/// The application is expected to open a socket bound to that endpoint and then feed the UDP datagrams received
+/// from that socket into the library by calling udpardRxSubscriptionReceive.
+typedef struct
+{
+    /// The IP address and UDP port number where UDP/IP datagrams matching this Cyphal subject will be sent.
+    /// The application should initialize a multicast socket bound to this endpoint.
+    /// READ-ONLY FIELD
+    UdpardUDPIPEndpoint udpip_endpoint;
+
+    UdpardMemoryResource memory_for_sessions;
+    UdpardMemoryResource memory_for_payloads;
+
+    UdpardRxPort port;
+} UdpardRxSubscription;
+
+int8_t udpardRxSubscriptionInit(UdpardRxSubscription* const self,
+                                const UdpardPortID          subject_id,
+                                const size_t                extent,
+                                const UdpardMemoryResource  memory_for_sessions,
+                                const UdpardMemoryResource  memory_for_payloads);
+
+void udpardRxSubscriptionDestroy(UdpardRxSubscription* const self);
+
+/// redundant_iface_index shall not exceed UDPARD_NETWORK_INTERFACE_COUNT_MAX.
+int8_t udpardRxSubscriptionReceive(UdpardRxSubscription* const self,
+                                   const UdpardMicrosecond     timestamp_usec,
+                                   const UdpardConstPayload    datagram_payload,
+                                   const uint8_t               redundant_iface_index,
+                                   UdpardRxTransfer* const     out_transfer);
+
+// ---------------------------------------------  RPC-SERVICES  ---------------------------------------------
+
+typedef struct
+{
+    /// READ-ONLY FIELD
+    UdpardTreeNode base;
+
+    UdpardRxPort port;
+
+    /// This field can be arbitrarily mutated by the user. It is never accessed by the library.
+    /// Its purpose is to simplify integration with OOP interfaces.
+    void* user_reference;
+} UdpardRxService;
+
+typedef struct
+{
+    /// The IP address and UDP port number where UDP/IP datagrams carrying RPC-service transfers destined to this node
+    /// will be sent.
+    /// The application should initialize a socket bound to the IP multicast group and UDP socket specified here.
+    /// READ-ONLY FIELD
+    UdpardUDPIPEndpoint udpip_endpoint;
+
+    UdpardMemoryResource memory_for_sessions;
+    UdpardMemoryResource memory_for_payloads;
+
+    /// READ-ONLY FIELDS
+    UdpardRxService* request_ports;
+    UdpardRxService* response_ports;
+} UdpardRxServiceDispatcher;
+
+/// Represents a received Cyphal RPC-service transfer -- either request or response.
+typedef struct
+{
+    UdpardRxTransfer base;
+    UdpardPortID     service_id;
+    bool             is_request;
+} UdpardRxServiceTransfer;
+
+int8_t udpardRxServiceDispatcherInit(UdpardRxServiceDispatcher* const self,
+                                     const UdpardNodeID               local_node_id,
+                                     const UdpardMemoryResource       memory_for_sessions,
+                                     const UdpardMemoryResource       memory_for_payloads);
+
+void udpardRxServiceDispatcherDestroy(UdpardRxServiceDispatcher* const self);
+
+int8_t udpardRxServiceDispatcherListen(UdpardRxServiceDispatcher* const self,
+                                       UdpardRxService* const           out_service,
+                                       const UdpardPortID               service_id,
+                                       const bool                       is_request,
+                                       const size_t                     extent);
+
+void udpardRxServiceDispatcherUnlisten(UdpardRxServiceDispatcher* const self,
+                                       const UdpardPortID               service_id,
+                                       const bool                       is_request);
+
+/// redundant_iface_index shall not exceed UDPARD_NETWORK_INTERFACE_COUNT_MAX.
+int8_t udpardRxServiceDispatcherReceive(UdpardRxServiceDispatcher* const self,
+                                        UdpardRxService** const          out_service,
+                                        const UdpardMicrosecond          timestamp_usec,
+                                        const UdpardConstPayload         datagram_payload,
+                                        const uint8_t                    redundant_iface_index,
+                                        UdpardRxServiceTransfer* const   out_transfer);
 
 #ifdef __cplusplus
 }
