@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <udpard.h>
+#include <udpard.h>  // Shall always be included first.
 #include <algorithm>
 #include <atomic>
 #include <array>
@@ -52,7 +52,7 @@ inline auto getRandomNatural(const T upper_open) -> T
 }
 
 template <typename F>
-static inline void traverse(const UdpardTreeNode* const root, const F& fun)
+inline void traverse(const UdpardTreeNode* const root, const F& fun)
 {
     if (root != nullptr)
     {
