@@ -41,8 +41,8 @@ struct Node final : Cavl
                ((check_ri == nullptr) || (check_ri->up == this));
     }
 
-    auto min() -> Node* { return reinterpret_cast<Node*>(cavlFindExtremum(this, false)); }
-    auto max() -> Node* { return reinterpret_cast<Node*>(cavlFindExtremum(this, true)); }
+    auto min() -> Node* { return static_cast<Node*>(cavlFindExtremum(this, false)); }
+    auto max() -> Node* { return static_cast<Node*>(cavlFindExtremum(this, true)); }
 
     auto operator=(const Cavl& cv) -> Node&
     {
@@ -62,7 +62,7 @@ auto search(Node<T>** const root, const Predicate& predicate, const Factory& fac
 
         static auto callPredicate(void* const user_reference, const Cavl* const node) -> std::int8_t
         {
-            const auto ret = static_cast<Refs*>(user_reference)->predicate(reinterpret_cast<const Node<T>&>(*node));
+            const auto ret = static_cast<Refs*>(user_reference)->predicate(static_cast<const Node<T>&>(*node));
             if (ret > 0)
             {
                 return 1;
@@ -80,7 +80,7 @@ auto search(Node<T>** const root, const Predicate& predicate, const Factory& fac
         }
     } refs{predicate, factory};
     Cavl* const out = cavlSearch(reinterpret_cast<Cavl**>(root), &refs, &Refs::callPredicate, &Refs::callFactory);
-    return reinterpret_cast<Node<T>*>(out);
+    return static_cast<Node<T>*>(out);
 }
 template <typename T, typename Predicate>
 auto search(Node<T>** const root, const Predicate& predicate) -> Node<T>*
@@ -98,8 +98,8 @@ void remove(Node<T>** const root, const Node<T>* const n)
 template <typename T>
 auto getHeight(const Node<T>* const n) -> std::uint8_t  // NOLINT recursion
 {
-    return (n != nullptr) ? static_cast<std::uint8_t>(1U + std::max(getHeight(reinterpret_cast<Node<T>*>(n->lr[0])),
-                                                                    getHeight(reinterpret_cast<Node<T>*>(n->lr[1]))))
+    return (n != nullptr) ? static_cast<std::uint8_t>(1U + std::max(getHeight(static_cast<Node<T>*>(n->lr[0])),
+                                                                    getHeight(static_cast<Node<T>*>(n->lr[1]))))
                           : 0;
 }
 
@@ -109,7 +109,7 @@ void print(const Node<T>* const nd, const std::uint8_t depth = 0, const char mar
     ASSERT_TRUE(10 > getHeight(nd));  // Fail early for malformed cyclic trees, do not overwhelm stdout.
     if (nd != nullptr)
     {
-        print<T>(reinterpret_cast<const Node<T>*>(nd->lr[0]), static_cast<std::uint8_t>(depth + 1U), 'L');
+        print<T>(static_cast<const Node<T>*>(nd->lr[0]), static_cast<std::uint8_t>(depth + 1U), 'L');
         for (std::uint16_t i = 1U; i < depth; i++)
         {
             std::cout << "              ";
@@ -128,7 +128,7 @@ void print(const Node<T>* const nd, const std::uint8_t depth = 0, const char mar
         }
         std::cout << marker << "=" << static_cast<std::int64_t>(nd->value)  //
                   << " [" << static_cast<std::int16_t>(nd->bf) << "]" << std::endl;
-        print<T>(reinterpret_cast<const Node<T>*>(nd->lr[1]), static_cast<std::uint8_t>(depth + 1U), 'R');
+        print<T>(static_cast<const Node<T>*>(nd->lr[1]), static_cast<std::uint8_t>(depth + 1U), 'R');
     }
 }
 
@@ -137,9 +137,9 @@ void traverse(Node* const root, const Visitor& visitor)  // NOLINT recursion nee
 {
     if (root != nullptr)
     {
-        traverse<Ascending, Node, Visitor>(reinterpret_cast<Node*>(root->lr[!Ascending]), visitor);
+        traverse<Ascending, Node, Visitor>(static_cast<Node*>(root->lr[!Ascending]), visitor);
         visitor(root);
-        traverse<Ascending, Node, Visitor>(reinterpret_cast<Node*>(root->lr[Ascending]), visitor);
+        traverse<Ascending, Node, Visitor>(static_cast<Node*>(root->lr[Ascending]), visitor);
     }
 }
 
@@ -168,7 +168,7 @@ auto findBrokenAncestry(const Node<T>* const n, const Cavl* const parent = nullp
     {
         for (auto* ch : n->lr)  // NOLINT array decay due to C API
         {
-            if (const Node<T>* p = findBrokenAncestry(reinterpret_cast<Node<T>*>(ch), n))
+            if (const Node<T>* p = findBrokenAncestry(static_cast<Node<T>*>(ch), n))
             {
                 return p;
             }
@@ -187,15 +187,15 @@ auto findBrokenBalanceFactor(const Node<T>* const n) -> const Cavl*  // NOLINT r
         {
             return n;
         }
-        const std::int16_t hl = getHeight(reinterpret_cast<Node<T>*>(n->lr[0]));
-        const std::int16_t hr = getHeight(reinterpret_cast<Node<T>*>(n->lr[1]));
+        const std::int16_t hl = getHeight(static_cast<Node<T>*>(n->lr[0]));
+        const std::int16_t hr = getHeight(static_cast<Node<T>*>(n->lr[1]));
         if (n->bf != (hr - hl))
         {
             return n;
         }
         for (auto* ch : n->lr)  // NOLINT array decay due to C API
         {
-            if (const Cavl* p = findBrokenBalanceFactor(reinterpret_cast<Node<T>*>(ch)))
+            if (const Cavl* p = findBrokenBalanceFactor(static_cast<Node<T>*>(ch)))
             {
                 return p;
             }
@@ -225,7 +225,10 @@ TEST(Cavl, CheckAscension)
     ASSERT_TRUE(3 == getHeight(&t));
     ASSERT_TRUE(&t == findBrokenBalanceFactor(&t));  // All zeros, incorrect.
     r.lr[1] = nullptr;
-    ASSERT_TRUE(2 == getHeight(&t));
+    std::cout << __LINE__ << ": " << static_cast<std::int32_t>(getHeight(&t)) << std::endl;
+    print(&t);
+    std::cout << __LINE__ << ": " << static_cast<std::int32_t>(getHeight(&t)) << std::endl;
+    ASSERT_EQ(2, getHeight(&t));
     ASSERT_TRUE(nullptr == findBrokenBalanceFactor(&t));  // Balanced now as we removed one node.
 }
 
@@ -303,11 +306,11 @@ TEST(Cavl, BalancingA)
     ASSERT_TRUE(nullptr == findBrokenAncestry(&x));
     ASSERT_TRUE(&x == cavlPrivateAdjustBalance(&x, false));  // bf = -1, same topology
     ASSERT_TRUE(-1 == x.bf);
-    ASSERT_TRUE(&z == cavlPrivateAdjustBalance(&z, true));  // bf = +1, same topology
+    ASSERT_TRUE(&z == cavlPrivateAdjustBalance(&z, true));   // bf = +1, same topology
     ASSERT_TRUE(+1 == z.bf);
     ASSERT_TRUE(&y == cavlPrivateAdjustBalance(&x, false));  // bf = -2, rotation needed
     print(&y);
-    ASSERT_TRUE(nullptr == findBrokenBalanceFactor(&y));  // Should be balanced now.
+    ASSERT_TRUE(nullptr == findBrokenBalanceFactor(&y));     // Should be balanced now.
     ASSERT_TRUE(nullptr == findBrokenAncestry(&y));
     ASSERT_TRUE(&z == y.lr[0]);
     ASSERT_TRUE(&x == y.lr[1]);
@@ -352,13 +355,13 @@ TEST(Cavl, BalancingB)
     ASSERT_TRUE(nullptr == findBrokenAncestry(&x));
     ASSERT_TRUE(&x == cavlPrivateAdjustBalance(&x, false));  // bf = -1, same topology
     ASSERT_TRUE(-1 == x.bf);
-    ASSERT_TRUE(&z == cavlPrivateAdjustBalance(&z, true));  // bf = +1, same topology
+    ASSERT_TRUE(&z == cavlPrivateAdjustBalance(&z, true));   // bf = +1, same topology
     ASSERT_TRUE(+1 == z.bf);
-    ASSERT_TRUE(&y == cavlPrivateAdjustBalance(&y, true));  // bf = +1, same topology
+    ASSERT_TRUE(&y == cavlPrivateAdjustBalance(&y, true));   // bf = +1, same topology
     ASSERT_TRUE(+1 == y.bf);
     ASSERT_TRUE(&y == cavlPrivateAdjustBalance(&x, false));  // bf = -2, rotation needed
     print(&y);
-    ASSERT_TRUE(nullptr == findBrokenBalanceFactor(&y));  // Should be balanced now.
+    ASSERT_TRUE(nullptr == findBrokenBalanceFactor(&y));     // Should be balanced now.
     ASSERT_TRUE(nullptr == findBrokenAncestry(&y));
     ASSERT_TRUE(&z == y.lr[0]);
     ASSERT_TRUE(&x == y.lr[1]);
