@@ -37,7 +37,9 @@ jobs:
       - uses: actions/upload-artifact@v3
         if: always()
         with:
-          name: ${{github.job}}
+          # The matrix is shown for convenience but this is fragile because the values may not be string-convertible.
+          # Shall it break one day, feel free to remove the matrix from here.
+          name: ${{github.job}}-#${{strategy.job-index}}-${{job.status}}-${{join(matrix.*, ',')}}
           path: ${{github.workspace}}/**/*
           retention-days: 2
 
@@ -73,7 +75,9 @@ jobs:
       - uses: actions/upload-artifact@v3
         if: always()
         with:
-          name: ${{github.job}}
+          # The matrix is shown for convenience but this is fragile because the values may not be string-convertible.
+          # Shall it break one day, feel free to remove the matrix from here.
+          name: ${{github.job}}-#${{strategy.job-index}}-${{job.status}}-${{join(matrix.*, ',')}}
           path: ${{github.workspace}}/**/*
           retention-days: 2
 
