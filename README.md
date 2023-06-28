@@ -4,11 +4,13 @@ This package is a staging package to make changes before committing a pull reque
 
 # Compact Cyphal/UDP v1 in C
 
-Libudpard is a compact implementation of the Cyphal/UDP protocol stack in C99/C11 for high-integrity real-time
+LibUDPard is a compact implementation of the Cyphal/UDP protocol stack in C99/C11 for high-integrity real-time
 embedded systems.
 
 [Cyphal](https://opencyphal.org) is an open lightweight data bus standard designed for reliable intravehicular
 communication in aerospace and robotic applications via CAN bus, UDP, and other robust transports.
+
+We pronounce LibUDPard as *lib-you-dee-pee-ard*.
 
 ## WORK IN PROGRESS, NOT READY FOR FORMAL USE
 

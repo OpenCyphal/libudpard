@@ -1,7 +1,6 @@
 // This software is distributed under the terms of the MIT License.
 // Copyright (c) 2016-2020 OpenCyphal Development Team.
 
-#include "exposed.hpp"
 #include "helpers.hpp"
 #include <catch.hpp>
 
@@ -30,7 +29,7 @@ TEST_CASE("TestAllocator")
     REQUIRE(3 == al.getNumAllocatedFragments());
     REQUIRE(600 == al.getTotalAllocatedAmount());
 
-    al.deallocate(a);
+    al.free(123, a);
     REQUIRE(2 == al.getNumAllocatedFragments());
     REQUIRE(477 == al.getTotalAllocatedAmount());
 
@@ -38,15 +37,15 @@ TEST_CASE("TestAllocator")
     REQUIRE(3 == al.getNumAllocatedFragments());
     REQUIRE(577 == al.getTotalAllocatedAmount());
 
-    al.deallocate(c);
+    al.free(21, c);
     REQUIRE(2 == al.getNumAllocatedFragments());
     REQUIRE(556 == al.getTotalAllocatedAmount());
 
-    al.deallocate(d);
+    al.free(100, d);
     REQUIRE(1 == al.getNumAllocatedFragments());
     REQUIRE(456 == al.getTotalAllocatedAmount());
 
-    al.deallocate(b);
+    al.free(456, b);
     REQUIRE(0 == al.getNumAllocatedFragments());
     REQUIRE(0 == al.getTotalAllocatedAmount());
 }

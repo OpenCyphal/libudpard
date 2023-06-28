@@ -21,6 +21,8 @@
 /// Therefore, an application with X subscriptions requires X+2 sockets, unless it is not interested in publishing
 /// and/or using RPC-services.
 ///
+/// Subscription pipeline doesn't care about the local node-ID.
+///
 /// --------------------------------------------------------------------------------------------------------------------
 ///
 /// This software is distributed under the terms of the MIT License.
@@ -187,10 +189,8 @@ struct UdpardMemoryResource
 typedef struct
 {
     /// The node-ID of the local node. This is used to populate the source node-ID field of the Cyphal header.
-    /// Set to UDPARD_NODE_ID_UNSET if the local node is anonymous.
-    /// This is a reference to simplify plug-and-play node-ID allocation where the value has to be changed
-    /// after the PnP process is complete; use of a pointer allows the application to update the node-ID in one place.
-    const UdpardNodeID* local_node_id;
+    /// Set to UDPARD_NODE_ID_UNSET if the local node is anonymous; this is the default.
+    UdpardNodeID local_node_id;
 
     /// The maximum number of frames this queue is allowed to contain. An attempt to push more will fail with an
     /// out-of-memory error even if the memory is not exhausted. This value can be changed by the user at any moment.
@@ -251,8 +251,8 @@ struct UdpardTxItem
     /// The UDP/IP datagram compiled by libudpard should be sent to this endpoint, which is always a multicast address.
     UdpardUDPIPEndpoint destination;
 
-    /// The UDP/IP datagram payload. This includes the Cyphal header as well and all required CRC-s.
-    /// It should be sent to the socket (or equivalent abstraction) verbatim.
+    /// The UDP/IP datagram payload. This includes the Cyphal header as well as all required CRCs.
+    /// It should be sent through the socket (or equivalent abstraction) verbatim.
     UdpardMutablePayload datagram_payload;
 
     /// This opaque pointer is assigned the value that is passed to udpardTxPush().
@@ -271,10 +271,7 @@ struct UdpardTxItem
 /// To safely discard it, simply pop all items from the queue.
 ///
 /// The time complexity is constant. This function does not invoke the dynamic memory manager.
-int8_t udpardTxInit(UdpardTx* const            self,
-                    const UdpardNodeID* const  local_node_id,
-                    const size_t               queue_capacity,
-                    const UdpardMemoryResource memory_resource);
+int8_t udpardTxInit(UdpardTx* const self, const size_t queue_capacity, const UdpardMemoryResource memory_resource);
 
 /// This function serializes a transfer into a sequence of transport frames and inserts them into the prioritized
 /// transmission queue at the appropriate position. Afterwards, the application is supposed to take the enqueued frames
@@ -442,7 +439,7 @@ typedef struct
 {
     UdpardMicrosecond    timestamp_usec;
     UdpardPriority       priority;
-    UdpardNodeID         remote_node_id;
+    UdpardNodeID         source_node_id;
     UdpardTransferID     transfer_id;
     UdpardMutablePayload payload;
 } UdpardRxTransfer;
@@ -480,7 +477,7 @@ int8_t udpardRxSubscriptionReceive(UdpardRxSubscription* const self,
                                    const UdpardMicrosecond     timestamp_usec,
                                    const UdpardConstPayload    datagram_payload,
                                    const uint8_t               redundant_iface_index,
-                                   UdpardRxTransfer* const     out_transfer);
+                                   UdpardRxTransfer* const     received_transfer);
 
 // ---------------------------------------------  RPC-SERVICES  ---------------------------------------------
 
@@ -528,7 +525,7 @@ int8_t udpardRxServiceDispatcherInit(UdpardRxServiceDispatcher* const self,
 void udpardRxServiceDispatcherDestroy(UdpardRxServiceDispatcher* const self);
 
 int8_t udpardRxServiceDispatcherListen(UdpardRxServiceDispatcher* const self,
-                                       UdpardRxService* const           out_service,
+                                       UdpardRxService* const           service,
                                        const UdpardPortID               service_id,
                                        const bool                       is_request,
                                        const size_t                     extent);
@@ -539,11 +536,11 @@ void udpardRxServiceDispatcherUnlisten(UdpardRxServiceDispatcher* const self,
 
 /// redundant_iface_index shall not exceed UDPARD_NETWORK_INTERFACE_COUNT_MAX.
 int8_t udpardRxServiceDispatcherReceive(UdpardRxServiceDispatcher* const self,
-                                        UdpardRxService** const          out_service,
+                                        UdpardRxService** const          service,
                                         const UdpardMicrosecond          timestamp_usec,
                                         const UdpardConstPayload         datagram_payload,
                                         const uint8_t                    redundant_iface_index,
-                                        UdpardRxServiceTransfer* const   out_transfer);
+                                        UdpardRxServiceTransfer* const   received_transfer);
 
 #ifdef __cplusplus
 }
