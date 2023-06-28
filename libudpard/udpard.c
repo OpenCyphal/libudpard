@@ -6,3 +6,9 @@
 #include "udpard.h"
 #include "_udpard_cavl.h"
 #include <string.h>
+
+const UdpardTxItem* udpardTxPeek(const UdpardTx* const self)
+{
+    (void) self;
+    return NULL;
+}
