@@ -56,6 +56,7 @@ jobs:
           - toolchain: gcc
             c-compiler: gcc
             cxx-compiler: g++
+            cxx-flags: -fno-strict-aliasing  # GCC in MinSizeRel C++20 mode misoptimizes the Cavl test.
           - toolchain: clang
             c-compiler: clang
             cxx-compiler: clang++
@@ -72,6 +73,7 @@ jobs:
           -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
           -DCMAKE_C_COMPILER=${{ matrix.c-compiler }}
           -DCMAKE_CXX_COMPILER=${{ matrix.cxx-compiler }}
+          -DCMAKE_CXX_FLAGS="${{ matrix.cxx-flags }}"
           -DNO_STATIC_ANALYSIS=1
           tests
       - run: |

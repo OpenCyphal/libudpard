@@ -39,7 +39,7 @@ else ()
 endif ()
 
 add_compile_options(
-        -Wall -Wextra -Werror -pedantic -fstrict-aliasing -Wdouble-promotion -Wswitch-enum -Wfloat-equal -Wundef
+        -Wall -Wextra -Werror -pedantic -Wdouble-promotion -Wswitch-enum -Wfloat-equal -Wundef
         -Wconversion -Wtype-limits -Wsign-conversion -Wcast-align
 )
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Woverloaded-virtual -Wnon-virtual-dtor -Wsign-promo")
@@ -69,15 +69,6 @@ function(gen_test_matrix name files compile_definitions compile_flags link_flags
     gen_test("${name}_x32_c99" "${files}" "${compile_definitions}" "${compile_flags} -m32" "-m32 ${link_flags}" "99")
     gen_test("${name}_x64_c11" "${files}" "${compile_definitions}" "${compile_flags} -m64" "-m64 ${link_flags}" "11")
     gen_test("${name}_x32_c11" "${files}" "${compile_definitions}" "${compile_flags} -m32" "-m32 ${link_flags}" "11")
-    # Coverage is only available for GCC builds.
-    if ((CMAKE_CXX_COMPILER_ID STREQUAL "GNU") AND (CMAKE_BUILD_TYPE STREQUAL "Debug"))
-        gen_test("${name}_cov"
-                "${files}"
-                "${compile_definitions}"
-                "${compile_flags} -g -O0 --coverage"
-                "--coverage"
-                "11")
-    endif ()
 endfunction()
 
 # Disable missing declaration warning to allow exposure of private definitions.

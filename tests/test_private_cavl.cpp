@@ -822,7 +822,6 @@ TEST(Cavl, RemovalA)
     std::puts("REMOVE 4:");
     remove(&root, &t[4]);
     print(root);
-    print(&t[5]);
     ASSERT_TRUE(&t[5] == root);
     ASSERT_TRUE(nullptr == findBrokenBalanceFactor(root));
     ASSERT_TRUE(nullptr == findBrokenAncestry(root));
