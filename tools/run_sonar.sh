@@ -42,9 +42,8 @@ cmake ../tests \
 -DCMAKE_BUILD_TYPE=Debug \
 -DCMAKE_C_COMPILER=clang \
 -DCMAKE_CXX_COMPILER=clang++ \
--DCMAKE_C_FLAGS= \
--DCMAKE_CXX_FLAGS="$profile_flags" \
--DCMAKE_EXE_LINKER_FLAGS="$profile_flags" || die "CMake failed"
+-DCMAKE_C_FLAGS="$profile_flags" \
+-DCMAKE_CXX_FLAGS="$profile_flags"  || die "CMake failed"
 build-wrapper-linux-x86-64 --out-dir . make VERBOSE=1 -j"$(nproc)" || die "Build wrapper failed"
 make test ARGS="--verbose" || die "Test execution failed"
 # These tools shall be of the same version as LLVM/Clang.
