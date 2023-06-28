@@ -306,11 +306,11 @@ TEST(Cavl, BalancingA)
     ASSERT_TRUE(nullptr == findBrokenAncestry(&x));
     ASSERT_TRUE(&x == cavlPrivateAdjustBalance(&x, false));  // bf = -1, same topology
     ASSERT_TRUE(-1 == x.bf);
-    ASSERT_TRUE(&z == cavlPrivateAdjustBalance(&z, true));   // bf = +1, same topology
+    ASSERT_TRUE(&z == cavlPrivateAdjustBalance(&z, true));  // bf = +1, same topology
     ASSERT_TRUE(+1 == z.bf);
     ASSERT_TRUE(&y == cavlPrivateAdjustBalance(&x, false));  // bf = -2, rotation needed
     print(&y);
-    ASSERT_TRUE(nullptr == findBrokenBalanceFactor(&y));     // Should be balanced now.
+    ASSERT_TRUE(nullptr == findBrokenBalanceFactor(&y));  // Should be balanced now.
     ASSERT_TRUE(nullptr == findBrokenAncestry(&y));
     ASSERT_TRUE(&z == y.lr[0]);
     ASSERT_TRUE(&x == y.lr[1]);
@@ -355,13 +355,13 @@ TEST(Cavl, BalancingB)
     ASSERT_TRUE(nullptr == findBrokenAncestry(&x));
     ASSERT_TRUE(&x == cavlPrivateAdjustBalance(&x, false));  // bf = -1, same topology
     ASSERT_TRUE(-1 == x.bf);
-    ASSERT_TRUE(&z == cavlPrivateAdjustBalance(&z, true));   // bf = +1, same topology
+    ASSERT_TRUE(&z == cavlPrivateAdjustBalance(&z, true));  // bf = +1, same topology
     ASSERT_TRUE(+1 == z.bf);
-    ASSERT_TRUE(&y == cavlPrivateAdjustBalance(&y, true));   // bf = +1, same topology
+    ASSERT_TRUE(&y == cavlPrivateAdjustBalance(&y, true));  // bf = +1, same topology
     ASSERT_TRUE(+1 == y.bf);
     ASSERT_TRUE(&y == cavlPrivateAdjustBalance(&x, false));  // bf = -2, rotation needed
     print(&y);
-    ASSERT_TRUE(nullptr == findBrokenBalanceFactor(&y));     // Should be balanced now.
+    ASSERT_TRUE(nullptr == findBrokenBalanceFactor(&y));  // Should be balanced now.
     ASSERT_TRUE(nullptr == findBrokenAncestry(&y));
     ASSERT_TRUE(&z == y.lr[0]);
     ASSERT_TRUE(&x == y.lr[1]);
