@@ -20,9 +20,10 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - run: |
-          gcc --version
-          clang --version
-          clang-tidy --version
+          # TODO BEGIN https://github.com/OpenCyphal/docker_toolchains/issues/36
+          dpkg --add-architecture i386
+          apt-get update
+          apt-get install -y libgtest-dev libgtest-dev:i386
       - run: >
           cmake
           -B ${{ github.workspace }}/build
@@ -33,7 +34,7 @@ jobs:
       - run: |
           cd ${{ github.workspace }}/build
           make VERBOSE=1 -j$(nproc)
-          make test
+          make test ARGS="--verbose"
       - uses: actions/upload-artifact@v3
         if: always()
         with:
@@ -60,6 +61,11 @@ jobs:
             cxx-compiler: clang++
     steps:
       - uses: actions/checkout@v3
+      - run: |
+          # TODO BEGIN https://github.com/OpenCyphal/docker_toolchains/issues/36
+          dpkg --add-architecture i386
+          apt-get update
+          apt-get install -y libgtest-dev libgtest-dev:i386
       - run: >
           cmake
           -B ${{ github.workspace }}/build
@@ -71,7 +77,7 @@ jobs:
       - run: |
           cd ${{ github.workspace }}/build
           make VERBOSE=1 -j$(nproc)
-          make test
+          make test ARGS="--verbose"
       - uses: actions/upload-artifact@v3
         if: always()
         with:
@@ -121,6 +127,5 @@ jobs:
       - uses: DoozyX/clang-format-lint-action@v0.15
         with:
           source: './libudpard ./tests'
-          exclude: './tests/catch'
           extensions: 'c,h,cpp,hpp'
           clangFormatVersion: ${{ env.LLVM_VERSION }}

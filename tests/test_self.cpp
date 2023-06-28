@@ -2,50 +2,50 @@
 // Copyright (c) 2016-2020 OpenCyphal Development Team.
 
 #include "helpers.hpp"
-#include <catch.hpp>
+#include <gtest/gtest.h>
 
-TEST_CASE("TestAllocator")
+TEST(TestAllocator, Basic)
 {
     helpers::TestAllocator al;
 
-    REQUIRE(0 == al.getNumAllocatedFragments());
-    REQUIRE(std::numeric_limits<std::size_t>::max() == al.getAllocationCeiling());
+    ASSERT_EQ(0, al.getNumAllocatedFragments());
+    ASSERT_EQ(std::numeric_limits<std::size_t>::max(), al.getAllocationCeiling());
 
     auto* a = al.allocate(123);
-    REQUIRE(1 == al.getNumAllocatedFragments());
-    REQUIRE(123 == al.getTotalAllocatedAmount());
+    ASSERT_EQ(1, al.getNumAllocatedFragments());
+    ASSERT_EQ(123, al.getTotalAllocatedAmount());
 
     auto* b = al.allocate(456);
-    REQUIRE(2 == al.getNumAllocatedFragments());
-    REQUIRE(579 == al.getTotalAllocatedAmount());
+    ASSERT_EQ(2, al.getNumAllocatedFragments());
+    ASSERT_EQ(579, al.getTotalAllocatedAmount());
 
     al.setAllocationCeiling(600);
 
-    REQUIRE(nullptr == al.allocate(100));
-    REQUIRE(2 == al.getNumAllocatedFragments());
-    REQUIRE(579 == al.getTotalAllocatedAmount());
+    ASSERT_EQ(nullptr, al.allocate(100));
+    ASSERT_EQ(2, al.getNumAllocatedFragments());
+    ASSERT_EQ(579, al.getTotalAllocatedAmount());
 
     auto* c = al.allocate(21);
-    REQUIRE(3 == al.getNumAllocatedFragments());
-    REQUIRE(600 == al.getTotalAllocatedAmount());
+    ASSERT_EQ(3, al.getNumAllocatedFragments());
+    ASSERT_EQ(600, al.getTotalAllocatedAmount());
 
     al.free(123, a);
-    REQUIRE(2 == al.getNumAllocatedFragments());
-    REQUIRE(477 == al.getTotalAllocatedAmount());
+    ASSERT_EQ(2, al.getNumAllocatedFragments());
+    ASSERT_EQ(477, al.getTotalAllocatedAmount());
 
     auto* d = al.allocate(100);
-    REQUIRE(3 == al.getNumAllocatedFragments());
-    REQUIRE(577 == al.getTotalAllocatedAmount());
+    ASSERT_EQ(3, al.getNumAllocatedFragments());
+    ASSERT_EQ(577, al.getTotalAllocatedAmount());
 
     al.free(21, c);
-    REQUIRE(2 == al.getNumAllocatedFragments());
-    REQUIRE(556 == al.getTotalAllocatedAmount());
+    ASSERT_EQ(2, al.getNumAllocatedFragments());
+    ASSERT_EQ(556, al.getTotalAllocatedAmount());
 
     al.free(100, d);
-    REQUIRE(1 == al.getNumAllocatedFragments());
-    REQUIRE(456 == al.getTotalAllocatedAmount());
+    ASSERT_EQ(1, al.getNumAllocatedFragments());
+    ASSERT_EQ(456, al.getTotalAllocatedAmount());
 
     al.free(456, b);
-    REQUIRE(0 == al.getNumAllocatedFragments());
-    REQUIRE(0 == al.getTotalAllocatedAmount());
+    ASSERT_EQ(0, al.getNumAllocatedFragments());
+    ASSERT_EQ(0, al.getTotalAllocatedAmount());
 }

@@ -44,15 +44,15 @@ add_compile_options(
 )
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Woverloaded-virtual -Wnon-virtual-dtor -Wsign-promo")
 
-include_directories(${library_dir})
-include_directories(SYSTEM catch)
-
-set(common_sources ${CMAKE_SOURCE_DIR}/main.cpp ${library_dir}/udpard.c)
-
 function(gen_test name files compile_definitions compile_flags link_flags c_standard)
-    add_executable(${name} ${common_sources} ${files})
+    add_executable(${name} ${library_dir}/udpard.c ${files})
+    target_include_directories(${name} PUBLIC ${library_dir})
     target_compile_definitions(${name} PUBLIC ${compile_definitions})
-    target_link_libraries(${name} pthread)
+    # We're not using find_package(GTest) because this method can only find the package for one specific architecture,
+    # which is not what we want. We build tests for AMD64 and x86 separately, which requires linking against different
+    # GTest libraries located in different directories. Instead of doing it the hard way via find_package separately
+    # per architecture, we just pass the library names directly and let the linker figure out where to find them.
+    target_link_libraries(${name} pthread gtest gtest_main)
     set_target_properties(
             ${name}
             PROPERTIES
@@ -67,10 +67,8 @@ endfunction()
 function(gen_test_matrix name files compile_definitions compile_flags link_flags)
     gen_test("${name}_x64_c99" "${files}" "${compile_definitions}" "${compile_flags} -m64" "-m64 ${link_flags}" "99")
     gen_test("${name}_x32_c99" "${files}" "${compile_definitions}" "${compile_flags} -m32" "-m32 ${link_flags}" "99")
-    target_link_libraries("${name}_x32_c99" ${ADDITIONAL_LIBS_32})
     gen_test("${name}_x64_c11" "${files}" "${compile_definitions}" "${compile_flags} -m64" "-m64 ${link_flags}" "11")
     gen_test("${name}_x32_c11" "${files}" "${compile_definitions}" "${compile_flags} -m32" "-m32 ${link_flags}" "11")
-    target_link_libraries("${name}_x32_c11" ${ADDITIONAL_LIBS_32})
     # Coverage is only available for GCC builds.
     if ((CMAKE_CXX_COMPILER_ID STREQUAL "GNU") AND (CMAKE_BUILD_TYPE STREQUAL "Debug"))
         gen_test("${name}_cov"
