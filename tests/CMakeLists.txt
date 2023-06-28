@@ -3,6 +3,10 @@
 # Author: Pavel Kirienko <pavel@opencyphal.org>
 
 cmake_minimum_required(VERSION 3.12)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
 project(udpard_tests C CXX)
 enable_testing()
 
@@ -34,8 +38,6 @@ else ()
     add_custom_target(format COMMAND ${clang_format} -i -fallback-style=none -style=file --verbose ${format_files})
 endif ()
 
-set(CMAKE_CXX_STANDARD 17)
-set(CXX_EXTENSIONS OFF)
 add_compile_options(
         -Wall -Wextra -Werror -pedantic -fstrict-aliasing -Wdouble-promotion -Wswitch-enum -Wfloat-equal -Wundef
         -Wconversion -Wtype-limits -Wsign-conversion -Wcast-align
@@ -57,6 +59,7 @@ function(gen_test name files compile_definitions compile_flags link_flags c_stan
             COMPILE_FLAGS "${compile_flags}"
             LINK_FLAGS "${link_flags}"
             C_STANDARD "${c_standard}"
+            C_EXTENSIONS OFF
     )
     add_test("run_${name}" "${name}" --rng-seed time)
 endfunction()
