@@ -61,7 +61,7 @@ function(gen_test name files compile_definitions compile_flags link_flags c_stan
             C_STANDARD "${c_standard}"
             C_EXTENSIONS OFF
     )
-    add_test("run_${name}" "${name}" --rng-seed time)
+    add_test("run_${name}" "${name}" --gtest_random_seed=0 --gtest_color=yes)
 endfunction()
 
 function(gen_test_matrix name files compile_definitions compile_flags link_flags)

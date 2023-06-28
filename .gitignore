@@ -32,7 +32,7 @@
 *.dSYM/
 
 # CMake build directory
-build/
+*build/
 cmake-build-*/
 build-avr/
 

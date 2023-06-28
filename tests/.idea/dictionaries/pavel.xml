@@ -12,6 +12,7 @@
       <w>mmcu</w>
       <w>nosonar</w>
       <w>opencyphal</w>
+      <w>profraw</w>
       <w>stringmakers</w>
       <w>udpard</w>
       <w>udpip</w>
