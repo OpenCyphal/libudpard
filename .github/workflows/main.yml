@@ -30,10 +30,9 @@ jobs:
           -DCMAKE_C_COMPILER=${{ matrix.c-compiler }}
           -DCMAKE_CXX_COMPILER=${{ matrix.cxx-compiler }}
           tests
-      - name: make
-        run: |
+      - run: |
           cd ${{ github.workspace }}/build
-          make VERBOSE=1
+          make VERBOSE=1 -j$(nproc)
           make test
       - uses: actions/upload-artifact@v3
         if: always()
@@ -67,10 +66,9 @@ jobs:
           -DCMAKE_CXX_COMPILER=${{ matrix.cxx-compiler }}
           -DNO_STATIC_ANALYSIS=1
           tests
-      - name: make
-        run: |
+      - run: |
           cd ${{ github.workspace }}/build
-          make VERBOSE=1
+          make VERBOSE=1 -j$(nproc)
           make test
       - uses: actions/upload-artifact@v3
         if: always()
