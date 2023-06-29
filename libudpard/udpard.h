@@ -817,7 +817,7 @@ typedef struct
 ///          endpoint to use based on the node-ID.
 ///
 ///     4. Announce its interest in specific RPC-services (requests and/or responses) by calling
-///        udpardRxServiceDispatcherRegister per each. This can be done at any later point as well.
+///        udpardRxServiceDispatcherListen per each. This can be done at any later point as well.
 ///
 ///     5. Read data from the sockets continuously and forward each received UDP datagram to
 ///        udpardRxServiceDispatcherReceive, along with the index of the redundant interface
@@ -841,7 +841,7 @@ void udpardRxServiceDispatcherDestroy(UdpardRxServiceDispatcher* const self);
 /// by creating an RPC-service RX port. The service pointer shall retain validity until its unregistration or until
 /// the dispatcher is destroyed. The service instance shall not be moved or destroyed.
 ///
-/// If such registration already exists, it will be unregistered first as if udpardRxServiceDispatcherUnregister was
+/// If such registration already exists, it will be unregistered first as if udpardRxServiceDispatcherCancel was
 /// invoked by the application, and then re-created anew with the new parameters.
 ///
 /// For the meaning of extent, please refer to the documentation of the subscription pipeline.
@@ -857,14 +857,14 @@ void udpardRxServiceDispatcherDestroy(UdpardRxServiceDispatcher* const self);
 /// The time complexity is logarithmic from the number of current registrations under the specified transfer kind
 /// (request or response).
 /// This function does not allocate new memory. The function may deallocate memory if such registration already
-/// existed; the deallocation behavior is specified in the documentation for udpardRxServiceDispatcherUnregister.
-int8_t udpardRxServiceDispatcherRegister(UdpardRxServiceDispatcher* const self,
-                                         UdpardRxService* const           service,
-                                         const UdpardPortID               service_id,
-                                         const bool                       is_request,
-                                         const size_t                     extent);
+/// existed; the deallocation behavior is specified in the documentation for udpardRxServiceDispatcherCancel.
+int8_t udpardRxServiceDispatcherListen(UdpardRxServiceDispatcher* const self,
+                                       UdpardRxService* const           service,
+                                       const UdpardPortID               service_id,
+                                       const bool                       is_request,
+                                       const size_t                     extent);
 
-/// This function reverses the effect of udpardRxServiceDispatcherRegister.
+/// This function reverses the effect of udpardRxServiceDispatcherListen.
 /// If the registration is found, all its memory is de-allocated (session states and payload buffers).
 /// Please refer to the UdpardRxPort session description for detailed information on the amount of memory freed.
 ///
@@ -874,9 +874,9 @@ int8_t udpardRxServiceDispatcherRegister(UdpardRxServiceDispatcher* const self,
 ///
 /// The time complexity is logarithmic from the number of current registration under the specified transfer kind.
 /// This function does not allocate new memory.
-int8_t udpardRxServiceDispatcherUnregister(UdpardRxServiceDispatcher* const self,
-                                           const UdpardPortID               service_id,
-                                           const bool                       is_request);
+int8_t udpardRxServiceDispatcherCancel(UdpardRxServiceDispatcher* const self,
+                                       const UdpardPortID               service_id,
+                                       const bool                       is_request);
 
 /// Datagrams received from the sockets of this service dispatcher are fed into this function.
 /// It is the counterpart of udpardRxSubscriptionReceive except that it is used for RPC-service transfers.
