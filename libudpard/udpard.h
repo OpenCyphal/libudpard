@@ -668,8 +668,7 @@ typedef struct
 ///          endpoint to use based on the subject-ID.
 ///
 ///     4. Read data from the sockets continuously and forward each received UDP datagram to
-///     udpardRxSubscriptionReceive,
-///        along with the index of the redundant interface the datagram was received on.
+///        udpardRxSubscriptionReceive, along with the index of the redundant interface the datagram was received on.
 ///
 /// The extent defines the size of the transfer payload memory buffer; or, in other words, the maximum possible size
 /// of received objects, considering also possible future versions with new fields. It is safe to pick larger values.
@@ -752,11 +751,15 @@ int8_t udpardRxSubscriptionReceive(UdpardRxSubscription* const self,
 
 // ---------------------------------------------  RPC-SERVICES  ---------------------------------------------
 
+/// An RPC-service RX port models the interest of the application in receiving RPC-service transfers of
+/// a particular kind (request or response) and a particular service-ID.
 typedef struct
 {
     /// READ-ONLY FIELD
     UdpardTreeNode base;
 
+    /// See UdpardRxPort.
+    /// Use this to change the transfer-ID timeout value for this RPC-service port.
     UdpardRxPort port;
 
     /// This field can be arbitrarily mutated by the user. It is never accessed by the library.
@@ -764,14 +767,27 @@ typedef struct
     void* user_reference;
 } UdpardRxService;
 
+/// A service dispatcher is a collection of RPC-service RX ports.
+///
+/// In Cyphal/UDP, each node has a specific IP multicast group address where RPC-service transfers destined to that
+/// node are sent to. This is similar to subject (topic) multicast group addressed except that the node-ID takes
+/// the place of the subject-ID. The IP multicast group address is derived from the local node-ID.
+/// This address is available here in a dedicated field named udp_ip_endpoint.
+/// The application is expected to open a separate socket bound to that endpoint per redundant interface,
+/// and then feed the UDP datagrams received from these sockets into udpardRxServiceDispatcherReceive,
+/// collecting UdpardRxServiceTransfer instances at the output.
+///
+/// Anonymous nodes (nodes without a node-ID of their own) cannot use RPC-services.
 typedef struct
 {
     /// The IP address and UDP port number where UDP/IP datagrams carrying RPC-service transfers destined to this node
     /// will be sent.
-    /// The application should initialize a socket bound to the IP multicast group and UDP socket specified here.
     /// READ-ONLY FIELD
     UdpardUDPIPEndpoint udp_ip_endpoint;
 
+    /// The application may choose to use dedicated memory resources for sessions (fixed-size allocations)
+    /// and for the payload buffers (extent-sized allocations).
+    /// Simpler applications may choose to use the same memory resource for both.
     UdpardMemoryResource memory_for_sessions;
     UdpardMemoryResource memory_for_payloads;
 
@@ -788,24 +804,83 @@ typedef struct
     bool             is_request;
 } UdpardRxServiceTransfer;
 
+/// To begin receiving RPC-service requests and/or responses, the application should do this:
+///
+///     1. Create a new UdpardRxServiceDispatcher instance.
+///
+///     2. Initialize it by calling udpardRxServiceDispatcherInit. Observe that a valid node-ID is required here.
+///        If the application has to perform a plug-and-play node-ID allocation, it has to complete that beforehand.
+///
+///     3. Per redundant network interface:
+///        - Create a new socket bound to the IP multicast group address and UDP port number specified in the
+///          udp_ip_endpoint field of the initialized service dispatcher instance. The library will determine the
+///          endpoint to use based on the node-ID.
+///
+///     4. Announce its interest in specific RPC-services (requests and/or responses) by calling
+///        udpardRxServiceDispatcherRegister per each. This can be done at any later point as well.
+///
+///     5. Read data from the sockets continuously and forward each received UDP datagram to
+///        udpardRxServiceDispatcherReceive, along with the index of the redundant interface
+///        the datagram was received on. Only those services that were announced in step 4 will be processed.
+///
+/// The return value is 0 on success.
+/// The return value is a negated invalid argument error if any of the input arguments are invalid.
+///
+/// The time complexity is constant. This function does not invoke the dynamic memory manager.
 int8_t udpardRxServiceDispatcherInit(UdpardRxServiceDispatcher* const self,
                                      const UdpardNodeID               local_node_id,
                                      const UdpardMemoryResource       memory_for_sessions,
                                      const UdpardMemoryResource       memory_for_payloads);
 
+/// Frees all memory held by the RPC-service dispatcher instance.
+/// After invoking this function, the instance is no longer usable.
+/// Do not forget to close the sockets that were opened for this instance.
 void udpardRxServiceDispatcherDestroy(UdpardRxServiceDispatcher* const self);
 
-int8_t udpardRxServiceDispatcherListen(UdpardRxServiceDispatcher* const self,
-                                       UdpardRxService* const           service,
-                                       const UdpardPortID               service_id,
-                                       const bool                       is_request,
-                                       const size_t                     extent);
+/// This function lets the application register its interest in a particular service-ID and kind (request/response)
+/// by creating an RPC-service RX port. The service pointer shall retain validity until its unregistration or until
+/// the dispatcher is destroyed. The service instance shall not be moved or destroyed.
+///
+/// If such registration already exists, it will be unregistered first as if udpardRxServiceDispatcherUnregister was
+/// invoked by the application, and then re-created anew with the new parameters.
+///
+/// For the meaning of extent, please refer to the documentation of the subscription pipeline.
+///
+/// By default, the transfer-ID timeout value is set to UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC.
+/// It can be changed by the user at any time by modifying the corresponding field in the registration instance.
+///
+/// The return value is 1 if a new registration has been created as requested.
+/// The return value is 0 if such registration existed at the time the function was invoked. In this case,
+/// the existing registration is terminated and then a new one is created in its place. Pending transfers may be lost.
+/// The return value is a negated invalid argument error if any of the input arguments are invalid.
+///
+/// The time complexity is logarithmic from the number of current registrations under the specified transfer kind
+/// (request or response).
+/// This function does not allocate new memory. The function may deallocate memory if such registration already
+/// existed; the deallocation behavior is specified in the documentation for udpardRxServiceDispatcherUnregister.
+int8_t udpardRxServiceDispatcherRegister(UdpardRxServiceDispatcher* const self,
+                                         UdpardRxService* const           service,
+                                         const UdpardPortID               service_id,
+                                         const bool                       is_request,
+                                         const size_t                     extent);
 
-void udpardRxServiceDispatcherUnlisten(UdpardRxServiceDispatcher* const self,
-                                       const UdpardPortID               service_id,
-                                       const bool                       is_request);
+/// This function reverses the effect of udpardRxServiceDispatcherRegister.
+/// If the registration is found, all its memory is de-allocated (session states and payload buffers).
+/// Please refer to the UdpardRxPort session description for detailed information on the amount of memory freed.
+///
+/// The return value is 1 if such registration existed (and, therefore, it was removed).
+/// The return value is 0 if such registration does not exist. In this case, the function has no effect.
+/// The return value is a negated invalid argument error if any of the input arguments are invalid.
+///
+/// The time complexity is logarithmic from the number of current registration under the specified transfer kind.
+/// This function does not allocate new memory.
+int8_t udpardRxServiceDispatcherUnregister(UdpardRxServiceDispatcher* const self,
+                                           const UdpardPortID               service_id,
+                                           const bool                       is_request);
 
-/// redundant_iface_index shall not exceed UDPARD_NETWORK_INTERFACE_COUNT_MAX.
+/// Datagrams received from the sockets of this service dispatcher are fed into this function.
+/// It is the counterpart of udpardRxSubscriptionReceive except that it is used for RPC-service transfers.
+/// Please refer to the documentation of udpardRxSubscriptionReceive for the usage information.
 int8_t udpardRxServiceDispatcherReceive(UdpardRxServiceDispatcher* const self,
                                         UdpardRxService** const          service,
                                         const UdpardMicrosecond          timestamp_usec,
