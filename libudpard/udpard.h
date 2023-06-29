@@ -64,7 +64,9 @@
 /// The library supports at most UDPARD_NETWORK_INTERFACE_COUNT_MAX redundant network interfaces.
 /// Transfers received from each interface are reassembled independently and the first interface to complete a
 /// transfer is always chosen to deliver the transfer to the application, while the transfers from the slower
-/// interfaces are discarded as duplicates.
+/// interfaces are discarded as duplicates. The application must assign each of the redundant interface a
+/// unique integer ID in the range [0, UDPARD_NETWORK_INTERFACE_COUNT_MAX) to allow the library to distinguish
+/// between them.
 ///
 /// As will be shown below, a typical application with R redundant network interfaces and S topic subscriptions needs
 /// R*(S+2) sockets (or equivalent abstractions provided by the underlying UDP/IP stack).
@@ -106,6 +108,8 @@
 /// responses. The former are referred to as "subscriptions" and the latter is called a "service dispatcher".
 /// Said pipelines are entirely independent from each other and can be operated from different threads,
 /// as they share no resources.
+///
+/// The reception pipeline is able to accept datagrams with arbitrary MTU.
 ///
 /// The application should instantiate one subscription instance per subject it needs to receive messages from,
 /// irrespective of the number of redundant interfaces. There needs to be one socket (or a similar abstraction
@@ -557,7 +561,9 @@ UdpardTxItem* udpardTxPop(UdpardTx* const self, const UdpardTxItem* const item);
 
 /// This type represents an open input port, such as a subscription to a subject (topic), a service server port
 /// that accepts RPC-service requests, or a service client port that accepts RPC-service responses.
-/// It is not meant to be accessed by the application directly except if advanced introspection is required.
+///
+/// The library performs transfer reassembly, deduplication, and integrity checks, along with the management of
+/// redundant network interfaces.
 typedef struct
 {
     /// For subject ports this is the subject-ID. For RPC-service ports this is the service-ID.
@@ -570,39 +576,47 @@ typedef struct
     size_t extent;
 
     /// Refer to the Cyphal specification for the description of the transfer-ID timeout.
-    /// See UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC.
+    /// By default, this is set to UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC and it can be changed by the user.
     /// This field can be adjusted at runtime arbitrarily; e.g., this is useful to implement adaptive timeouts.
     UdpardMicrosecond transfer_id_timeout_usec;
 
-    /// A new session state instance is created per remote node-ID that emits transfers matching this port
-    /// per redundant interface.
+    /// A new session instance is created per remote node-ID that emits transfers matching this port.
     /// For example, if the local node is subscribed to a certain subject and there are X nodes publishing
     /// transfers on that subject, then there will be X sessions created for that subject.
     /// Same applies to RPC-services as well.
     ///
     /// Once a session is created, it is never freed again until the port that owns it (this structure) is destroyed.
-    /// This is in line with the assumption that the network configuration is usually static, and that
+    /// This is in line with the assumption that the network configuration is usually mostly static, and that
     /// once a node has started emitting data on a certain port, it is likely to continue doing so.
     /// Applications where this is not the case may consider cycling their ports periodically
     /// by destroying and re-creating them immediately.
     ///
-    /// Each session instance takes sizeof(UdpardInternalRxSession) bytes of heap memory,
-    /// which is at most 128 bytes on most platforms (on small word size platforms it may be much smaller).
-    /// On top of that, each session instance may have one payload buffer allocated for the reassembled transfer;
-    /// the size of that buffer is determined by the application at the time of subscription.
-    /// The payload buffer is only allocated while reassembly is in progress; when the subscription is idle,
+    /// Each session instance takes sizeof(UdpardInternalRxSession) bytes of dynamic memory,
+    /// which is at most 128 bytes on wide-word platforms (on small word size platforms it is usually much smaller).
+    /// On top of that, each session instance may have one transfer payload buffer allocated per redundant interface;
+    /// the size of each buffer equals the extent (see above).
+    /// The payload buffer is only allocated while reassembly is in progress; when the session is idle,
     /// no additional memory is held by the session instance.
     ///
+    /// To summarize, a node with R redundant network interfaces subscribed to a subject with extent E bytes
+    /// requires at most (sizeof(UdpardInternalRxSession) + R*E) bytes of dynamic memory per session instance,
+    /// and there is a dedicated session instance per remote node that publishes on this subject.
+    ///
     /// From the above one can deduce that the worst situation from the memory management standpoint is when
-    /// there is a large number of nodes emitting data under a certain session specifier (e.g., publishing on a subject)
-    /// such that each node begins a multi-frame transfer while never completing it.
+    /// there is a large number of nodes emitting data such that each node begins a multi-frame transfer
+    /// while never completing it.
+    ///
+    /// If the dynamic memory pool is sized correctly, the application is guaranteed to never encounter an
+    /// out-of-memory (OOM) error at runtime. The actual size of the dynamic memory pool is typically larger;
+    /// for a detailed review of this matter please refer to the documentation of O1Heap.
     ///
     /// READ-ONLY FIELD
     UdpardTreeNode* sessions;
 } UdpardRxPort;
 
 /// Represents a received Cyphal transfer.
-/// The payload is owned by this instance, so the application is required to free it after use.
+/// The payload buffer is owned by this instance, so the application is required to free it after use
+/// by calling UdpardMemoryResource::free(payload.data).
 typedef struct
 {
     UdpardMicrosecond    timestamp_usec;
@@ -615,32 +629,121 @@ typedef struct
 // ---------------------------------------------  SUBJECTS  ---------------------------------------------
 
 /// This is a specialization of a port for subject (topic) subscriptions.
+///
 /// In Cyphal/UDP, each subject (topic) has a specific IP multicast group address associated with it.
-/// This address is available here in a dedicated field.
-/// The application is expected to open a socket bound to that endpoint and then feed the UDP datagrams received
-/// from that socket into the library by calling udpardRxSubscriptionReceive.
+/// This address is available here in a dedicated field named udp_ip_endpoint.
+/// The application is expected to open a separate socket bound to that endpoint per redundant interface,
+/// and then feed the UDP datagrams received from these sockets into udpardRxSubscriptionReceive,
+/// collecting UdpardRxTransfer instances at the output.
+///
+/// Observe that the subscription pipeline is entirely independent of the node-ID of the local node.
+/// This is by design, allowing nodes to listen to subjects without having to be present online.
 typedef struct
 {
-    /// The IP address and UDP port number where UDP/IP datagrams matching this Cyphal subject will be sent.
-    /// The application should initialize a multicast socket bound to this endpoint.
-    /// READ-ONLY FIELD
-    UdpardUDPIPEndpoint udpip_endpoint;
+    /// See UdpardRxPort.
+    /// Use this to change the transfer-ID timeout value for this subscription.
+    UdpardRxPort port;
 
+    /// The IP multicast group address and the UDP port number where UDP/IP datagrams matching this Cyphal
+    /// subject will be sent by the publishers (remote nodes).
+    /// READ-ONLY FIELD
+    UdpardUDPIPEndpoint udp_ip_endpoint;
+
+    /// The application may choose to use dedicated memory resources for sessions (fixed-size allocations)
+    /// and for the payload buffers (extent-sized allocations).
+    /// Simpler applications may choose to use the same memory resource for both.
     UdpardMemoryResource memory_for_sessions;
     UdpardMemoryResource memory_for_payloads;
-
-    UdpardRxPort port;
 } UdpardRxSubscription;
 
+/// To subscribe to a subject, the application should do this:
+///
+///     1. Create a new UdpardRxSubscription instance.
+///
+///     2. Initialize it by calling udpardRxSubscriptionInit. The subject-ID and port-ID are synonymous here.
+///
+///     3. Per redundant network interface:
+///        - Create a new socket bound to the IP multicast group address and UDP port number specified in the
+///          udp_ip_endpoint field of the initialized subscription instance. The library will determine the
+///          endpoint to use based on the subject-ID.
+///
+///     4. Read data from the sockets continuously and forward each received UDP datagram to
+///     udpardRxSubscriptionReceive,
+///        along with the index of the redundant interface the datagram was received on.
+///
+/// The extent defines the size of the transfer payload memory buffer; or, in other words, the maximum possible size
+/// of received objects, considering also possible future versions with new fields. It is safe to pick larger values.
+/// Note well that the extent is not the same thing as the maximum size of the object, it is usually larger!
+/// Transfers that carry payloads that exceed the specified extent will be accepted anyway but the excess payload
+/// will be truncated away, as mandated by the Specification. The transfer CRC is always validated regardless of
+/// whether its payload is truncated.
+///
+/// By default, the transfer-ID timeout value is set to UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC.
+/// It can be changed by the user at any time by modifying the corresponding field in the subscription instance.
+///
+/// The return value is 0 on success.
+/// The return value is a negated invalid argument error if any of the input arguments are invalid.
+///
+/// The time complexity is constant. This function does not invoke the dynamic memory manager.
 int8_t udpardRxSubscriptionInit(UdpardRxSubscription* const self,
                                 const UdpardPortID          subject_id,
                                 const size_t                extent,
                                 const UdpardMemoryResource  memory_for_sessions,
                                 const UdpardMemoryResource  memory_for_payloads);
 
+/// Frees all memory held by the subscription instance.
+/// After invoking this function, the instance is no longer usable.
+/// Do not forget to close the sockets that were opened for this subscription.
 void udpardRxSubscriptionDestroy(UdpardRxSubscription* const self);
 
-/// redundant_iface_index shall not exceed UDPARD_NETWORK_INTERFACE_COUNT_MAX.
+/// Datagrams received from the sockets of this subscription are fed into this function.
+///
+/// The timestamp value indicates the arrival time of the datagram; the arrival time of the first datagram of
+/// a transfer becomes the transfer timestamp upon successful reassembly.
+/// This value is also used for the transfer-ID timeout management.
+/// Usually, naive software timestamping is adequate for these purposes, but some applications may require
+/// a greater timestamping accuracy (e.g., for time synchronization).
+///
+/// The redundant interface index shall not exceed UDPARD_NETWORK_INTERFACE_COUNT_MAX.
+///
+/// The accepted datagram may either be invalid, carry a non-final part of a multi-frame transfer,
+/// carry a final part of a multi-frame transfer, or carry a single-frame transfer.
+/// The last two cases are said to complete a transfer.
+///
+/// If the datagram completes a transfer, the received_transfer argument is filled with the transfer details
+/// and the return value is one.
+/// The caller is assigned ownership of the transfer payload buffer memory; it has to be freed after use by calling
+/// UdpardRxSubscription::memory_for_payloads.free(received_transfer->payload.data).
+/// The lifetime of the resulting transfer object is not related to the lifetime of the input datagram (that is,
+/// even if it is a single-frame transfer, its payload is copied out into a new dynamically allocated buffer).
+/// If the extent is zero, the payload pointer may be NULL, since there is no data to store and so no buffer is needed.
+///
+/// If the datagram does not complete a transfer or is malformed, the function returns zero and the received_transfer
+/// is not modified. Observe that malformed frames are not treated as errors, as the local application is not
+/// responsible for the behavior of external agents producing the datagrams.
+///
+/// The function invokes the dynamic memory manager in the following cases only:
+///
+///     1. A new session state object is allocated when a new session is initiated.
+///        Please refer to UdpardRxPort for further information about the session state management.
+///
+///     2. A new transfer payload buffer is allocated when a new transfer is initiated, unless the buffer
+///        was already allocated at the time. This event occurs when a valid transport frame is received and it
+///        begins a new transfer on its interface (that is, the frame index is zero and it is not a duplicate).
+///        The amount of the allocated memory equals the extent configured during initialization of the subscription.
+///
+///     3. Transfer payload buffers may occasionally be deallocated at the discretion of the library.
+///        This operation does not increase the worst case execution time and does not improve the worst case memory
+///        consumption, so a deterministic application need not consider this behavior in its resource analysis.
+///        This behavior is implemented for the benefit of applications where rigorous characterization is unnecessary.
+///
+/// The time complexity is O(p + log n) where n is the number of remote notes publishing on this subject (topic),
+/// and p is the amount of payload in the received frame (because it will be copied into an internal contiguous buffer).
+/// Malformed frames are discarded in constant time.
+///
+/// A negated out-of-memory error is returned if the function fails to allocate memory.
+/// A negated invalid argument error is returned if any of the input arguments are invalid.
+/// No other errors are possible.
 int8_t udpardRxSubscriptionReceive(UdpardRxSubscription* const self,
                                    const UdpardMicrosecond     timestamp_usec,
                                    const UdpardConstPayload    datagram_payload,
@@ -667,7 +770,7 @@ typedef struct
     /// will be sent.
     /// The application should initialize a socket bound to the IP multicast group and UDP socket specified here.
     /// READ-ONLY FIELD
-    UdpardUDPIPEndpoint udpip_endpoint;
+    UdpardUDPIPEndpoint udp_ip_endpoint;
 
     UdpardMemoryResource memory_for_sessions;
     UdpardMemoryResource memory_for_payloads;
