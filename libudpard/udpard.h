@@ -12,6 +12,9 @@
 /// instruction set architecture, from 8 to 64 bit, little- and big-endian, RTOS-based or baremetal,
 /// as long as there is a standards-compliant ISO C99 compiler available.
 ///
+/// The library offers a very low-level API that may be cumbersome to use in many applications.
+/// Users seeking a higher-level API are encouraged to use LibCyphal instead, which builds on top of LibUDPard et al.
+///
 ///
 ///          INTEGRATION
 ///
@@ -223,6 +226,7 @@ typedef uint16_t                    UdpardNodeID;
 typedef uint64_t                    UdpardTransferID;
 
 /// Transfer priority level mnemonics per the recommendations given in the Cyphal Specification.
+/// For outgoing transfers they are mapped to DSCP values as configured per redundant interface (per UdpardTx instance).
 typedef enum
 {
     UdpardPriorityExceptional = 0,
@@ -269,17 +273,17 @@ typedef struct
 // =============================================================================================================
 
 /// A pointer to the memory allocation function. The semantics are similar to malloc():
-///     - The returned pointer shall point to an uninitialized block of memory that is at least "amount" bytes large.
+///     - The returned pointer shall point to an uninitialized block of memory that is at least "size" bytes large.
 ///     - If there is not enough memory, the returned pointer shall be NULL.
 ///     - The memory shall be aligned at least at max_align_t.
 ///     - The execution time should be constant (O(1)).
-///     - The worst-case memory fragmentation should be bounded and easily predictable.
+///     - The worst-case memory consumption (worst fragmentation) should be understood by the developer.
 /// If the standard dynamic memory manager of the target platform does not satisfy the above requirements,
 /// consider using O1Heap: https://github.com/pavel-kirienko/o1heap.
 typedef void* (*UdpardMemoryAllocate)(UdpardMemoryResource* const self, const size_t size);
 
 /// The counterpart of the above -- this function is invoked to return previously allocated memory to the allocator.
-/// The size argument contains the amount of memory that was originally requested via UdpardMemoryAllocate.
+/// The size argument contains the amount of memory that was originally requested via the allocation function.
 /// The semantics are similar to free():
 ///     - The pointer was previously returned by the allocation function.
 ///     - The pointer may be NULL, in which case the function shall have no effect.
@@ -289,7 +293,6 @@ typedef void (*UdpardMemoryFree)(UdpardMemoryResource* const self, const size_t 
 /// A memory resource encapsulates the dynamic memory allocation and deallocation facilities.
 /// The time complexity models given in the API documentation are made on the assumption that the memory management
 /// functions have constant complexity O(1).
-/// Consider using https://github.com/pavel-kirienko/o1heap as the memory resource implementation.
 struct UdpardMemoryResource
 {
     /// The function pointers shall be valid at all times.
@@ -303,36 +306,46 @@ struct UdpardMemoryResource
 // =============================================    TX PIPELINE    =============================================
 // =============================================================================================================
 
-/// The transmission pipeline is a prioritized transmission queue that keeps UDP datagrams (aka frames)
+/// The transmission pipeline is a prioritized transmission queue that keeps UDP datagrams (aka transport frames)
 /// destined for transmission via one network interface.
 /// Applications with redundant network interfaces are expected to have one instance of this type per interface.
 /// Applications that are not interested in transmission may have zero such instances.
 ///
-/// All operations (push, peek, pop) are O(log n) in the worst case; there is exactly one memory allocation per element.
-/// The size of each allocation is sizeof(UdpardTxItem) + payload_size.
+/// All operations are logarithmic in complexity on the number of enqueued items.
+/// There is exactly one memory allocation per element;
+/// the size of each allocation is sizeof(UdpardTxItem) plus the size of the datagram.
+///
 /// Once initialized, instances cannot be copied.
 ///
 /// API functions that work with this type are named "udpardTx*()", find them below.
 typedef struct
 {
-    /// The node-ID of the local node. This is used to populate the source node-ID field of the Cyphal header.
-    /// Set to UDPARD_NODE_ID_UNSET if the local node is anonymous; this is the default.
-    UdpardNodeID local_node_id;
+    /// Pointer to the node-ID of the local node, which is used to populate the source node-ID field of outgoing
+    /// transfers.
+    /// This is made a pointer to allow the user to easily change the node-ID after a plug-and-play node-ID allocation
+    /// across multiple instances (remember there is a separate instance per redundant interface).
+    /// The node-ID value should be set to UDPARD_NODE_ID_UNSET if the local node is anonymous
+    /// (e.g., during PnP allocation or if no transmission is needed).
+    const UdpardNodeID* local_node_id;
 
-    /// The maximum number of frames this queue is allowed to contain. An attempt to push more will fail with an
-    /// out-of-memory error even if the memory is not exhausted. This value can be changed by the user at any moment.
-    /// The purpose of this limitation is to ensure that a blocked queue does not exhaust the heap memory.
+    /// The maximum number of UDP datagrams this instance is allowed to enqueue.
+    /// An attempt to push more will fail with an out-of-memory error even if the memory is not exhausted.
+    /// The purpose of this limitation is to ensure that a blocked queue does not exhaust the memory.
+    /// The value can be changed arbitrarily at any time between enqueue operations.
     size_t queue_capacity;
 
-    /// The transport-layer maximum transmission unit (MTU). The value can be changed arbitrarily at any time between
-    /// pushes. It defines the maximum number of data bytes per UDP data frame in outgoing transfers via this queue.
+    /// The transport-layer maximum transmission unit (MTU).
+    /// It defines the maximum number of data bytes per UDP data frame in outgoing transfers via this queue.
     /// See UDPARD_MTU_*.
+    /// The value can be changed arbitrarily at any time between enqueue operations.
     size_t mtu_bytes;
 
-    /// Mapping from the Cyphal priority level in [0,7], where the highest priority is at index 0
+    /// The mapping from the Cyphal priority level in [0,7], where the highest priority is at index 0
     /// and the lowest priority is at the last element of the array, to the IP DSCP field value.
+    /// See UdpardPriority.
     /// By default, the mapping is initialized per the recommendations given in the Cyphal/UDP specification.
-    /// The user can change it at any moment individually per queue (i.e., per interface).
+    /// The value can be changed arbitrarily at any time between enqueue operations
+    /// (different interfaces may have different DSCP mappings).
     uint8_t dscp_value_per_priority[UDPARD_PRIORITY_MAX + 1U];
 
     /// This field can be arbitrarily mutated by the user. It is never accessed by the library.
@@ -340,20 +353,24 @@ typedef struct
     void* user_reference;
 
     /// The memory resource used by this queue for allocating the enqueued items (UDP datagrams).
-    /// There is exactly one allocation per enqueued datagram.
-    /// In a simple application there would be just one memory resource shared by all queues.
+    /// There is exactly one allocation per enqueued item, each allocation contains both the UdpardTxItem
+    /// and its payload.
+    /// In a simple application there would be just one memory resource shared by all parts of the library.
     UdpardMemoryResource memory;
 
     /// The number of frames that are currently contained in the queue, initially zero.
     /// READ-ONLY FIELD
     size_t size;
 
-    /// The root of the priority queue is NULL if the queue is empty.
+    /// Internal use only.
     /// READ-ONLY FIELD
     UdpardTreeNode* root;
 } UdpardTx;
 
-/// One frame (UDP datagram) stored in the transmission queue along with its metadata.
+/// One transport frame (UDP datagram) stored in the UdpardTx transmission queue along with its metadata.
+/// The datagram should be sent to the indicated UDP/IP endpoint with the specified DSCP value.
+/// The datagram should be discarded (transmission aborted) if the deadline has expired.
+/// All fields are READ-ONLY.
 struct UdpardTxItem
 {
     /// Internal use only; do not access this field.
@@ -367,88 +384,92 @@ struct UdpardTxItem
     UdpardTxItem* next_in_transfer;
 
     /// This is the same value that is passed to udpardTxPublish/Request/Respond.
-    /// Frames whose transmission deadline is in the past shall be dropped.
+    /// Frames whose transmission deadline is in the past should be dropped (transmission aborted).
     UdpardMicrosecond deadline_usec;
 
-    /// The differentiated services code point (DSCP) is used to prioritize UDP frames on the network.
+    /// The IP differentiated services code point (DSCP) is used to prioritize UDP frames on the network.
     /// LibUDPard selects the DSCP value based on the transfer priority level and the configured DSCP mapping.
-    /// Refer to the IP specification for details.
     uint8_t dscp;
 
-    /// The UDP/IP datagram compiled by libudpard should be sent to this endpoint, which is always a multicast address.
+    /// This UDP/IP datagram compiled by libudpard should be sent to this endpoint.
+    /// The endpoint is always at a multicast address.
     UdpardUDPIPEndpoint destination;
 
-    /// The UDP/IP datagram payload. This includes the Cyphal header as well as all required CRCs.
+    /// The completed UDP/IP datagram payload. This includes the Cyphal header as well as all required CRCs.
     /// It should be sent through the socket (or equivalent abstraction) verbatim.
     UdpardMutablePayload datagram_payload;
 
-    /// This opaque pointer is assigned the value that is passed to udpardTxPush().
+    /// This opaque pointer is assigned the value that is passed to udpardTxPublish/Request/Respond.
     /// The library itself does not make use of it but the application can use it to provide continuity between
-    /// its high-level transfer objects and the low-level frame objects.
+    /// its high-level transfer objects and datagrams that originate from it.
     /// If not needed, the application can set it to NULL.
     void* user_transfer_reference;
 };
 
 /// Construct a new transmission pipeline with the specified queue capacity and memory resource.
-/// The other parameters will be initialized to the recommended defaults automatically, which can be changed later.
-/// No memory allocation is going to take place until the queue is actually pushed to.
-/// Applications are expected to have one instance of this type per redundant interface.
+/// Refer to the documentation for UdpardTx for more information.
+/// The other parameters will be initialized to the recommended defaults automatically,
+/// which can be changed later by modifying the struct fields directly.
+/// No memory allocation is going to take place until the pipeline is actually written to.
 ///
 /// The instance does not hold any resources itself except for the allocated memory.
-/// To safely discard it, simply pop all items from the queue.
+/// To safely discard it, simply pop all enqueued frames from it.
 ///
 /// The time complexity is constant. This function does not invoke the dynamic memory manager.
-int8_t udpardTxInit(UdpardTx* const self, const size_t queue_capacity, const UdpardMemoryResource memory_resource);
+int8_t udpardTxInit(UdpardTx* const            self,
+                    const UdpardNodeID* const  local_node_id,
+                    const size_t               queue_capacity,
+                    const UdpardMemoryResource memory);
 
-/// This function serializes a transfer into a sequence of transport frames and inserts them into the prioritized
+/// This function serializes a message transfer into a sequence of UDP datagrams and inserts them into the prioritized
 /// transmission queue at the appropriate position. Afterwards, the application is supposed to take the enqueued frames
-/// from the transmission queue using the function udpardTxPeek() and transmit them. Each transmitted (or otherwise
-/// discarded, e.g., due to timeout) frame should be removed from the queue using udpardTxPop(). The queue is
-/// prioritized following the normal UDP frame arbitration rules to avoid the inner priority inversion. The transfer
-/// payload will be copied into the transmission queue so that the lifetime of the frames is not related to the
+/// from the transmission queue using the function udpardTxPeek and transmit them one by one. Each transmitted
+/// (or discarded, e.g., due to timeout) frame should be removed from the queue using udpardTxPop. The enqueued items
+/// are prioritized according to their Cyphal transfer priority to avoid the inner priority inversion. The transfer
+/// payload will be copied into the transmission queue so that the lifetime of the datagrams is not related to the
 /// lifetime of the input payload buffer.
 ///
-/// The MTU of the generated frames is dependent on the value of the MTU setting at the time when this function
+/// The MTU of the generated datagrams is dependent on the value of the MTU setting at the time when this function
 /// is invoked. The MTU setting can be changed arbitrarily between invocations.
 ///
+/// The pointer to the transfer_id will be used to populate the transfer_id field of the generated datagrams and
+/// then to increment the pointed-to value to prepare it for the next publication.
+/// There shall be a separate transfer-ID counter per subject (topic).
+/// The lifetime of the pointed-to transfer-ID counter must exceed the lifetime of the intent to publish on this
+/// subject (topic); one common approach is to use a static variable.
+///
 /// The user_transfer_reference is an opaque pointer that will be assigned to the user_transfer_reference field of
-/// each frame in the resulting transfer. The library itself does not use or check this value in any way, so it can
-/// be NULL if not needed.
+/// each enqueued item. The library itself does not use or check this value in any way, so it can be NULL if not needed.
 ///
-/// The tx_deadline_usec will be used to populate the timestamp values of the resulting transport
-/// frames (so all frames will have the same timestamp value). This feature is intended to facilitate transmission
-/// deadline tracking, i.e., aborting frames that could not be transmitted before the specified deadline.
-/// Therefore, normally, the timestamp value should be in the future.
-/// The library itself, however, does not use or check this value in any way, so it can be zero if not needed.
+/// The deadline_usec value will be used to populate the eponymous field of the generated datagrams
+/// (all will share the same deadline value).
+/// This feature is intended to allow aborting frames that could not be transmitted before the specified deadline;
+/// therefore, normally, the timestamp value should be in the future.
+/// The library itself, however, does not use or check this value in any way, so it can be zero if not needed
+/// (this is not recommended for real-time systems).
 ///
-/// The function returns the number of frames enqueued into the prioritized TX queue (which is always a positive
-/// number) in case of success (so that the application can track the number of items in the TX queue if necessary).
+/// The function returns the number of UDP datagrams enqueued, which is always a positive number, in case of success.
 /// In case of failure, the function returns a negated error code: either invalid argument or out-of-memory.
 ///
 /// An invalid argument error may be returned in the following cases:
-///     - Any of the input arguments are NULL.
-///     - The remote node-ID is not UDPARD_NODE_ID_UNSET and the transfer is a message transfer.
-///     - The remote node-ID is above UDPARD_NODE_ID_MAX and the transfer is a service transfer.
+///     - Any of the input arguments except user_transfer_reference are NULL.
 ///     - The priority, subject-ID, or service-ID exceed their respective maximums.
-///     - The transfer kind is invalid.
 ///     - The payload pointer is NULL while the payload size is nonzero.
-///     - The local node is anonymous and a message transfer is requested that requires a multi-frame transfer.
-///     - The local node is anonymous and a service transfer is requested.
-/// The following cases are handled without raising an invalid argument error:
-///     - If the transfer-ID is above the maximum, the excessive bits are silently masked away
-///       (i.e., the modulo is computed automatically, so the caller doesn't have to bother).
+///     - The local node is anonymous (the local node-ID is unset) and the transfer payload cannot fit into
+///       a single datagram (a multi-frame transfer is required).
 ///
 /// An out-of-memory error is returned if a TX frame could not be allocated due to the memory being exhausted,
 /// or if the capacity of the queue would be exhausted by this operation. In such cases, all frames allocated for
 /// this transfer (if any) will be deallocated automatically. In other words, either all frames of the transfer are
 /// enqueued successfully, or none are.
 ///
+/// The memory allocation requirement is one allocation per datagram:
+/// a single-frame transfer takes one allocation; a multi-frame transfer of N frames takes N allocations.
+/// The size of each allocation is (sizeof(UdpardTxItem) + MTU) except for the last datagram where the payload may be
+/// smaller than the MTU.
+///
 /// The time complexity is O(p + log e), where p is the amount of payload in the transfer, and e is the number of
 /// frames already enqueued in the transmission queue.
-///
-/// The memory allocation requirement is one allocation per transport frame. A single-frame transfer takes one
-/// allocation; a multi-frame transfer of N frames takes N allocations. The size of each allocation is
-/// (sizeof(UdpardTxItem) + MTU).
 int32_t udpardTxPublish(UdpardTx* const          self,
                         void* const              user_transfer_reference,
                         const UdpardMicrosecond  deadline_usec,
@@ -457,6 +478,22 @@ int32_t udpardTxPublish(UdpardTx* const          self,
                         UdpardTransferID* const  transfer_id,
                         const UdpardConstPayload payload);
 
+/// This is similar to udpardTxPublish except that it is intended for service request transfers.
+/// It takes the node-ID of the server that is intended to receive the request.
+///
+/// The pointer to the transfer_id will be used to populate the transfer_id field of the generated datagrams and
+/// then to increment the pointed-to value to prepare it for the next publication.
+/// There shall be a separate transfer-ID counter per pair of (service-ID, server node-ID).
+/// The lifetime of the pointed-to transfer-ID counter must exceed the lifetime of the intent to publish on this
+/// subject (topic); one common approach is to use a static array indexed by server node-ID per service-ID
+/// (memory-constrained applications may choose a more compact container).
+///
+/// Aside from the errors defined for udpardTxPublish, this function may also return an invalid argument error
+/// in the following cases:
+///     - The server node-ID value exceeds UDPARD_NODE_ID_MAX.
+///     - The local node is anonymous (the local node-ID is unset).
+///
+/// Other considerations are the same as for udpardTxPublish.
 int32_t udpardTxRequest(UdpardTx* const          self,
                         void* const              user_transfer_reference,
                         const UdpardMicrosecond  deadline_usec,
@@ -466,6 +503,10 @@ int32_t udpardTxRequest(UdpardTx* const          self,
                         UdpardTransferID* const  transfer_id,
                         const UdpardConstPayload payload);
 
+/// This is similar to udpardTxRequest except that it takes the node-ID of the client instead of server,
+/// and the transfer-ID is passed by value rather than by pointer.
+/// The transfer-ID is passed by value because when responding to an RPC-service request, the server must
+/// reuse the transfer-ID value of the request (this is to allow the client to match responses with their requests).
 int32_t udpardTxRespond(UdpardTx* const          self,
                         void* const              user_transfer_reference,
                         const UdpardMicrosecond  deadline_usec,
@@ -475,23 +516,23 @@ int32_t udpardTxRespond(UdpardTx* const          self,
                         const UdpardTransferID   transfer_id,
                         const UdpardConstPayload payload);
 
-/// This function accesses the top element of the prioritized transmission queue. The queue itself is not modified
-/// (i.e., the accessed element is not removed). The application should invoke this function to collect the transport
-/// frames of serialized transfers pushed into the prioritized transmission queue by udpardTxPush().
+/// This function accesses the enqueued UDP datagram scheduled for transmission next. The queue itself is not modified
+/// (i.e., the accessed element is not removed). The application should invoke this function to collect the datagrams
+/// enqueued by udpardTxPublish/Request/Respond whenever the socket (or equivalent abstraction) becomes writable.
 ///
-/// The timestamp values of returned frames are initialized with tx_deadline_usec from udpardTxPush().
-/// Timestamps are used to specify the transmission deadline. It is up to the application and/or the media layer
-/// to implement the discardment of timed-out transport frames. The library does not check it, so a frame that is
+/// The timestamp values of the enqueued items are initialized with deadline_usec from udpardTxPublish/Request/Respond.
+/// The timestamps are used to specify the transmission deadline. It is up to the application and/or the socket layer
+/// to implement the discardment of timed-out datagrams. The library does not check it, so a frame that is
 /// already timed out may be returned here.
 ///
 /// If the queue is empty or if the argument is NULL, the returned value is NULL.
 ///
-/// If the queue is non-empty, the returned value is a pointer to its top element (i.e., the next frame to transmit).
+/// If the queue is non-empty, the returned value is a pointer to its top element (i.e., the next item to transmit).
 /// The returned pointer points to an object allocated in the dynamic storage; it should be eventually freed by the
-/// application by calling udpardInstance::memory_free(). The memory shall not be freed before the entry is removed
-/// from the queue by calling udpardTxPop(); this is because until udpardTxPop() is executed, the library retains
-/// ownership of the object. The pointer retains validity until explicitly freed by the application; in other words,
-/// calling udpardTxPop() does not invalidate the object.
+/// application by calling UdpardTx::memory.free. The memory shall not be freed before the item is removed
+/// from the queue by calling udpardTxPop; this is because until udpardTxPop is executed, the library retains
+/// ownership of the item. The pointer retains validity until explicitly freed by the application; in other words,
+/// calling udpardTxPop does not invalidate the object.
 ///
 /// The payload buffer is located shortly after the object itself, in the same memory fragment. The application shall
 /// not attempt to free it.
@@ -499,10 +540,10 @@ int32_t udpardTxRespond(UdpardTx* const          self,
 /// The time complexity is logarithmic of the queue size. This function does not invoke the dynamic memory manager.
 const UdpardTxItem* udpardTxPeek(const UdpardTx* const self);
 
-/// This function transfers the ownership of the specified element of the prioritized transmission queue from the queue
-/// to the application. The element does not necessarily need to be the top one -- it is safe to dequeue any element.
-/// The element is dequeued but not invalidated; it is the responsibility of the application to deallocate the
-/// memory used by the object later. The memory SHALL NOT be deallocated UNTIL this function is invoked.
+/// This function transfers the ownership of the specified item of the prioritized transmission queue from the queue
+/// to the application. The item does not necessarily need to be the top one -- it is safe to dequeue any item.
+/// The item is dequeued but not invalidated; it is the responsibility of the application to deallocate its memory
+/// later. The memory SHALL NOT be deallocated UNTIL this function is invoked.
 /// The function returns the same pointer that it is given except that it becomes mutable.
 ///
 /// If any of the arguments are NULL, the function has no effect and returns NULL.
