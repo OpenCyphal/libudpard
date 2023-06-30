@@ -12,6 +12,7 @@
       <w>libcanard</w>
       <w>libgtest</w>
       <w>libudpard</w>
+      <w>memoryview</w>
       <w>misoptimizes</w>
       <w>mmcu</w>
       <w>nosonar</w>
