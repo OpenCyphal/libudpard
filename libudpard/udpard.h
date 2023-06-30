@@ -361,7 +361,7 @@ typedef struct
     /// See UdpardPriority.
     /// By default, the mapping is initialized per the recommendations given in the Cyphal/UDP specification.
     /// The value can be changed arbitrarily at any time between enqueue operations.
-    uint8_t dscp_value_per_priority[UDPARD_PRIORITY_MAX + 1U];
+    uint_least8_t dscp_value_per_priority[UDPARD_PRIORITY_MAX + 1U];
 
     /// The memory resource used by this queue for allocating the enqueued items (UDP datagrams).
     /// There is exactly one allocation per enqueued item, each allocation contains both the UdpardTxItem
@@ -371,7 +371,7 @@ typedef struct
 
     /// The number of frames that are currently contained in the queue, initially zero.
     /// READ-ONLY
-    size_t size;
+    size_t queue_size;
 
     /// Internal use only.
     /// READ-ONLY
@@ -400,7 +400,7 @@ struct UdpardTxItem
 
     /// The IP differentiated services code point (DSCP) is used to prioritize UDP frames on the network.
     /// LibUDPard selects the DSCP value based on the transfer priority level and the configured DSCP mapping.
-    uint8_t dscp;
+    uint_least8_t dscp;
 
     /// This UDP/IP datagram compiled by libudpard should be sent to this endpoint.
     /// The endpoint is always at a multicast address.
@@ -756,7 +756,7 @@ void udpardRxSubscriptionDestroy(UdpardRxSubscription* const self);
 int8_t udpardRxSubscriptionReceive(UdpardRxSubscription* const self,
                                    const UdpardMicrosecond     timestamp_usec,
                                    const UdpardConstPayload    datagram_payload,
-                                   const uint8_t               redundant_iface_index,
+                                   const uint_least8_t         redundant_iface_index,
                                    UdpardRxTransfer* const     received_transfer);
 
 // ---------------------------------------------  RPC-SERVICES  ---------------------------------------------
@@ -895,7 +895,7 @@ int8_t udpardRxServiceDispatcherReceive(UdpardRxServiceDispatcher* const self,
                                         UdpardRxService** const          service,
                                         const UdpardMicrosecond          timestamp_usec,
                                         const UdpardConstPayload         datagram_payload,
-                                        const uint8_t                    redundant_iface_index,
+                                        const uint_least8_t              redundant_iface_index,
                                         UdpardRxServiceTransfer* const   received_transfer);
 
 #ifdef __cplusplus
