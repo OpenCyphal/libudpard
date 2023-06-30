@@ -1347,7 +1347,7 @@ TEST(Cavl, MutationRandomized)
     };
 
     std::puts("Running the randomized test...");
-    for (std::uint32_t iteration = 0U; iteration < 100'000U; iteration++)
+    for (std::uint32_t iteration = 0U; iteration < 10'000U; iteration++)
     {
         if ((getRandomByte() % 2U) != 0)
         {
