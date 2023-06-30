@@ -194,14 +194,13 @@ extern "C" {
 #define UDPARD_ERROR_INVALID_ARGUMENT 2
 #define UDPARD_ERROR_OUT_OF_MEMORY 3
 
-/// MTU values for the supported protocols.
 /// RFC 791 states that hosts must be prepared to accept datagrams of up to 576 octets and it is expected that this
 /// library will receive non IP-fragmented datagrams thus the minimum MTU should be larger than 576.
 /// That being said, the MTU here is set to 1408 which is derived as:
 ///     1500B Ethernet MTU (RFC 894) - 60B IPv4 max header - 8B UDP Header - 24B Cyphal header
-#define UDPARD_DEFAULT_MTU 1408U
+#define UDPARD_MTU_DEFAULT 1408U
 /// To guarantee a single frame transfer, the maximum payload size shall be 4 bytes less to accommodate for the CRC.
-#define UDPARD_DEFAULT_MTU_MAX_SINGLE_FRAME (UDPARD_MTU_MAX - 4U)
+#define UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME (UDPARD_MTU_MAX - 4U)
 
 /// The port number is defined in the Cyphal/UDP Specification. The same port number is used for all transfer kinds.
 #define UDPARD_UDP_PORT 9382U
@@ -350,10 +349,11 @@ typedef struct
     /// The purpose of this limitation is to ensure that a blocked queue does not exhaust the memory.
     size_t queue_capacity;
 
-    /// The transport-layer maximum transmission unit (MTU).
-    /// It defines the maximum number of data bytes per UDP data frame in outgoing transfers via this queue.
+    /// The maximum number of Cyphal transfer payload bytes per UDP datagram.
+    /// The Cyphal/UDP header and the final CRC are added to this value to obtain the total UDP datagram payload size.
     /// See UDPARD_MTU_*.
     /// The value can be changed arbitrarily at any time between enqueue operations.
+    /// The value is constrained by the library to not fall below the sane lower limit.
     size_t mtu_bytes;
 
     /// The mapping from the Cyphal priority level in [0,7], where the highest priority is at index 0
