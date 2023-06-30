@@ -145,3 +145,88 @@ UDPARD_PRIVATE uint32_t transferCRCAdd(const uint32_t crc, const size_t size, co
     }
     return out;
 }
+
+// =====================================================================================================================
+// =================================================  MEMORY RESOURCE  =================================================
+// =====================================================================================================================
+
+UDPARD_PRIVATE bool isValidMemoryResource(const UdpardMemoryResource* const memory)
+{
+    return (memory != NULL) && (memory->allocate != NULL) && (memory->free != NULL);
+}
+
+// =====================================================================================================================
+// =================================================    TX PIPELINE    =================================================
+// =====================================================================================================================
+
+int8_t udpardTxInit(UdpardTx* const            self,
+                    const UdpardNodeID* const  local_node_id,
+                    const size_t               queue_capacity,
+                    const UdpardMemoryResource memory)
+{
+    int8_t ret = -UDPARD_ERROR_INVALID_ARGUMENT;
+    if ((NULL != self) && (NULL != local_node_id) && isValidMemoryResource(&memory))
+    {
+        ret = 0;
+        memset(self, 0, sizeof(*self));  // NOLINT(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
+        self->local_node_id  = local_node_id;
+        self->queue_capacity = queue_capacity;
+        self->mtu_bytes      = UDPARD_DEFAULT_MTU;
+        // The DSCP mapping recommended by the Specification.
+        self->dscp_value_per_priority[UdpardPriorityExceptional] = 0x00;
+        self->dscp_value_per_priority[UdpardPriorityImmediate]   = 0x00;
+        self->dscp_value_per_priority[UdpardPriorityFast]        = 0x00;
+        self->dscp_value_per_priority[UdpardPriorityHigh]        = 0x00;
+        self->dscp_value_per_priority[UdpardPriorityNominal]     = 0x00;
+        self->dscp_value_per_priority[UdpardPriorityLow]         = 0x00;
+        self->dscp_value_per_priority[UdpardPrioritySlow]        = 0x00;
+        self->dscp_value_per_priority[UdpardPriorityOptional]    = 0x00;
+        //
+        self->memory = memory;
+        self->size   = 0;
+        self->root   = NULL;
+    }
+    return ret;
+}
+
+int32_t udpardTxPublish(UdpardTx* const          self,
+                        void* const              user_transfer_reference,
+                        const UdpardMicrosecond  deadline_usec,
+                        const UdpardPriority     priority,
+                        const UdpardPortID       subject_id,
+                        UdpardTransferID* const  transfer_id,
+                        const UdpardConstPayload payload)
+{
+    (void) headerCRCCompute;
+    (void) transferCRCAdd;
+    (void) self;
+    (void) user_transfer_reference;
+    (void) deadline_usec;
+    (void) priority;
+    (void) subject_id;
+    *transfer_id = 0;
+    (void) payload;
+    return -1;
+}
+
+#if 0
+
+int32_t udpardTxRequest(UdpardTx* const          self,
+                        void* const              user_transfer_reference,
+                        const UdpardMicrosecond  deadline_usec,
+                        const UdpardPriority     priority,
+                        const UdpardPortID       service_id,
+                        const UdpardNodeID       server_node_id,
+                        UdpardTransferID* const  transfer_id,
+                        const UdpardConstPayload payload);
+
+int32_t udpardTxRespond(UdpardTx* const          self,
+                        void* const              user_transfer_reference,
+                        const UdpardMicrosecond  deadline_usec,
+                        const UdpardPriority     priority,
+                        const UdpardPortID       service_id,
+                        const UdpardNodeID       client_node_id,
+                        const UdpardTransferID   transfer_id,
+                        const UdpardConstPayload payload);
+
+#endif

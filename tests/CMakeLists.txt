@@ -73,13 +73,13 @@ endfunction()
 
 # Disable missing declaration warning to allow exposure of private definitions.
 gen_test_matrix(test_private
-        "test_private_cavl.cpp;test_private_crc.cpp;"
+        "test_private_cavl.cpp;test_private_crc.cpp;test_private_tx.cpp;"
         "-DUDPARD_CONFIG_HEADER=\"${CMAKE_CURRENT_SOURCE_DIR}/udpard_config_private.h\""
         "-Wno-missing-declarations"
         "")
 
 gen_test_matrix(test_public
-        "test_self.cpp"
+        "test_self.cpp;test_public_tx.cpp;"
         ""
         "-Wmissing-declarations"
         "")

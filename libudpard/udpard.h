@@ -199,9 +199,9 @@ extern "C" {
 /// library will receive non IP-fragmented datagrams thus the minimum MTU should be larger than 576.
 /// That being said, the MTU here is set to 1408 which is derived as:
 ///     1500B Ethernet MTU (RFC 894) - 60B IPv4 max header - 8B UDP Header - 24B Cyphal header
-#define UDPARD_MTU_MAX 1408U
+#define UDPARD_DEFAULT_MTU 1408U
 /// To guarantee a single frame transfer, the maximum payload size shall be 4 bytes less to accommodate for the CRC.
-#define UDPARD_MTU_MAX_SINGLE_FRAME (UDPARD_MTU_MAX - 4U)
+#define UDPARD_DEFAULT_MTU_MAX_SINGLE_FRAME (UDPARD_MTU_MAX - 4U)
 
 /// The port number is defined in the Cyphal/UDP Specification. The same port number is used for all transfer kinds.
 #define UDPARD_UDP_PORT 9382U
@@ -275,9 +275,9 @@ typedef struct
     uint16_t udp_port;
 } UdpardUDPIPEndpoint;
 
-// =============================================================================================================
-// =============================================  MEMORY RESOURCE  =============================================
-// =============================================================================================================
+// =====================================================================================================================
+// =================================================  MEMORY RESOURCE  =================================================
+// =====================================================================================================================
 
 /// A pointer to the memory allocation function. The semantics are similar to malloc():
 ///     - The returned pointer shall point to an uninitialized block of memory that is at least "size" bytes large.
@@ -309,9 +309,9 @@ struct UdpardMemoryResource
     void* user_reference;
 };
 
-// =============================================================================================================
-// =============================================    TX PIPELINE    =============================================
-// =============================================================================================================
+// =====================================================================================================================
+// =================================================    TX PIPELINE    =================================================
+// =====================================================================================================================
 
 /// The transmission pipeline is a prioritized transmission queue that keeps UDP datagrams (aka transport frames)
 /// destined for transmission via one network interface.
@@ -362,10 +362,6 @@ typedef struct
     /// By default, the mapping is initialized per the recommendations given in the Cyphal/UDP specification.
     /// The value can be changed arbitrarily at any time between enqueue operations.
     uint8_t dscp_value_per_priority[UDPARD_PRIORITY_MAX + 1U];
-
-    /// This field can be arbitrarily mutated by the user. It is never accessed by the library.
-    /// Its purpose is to simplify integration with OOP interfaces.
-    void* user_reference;
 
     /// The memory resource used by this queue for allocating the enqueued items (UDP datagrams).
     /// There is exactly one allocation per enqueued item, each allocation contains both the UdpardTxItem
@@ -568,9 +564,9 @@ const UdpardTxItem* udpardTxPeek(const UdpardTx* const self);
 /// The time complexity is logarithmic of the queue size. This function does not invoke the dynamic memory manager.
 UdpardTxItem* udpardTxPop(UdpardTx* const self, const UdpardTxItem* const item);
 
-// =============================================================================================================
-// =============================================    RX PIPELINE    =============================================
-// =============================================================================================================
+// =====================================================================================================================
+// =================================================    RX PIPELINE    =================================================
+// =====================================================================================================================
 
 /// This type represents an open input port, such as a subscription to a subject (topic), a service server port
 /// that accepts RPC-service requests, or a service client port that accepts RPC-service responses.
