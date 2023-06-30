@@ -49,9 +49,3 @@ TEST(TestAllocator, Basic)
     ASSERT_EQ(0, al.getNumAllocatedFragments());
     ASSERT_EQ(0, al.getTotalAllocatedAmount());
 }
-
-TEST(Dummy, Dummy)
-{
-    std::cerr << "Please remove this test\n";
-    udpardTxPeek(nullptr);
-}

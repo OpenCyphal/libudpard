@@ -38,6 +38,7 @@ Checks: >-
   -cert-msc30-c,
   -cert-msc50-cpp,
   -modernize-macro-to-enum,
+  -modernize-use-trailing-return-type,
   -cppcoreguidelines-owning-memory,
 WarningsAsErrors: '*'
 HeaderFilterRegex: '.*\.hpp'
