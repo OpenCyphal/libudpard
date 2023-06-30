@@ -37,8 +37,8 @@
 
 typedef uint_least8_t byte_t;  ///< For compatibility with platforms where byte size is not 8 bits.
 
-#define BITS_PER_BYTE 8U
-#define BYTE_MAX 0xFFU
+static const uint_fast8_t ByteWidth = 8U;
+static const byte_t       ByteMax   = 0xFFU;
 
 typedef struct
 {
@@ -120,8 +120,8 @@ UDPARD_PRIVATE uint16_t headerCRCAddByte(const uint16_t crc, const byte_t byte)
         0xEF1FU, 0xFF3EU, 0xCF5DU, 0xDF7CU, 0xAF9BU, 0xBFBAU, 0x8FD9U, 0x9FF8U, 0x6E17U, 0x7E36U, 0x4E55U, 0x5E74U,
         0x2E93U, 0x3EB2U, 0x0ED1U, 0x1EF0U,
     };
-    return (uint16_t) ((uint16_t) (crc << BITS_PER_BYTE) ^
-                       Table[(uint16_t) ((uint16_t) (crc >> BITS_PER_BYTE) ^ byte) & BYTE_MAX]);
+    return (uint16_t) ((uint16_t) (crc << ByteWidth) ^
+                       Table[(uint16_t) ((uint16_t) (crc >> ByteWidth) ^ byte) & ByteMax]);
 }
 
 UDPARD_PRIVATE uint16_t headerCRCCompute(const size_t size, const void* const data)
@@ -180,7 +180,7 @@ UDPARD_PRIVATE uint32_t transferCRCAddByte(const uint32_t crc, const byte_t byte
         0xF36E6F75UL, 0x0105EC76UL, 0x12551F82UL, 0xE03E9C81UL, 0x34F4F86AUL, 0xC69F7B69UL, 0xD5CF889DUL, 0x27A40B9EUL,
         0x79B737BAUL, 0x8BDCB4B9UL, 0x988C474DUL, 0x6AE7C44EUL, 0xBE2DA0A5UL, 0x4C4623A6UL, 0x5F16D052UL, 0xAD7D5351UL,
     };
-    return (crc >> BITS_PER_BYTE) ^ Table[byte ^ (crc & BYTE_MAX)];
+    return (crc >> ByteWidth) ^ Table[byte ^ (crc & ByteMax)];
 }
 
 /// Do not forget to apply the output XOR when done.
@@ -277,7 +277,7 @@ UDPARD_PRIVATE byte_t* txSerializeU32(byte_t* const destination_buffer, const ui
     byte_t* p = destination_buffer;
     for (size_t i = 0; i < sizeof(value); i++)  // We sincerely hope that the compiler will use memcpy.
     {
-        *p++ = (byte_t) ((byte_t) (value >> (i * BITS_PER_BYTE)) & BYTE_MAX);
+        *p++ = (byte_t) ((byte_t) (value >> (i * ByteWidth)) & ByteMax);
     }
     return p;
 }
@@ -291,18 +291,18 @@ UDPARD_PRIVATE byte_t* txSerializeHeader(byte_t* const         destination_buffe
     *p++      = HEADER_VERSION;
     *p++      = (byte_t) meta->priority;
     // source node-ID
-    *p++ = (byte_t) (meta->src_node_id & BYTE_MAX);
-    *p++ = (byte_t) ((byte_t) (meta->src_node_id >> BITS_PER_BYTE) & BYTE_MAX);
+    *p++ = (byte_t) (meta->src_node_id & ByteMax);
+    *p++ = (byte_t) ((byte_t) (meta->src_node_id >> ByteWidth) & ByteMax);
     // destination node-ID
-    *p++ = (byte_t) (meta->dst_node_id & BYTE_MAX);
-    *p++ = (byte_t) ((byte_t) (meta->dst_node_id >> BITS_PER_BYTE) & BYTE_MAX);
+    *p++ = (byte_t) (meta->dst_node_id & ByteMax);
+    *p++ = (byte_t) ((byte_t) (meta->dst_node_id >> ByteWidth) & ByteMax);
     // data specifier
-    *p++ = (byte_t) (meta->data_specifier & BYTE_MAX);
-    *p++ = (byte_t) ((byte_t) (meta->data_specifier >> BITS_PER_BYTE) & BYTE_MAX);
+    *p++ = (byte_t) (meta->data_specifier & ByteMax);
+    *p++ = (byte_t) ((byte_t) (meta->data_specifier >> ByteWidth) & ByteMax);
     // transfer-ID
     for (size_t i = 0; i < sizeof(UdpardTransferID); i++)
     {
-        *p++ = (byte_t) ((byte_t) (meta->transfer_id >> (i * BITS_PER_BYTE)) & BYTE_MAX);
+        *p++ = (byte_t) ((byte_t) (meta->transfer_id >> (i * ByteWidth)) & ByteMax);
     }
     // frame index
     p = txSerializeU32(p, frame_index | (end_of_transfer ? HEADER_FRAME_INDEX_EOT_MASK : 0U));
@@ -311,8 +311,8 @@ UDPARD_PRIVATE byte_t* txSerializeHeader(byte_t* const         destination_buffe
     *p++ = 0;
     // header CRC in the big endian format
     const uint16_t crc = headerCRCCompute(HEADER_SIZE - HEADER_CRC_SIZE_BYTES, destination_buffer);
-    *p++               = (byte_t) (crc >> BITS_PER_BYTE) & BYTE_MAX;
-    *p++               = (byte_t) (crc & BYTE_MAX);
+    *p++               = (byte_t) ((byte_t) (crc >> ByteWidth) & ByteMax);
+    *p++               = (byte_t) (crc & ByteMax);
     UDPARD_ASSERT(p == (destination_buffer + HEADER_SIZE));
     return p;
 }
