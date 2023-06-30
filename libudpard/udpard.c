@@ -216,7 +216,9 @@ typedef struct
 {
     UdpardTxItem  base;
     uint_least8_t precedence;  ///< Lower precedence handled first.
-    byte_t        payload_buffer[];
+    // The MISRA violation here is hard to get rid of without having to allocate a separate memory block for the
+    // payload, which is much more costly risk-wise.
+    byte_t payload_buffer[];  // NOSONAR MISRA C 18.7 Flexible array member.
 } TxItem;
 
 /// Chain of TX frames prepared for insertion into a TX queue.
@@ -272,7 +274,7 @@ UDPARD_PRIVATE byte_t* txSerializeU32(byte_t* const destination_buffer, const ui
     byte_t* p = destination_buffer;
     for (size_t i = 0; i < sizeof(value); i++)  // We sincerely hope that the compiler will use memcpy.
     {
-        *p++ = (byte_t) (value >> (i * BITS_PER_BYTE)) & BYTE_MAX;
+        *p++ = (byte_t) ((byte_t) (value >> (i * BITS_PER_BYTE)) & BYTE_MAX);
     }
     return p;
 }
@@ -287,17 +289,17 @@ UDPARD_PRIVATE byte_t* txSerializeHeader(byte_t* const         destination_buffe
     *p++      = (byte_t) meta->priority;
     // source node-ID
     *p++ = (byte_t) (meta->src_node_id & BYTE_MAX);
-    *p++ = (byte_t) (meta->src_node_id >> BITS_PER_BYTE) & BYTE_MAX;
+    *p++ = (byte_t) ((byte_t) (meta->src_node_id >> BITS_PER_BYTE) & BYTE_MAX);
     // destination node-ID
     *p++ = (byte_t) (meta->dst_node_id & BYTE_MAX);
-    *p++ = (byte_t) (meta->dst_node_id >> BITS_PER_BYTE) & BYTE_MAX;
+    *p++ = (byte_t) ((byte_t) (meta->dst_node_id >> BITS_PER_BYTE) & BYTE_MAX);
     // data specifier
     *p++ = (byte_t) (meta->data_specifier & BYTE_MAX);
-    *p++ = (byte_t) (meta->data_specifier >> BITS_PER_BYTE) & BYTE_MAX;
+    *p++ = (byte_t) ((byte_t) (meta->data_specifier >> BITS_PER_BYTE) & BYTE_MAX);
     // transfer-ID
     for (size_t i = 0; i < sizeof(UdpardTransferID); i++)
     {
-        *p++ = (byte_t) (meta->transfer_id >> (i * BITS_PER_BYTE)) & BYTE_MAX;
+        *p++ = (byte_t) ((byte_t) (meta->transfer_id >> (i * BITS_PER_BYTE)) & BYTE_MAX);
     }
     // frame index
     p = txSerializeU32(p, frame_index | (end_of_transfer ? HEADER_FRAME_INDEX_EOT_MASK : 0U));
