@@ -19,8 +19,6 @@ using byte_t = std::uint_least8_t;
 
 constexpr std::size_t HeaderSize = 24U;
 
-// Extern C effectively discards the outer namespaces.
-extern "C" {
 struct Metadata final
 {
     UdpardPriority   priority;
@@ -38,11 +36,12 @@ struct TxItem final : public UdpardTxItem
 
 struct TxChain final
 {
-    TxItem*       head;
-    TxItem*       tail;
-    std::uint32_t count;
+    TxItem*     head;
+    TxItem*     tail;
+    std::size_t count;
 };
 
+extern "C" {
 std::uint16_t headerCRCCompute(const std::size_t size, const void* const data);
 
 std::uint32_t transferCRCAdd(const std::uint32_t crc, const std::size_t size, const void* const data);

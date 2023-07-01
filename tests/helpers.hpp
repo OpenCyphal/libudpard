@@ -100,7 +100,7 @@ public:
                 throw std::bad_alloc();  // This is a test suite failure, not a failed test. Mind the difference.
             }
             p += canary_.size();
-            std::generate_n(p, size, []() { return static_cast<std::uint8_t>(getRandomNatural(256U)); });
+            std::generate_n(p, size, [] { return static_cast<std::uint8_t>(getRandomNatural(256U)); });
             std::memcpy(p - canary_.size(), canary_.begin(), canary_.size());
             std::memcpy(p + size, canary_.begin(), canary_.size());
             allocated_.emplace(p, size);

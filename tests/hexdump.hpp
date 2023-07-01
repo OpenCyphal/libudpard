@@ -27,7 +27,7 @@ template <std::uint8_t BytesPerRow = 16, typename InputIterator>
         }
         else
         {
-            output << std::endl;
+            output << "\n";
         }
         output << std::setw(8) << offset << "  ";
         offset += BytesPerRow;
@@ -38,7 +38,6 @@ template <std::uint8_t BytesPerRow = 16, typename InputIterator>
             {
                 output << ' ';
             }
-
             if (it != end)
             {
                 output << std::setw(2) << static_cast<std::uint32_t>(*it) << ' ';
