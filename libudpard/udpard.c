@@ -232,15 +232,15 @@ typedef struct
     uint32_t count;
 } TxChain;
 
-UDPARD_PRIVATE TxItem* txNewItem(UdpardMemoryResource* const memory,
-                                 const UdpardMicrosecond     deadline_usec,
-                                 uint_least8_t               dscp,
-                                 const UdpardUDPIPEndpoint   endpoint,
-                                 const size_t                datagram_payload_size,
-                                 void* const                 user_transfer_reference)
+UDPARD_PRIVATE TxItem* txNewItem(UdpardTx* const           tx,
+                                 const UdpardMicrosecond   deadline_usec,
+                                 const UdpardPriority      priority,
+                                 const UdpardUDPIPEndpoint endpoint,
+                                 const size_t              datagram_payload_size,
+                                 void* const               user_transfer_reference)
 {
-    UDPARD_ASSERT(memory != NULL);
-    TxItem* const out = (TxItem*) memory->allocate(memory, sizeof(TxItem) + datagram_payload_size);
+    UDPARD_ASSERT(tx != NULL);
+    TxItem* const out = (TxItem*) tx->memory.allocate(&tx->memory, sizeof(TxItem) + datagram_payload_size);
     if (out != NULL)
     {
         // No tree linkage by default.
@@ -248,10 +248,13 @@ UDPARD_PRIVATE TxItem* txNewItem(UdpardMemoryResource* const memory,
         out->base.base.lr[0] = NULL;
         out->base.base.lr[1] = NULL;
         out->base.base.bf    = 0;
+        // The TX queue prioritization is based on the Cyphal priority level only.
+        // We may add more advanced prioritization policies later.
+        out->precedence = (uint_least8_t) priority;
         // Init metadata.
         out->base.next_in_transfer        = NULL;  // Last by default.
         out->base.deadline_usec           = deadline_usec;
-        out->base.dscp                    = dscp;
+        out->base.dscp                    = tx->dscp_value_per_priority[priority];
         out->base.destination             = endpoint;
         out->base.user_transfer_reference = user_transfer_reference;
         // The payload points to the buffer already allocated.
@@ -330,9 +333,9 @@ UDPARD_PRIVATE int32_t txPushSingleFrame(UdpardTx* const           tx,
     UDPARD_ASSERT((payload.data != NULL) || (payload.size == 0));
     int32_t       out = 0;
     TxItem* const tqi = (tx->queue_size < tx->queue_capacity)
-                            ? txNewItem(&tx->memory,
+                            ? txNewItem(tx,
                                         deadline_usec,
-                                        tx->dscp_value_per_priority[meta->priority],
+                                        meta->priority,
                                         endpoint,
                                         payload.size + HEADER_SIZE + TRANSFER_CRC_SIZE_BYTES,
                                         user_transfer_reference)
@@ -391,12 +394,7 @@ UDPARD_PRIVATE TxChain txGenerateMultiFrameChain(UdpardTx* const           tx,
         UDPARD_ASSERT(frame_size <= mtu);
         const size_t fragment_size = (last_frame ? (frame_size - TRANSFER_CRC_SIZE_BYTES) : mtu) - HEADER_SIZE;
         UDPARD_ASSERT(fragment_size <= (payload.size - offset));
-        TxItem* const tqi = txNewItem(&tx->memory,
-                                      deadline_usec,
-                                      tx->dscp_value_per_priority[meta->priority],
-                                      endpoint,
-                                      frame_size,
-                                      user_transfer_reference);
+        TxItem* const tqi = txNewItem(tx, deadline_usec, meta->priority, endpoint, frame_size, user_transfer_reference);
         if (NULL == out.head)
         {
             out.head = tqi;

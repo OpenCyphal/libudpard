@@ -29,16 +29,16 @@ namespace helpers
 {
 namespace dummy_allocator
 {
-inline auto allocate(UdpardMemoryResource* const ins, const std::size_t amount) -> void*
+inline auto allocate(UdpardMemoryResource* const self, const std::size_t amount) -> void*
 {
-    (void) ins;
+    (void) self;
     (void) amount;
     return nullptr;
 }
 
-inline void free(UdpardMemoryResource* const ins, const size_t size, void* const pointer)
+inline void free(UdpardMemoryResource* const self, const size_t size, void* const pointer)
 {
-    (void) ins;
+    (void) self;
     (void) size;
     (void) pointer;
 }
@@ -84,31 +84,37 @@ public:
         }
     }
 
-    [[nodiscard]] auto allocate(const std::size_t amount) -> void*
+    [[nodiscard]] auto makeMemoryResource()
+    {
+        return UdpardMemoryResource{.allocate       = &TestAllocator::trampolineAllocate,
+                                    .free           = &TestAllocator::trampolineFree,
+                                    .user_reference = this};
+    }
+
+    [[nodiscard]] auto allocate(const std::size_t size) -> void*
     {
         const std::unique_lock locker(lock_);
         std::uint8_t*          p = nullptr;
-        if ((amount > 0U) && ((getTotalAllocatedAmount() + amount) <= ceiling_))
+        if ((size > 0U) && ((getTotalAllocatedAmount() + size) <= ceiling_))
         {
-            const auto amount_with_canaries = amount + canary_.size() * 2U;
+            const auto size_with_canaries = size + canary_.size() * 2U;
             // Clang-tidy complains about manual memory management. Suppressed because we need it for testing purposes.
-            p = static_cast<std::uint8_t*>(std::malloc(amount_with_canaries));  // NOLINT
+            p = static_cast<std::uint8_t*>(std::malloc(size_with_canaries));  // NOLINT
             if (p == nullptr)
             {
                 throw std::bad_alloc();  // This is a test suite failure, not a failed test. Mind the difference.
             }
             p += canary_.size();
-            std::generate_n(p, amount, []() { return static_cast<std::uint8_t>(getRandomNatural(256U)); });
+            std::generate_n(p, size, []() { return static_cast<std::uint8_t>(getRandomNatural(256U)); });
             std::memcpy(p - canary_.size(), canary_.begin(), canary_.size());
-            std::memcpy(p + amount, canary_.begin(), canary_.size());
-            allocated_.emplace(p, amount);
+            std::memcpy(p + size, canary_.begin(), canary_.size());
+            allocated_.emplace(p, size);
         }
         return p;
     }
 
     void free(const std::size_t size, void* const pointer)
     {
-        (void) size;  // TODO FIXME ensure the size passed to this function is correct.
         if (pointer != nullptr)
         {
             const std::unique_lock locker(lock_);
@@ -118,15 +124,20 @@ public:
                 throw std::logic_error("Attempted to deallocate memory that was never allocated; ptr=" +
                                        std::to_string(reinterpret_cast<std::uint64_t>(pointer)));
             }
-            const auto [p, amount] = *it;
+            const auto [p, true_size] = *it;
+            if (size != true_size)
+            {
+                throw std::logic_error("Attempted to deallocate memory with a wrong size; ptr=" +
+                                       std::to_string(reinterpret_cast<std::uint64_t>(pointer)));
+            }
             if ((0 != std::memcmp(p - canary_.size(), canary_.begin(), canary_.size())) ||
-                (0 != std::memcmp(p + amount, canary_.begin(), canary_.size())))
+                (0 != std::memcmp(p + true_size, canary_.begin(), canary_.size())))
             {
                 throw std::logic_error("Dead canary detected at ptr=" +
                                        std::to_string(reinterpret_cast<std::uint64_t>(pointer)));
             }
             std::generate_n(p - canary_.size(),  // Damage the memory to make sure it's not used after deallocation.
-                            amount + canary_.size() * 2U,
+                            true_size + canary_.size() * 2U,
                             []() { return static_cast<std::uint8_t>(getRandomNatural(256U)); });
             std::free(p - canary_.size());
             allocated_.erase(it);
@@ -159,6 +170,16 @@ private:
         std::array<std::uint8_t, 256> out{};
         std::generate_n(out.begin(), out.size(), []() { return static_cast<std::uint8_t>(getRandomNatural(256U)); });
         return out;
+    }
+
+    static auto trampolineAllocate(UdpardMemoryResource* const self, const size_t size) -> void*
+    {
+        return static_cast<TestAllocator*>(self->user_reference)->allocate(size);
+    }
+
+    static void trampolineFree(UdpardMemoryResource* const self, const size_t size, void* const pointer)
+    {
+        return static_cast<TestAllocator*>(self->user_reference)->free(size, pointer);
     }
 
     const std::array<std::uint8_t, 256> canary_ = makeCanary();
