@@ -29,6 +29,9 @@ constexpr std::string_view GrandScheme =
     "the careless---messengers, mess men, etc. In the grand scheme of the battle, they are nothing.";
 constexpr std::array<std::uint8_t, 4> GrandSchemeCRC{{119, 220, 185, 219}};
 
+constexpr std::string_view            InterstellarWar = "You have not seen what a true interstellar war is like.";
+constexpr std::array<std::uint8_t, 4> InterstellarWarCRC{{102, 217, 109, 188}};
+
 auto makeHeader(const Metadata meta, const std::uint32_t frame_index, const bool end_of_transfer)
 {
     std::array<exposed::byte_t, HeaderSize> buffer{};
@@ -168,6 +171,86 @@ TEST(TxPrivate, MakeChainSingleMaxMTU)
     ASSERT_EQ(&user_transfer_referent, chain.head->user_transfer_reference);
 }
 
+TEST(TxPrivate, MakeChainThreeFrames)
+{
+    helpers::TestAllocator alloc;
+    std::monostate         user_transfer_referent;
+    const Metadata         meta{
+                .priority       = UdpardPriorityNominal,
+                .src_node_id    = 4321,
+                .dst_node_id    = 5432,
+                .data_specifier = 7766,
+                .transfer_id    = 0x0123'4567'89AB'CDEFULL,
+    };
+    const auto mtu   = (GrandScheme.size() + 4U + 3U) / 3U;  // Force payload split into three frames.
+    const auto chain = txMakeChain(&alloc,
+                                   std::array<std::uint_least8_t, 8>{{11, 22, 33, 44, 55, 66, 77, 88}}.data(),
+                                   mtu,
+                                   223574680,
+                                   meta,
+                                   UdpardUDPIPEndpoint{.ip_address = 0xBABA'DEDAU, .udp_port = 0xD0ED},
+                                   UdpardConstPayload{.size = GrandScheme.size(), .data = GrandScheme.data()},
+                                   &user_transfer_referent);
+    ASSERT_EQ(3, alloc.getNumAllocatedFragments());
+    ASSERT_EQ(3 * (sizeof(TxItem) + HeaderSize) + GrandScheme.size() + 4U, alloc.getTotalAllocatedAmount());
+    ASSERT_EQ(3, chain.count);
+    const auto* const first = chain.head;
+    ASSERT_NE(nullptr, first);
+    const auto* const second = first->next_in_transfer;
+    ASSERT_NE(nullptr, second);
+    const auto* const third = second->next_in_transfer;
+    ASSERT_NE(nullptr, third);
+    ASSERT_EQ(nullptr, third->next_in_transfer);
+    ASSERT_EQ(chain.tail, third);
+
+    // FIRST FRAME -- contains the first part of the payload.
+    std::cout << hexdump::hexdump(first->datagram_payload.data, first->datagram_payload.size) << std::endl;
+    ASSERT_EQ(223574680, first->deadline_usec);
+    ASSERT_EQ(55, first->dscp);
+    ASSERT_EQ(0xBABA'DEDAU, first->destination.ip_address);
+    ASSERT_EQ(0xD0ED, first->destination.udp_port);
+    ASSERT_EQ(HeaderSize + mtu, first->datagram_payload.size);
+    ASSERT_EQ(0, std::memcmp(makeHeader(meta, 0, false).data(), first->datagram_payload.data, HeaderSize));
+    ASSERT_EQ(0,
+              std::memcmp(GrandScheme.data(),
+                          static_cast<exposed::byte_t*>(first->datagram_payload.data) + HeaderSize,
+                          mtu));
+    ASSERT_EQ(&user_transfer_referent, first->user_transfer_reference);
+
+    // SECOND FRAME -- contains the second part of the payload.
+    std::cout << hexdump::hexdump(second->datagram_payload.data, second->datagram_payload.size) << std::endl;
+    ASSERT_EQ(223574680, second->deadline_usec);
+    ASSERT_EQ(55, second->dscp);
+    ASSERT_EQ(0xBABA'DEDAU, second->destination.ip_address);
+    ASSERT_EQ(0xD0ED, second->destination.udp_port);
+    ASSERT_EQ(HeaderSize + mtu, second->datagram_payload.size);
+    ASSERT_EQ(0, std::memcmp(makeHeader(meta, 1, false).data(), second->datagram_payload.data, HeaderSize));
+    ASSERT_EQ(0,
+              std::memcmp(GrandScheme.data() + mtu,
+                          static_cast<exposed::byte_t*>(second->datagram_payload.data) + HeaderSize,
+                          mtu));
+    ASSERT_EQ(&user_transfer_referent, second->user_transfer_reference);
+
+    // THIRD FRAME -- contains the third part of the payload and the CRC at the end.
+    std::cout << hexdump::hexdump(third->datagram_payload.data, third->datagram_payload.size) << std::endl;
+    ASSERT_EQ(223574680, third->deadline_usec);
+    ASSERT_EQ(55, third->dscp);
+    ASSERT_EQ(0xBABA'DEDAU, third->destination.ip_address);
+    ASSERT_EQ(0xD0ED, third->destination.udp_port);
+    const auto third_payload_size = GrandScheme.size() - 2 * mtu;
+    ASSERT_EQ(HeaderSize + third_payload_size + 4U, third->datagram_payload.size);
+    ASSERT_EQ(0, std::memcmp(makeHeader(meta, 2, true).data(), third->datagram_payload.data, HeaderSize));
+    ASSERT_EQ(0,
+              std::memcmp(GrandScheme.data() + 2 * mtu,
+                          static_cast<exposed::byte_t*>(third->datagram_payload.data) + HeaderSize,
+                          third_payload_size));
+    ASSERT_EQ(0,
+              std::memcmp(GrandSchemeCRC.data(),
+                          static_cast<exposed::byte_t*>(third->datagram_payload.data) + HeaderSize + third_payload_size,
+                          GrandSchemeCRC.size()));
+    ASSERT_EQ(&user_transfer_referent, third->user_transfer_reference);
+}
+
 TEST(TxPrivate, MakeChainCRCSpill1)
 {
     helpers::TestAllocator alloc;
@@ -179,17 +262,17 @@ TEST(TxPrivate, MakeChainCRCSpill1)
                 .data_specifier = 7766,
                 .transfer_id    = 0x0123'4567'89AB'CDEFULL,
     };
-    const auto mtu   = GrandScheme.size() + 3U;
+    const auto mtu   = InterstellarWar.size() + 3U;
     const auto chain = txMakeChain(&alloc,
                                    std::array<std::uint_least8_t, 8>{{11, 22, 33, 44, 55, 66, 77, 88}}.data(),
                                    mtu,
                                    223574680,
                                    meta,
                                    UdpardUDPIPEndpoint{.ip_address = 0xBABA'DEDAU, .udp_port = 0xD0ED},
-                                   UdpardConstPayload{.size = GrandScheme.size(), .data = GrandScheme.data()},
+                                   UdpardConstPayload{.size = InterstellarWar.size(), .data = InterstellarWar.data()},
                                    &user_transfer_referent);
     ASSERT_EQ(2, alloc.getNumAllocatedFragments());
-    ASSERT_EQ(2 * (sizeof(TxItem) + HeaderSize) + GrandScheme.size() + 4U, alloc.getTotalAllocatedAmount());
+    ASSERT_EQ(2 * (sizeof(TxItem) + HeaderSize) + InterstellarWar.size() + 4U, alloc.getTotalAllocatedAmount());
     ASSERT_EQ(2, chain.count);
     ASSERT_NE(chain.head, chain.tail);
     ASSERT_EQ(chain.tail, chain.head->next_in_transfer);
@@ -204,13 +287,13 @@ TEST(TxPrivate, MakeChainCRCSpill1)
     ASSERT_EQ(HeaderSize + mtu, chain.head->datagram_payload.size);
     ASSERT_EQ(0, std::memcmp(makeHeader(meta, 0, false).data(), chain.head->datagram_payload.data, HeaderSize));
     ASSERT_EQ(0,
-              std::memcmp(GrandScheme.data(),
+              std::memcmp(InterstellarWar.data(),
                           static_cast<exposed::byte_t*>(chain.head->datagram_payload.data) + HeaderSize,
-                          GrandScheme.size()));
+                          InterstellarWar.size()));
     ASSERT_EQ(0,
-              std::memcmp(GrandSchemeCRC.data(),
+              std::memcmp(InterstellarWarCRC.data(),
                           static_cast<exposed::byte_t*>(chain.head->datagram_payload.data) + HeaderSize +
-                              GrandScheme.size(),
+                              InterstellarWar.size(),
                           3U));
     ASSERT_EQ(&user_transfer_referent, chain.head->user_transfer_reference);
 
@@ -223,7 +306,7 @@ TEST(TxPrivate, MakeChainCRCSpill1)
     ASSERT_EQ(HeaderSize + 1U, chain.tail->datagram_payload.size);
     ASSERT_EQ(0, std::memcmp(makeHeader(meta, 1, true).data(), chain.tail->datagram_payload.data, HeaderSize));
     ASSERT_EQ(0,
-              std::memcmp(GrandSchemeCRC.data() + 3U,
+              std::memcmp(InterstellarWarCRC.data() + 3U,
                           static_cast<exposed::byte_t*>(chain.tail->datagram_payload.data) + HeaderSize,
                           1U));
     ASSERT_EQ(&user_transfer_referent, chain.tail->user_transfer_reference);
@@ -240,17 +323,17 @@ TEST(TxPrivate, MakeChainCRCSpill2)
                 .data_specifier = 7766,
                 .transfer_id    = 0x0123'4567'89AB'CDEFULL,
     };
-    const auto mtu   = GrandScheme.size() + 2U;
+    const auto mtu   = InterstellarWar.size() + 2U;
     const auto chain = txMakeChain(&alloc,
                                    std::array<std::uint_least8_t, 8>{{11, 22, 33, 44, 55, 66, 77, 88}}.data(),
                                    mtu,
                                    223574680,
                                    meta,
                                    UdpardUDPIPEndpoint{.ip_address = 0xBABA'DEDAU, .udp_port = 0xD0ED},
-                                   UdpardConstPayload{.size = GrandScheme.size(), .data = GrandScheme.data()},
+                                   UdpardConstPayload{.size = InterstellarWar.size(), .data = InterstellarWar.data()},
                                    &user_transfer_referent);
     ASSERT_EQ(2, alloc.getNumAllocatedFragments());
-    ASSERT_EQ(2 * (sizeof(TxItem) + HeaderSize) + GrandScheme.size() + 4U, alloc.getTotalAllocatedAmount());
+    ASSERT_EQ(2 * (sizeof(TxItem) + HeaderSize) + InterstellarWar.size() + 4U, alloc.getTotalAllocatedAmount());
     ASSERT_EQ(2, chain.count);
     ASSERT_NE(chain.head, chain.tail);
     ASSERT_EQ(chain.tail, chain.head->next_in_transfer);
@@ -265,13 +348,13 @@ TEST(TxPrivate, MakeChainCRCSpill2)
     ASSERT_EQ(HeaderSize + mtu, chain.head->datagram_payload.size);
     ASSERT_EQ(0, std::memcmp(makeHeader(meta, 0, false).data(), chain.head->datagram_payload.data, HeaderSize));
     ASSERT_EQ(0,
-              std::memcmp(GrandScheme.data(),
+              std::memcmp(InterstellarWar.data(),
                           static_cast<exposed::byte_t*>(chain.head->datagram_payload.data) + HeaderSize,
-                          GrandScheme.size()));
+                          InterstellarWar.size()));
     ASSERT_EQ(0,
-              std::memcmp(GrandSchemeCRC.data(),
+              std::memcmp(InterstellarWarCRC.data(),
                           static_cast<exposed::byte_t*>(chain.head->datagram_payload.data) + HeaderSize +
-                              GrandScheme.size(),
+                              InterstellarWar.size(),
                           2U));
     ASSERT_EQ(&user_transfer_referent, chain.head->user_transfer_reference);
 
@@ -284,7 +367,7 @@ TEST(TxPrivate, MakeChainCRCSpill2)
     ASSERT_EQ(HeaderSize + 2U, chain.tail->datagram_payload.size);
     ASSERT_EQ(0, std::memcmp(makeHeader(meta, 1, true).data(), chain.tail->datagram_payload.data, HeaderSize));
     ASSERT_EQ(0,
-              std::memcmp(GrandSchemeCRC.data() + 2U,
+              std::memcmp(InterstellarWarCRC.data() + 2U,
                           static_cast<exposed::byte_t*>(chain.tail->datagram_payload.data) + HeaderSize,
                           2U));
     ASSERT_EQ(&user_transfer_referent, chain.tail->user_transfer_reference);
@@ -301,17 +384,17 @@ TEST(TxPrivate, MakeChainCRCSpill3)
                 .data_specifier = 7766,
                 .transfer_id    = 0x0123'4567'89AB'CDEFULL,
     };
-    const auto mtu   = GrandScheme.size() + 1U;
+    const auto mtu   = InterstellarWar.size() + 1U;
     const auto chain = txMakeChain(&alloc,
                                    std::array<std::uint_least8_t, 8>{{11, 22, 33, 44, 55, 66, 77, 88}}.data(),
                                    mtu,
                                    223574680,
                                    meta,
                                    UdpardUDPIPEndpoint{.ip_address = 0xBABA'DEDAU, .udp_port = 0xD0ED},
-                                   UdpardConstPayload{.size = GrandScheme.size(), .data = GrandScheme.data()},
+                                   UdpardConstPayload{.size = InterstellarWar.size(), .data = InterstellarWar.data()},
                                    &user_transfer_referent);
     ASSERT_EQ(2, alloc.getNumAllocatedFragments());
-    ASSERT_EQ(2 * (sizeof(TxItem) + HeaderSize) + GrandScheme.size() + 4U, alloc.getTotalAllocatedAmount());
+    ASSERT_EQ(2 * (sizeof(TxItem) + HeaderSize) + InterstellarWar.size() + 4U, alloc.getTotalAllocatedAmount());
     ASSERT_EQ(2, chain.count);
     ASSERT_NE(chain.head, chain.tail);
     ASSERT_EQ(chain.tail, chain.head->next_in_transfer);
@@ -326,13 +409,13 @@ TEST(TxPrivate, MakeChainCRCSpill3)
     ASSERT_EQ(HeaderSize + mtu, chain.head->datagram_payload.size);
     ASSERT_EQ(0, std::memcmp(makeHeader(meta, 0, false).data(), chain.head->datagram_payload.data, HeaderSize));
     ASSERT_EQ(0,
-              std::memcmp(GrandScheme.data(),
+              std::memcmp(InterstellarWar.data(),
                           static_cast<exposed::byte_t*>(chain.head->datagram_payload.data) + HeaderSize,
-                          GrandScheme.size()));
+                          InterstellarWar.size()));
     ASSERT_EQ(0,
-              std::memcmp(GrandSchemeCRC.data(),
+              std::memcmp(InterstellarWarCRC.data(),
                           static_cast<exposed::byte_t*>(chain.head->datagram_payload.data) + HeaderSize +
-                              GrandScheme.size(),
+                              InterstellarWar.size(),
                           1U));
     ASSERT_EQ(&user_transfer_referent, chain.head->user_transfer_reference);
 
@@ -345,7 +428,7 @@ TEST(TxPrivate, MakeChainCRCSpill3)
     ASSERT_EQ(HeaderSize + 3U, chain.tail->datagram_payload.size);
     ASSERT_EQ(0, std::memcmp(makeHeader(meta, 1, true).data(), chain.tail->datagram_payload.data, HeaderSize));
     ASSERT_EQ(0,
-              std::memcmp(GrandSchemeCRC.data() + 1U,
+              std::memcmp(InterstellarWarCRC.data() + 1U,
                           static_cast<exposed::byte_t*>(chain.tail->datagram_payload.data) + HeaderSize,
                           3U));
     ASSERT_EQ(&user_transfer_referent, chain.tail->user_transfer_reference);
@@ -362,17 +445,17 @@ TEST(TxPrivate, MakeChainCRCSpillFull)
                 .data_specifier = 7766,
                 .transfer_id    = 0x0123'4567'89AB'CDEFULL,
     };
-    const auto mtu   = GrandScheme.size();
+    const auto mtu   = InterstellarWar.size();
     const auto chain = txMakeChain(&alloc,
                                    std::array<std::uint_least8_t, 8>{{11, 22, 33, 44, 55, 66, 77, 88}}.data(),
                                    mtu,
                                    223574680,
                                    meta,
                                    UdpardUDPIPEndpoint{.ip_address = 0xBABA'DEDAU, .udp_port = 0xD0ED},
-                                   UdpardConstPayload{.size = GrandScheme.size(), .data = GrandScheme.data()},
+                                   UdpardConstPayload{.size = InterstellarWar.size(), .data = InterstellarWar.data()},
                                    &user_transfer_referent);
     ASSERT_EQ(2, alloc.getNumAllocatedFragments());
-    ASSERT_EQ(2 * (sizeof(TxItem) + HeaderSize) + GrandScheme.size() + 4U, alloc.getTotalAllocatedAmount());
+    ASSERT_EQ(2 * (sizeof(TxItem) + HeaderSize) + InterstellarWar.size() + 4U, alloc.getTotalAllocatedAmount());
     ASSERT_EQ(2, chain.count);
     ASSERT_NE(chain.head, chain.tail);
     ASSERT_EQ(chain.tail, chain.head->next_in_transfer);
@@ -385,12 +468,12 @@ TEST(TxPrivate, MakeChainCRCSpillFull)
     ASSERT_EQ(0xBABA'DEDAU, chain.head->destination.ip_address);
     ASSERT_EQ(0xD0ED, chain.head->destination.udp_port);
     ASSERT_EQ(HeaderSize + mtu, chain.head->datagram_payload.size);
-    ASSERT_EQ(HeaderSize + GrandScheme.size(), chain.head->datagram_payload.size);
+    ASSERT_EQ(HeaderSize + InterstellarWar.size(), chain.head->datagram_payload.size);
     ASSERT_EQ(0, std::memcmp(makeHeader(meta, 0, false).data(), chain.head->datagram_payload.data, HeaderSize));
     ASSERT_EQ(0,
-              std::memcmp(GrandScheme.data(),
+              std::memcmp(InterstellarWar.data(),
                           static_cast<exposed::byte_t*>(chain.head->datagram_payload.data) + HeaderSize,
-                          GrandScheme.size()));
+                          InterstellarWar.size()));
     ASSERT_EQ(&user_transfer_referent, chain.head->user_transfer_reference);
 
     // SECOND FRAME -- contains the last byte of the CRC.
@@ -402,7 +485,7 @@ TEST(TxPrivate, MakeChainCRCSpillFull)
     ASSERT_EQ(HeaderSize + 4U, chain.tail->datagram_payload.size);
     ASSERT_EQ(0, std::memcmp(makeHeader(meta, 1, true).data(), chain.tail->datagram_payload.data, HeaderSize));
     ASSERT_EQ(0,
-              std::memcmp(GrandSchemeCRC.data(),
+              std::memcmp(InterstellarWarCRC.data(),
                           static_cast<exposed::byte_t*>(chain.tail->datagram_payload.data) + HeaderSize,
                           4U));
     ASSERT_EQ(&user_transfer_referent, chain.tail->user_transfer_reference);

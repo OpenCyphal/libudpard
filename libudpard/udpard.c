@@ -457,6 +457,8 @@ int32_t udpardTxPublish(UdpardTx* const          self,
     (void) txMakeChain;
     (void) makeSubjectUDPIPEndpoint;
     (void) makeServiceUDPIPEndpoint;
+    (void) avlTrivialFactory;
+    (void) txAVLPredicate;
     return -1;
 }
 
