@@ -191,9 +191,10 @@ extern "C" {
 /// No other error states may occur in the library.
 /// By contract, a well-characterized application with properly sized memory pools will never encounter errors.
 /// The error code 1 is not used because -1 is often used as a generic error code in 3rd-party code.
-#define UDPARD_ERROR_INVALID_ARGUMENT 2
-#define UDPARD_ERROR_OUT_OF_MEMORY 3
-#define UDPARD_ERROR_CAPACITY_LIMIT 4
+#define UDPARD_ERROR_ARGUMENT 2
+#define UDPARD_ERROR_MEMORY 3
+#define UDPARD_ERROR_CAPACITY 4
+#define UDPARD_ERROR_ANONYMOUS 5
 
 /// RFC 791 states that hosts must be prepared to accept datagrams of up to 576 octets and it is expected that this
 /// library will receive non IP-fragmented datagrams thus the minimum MTU should be larger than 576.
@@ -346,7 +347,7 @@ typedef struct
     const UdpardNodeID* local_node_id;
 
     /// The maximum number of UDP datagrams this instance is allowed to enqueue.
-    /// An attempt to push more will fail with the capacity limit error even if the memory is not exhausted.
+    /// An attempt to push more will fail with UDPARD_ERROR_CAPACITY.
     /// The purpose of this limitation is to ensure that a blocked queue does not exhaust the memory.
     size_t queue_capacity;
 
@@ -462,17 +463,18 @@ int8_t udpardTxInit(UdpardTx* const             self,
 /// (this is not recommended for real-time systems).
 ///
 /// The function returns the number of UDP datagrams enqueued, which is always a positive number, in case of success.
-/// In case of failure, the function returns a negated error code: either invalid argument or out-of-memory.
+/// In case of failure, the function returns a negated error code.
 ///
-/// The invalid argument error may be returned in the following cases:
+/// UDPARD_ERROR_ARGUMENT may be returned in the following cases:
 ///     - Any of the input arguments except user_transfer_reference are NULL.
 ///     - The priority or the port-ID exceed their respective maximums.
 ///     - The payload pointer is NULL while the payload size is nonzero.
-///     - The local node is anonymous (the local node-ID is unset) and the transfer payload cannot fit into
-///       a single datagram (a multi-frame transfer is required).
 ///
-/// The out-of-memory error is returned if a TX frame could not be allocated due to the memory being exhausted.
-/// The capacity error is returned if the capacity of the queue would be exhausted by this operation.
+/// UDPARD_ERROR_ANONYMOUS is returned if local node is anonymous (the local node-ID is unset) and
+/// the transfer payload cannot fit into a single datagram (a multi-frame transfer is required).
+///
+/// UDPARD_ERROR_MEMORY is returned if a TX frame could not be allocated due to the memory being exhausted.
+/// UDPARD_ERROR_CAPACITY is returned if the capacity of the queue would be exceeded by this operation.
 /// In such cases, all frames allocated for this transfer (if any) will be deallocated automatically.
 /// In other words, either all frames of the transfer are enqueued successfully, or none are.
 ///
@@ -501,10 +503,9 @@ int32_t udpardTxPublish(UdpardTx* const          self,
 /// on this server node; one common approach is to use a static array indexed by the server node-ID per service-ID
 /// (memory-constrained applications may choose a more compact container).
 ///
-/// Aside from the errors defined for udpardTxPublish, this function may also return an invalid argument error
-/// in the following cases:
-///     - The server node-ID value exceeds UDPARD_NODE_ID_MAX.
-///     - The local node is anonymous (the local node-ID is unset).
+/// Additional error conditions:
+///     - UDPARD_ERROR_ARGUMENT if the server node-ID value is invalid.
+///     - UDPARD_ERROR_ANONYMOUS if the local node is anonymous (the local node-ID is unset).
 ///
 /// Other considerations are the same as for udpardTxPublish.
 int32_t udpardTxRequest(UdpardTx* const          self,
@@ -699,7 +700,7 @@ typedef struct
 /// It can be changed by the user at any time by modifying the corresponding field in the subscription instance.
 ///
 /// The return value is 0 on success.
-/// The return value is a negated invalid argument error if any of the input arguments are invalid.
+/// The return value is a negated UDPARD_ERROR_ARGUMENT if any of the input arguments are invalid.
 ///
 /// The time complexity is constant. This function does not invoke the dynamic memory manager.
 int8_t udpardRxSubscriptionInit(UdpardRxSubscription* const self,
@@ -758,9 +759,8 @@ void udpardRxSubscriptionDestroy(UdpardRxSubscription* const self);
 /// and p is the amount of payload in the received frame (because it will be copied into an internal contiguous buffer).
 /// Malformed frames are discarded in constant time.
 ///
-/// A negated out-of-memory error is returned if the function fails to allocate memory.
-/// A negated invalid argument error is returned if any of the input arguments are invalid.
-/// No other errors are possible.
+/// UDPARD_ERROR_MEMORY is returned if the function fails to allocate memory.
+/// UDPARD_ERROR_ARGUMENT is returned if any of the input arguments are invalid.
 int8_t udpardRxSubscriptionReceive(UdpardRxSubscription* const self,
                                    const UdpardMicrosecond     timestamp_usec,
                                    const UdpardConstPayload    datagram_payload,
@@ -842,7 +842,7 @@ typedef struct
 ///        the datagram was received on. Only those services that were announced in step 4 will be processed.
 ///
 /// The return value is 0 on success.
-/// The return value is a negated invalid argument error if any of the input arguments are invalid.
+/// The return value is a negated UDPARD_ERROR_ARGUMENT if any of the input arguments are invalid.
 ///
 /// The time complexity is constant. This function does not invoke the dynamic memory manager.
 int8_t udpardRxServiceDispatcherInit(UdpardRxServiceDispatcher* const self,
@@ -870,7 +870,7 @@ void udpardRxServiceDispatcherDestroy(UdpardRxServiceDispatcher* const self);
 /// The return value is 1 if a new registration has been created as requested.
 /// The return value is 0 if such registration existed at the time the function was invoked. In this case,
 /// the existing registration is terminated and then a new one is created in its place. Pending transfers may be lost.
-/// The return value is a negated invalid argument error if any of the input arguments are invalid.
+/// The return value is a negated UDPARD_ERROR_ARGUMENT if any of the input arguments are invalid.
 ///
 /// The time complexity is logarithmic from the number of current registrations under the specified transfer kind
 /// (request or response).
@@ -888,7 +888,7 @@ int8_t udpardRxServiceDispatcherListen(UdpardRxServiceDispatcher* const self,
 ///
 /// The return value is 1 if such registration existed (and, therefore, it was removed).
 /// The return value is 0 if such registration does not exist. In this case, the function has no effect.
-/// The return value is a negated invalid argument error if any of the input arguments are invalid.
+/// The return value is a negated UDPARD_ERROR_ARGUMENT if any of the input arguments are invalid.
 ///
 /// The time complexity is logarithmic from the number of current registration under the specified transfer kind.
 /// This function does not allocate new memory.

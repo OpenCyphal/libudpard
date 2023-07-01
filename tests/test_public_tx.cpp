@@ -30,7 +30,7 @@ TEST(TxPublic, TxInit)
             .free           = &helpers::dummy_allocator::free,
             .user_reference = &user_referent,
         };
-        ASSERT_EQ(-UDPARD_ERROR_INVALID_ARGUMENT, udpardTxInit(nullptr, &node_id, 0, &memory));
+        ASSERT_EQ(-UDPARD_ERROR_ARGUMENT, udpardTxInit(nullptr, &node_id, 0, &memory));
     }
     {
         UdpardTx             tx{};
@@ -39,7 +39,7 @@ TEST(TxPublic, TxInit)
             .free           = &helpers::dummy_allocator::free,
             .user_reference = &user_referent,
         };
-        ASSERT_EQ(-UDPARD_ERROR_INVALID_ARGUMENT, udpardTxInit(&tx, nullptr, 0, &memory));
+        ASSERT_EQ(-UDPARD_ERROR_ARGUMENT, udpardTxInit(&tx, nullptr, 0, &memory));
     }
     {
         UdpardTx             tx{};
@@ -48,7 +48,7 @@ TEST(TxPublic, TxInit)
             .free           = &helpers::dummy_allocator::free,
             .user_reference = &user_referent,
         };
-        ASSERT_EQ(-UDPARD_ERROR_INVALID_ARGUMENT, udpardTxInit(&tx, &node_id, 0, &memory));
+        ASSERT_EQ(-UDPARD_ERROR_ARGUMENT, udpardTxInit(&tx, &node_id, 0, &memory));
     }
     {
         UdpardTx             tx{};
@@ -57,7 +57,7 @@ TEST(TxPublic, TxInit)
             .free           = nullptr,
             .user_reference = &user_referent,
         };
-        ASSERT_EQ(-UDPARD_ERROR_INVALID_ARGUMENT, udpardTxInit(&tx, &node_id, 0, &memory));
+        ASSERT_EQ(-UDPARD_ERROR_ARGUMENT, udpardTxInit(&tx, &node_id, 0, &memory));
     }
     {
         UdpardTx             tx{};
@@ -121,7 +121,7 @@ TEST(TxPublic, Publish)
     udpardTxFree(tx.memory, udpardTxPop(&tx, nullptr));  // No-op.
 
     // Out of queue; transfer-ID not incremented.
-    ASSERT_EQ(-UDPARD_ERROR_CAPACITY_LIMIT,
+    ASSERT_EQ(-UDPARD_ERROR_CAPACITY,
               udpardTxPublish(&tx,
                               1234567890,
                               UdpardPriorityNominal,
@@ -131,8 +131,26 @@ TEST(TxPublic, Publish)
                               nullptr));
     ASSERT_EQ(1, transfer_id);
 
+    // Attempt to publish a multi-frame transfer with an anonymous local node.
+    {
+        auto               tx_bad            = tx;
+        const UdpardNodeID anonymous_node_id = 0xFFFFU;
+        tx_bad.queue_size                    = 1000;
+        tx_bad.mtu                           = 10;  // Force multi-frame.
+        tx_bad.local_node_id                 = &anonymous_node_id;
+        ASSERT_EQ(-UDPARD_ERROR_ANONYMOUS,
+                  udpardTxPublish(&tx_bad,
+                                  1234567890,
+                                  UdpardPriorityNominal,
+                                  0x1432,
+                                  &transfer_id,
+                                  {.size = FleetingEvents.size(), .data = FleetingEvents.data()},
+                                  nullptr));
+        ASSERT_EQ(1, transfer_id);
+    }
+
     // Invalid Tx.
-    ASSERT_EQ(-UDPARD_ERROR_INVALID_ARGUMENT,
+    ASSERT_EQ(-UDPARD_ERROR_ARGUMENT,
               udpardTxPublish(nullptr,
                               1234567890,
                               UdpardPriorityNominal,
@@ -142,19 +160,21 @@ TEST(TxPublic, Publish)
                               nullptr));
     ASSERT_EQ(1, transfer_id);
     // Invalid local node-ID.
-    auto tx_bad          = tx;
-    tx_bad.local_node_id = nullptr;
-    ASSERT_EQ(-UDPARD_ERROR_INVALID_ARGUMENT,
-              udpardTxPublish(&tx_bad,
-                              1234567890,
-                              UdpardPriorityNominal,
-                              0x1432,
-                              &transfer_id,
-                              {.size = FleetingEvents.size(), .data = FleetingEvents.data()},
-                              nullptr));
-    ASSERT_EQ(1, transfer_id);
+    {
+        auto tx_bad          = tx;
+        tx_bad.local_node_id = nullptr;
+        ASSERT_EQ(-UDPARD_ERROR_ARGUMENT,
+                  udpardTxPublish(&tx_bad,
+                                  1234567890,
+                                  UdpardPriorityNominal,
+                                  0x1432,
+                                  &transfer_id,
+                                  {.size = FleetingEvents.size(), .data = FleetingEvents.data()},
+                                  nullptr));
+        ASSERT_EQ(1, transfer_id);
+    }
     // Invalid priority.
-    ASSERT_EQ(-UDPARD_ERROR_INVALID_ARGUMENT,
+    ASSERT_EQ(-UDPARD_ERROR_ARGUMENT,
               udpardTxPublish(&tx,
                               1234567890,
                               (UdpardPriority) 255,
@@ -164,7 +184,7 @@ TEST(TxPublic, Publish)
                               nullptr));
     ASSERT_EQ(1, transfer_id);
     // Invalid subject.
-    ASSERT_EQ(-UDPARD_ERROR_INVALID_ARGUMENT,
+    ASSERT_EQ(-UDPARD_ERROR_ARGUMENT,
               udpardTxPublish(&tx,
                               1234567890,
                               UdpardPriorityNominal,
@@ -174,7 +194,7 @@ TEST(TxPublic, Publish)
                               nullptr));
     ASSERT_EQ(1, transfer_id);
     // Invalid transfer-ID pointer.
-    ASSERT_EQ(-UDPARD_ERROR_INVALID_ARGUMENT,
+    ASSERT_EQ(-UDPARD_ERROR_ARGUMENT,
               udpardTxPublish(&tx,
                               1234567890,
                               UdpardPriorityNominal,
@@ -183,7 +203,7 @@ TEST(TxPublic, Publish)
                               {.size = FleetingEvents.size(), .data = FleetingEvents.data()},
                               nullptr));
     // Invalid payload pointer.
-    ASSERT_EQ(-UDPARD_ERROR_INVALID_ARGUMENT,
+    ASSERT_EQ(-UDPARD_ERROR_ARGUMENT,
               udpardTxPublish(&tx,
                               1234567890,
                               UdpardPriorityNominal,

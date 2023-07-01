@@ -598,7 +598,7 @@ TEST(TxPrivate, PushCapacityLimit)
         .data_specifier = 7766,
         .transfer_id    = 0x0123'4567'89AB'CDEFULL,
     };
-    ASSERT_EQ(-UDPARD_ERROR_CAPACITY_LIMIT,
+    ASSERT_EQ(-UDPARD_ERROR_CAPACITY,
               txPush(&tx,
                      1234567890U,
                      meta,
@@ -632,7 +632,73 @@ TEST(TxPrivate, PushOOM)
         .transfer_id    = 0x0123'4567'89AB'CDEFULL,
     };
     allocator.setAllocationCeiling(EtherealStrength.size());  // No memory for the overheads.
-    ASSERT_EQ(-UDPARD_ERROR_OUT_OF_MEMORY,
+    ASSERT_EQ(-UDPARD_ERROR_MEMORY,
+              txPush(&tx,
+                     1234567890U,
+                     meta,
+                     {.ip_address = 0xBABA'DEDAU, .udp_port = 0xD0ED},
+                     {.size = EtherealStrength.size(), .data = EtherealStrength.data()},
+                     nullptr));
+    ASSERT_EQ(0, allocator.getNumAllocatedFragments());
+    ASSERT_EQ(0, allocator.getTotalAllocatedAmount());
+    ASSERT_EQ(0, tx.queue_size);
+}
+
+TEST(TxPrivate, PushAnonymousMultiFrame)
+{
+    helpers::TestAllocator allocator;
+    const UdpardNodeID     node_id = 0xFFFFU;
+    //
+    UdpardTx tx{
+        .local_node_id           = &node_id,
+        .queue_capacity          = 10'000U,
+        .mtu                     = (EtherealStrength.size() + 4U + 3U) / 3U,
+        .dscp_value_per_priority = {0, 1, 2, 3, 4, 5, 6, 7},
+        .memory                  = &allocator,
+        .queue_size              = 0,
+        .root                    = nullptr,
+    };
+    const Metadata meta{
+        .priority       = UdpardPriorityNominal,
+        .src_node_id    = 4321,
+        .dst_node_id    = 5432,
+        .data_specifier = 7766,
+        .transfer_id    = 0x0123'4567'89AB'CDEFULL,
+    };
+    ASSERT_EQ(-UDPARD_ERROR_ANONYMOUS,
+              txPush(&tx,
+                     1234567890U,
+                     meta,
+                     {.ip_address = 0xBABA'DEDAU, .udp_port = 0xD0ED},
+                     {.size = EtherealStrength.size(), .data = EtherealStrength.data()},
+                     nullptr));
+    ASSERT_EQ(0, allocator.getNumAllocatedFragments());
+    ASSERT_EQ(0, allocator.getTotalAllocatedAmount());
+    ASSERT_EQ(0, tx.queue_size);
+}
+
+TEST(TxPrivate, PushAnonymousService)
+{
+    helpers::TestAllocator allocator;
+    const UdpardNodeID     node_id = 0xFFFFU;
+    //
+    UdpardTx tx{
+        .local_node_id           = &node_id,
+        .queue_capacity          = 10'000,
+        .mtu                     = 1500,
+        .dscp_value_per_priority = {0, 1, 2, 3, 4, 5, 6, 7},
+        .memory                  = &allocator,
+        .queue_size              = 0,
+        .root                    = nullptr,
+    };
+    const Metadata meta{
+        .priority       = UdpardPriorityNominal,
+        .src_node_id    = 4321,
+        .dst_node_id    = 5432,
+        .data_specifier = 0x8099U,  // Service response.
+        .transfer_id    = 0x0123'4567'89AB'CDEFULL,
+    };
+    ASSERT_EQ(-UDPARD_ERROR_ANONYMOUS,
               txPush(&tx,
                      1234567890U,
                      meta,

@@ -49,6 +49,9 @@ typedef struct
     UdpardTransferID transfer_id;
 } Metadata;
 
+#define DATA_SPECIFIER_SERVICE_NOT_MESSAGE_MASK 0x8000U
+#define DATA_SPECIFIER_SERVICE_REQUEST_NOT_RESPONSE_MASK 0x4000U
+
 #define HEADER_SIZE 24U
 #define HEADER_VERSION 1U
 #define HEADER_FRAME_INDEX_EOT_MASK 0x80000000UL
@@ -423,7 +426,17 @@ UDPARD_PRIVATE int32_t txPush(UdpardTx* const           tx,
     const size_t mtu         = larger(tx->mtu, 1U);
     const size_t frame_count = ((payload.size + TRANSFER_CRC_SIZE_BYTES + mtu) - 1U) / mtu;
     UDPARD_ASSERT(frame_count > 0U);
-    if ((tx->queue_size + frame_count) <= tx->queue_capacity)  // Bail early if we can see that we won't fit anyway.
+    const bool anonymous = (*tx->local_node_id) > UDPARD_NODE_ID_MAX;
+    const bool service   = (meta.data_specifier & DATA_SPECIFIER_SERVICE_NOT_MESSAGE_MASK) != 0;
+    if (anonymous && ((frame_count > 1) || service))
+    {
+        out = -UDPARD_ERROR_ANONYMOUS;  // Only single-frame message transfers can be anonymous.
+    }
+    else if ((tx->queue_size + frame_count) > tx->queue_capacity)
+    {
+        out = -UDPARD_ERROR_CAPACITY;  // Not enough space in the queue.
+    }
+    else
     {
         const TxChain chain = txMakeChain(tx->memory,
                                           tx->dscp_value_per_priority,
@@ -453,7 +466,7 @@ UDPARD_PRIVATE int32_t txPush(UdpardTx* const           tx,
         }
         else  // The queue is large enough but we ran out of heap memory, so we have to unwind the chain.
         {
-            out                = -UDPARD_ERROR_OUT_OF_MEMORY;
+            out                = -UDPARD_ERROR_MEMORY;
             UdpardTxItem* head = &chain.head->base;
             while (head != NULL)
             {
@@ -462,10 +475,6 @@ UDPARD_PRIVATE int32_t txPush(UdpardTx* const           tx,
                 head = next;
             }
         }
-    }
-    else  // Not enough space in the queue; this is a separate case.
-    {
-        out = -UDPARD_ERROR_CAPACITY_LIMIT;
     }
     UDPARD_ASSERT((out < 0) || (out >= 1));
     return out;
@@ -476,7 +485,7 @@ int8_t udpardTxInit(UdpardTx* const             self,
                     const size_t                queue_capacity,
                     UdpardMemoryResource* const memory)
 {
-    int8_t ret = -UDPARD_ERROR_INVALID_ARGUMENT;
+    int8_t ret = -UDPARD_ERROR_ARGUMENT;
     if ((NULL != self) && (NULL != local_node_id) && isValidMemoryResource(memory))
     {
         ret = 0;
@@ -501,7 +510,7 @@ int32_t udpardTxPublish(UdpardTx* const          self,
                         const UdpardConstPayload payload,
                         void* const              user_transfer_reference)
 {
-    int32_t    out     = -UDPARD_ERROR_INVALID_ARGUMENT;
+    int32_t    out     = -UDPARD_ERROR_ARGUMENT;
     const bool args_ok = (self != NULL) && (self->local_node_id != NULL) && (priority <= UDPARD_PRIORITY_MAX) &&
                          (subject_id <= UDPARD_SUBJECT_ID_MAX) && (transfer_id != NULL) &&
                          ((payload.data != NULL) || (payload.size == 0U));
@@ -536,7 +545,7 @@ int32_t udpardTxRequest(UdpardTx* const          self,
                         const UdpardConstPayload payload,
                         void* const              user_transfer_reference)
 {
-    int32_t    out     = -UDPARD_ERROR_INVALID_ARGUMENT;
+    int32_t    out     = -UDPARD_ERROR_ARGUMENT;
     const bool args_ok = (self != NULL) && (self->local_node_id != NULL) && (priority <= UDPARD_PRIORITY_MAX) &&
                          (service_id <= UDPARD_SERVICE_ID_MAX) && (transfer_id != NULL) &&
                          ((payload.data != NULL) || (payload.size == 0U));
@@ -549,7 +558,8 @@ int32_t udpardTxRequest(UdpardTx* const          self,
                          .src_node_id    = *self->local_node_id,
                          .dst_node_id    = server_node_id,
                          .transfer_id    = *transfer_id,
-                         .data_specifier = service_id,
+                         .data_specifier = DATA_SPECIFIER_SERVICE_NOT_MESSAGE_MASK |
+                                           DATA_SPECIFIER_SERVICE_REQUEST_NOT_RESPONSE_MASK | service_id,
                      },
                      makeServiceUDPIPEndpoint(server_node_id),
                      payload,
@@ -571,7 +581,7 @@ int32_t udpardTxRespond(UdpardTx* const          self,
                         const UdpardConstPayload payload,
                         void* const              user_transfer_reference)
 {
-    int32_t    out     = -UDPARD_ERROR_INVALID_ARGUMENT;
+    int32_t    out     = -UDPARD_ERROR_ARGUMENT;
     const bool args_ok = (self != NULL) && (self->local_node_id != NULL) && (priority <= UDPARD_PRIORITY_MAX) &&
                          (service_id <= UDPARD_SERVICE_ID_MAX) && ((payload.data != NULL) || (payload.size == 0U));
     if (args_ok)
@@ -583,7 +593,7 @@ int32_t udpardTxRespond(UdpardTx* const          self,
                          .src_node_id    = *self->local_node_id,
                          .dst_node_id    = client_node_id,
                          .transfer_id    = transfer_id,
-                         .data_specifier = service_id,
+                         .data_specifier = DATA_SPECIFIER_SERVICE_NOT_MESSAGE_MASK | service_id,
                      },
                      makeServiceUDPIPEndpoint(client_node_id),
                      payload,
