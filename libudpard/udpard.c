@@ -242,9 +242,9 @@ typedef struct
 /// Chain of TX frames prepared for insertion into a TX queue.
 typedef struct
 {
-    TxItem*  head;
-    TxItem*  tail;
-    uint32_t count;
+    TxItem* head;
+    TxItem* tail;
+    size_t  count;
 } TxChain;
 
 UDPARD_PRIVATE TxItem* txNewItem(UdpardMemoryResource* const memory,
@@ -386,7 +386,7 @@ UDPARD_PRIVATE TxChain txMakeChain(UdpardMemoryResource* const memory,
             break;
         }
         const bool last      = (payload_size_with_crc - offset) <= mtu;
-        byte_t*    write_ptr = txSerializeHeader(&tqi->payload_buffer[0], meta, out.count, last);
+        byte_t*    write_ptr = txSerializeHeader(&tqi->payload_buffer[0], meta, (uint32_t) out.count, last);
         if (offset < payload.size)
         {
             const size_t progress = smaller(payload.size - offset, mtu);
@@ -409,6 +409,7 @@ UDPARD_PRIVATE TxChain txMakeChain(UdpardMemoryResource* const memory,
             offset += write_size;
         }
         out.count++;
+        UDPARD_ASSERT((out.count + 0ULL) <= INT32_MAX);  // +0 is to suppress warning.
     }
     UDPARD_ASSERT((offset == payload_size_with_crc) || (out.tail == NULL));
     return out;
@@ -425,7 +426,7 @@ UDPARD_PRIVATE int32_t txPush(UdpardTx* const           tx,
     int32_t      out         = 0;  // The number of frames enqueued or negated error.
     const size_t mtu         = larger(tx->mtu, 1U);
     const size_t frame_count = ((payload.size + TRANSFER_CRC_SIZE_BYTES + mtu) - 1U) / mtu;
-    UDPARD_ASSERT(frame_count > 0U);
+    UDPARD_ASSERT((frame_count > 0U) && (frame_count <= INT32_MAX));
     const bool anonymous = (*tx->local_node_id) > UDPARD_NODE_ID_MAX;
     const bool service   = (meta.data_specifier & DATA_SPECIFIER_SERVICE_NOT_MESSAGE_MASK) != 0;
     if (anonymous && ((frame_count > 1) || service))

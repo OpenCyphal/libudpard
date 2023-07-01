@@ -174,15 +174,18 @@ TEST(TxPublic, Publish)
         ASSERT_EQ(1, transfer_id);
     }
     // Invalid priority.
-    ASSERT_EQ(-UDPARD_ERROR_ARGUMENT,
-              udpardTxPublish(&tx,
-                              1234567890,
-                              (UdpardPriority) 255,
-                              0x1432,
-                              &transfer_id,
-                              {.size = FleetingEvents.size(), .data = FleetingEvents.data()},
-                              nullptr));
-    ASSERT_EQ(1, transfer_id);
+    {
+        auto bad_priority = UdpardPriorityOptional;
+        ASSERT_EQ(-UDPARD_ERROR_ARGUMENT,
+                  udpardTxPublish(&tx,
+                                  1234567890,
+                                  (UdpardPriority) (bad_priority + 1),
+                                  0x1432,
+                                  &transfer_id,
+                                  {.size = FleetingEvents.size(), .data = FleetingEvents.data()},
+                                  nullptr));
+        ASSERT_EQ(1, transfer_id);
+    }
     // Invalid subject.
     ASSERT_EQ(-UDPARD_ERROR_ARGUMENT,
               udpardTxPublish(&tx,
