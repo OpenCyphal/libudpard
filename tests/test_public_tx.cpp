@@ -58,4 +58,5 @@ TEST(TxPublic, TxInit)
                                .user_reference = &user_referent,
                            }));
     ASSERT_EQ(&user_referent, tx.memory.user_reference);
+    ASSERT_EQ(UDPARD_MTU_DEFAULT, tx.mtu);
 }

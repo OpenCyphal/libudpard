@@ -353,8 +353,8 @@ typedef struct
     /// The Cyphal/UDP header and the final CRC are added to this value to obtain the total UDP datagram payload size.
     /// See UDPARD_MTU_*.
     /// The value can be changed arbitrarily at any time between enqueue operations.
-    /// The value is constrained by the library to not fall below the sane lower limit.
-    size_t mtu_bytes;
+    /// The value is constrained by the library to be positive.
+    size_t mtu;
 
     /// The mapping from the Cyphal priority level in [0,7], where the highest priority is at index 0
     /// and the lowest priority is at the last element of the array, to the IP DSCP field value.

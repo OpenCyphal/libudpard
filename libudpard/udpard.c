@@ -53,9 +53,6 @@ typedef struct
 #define HEADER_VERSION 1U
 #define HEADER_FRAME_INDEX_EOT_MASK 0x80000000UL
 
-/// The MTU shall be at least this large.
-#define MAX_OVERHEAD_PER_FRAME (HEADER_SIZE + TRANSFER_CRC_SIZE_BYTES)
-
 // See Cyphal/UDP Specification, section 4.3.2.1 Endpoints.
 #define SUBJECT_MULTICAST_GROUP_ADDRESS_MASK 0xEF000000UL
 #define SERVICE_MULTICAST_GROUP_ADDRESS_MASK 0xEF010000UL
@@ -86,6 +83,11 @@ UDPARD_PRIVATE UdpardUDPIPEndpoint makeServiceUDPIPEndpoint(const UdpardNodeID d
 UDPARD_PRIVATE UdpardTreeNode* avlTrivialFactory(void* const user_reference)
 {
     return (UdpardTreeNode*) user_reference;
+}
+
+UDPARD_PRIVATE size_t smaller(const size_t a, const size_t b)
+{
+    return (a < b) ? a : b;
 }
 
 // --------------------------------------------- HEADER CRC ---------------------------------------------
@@ -183,7 +185,7 @@ UDPARD_PRIVATE uint32_t transferCRCAddByte(const uint32_t crc, const byte_t byte
     return (crc >> ByteWidth) ^ Table[byte ^ (crc & ByteMax)];
 }
 
-/// Do not forget to apply the output XOR when done.
+/// Do not forget to apply the output XOR when done, or use transferCRCCompute().
 UDPARD_PRIVATE uint32_t transferCRCAdd(const uint32_t crc, const size_t size, const void* const data)
 {
     UDPARD_ASSERT((data != NULL) || (size == 0U));
@@ -195,6 +197,11 @@ UDPARD_PRIVATE uint32_t transferCRCAdd(const uint32_t crc, const size_t size, co
         ++p;
     }
     return out;
+}
+
+UDPARD_PRIVATE uint32_t transferCRCCompute(const size_t size, const void* const data)
+{
+    return transferCRCAdd(TRANSFER_CRC_INITIAL, size, data) ^ TRANSFER_CRC_OUTPUT_XOR;
 }
 
 // =====================================================================================================================
@@ -232,15 +239,16 @@ typedef struct
     uint32_t count;
 } TxChain;
 
-UDPARD_PRIVATE TxItem* txNewItem(UdpardTx* const           tx,
-                                 const UdpardMicrosecond   deadline_usec,
-                                 const UdpardPriority      priority,
-                                 const UdpardUDPIPEndpoint endpoint,
-                                 const size_t              datagram_payload_size,
-                                 void* const               user_transfer_reference)
+UDPARD_PRIVATE TxItem* txNewItem(UdpardMemoryResource* const memory,
+                                 const uint_least8_t         dscp_value_per_priority[UDPARD_PRIORITY_MAX + 1U],
+                                 const UdpardMicrosecond     deadline_usec,
+                                 const UdpardPriority        priority,
+                                 const UdpardUDPIPEndpoint   endpoint,
+                                 const size_t                datagram_payload_size,
+                                 void* const                 user_transfer_reference)
 {
-    UDPARD_ASSERT(tx != NULL);
-    TxItem* const out = (TxItem*) tx->memory.allocate(&tx->memory, sizeof(TxItem) + datagram_payload_size);
+    UDPARD_ASSERT(memory != NULL);
+    TxItem* const out = (TxItem*) memory->allocate(memory, sizeof(TxItem) + datagram_payload_size);
     if (out != NULL)
     {
         // No tree linkage by default.
@@ -254,7 +262,7 @@ UDPARD_PRIVATE TxItem* txNewItem(UdpardTx* const           tx,
         // Init metadata.
         out->base.next_in_transfer        = NULL;  // Last by default.
         out->base.deadline_usec           = deadline_usec;
-        out->base.dscp                    = tx->dscp_value_per_priority[priority];
+        out->base.dscp                    = dscp_value_per_priority[priority];
         out->base.destination             = endpoint;
         out->base.user_transfer_reference = user_transfer_reference;
         // The payload points to the buffer already allocated.
@@ -275,6 +283,14 @@ UDPARD_PRIVATE int8_t txAVLPredicate(void* const user_reference,  // NOSONAR Cav
     return (target->precedence >= other->precedence) ? +1 : -1;
 }
 
+UDPARD_PRIVATE byte_t* txSerializeU16(byte_t* const destination_buffer, const uint16_t value)
+{
+    byte_t* p = destination_buffer;
+    *p++      = (byte_t) (value & ByteMax);
+    *p++      = (byte_t) ((byte_t) (value >> ByteWidth) & ByteMax);
+    return p;
+}
+
 UDPARD_PRIVATE byte_t* txSerializeU32(byte_t* const destination_buffer, const uint32_t value)
 {
     byte_t* p = destination_buffer;
@@ -285,34 +301,32 @@ UDPARD_PRIVATE byte_t* txSerializeU32(byte_t* const destination_buffer, const ui
     return p;
 }
 
-UDPARD_PRIVATE byte_t* txSerializeHeader(byte_t* const         destination_buffer,
-                                         const Metadata* const meta,
-                                         const uint32_t        frame_index,
-                                         const bool            end_of_transfer)
+UDPARD_PRIVATE byte_t* txSerializeU64(byte_t* const destination_buffer, const uint64_t value)
+{
+    byte_t* p = destination_buffer;
+    for (size_t i = 0; i < sizeof(value); i++)  // We sincerely hope that the compiler will use memcpy.
+    {
+        *p++ = (byte_t) ((byte_t) (value >> (i * ByteWidth)) & ByteMax);
+    }
+    return p;
+}
+
+UDPARD_PRIVATE byte_t* txSerializeHeader(byte_t* const  destination_buffer,
+                                         const Metadata meta,
+                                         const uint32_t frame_index,
+                                         const bool     end_of_transfer)
 {
     byte_t* p = destination_buffer;
     *p++      = HEADER_VERSION;
-    *p++      = (byte_t) meta->priority;
-    // source node-ID
-    *p++ = (byte_t) (meta->src_node_id & ByteMax);
-    *p++ = (byte_t) ((byte_t) (meta->src_node_id >> ByteWidth) & ByteMax);
-    // destination node-ID
-    *p++ = (byte_t) (meta->dst_node_id & ByteMax);
-    *p++ = (byte_t) ((byte_t) (meta->dst_node_id >> ByteWidth) & ByteMax);
-    // data specifier
-    *p++ = (byte_t) (meta->data_specifier & ByteMax);
-    *p++ = (byte_t) ((byte_t) (meta->data_specifier >> ByteWidth) & ByteMax);
-    // transfer-ID
-    for (size_t i = 0; i < sizeof(UdpardTransferID); i++)
-    {
-        *p++ = (byte_t) ((byte_t) (meta->transfer_id >> (i * ByteWidth)) & ByteMax);
-    }
-    // frame index
-    p = txSerializeU32(p, frame_index | (end_of_transfer ? HEADER_FRAME_INDEX_EOT_MASK : 0U));
-    // opaque user data
-    *p++ = 0;
-    *p++ = 0;
-    // header CRC in the big endian format
+    *p++      = (byte_t) meta.priority;
+    p         = txSerializeU16(p, meta.src_node_id);
+    p         = txSerializeU16(p, meta.dst_node_id);
+    p         = txSerializeU16(p, meta.data_specifier);
+    p         = txSerializeU64(p, meta.transfer_id);
+    p         = txSerializeU32(p, frame_index | (end_of_transfer ? HEADER_FRAME_INDEX_EOT_MASK : 0U));
+    p         = txSerializeU16(p, 0);  // opaque user data
+    // Header CRC in the big endian format. Optimization prospect: the header up to frame_index is constant in
+    // multi-frame transfers, so we don't really need to recompute the CRC from scratch per frame.
     const uint16_t crc = headerCRCCompute(HEADER_SIZE - HEADER_CRC_SIZE_BYTES, destination_buffer);
     *p++               = (byte_t) ((byte_t) (crc >> ByteWidth) & ByteMax);
     *p++               = (byte_t) (crc & ByteMax);
@@ -320,81 +334,34 @@ UDPARD_PRIVATE byte_t* txSerializeHeader(byte_t* const         destination_buffe
     return p;
 }
 
-/// Returns the number of frames enqueued or error (i.e., =1 or <0).
-UDPARD_PRIVATE int32_t txPushSingleFrame(UdpardTx* const           tx,
-                                         const UdpardMicrosecond   deadline_usec,
-                                         const Metadata* const     meta,
-                                         const UdpardUDPIPEndpoint endpoint,
-                                         const UdpardConstPayload  payload,
-                                         const uint32_t            crc,
-                                         void* const               user_transfer_reference)
-{
-    UDPARD_ASSERT((tx != NULL) && (meta != NULL));
-    UDPARD_ASSERT((payload.data != NULL) || (payload.size == 0));
-    int32_t       out = 0;
-    TxItem* const tqi = (tx->queue_size < tx->queue_capacity)
-                            ? txNewItem(tx,
-                                        deadline_usec,
-                                        meta->priority,
-                                        endpoint,
-                                        payload.size + HEADER_SIZE + TRANSFER_CRC_SIZE_BYTES,
-                                        user_transfer_reference)
-                            : NULL;
-    if (tqi != NULL)
-    {
-        byte_t* ptr = txSerializeHeader(&tqi->payload_buffer[0], meta, 0U, true);
-        if (payload.size > 0U)  // The check is needed to avoid calling memcpy() with a NULL pointer, it's an UB.
-        {
-            UDPARD_ASSERT(payload.data != NULL);
-            // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-            (void) memcpy(ptr, payload.data, payload.size);
-            ptr += payload.size;
-        }
-        txSerializeU32(ptr, crc);
-        // Insert the newly created TX item into the queue.
-        const UdpardTreeNode* const res = cavlSearch(&tx->root, &tqi->base.base, &txAVLPredicate, &avlTrivialFactory);
-        (void) res;
-        UDPARD_ASSERT(res == &tqi->base.base);
-        tx->queue_size++;
-        UDPARD_ASSERT(tx->queue_size <= tx->queue_capacity);
-        out = 1;  // One frame enqueued.
-    }
-    else
-    {
-        out = -UDPARD_ERROR_OUT_OF_MEMORY;
-    }
-    UDPARD_ASSERT((out < 0) || (out == 1));
-    return out;
-}
-
 /// Produces a chain of Tx queue items for later insertion into the Tx queue. The tail is NULL if OOM.
-UDPARD_PRIVATE TxChain txGenerateMultiFrameChain(UdpardTx* const           tx,
-                                                 const size_t              mtu,
-                                                 const UdpardMicrosecond   deadline_usec,
-                                                 const Metadata* const     meta,
-                                                 const UdpardUDPIPEndpoint endpoint,
-                                                 const UdpardConstPayload  payload,
-                                                 const uint32_t            crc,
-                                                 void* const               user_transfer_reference)
+/// The caller is responsible for freeing the memory allocated for the chain.
+UDPARD_PRIVATE TxChain txMakeChain(UdpardMemoryResource* const memory,
+                                   const uint_least8_t         dscp_value_per_priority[UDPARD_PRIORITY_MAX + 1U],
+                                   const size_t                mtu,
+                                   const UdpardMicrosecond     deadline_usec,
+                                   const Metadata              meta,
+                                   const UdpardUDPIPEndpoint   endpoint,
+                                   const UdpardConstPayload    payload,
+                                   void* const                 user_transfer_reference)
 {
-    UDPARD_ASSERT(tx != NULL);
-    UDPARD_ASSERT(mtu > MAX_OVERHEAD_PER_FRAME);  // The caller should guarantee this.
+    UDPARD_ASSERT(memory != NULL);
+    UDPARD_ASSERT(mtu > 0);
+    UDPARD_ASSERT((payload.data != NULL) || (payload.size == 0U));
     const size_t payload_size_with_crc = payload.size + TRANSFER_CRC_SIZE_BYTES;
-    UDPARD_ASSERT((payload.data != NULL) && (payload_size_with_crc > mtu));
-    byte_t crc_bytes[TRANSFER_CRC_SIZE_BYTES];
-    txSerializeU32(crc_bytes, crc);
+    byte_t       crc_bytes[TRANSFER_CRC_SIZE_BYTES];
+    txSerializeU32(crc_bytes, transferCRCCompute(payload.size, payload.data));
     TxChain out    = {NULL, NULL, 0};
     size_t  offset = 0U;
-    // First we write the payload, then the final CRC at the end.
     while (offset < payload_size_with_crc)
     {
-        const size_t perfect_size = (payload_size_with_crc - offset) + HEADER_SIZE;
-        const bool   last_frame   = perfect_size <= mtu;
-        const size_t frame_size   = last_frame ? perfect_size : mtu;
-        UDPARD_ASSERT(frame_size <= mtu);
-        const size_t fragment_size = (last_frame ? (frame_size - TRANSFER_CRC_SIZE_BYTES) : mtu) - HEADER_SIZE;
-        UDPARD_ASSERT(fragment_size <= (payload.size - offset));
-        TxItem* const tqi = txNewItem(tx, deadline_usec, meta->priority, endpoint, frame_size, user_transfer_reference);
+        TxItem* const tqi = txNewItem(memory,
+                                      dscp_value_per_priority,
+                                      deadline_usec,
+                                      meta.priority,
+                                      endpoint,
+                                      smaller(payload_size_with_crc - offset, mtu) + HEADER_SIZE,
+                                      user_transfer_reference);
         if (NULL == out.head)
         {
             out.head = tqi;
@@ -410,26 +377,32 @@ UDPARD_PRIVATE TxChain txGenerateMultiFrameChain(UdpardTx* const           tx,
         {
             break;
         }
-        byte_t* write_ptr = txSerializeHeader(&tqi->payload_buffer[0], meta, out.count, last_frame);
+        const bool last      = (payload_size_with_crc - offset) <= mtu;
+        byte_t*    write_ptr = txSerializeHeader(&tqi->payload_buffer[0], meta, out.count, last);
         if (offset < payload.size)
         {
+            const size_t progress = smaller(payload.size - offset, mtu);
             // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-            (void) memcpy(write_ptr, ((const byte_t*) payload.data) + offset, fragment_size);
-            offset += fragment_size;
-            write_ptr += fragment_size;
+            (void) memcpy(write_ptr, ((const byte_t*) payload.data) + offset, progress);
+            offset += progress;
+            write_ptr += progress;
             UDPARD_ASSERT(offset <= payload.size);
+            UDPARD_ASSERT((!last) || (offset == payload.size));
         }
         if (offset >= payload.size)
         {
             const size_t crc_offset = offset - payload.size;
             UDPARD_ASSERT(crc_offset < TRANSFER_CRC_SIZE_BYTES);
-            const size_t write_size = TRANSFER_CRC_SIZE_BYTES - crc_offset;
+            const size_t available = tqi->base.datagram_payload.size - (size_t) (write_ptr - &tqi->payload_buffer[0]);
+            UDPARD_ASSERT(available <= TRANSFER_CRC_SIZE_BYTES);
+            const size_t write_size = smaller(TRANSFER_CRC_SIZE_BYTES - crc_offset, available);
             // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
             (void) memcpy(write_ptr, &crc_bytes[crc_offset], write_size);
             offset += write_size;
         }
         out.count++;
     }
+    UDPARD_ASSERT((offset == payload_size_with_crc) || (out.tail == NULL));
     return out;
 }
 
@@ -446,7 +419,7 @@ int8_t udpardTxInit(UdpardTx* const            self,
         (void) memset(self, 0, sizeof(*self));
         self->local_node_id  = local_node_id;
         self->queue_capacity = queue_capacity;
-        self->mtu_bytes      = UDPARD_MTU_DEFAULT;
+        self->mtu            = UDPARD_MTU_DEFAULT;
         // The DSCP mapping recommended by the Specification.
         self->dscp_value_per_priority[UdpardPriorityExceptional] = 0x00;
         self->dscp_value_per_priority[UdpardPriorityImmediate]   = 0x00;
@@ -481,8 +454,7 @@ int32_t udpardTxPublish(UdpardTx* const          self,
     (void) subject_id;
     *transfer_id = 0;
     (void) payload;
-    (void) txPushSingleFrame;
-    (void) txGenerateMultiFrameChain;
+    (void) txMakeChain;
     (void) makeSubjectUDPIPEndpoint;
     (void) makeServiceUDPIPEndpoint;
     return -1;

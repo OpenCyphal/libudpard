@@ -65,10 +65,14 @@ inline void traverse(const UdpardTreeNode* const root, const F& fun)
 /// An allocator that sits on top of the standard malloc() providing additional testing capabilities.
 /// It allows the user to specify the maximum amount of memory that can be allocated; further requests will emulate OOM.
 /// It also performs correctness checks on the memory use.
-class TestAllocator
+class TestAllocator final : public UdpardMemoryResource
 {
 public:
-    TestAllocator()                                         = default;
+    TestAllocator() :
+        UdpardMemoryResource{.allocate       = &TestAllocator::trampolineAllocate,
+                             .free           = &TestAllocator::trampolineFree,
+                             .user_reference = this}
+    {}
     TestAllocator(const TestAllocator&)                     = delete;
     TestAllocator(const TestAllocator&&)                    = delete;
     auto operator=(const TestAllocator&) -> TestAllocator&  = delete;
@@ -79,16 +83,8 @@ public:
         const std::unique_lock locker(lock_);
         for (const auto& pair : allocated_)
         {
-            // Clang-tidy complains about manual memory management. Suppressed because we need it for testing purposes.
-            std::free(pair.first - canary_.size());  // NOLINT
+            std::free(pair.first - canary_.size());
         }
-    }
-
-    [[nodiscard]] auto makeMemoryResource()
-    {
-        return UdpardMemoryResource{.allocate       = &TestAllocator::trampolineAllocate,
-                                    .free           = &TestAllocator::trampolineFree,
-                                    .user_reference = this};
     }
 
     [[nodiscard]] auto allocate(const std::size_t size) -> void*
@@ -98,8 +94,7 @@ public:
         if ((size > 0U) && ((getTotalAllocatedAmount() + size) <= ceiling_))
         {
             const auto size_with_canaries = size + canary_.size() * 2U;
-            // Clang-tidy complains about manual memory management. Suppressed because we need it for testing purposes.
-            p = static_cast<std::uint8_t*>(std::malloc(size_with_canaries));  // NOLINT
+            p                             = static_cast<std::uint8_t*>(std::malloc(size_with_canaries));
             if (p == nullptr)
             {
                 throw std::bad_alloc();  // This is a test suite failure, not a failed test. Mind the difference.
