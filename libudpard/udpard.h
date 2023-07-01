@@ -449,6 +449,7 @@ int8_t udpardTxInit(UdpardTx* const             self,
 /// There shall be a separate transfer-ID counter per subject (topic).
 /// The lifetime of the pointed-to transfer-ID counter must exceed the lifetime of the intent to publish on this
 /// subject (topic); one common approach is to use a static variable.
+/// The transfer-ID counter is not modified if the function fails.
 ///
 /// The user_transfer_reference is an opaque pointer that will be assigned to the user_transfer_reference field of
 /// each enqueued item. The library itself does not use or check this value in any way, so it can be NULL if not needed.
@@ -483,12 +484,12 @@ int8_t udpardTxInit(UdpardTx* const             self,
 /// The time complexity is O(p + log e), where p is the amount of payload in the transfer, and e is the number of
 /// frames already enqueued in the transmission queue.
 int32_t udpardTxPublish(UdpardTx* const          self,
-                        void* const              user_transfer_reference,
                         const UdpardMicrosecond  deadline_usec,
                         const UdpardPriority     priority,
                         const UdpardPortID       subject_id,
                         UdpardTransferID* const  transfer_id,
-                        const UdpardConstPayload payload);
+                        const UdpardConstPayload payload,
+                        void* const              user_transfer_reference);
 
 /// This is similar to udpardTxPublish except that it is intended for service request transfers.
 /// It takes the node-ID of the server that is intended to receive the request.
@@ -507,26 +508,26 @@ int32_t udpardTxPublish(UdpardTx* const          self,
 ///
 /// Other considerations are the same as for udpardTxPublish.
 int32_t udpardTxRequest(UdpardTx* const          self,
-                        void* const              user_transfer_reference,
                         const UdpardMicrosecond  deadline_usec,
                         const UdpardPriority     priority,
                         const UdpardPortID       service_id,
                         const UdpardNodeID       server_node_id,
                         UdpardTransferID* const  transfer_id,
-                        const UdpardConstPayload payload);
+                        const UdpardConstPayload payload,
+                        void* const              user_transfer_reference);
 
 /// This is similar to udpardTxRequest except that it takes the node-ID of the client instead of server,
 /// and the transfer-ID is passed by value rather than by pointer.
 /// The transfer-ID is passed by value because when responding to an RPC-service request, the server must
 /// reuse the transfer-ID value of the request (this is to allow the client to match responses with their requests).
 int32_t udpardTxRespond(UdpardTx* const          self,
-                        void* const              user_transfer_reference,
                         const UdpardMicrosecond  deadline_usec,
                         const UdpardPriority     priority,
                         const UdpardPortID       service_id,
                         const UdpardNodeID       client_node_id,
                         const UdpardTransferID   transfer_id,
-                        const UdpardConstPayload payload);
+                        const UdpardConstPayload payload,
+                        void* const              user_transfer_reference);
 
 /// This function accesses the enqueued UDP datagram scheduled for transmission next. The queue itself is not modified
 /// (i.e., the accessed element is not removed). The application should invoke this function to collect the datagrams

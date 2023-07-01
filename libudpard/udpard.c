@@ -467,7 +467,7 @@ UDPARD_PRIVATE int32_t txPush(UdpardTx* const           tx,
     {
         out = -UDPARD_ERROR_CAPACITY_LIMIT;
     }
-    UDPARD_ASSERT((out < 0) || (out >= 2));
+    UDPARD_ASSERT((out < 0) || (out >= 1));
     return out;
 }
 
@@ -485,16 +485,7 @@ int8_t udpardTxInit(UdpardTx* const             self,
         self->local_node_id  = local_node_id;
         self->queue_capacity = queue_capacity;
         self->mtu            = UDPARD_MTU_DEFAULT;
-        // The DSCP mapping recommended by the Specification.
-        self->dscp_value_per_priority[UdpardPriorityExceptional] = 0x00;
-        self->dscp_value_per_priority[UdpardPriorityImmediate]   = 0x00;
-        self->dscp_value_per_priority[UdpardPriorityFast]        = 0x00;
-        self->dscp_value_per_priority[UdpardPriorityHigh]        = 0x00;
-        self->dscp_value_per_priority[UdpardPriorityNominal]     = 0x00;
-        self->dscp_value_per_priority[UdpardPriorityLow]         = 0x00;
-        self->dscp_value_per_priority[UdpardPrioritySlow]        = 0x00;
-        self->dscp_value_per_priority[UdpardPriorityOptional]    = 0x00;
-        //
+        // The DSCP mapping recommended by the Specification is all zeroes, so we don't need to set it.
         self->memory     = memory;
         self->queue_size = 0;
         self->root       = NULL;
@@ -503,24 +494,102 @@ int8_t udpardTxInit(UdpardTx* const             self,
 }
 
 int32_t udpardTxPublish(UdpardTx* const          self,
-                        void* const              user_transfer_reference,
                         const UdpardMicrosecond  deadline_usec,
                         const UdpardPriority     priority,
                         const UdpardPortID       subject_id,
                         UdpardTransferID* const  transfer_id,
-                        const UdpardConstPayload payload)
+                        const UdpardConstPayload payload,
+                        void* const              user_transfer_reference)
 {
-    (void) self;
-    (void) user_transfer_reference;
-    (void) deadline_usec;
-    (void) priority;
-    (void) subject_id;
-    *transfer_id = 0;
-    (void) payload;
-    (void) makeSubjectUDPIPEndpoint;
-    (void) makeServiceUDPIPEndpoint;
-    (void) txPush;
-    return -1;
+    int32_t    out     = -UDPARD_ERROR_INVALID_ARGUMENT;
+    const bool args_ok = (self != NULL) && (self->local_node_id != NULL) && (priority <= UDPARD_PRIORITY_MAX) &&
+                         (subject_id <= UDPARD_SUBJECT_ID_MAX) && (transfer_id != NULL) &&
+                         ((payload.data != NULL) || (payload.size == 0U));
+    if (args_ok)
+    {
+        out = txPush(self,
+                     deadline_usec,
+                     (Metadata){
+                         .priority       = priority,
+                         .src_node_id    = *self->local_node_id,
+                         .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                         .transfer_id    = *transfer_id,
+                         .data_specifier = subject_id,
+                     },
+                     makeSubjectUDPIPEndpoint(subject_id),
+                     payload,
+                     user_transfer_reference);
+        if (out > 0)
+        {
+            ++*transfer_id;
+        }
+    }
+    return out;
+}
+
+int32_t udpardTxRequest(UdpardTx* const          self,
+                        const UdpardMicrosecond  deadline_usec,
+                        const UdpardPriority     priority,
+                        const UdpardPortID       service_id,
+                        const UdpardNodeID       server_node_id,
+                        UdpardTransferID* const  transfer_id,
+                        const UdpardConstPayload payload,
+                        void* const              user_transfer_reference)
+{
+    int32_t    out     = -UDPARD_ERROR_INVALID_ARGUMENT;
+    const bool args_ok = (self != NULL) && (self->local_node_id != NULL) && (priority <= UDPARD_PRIORITY_MAX) &&
+                         (service_id <= UDPARD_SERVICE_ID_MAX) && (transfer_id != NULL) &&
+                         ((payload.data != NULL) || (payload.size == 0U));
+    if (args_ok)
+    {
+        out = txPush(self,
+                     deadline_usec,
+                     (Metadata){
+                         .priority       = priority,
+                         .src_node_id    = *self->local_node_id,
+                         .dst_node_id    = server_node_id,
+                         .transfer_id    = *transfer_id,
+                         .data_specifier = service_id,
+                     },
+                     makeServiceUDPIPEndpoint(server_node_id),
+                     payload,
+                     user_transfer_reference);
+        if (out > 0)
+        {
+            ++*transfer_id;
+        }
+    }
+    return out;
+}
+
+int32_t udpardTxRespond(UdpardTx* const          self,
+                        const UdpardMicrosecond  deadline_usec,
+                        const UdpardPriority     priority,
+                        const UdpardPortID       service_id,
+                        const UdpardNodeID       client_node_id,
+                        const UdpardTransferID   transfer_id,
+                        const UdpardConstPayload payload,
+                        void* const              user_transfer_reference)
+{
+    int32_t    out     = -UDPARD_ERROR_INVALID_ARGUMENT;
+    const bool args_ok = (self != NULL) && (self->local_node_id != NULL) && (priority <= UDPARD_PRIORITY_MAX) &&
+                         (service_id <= UDPARD_SERVICE_ID_MAX) && ((payload.data != NULL) || (payload.size == 0U));
+    if (args_ok)
+    {
+        out = txPush(self,
+                     deadline_usec,
+                     (Metadata){
+                         .priority       = priority,
+                         .src_node_id    = *self->local_node_id,
+                         .dst_node_id    = client_node_id,
+                         .transfer_id    = transfer_id,
+                         .data_specifier = service_id,
+                     },
+                     makeServiceUDPIPEndpoint(client_node_id),
+                     payload,
+                     user_transfer_reference);
+    }
+    return out;
 }
 
 const UdpardTxItem* udpardTxPeek(const UdpardTx* const self)
