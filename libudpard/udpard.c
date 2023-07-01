@@ -90,6 +90,11 @@ UDPARD_PRIVATE size_t smaller(const size_t a, const size_t b)
     return (a < b) ? a : b;
 }
 
+UDPARD_PRIVATE size_t larger(const size_t a, const size_t b)
+{
+    return (a > b) ? a : b;
+}
+
 // --------------------------------------------- HEADER CRC ---------------------------------------------
 
 #define HEADER_CRC_INITIAL 0xFFFFU
@@ -406,13 +411,73 @@ UDPARD_PRIVATE TxChain txMakeChain(UdpardMemoryResource* const memory,
     return out;
 }
 
-int8_t udpardTxInit(UdpardTx* const            self,
-                    const UdpardNodeID* const  local_node_id,
-                    const size_t               queue_capacity,
-                    const UdpardMemoryResource memory)
+UDPARD_PRIVATE int32_t txPush(UdpardTx* const           tx,
+                              const UdpardMicrosecond   deadline_usec,
+                              const Metadata            meta,
+                              const UdpardUDPIPEndpoint endpoint,
+                              const UdpardConstPayload  payload,
+                              void* const               user_transfer_reference)
+{
+    UDPARD_ASSERT(tx != NULL);
+    int32_t      out         = 0;  // The number of frames enqueued or negated error.
+    const size_t mtu         = larger(tx->mtu, 1U);
+    const size_t frame_count = ((payload.size + TRANSFER_CRC_SIZE_BYTES + mtu) - 1U) / mtu;
+    UDPARD_ASSERT(frame_count > 0U);
+    if ((tx->queue_size + frame_count) <= tx->queue_capacity)  // Bail early if we can see that we won't fit anyway.
+    {
+        const TxChain chain = txMakeChain(tx->memory,
+                                          tx->dscp_value_per_priority,
+                                          mtu,
+                                          deadline_usec,
+                                          meta,
+                                          endpoint,
+                                          payload,
+                                          user_transfer_reference);
+        if (chain.tail != NULL)
+        {
+            UDPARD_ASSERT(frame_count == chain.count);
+            UdpardTxItem* next = &chain.head->base;
+            do
+            {
+                const UdpardTreeNode* const res =
+                    cavlSearch(&tx->root, &next->base, &txAVLPredicate, &avlTrivialFactory);
+                (void) res;
+                UDPARD_ASSERT(res == &next->base);
+                UDPARD_ASSERT(tx->root != NULL);
+                next = next->next_in_transfer;
+            } while (next != NULL);
+            tx->queue_size += chain.count;
+            UDPARD_ASSERT(tx->queue_size <= tx->queue_capacity);
+            UDPARD_ASSERT((chain.count + 0ULL) <= INT32_MAX);  // +0 is to suppress warning.
+            out = (int32_t) chain.count;
+        }
+        else  // The queue is large enough but we ran out of heap memory, so we have to unwind the chain.
+        {
+            out                = -UDPARD_ERROR_OUT_OF_MEMORY;
+            UdpardTxItem* head = &chain.head->base;
+            while (head != NULL)
+            {
+                UdpardTxItem* const next = head->next_in_transfer;
+                tx->memory->free(tx->memory, sizeof(TxItem) + head->datagram_payload.size, head);
+                head = next;
+            }
+        }
+    }
+    else  // Not enough space in the queue; this is a separate case.
+    {
+        out = -UDPARD_ERROR_CAPACITY_LIMIT;
+    }
+    UDPARD_ASSERT((out < 0) || (out >= 2));
+    return out;
+}
+
+int8_t udpardTxInit(UdpardTx* const             self,
+                    const UdpardNodeID* const   local_node_id,
+                    const size_t                queue_capacity,
+                    UdpardMemoryResource* const memory)
 {
     int8_t ret = -UDPARD_ERROR_INVALID_ARGUMENT;
-    if ((NULL != self) && (NULL != local_node_id) && isValidMemoryResource(&memory))
+    if ((NULL != self) && (NULL != local_node_id) && isValidMemoryResource(memory))
     {
         ret = 0;
         // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
@@ -445,8 +510,6 @@ int32_t udpardTxPublish(UdpardTx* const          self,
                         UdpardTransferID* const  transfer_id,
                         const UdpardConstPayload payload)
 {
-    (void) headerCRCCompute;
-    (void) transferCRCAdd;
     (void) self;
     (void) user_transfer_reference;
     (void) deadline_usec;
@@ -454,32 +517,47 @@ int32_t udpardTxPublish(UdpardTx* const          self,
     (void) subject_id;
     *transfer_id = 0;
     (void) payload;
-    (void) txMakeChain;
     (void) makeSubjectUDPIPEndpoint;
     (void) makeServiceUDPIPEndpoint;
-    (void) avlTrivialFactory;
-    (void) txAVLPredicate;
+    (void) txPush;
     return -1;
 }
 
-#if 0
+const UdpardTxItem* udpardTxPeek(const UdpardTx* const self)
+{
+    const UdpardTxItem* out = NULL;
+    if (self != NULL)
+    {
+        // Paragraph 6.7.2.1.15 of the C standard says:
+        //     A pointer to a structure object, suitably converted, points to its initial member, and vice versa.
+        out = (const UdpardTxItem*) (void*) cavlFindExtremum(self->root, false);
+    }
+    return out;
+}
 
-int32_t udpardTxRequest(UdpardTx* const          self,
-                        void* const              user_transfer_reference,
-                        const UdpardMicrosecond  deadline_usec,
-                        const UdpardPriority     priority,
-                        const UdpardPortID       service_id,
-                        const UdpardNodeID       server_node_id,
-                        UdpardTransferID* const  transfer_id,
-                        const UdpardConstPayload payload);
+UdpardTxItem* udpardTxPop(UdpardTx* const self, const UdpardTxItem* const item)
+{
+    UdpardTxItem* out = NULL;
+    if ((self != NULL) && (item != NULL))
+    {
+        // Intentional violation of MISRA: casting away const qualifier. This is considered safe because the API
+        // contract dictates that the pointer shall point to a mutable entity in RAM previously allocated by the
+        // memory manager. It is difficult to avoid this cast in this context.
+        out = (UdpardTxItem*) item;  // NOSONAR casting away const qualifier.
+        // Paragraph 6.7.2.1.15 of the C standard says:
+        //     A pointer to a structure object, suitably converted, points to its initial member, and vice versa.
+        // Note that the highest-priority frame is always a leaf node in the AVL tree, which means that it is very
+        // cheap to remove.
+        cavlRemove(&self->root, &item->base);
+        self->queue_size--;
+    }
+    return out;
+}
 
-int32_t udpardTxRespond(UdpardTx* const          self,
-                        void* const              user_transfer_reference,
-                        const UdpardMicrosecond  deadline_usec,
-                        const UdpardPriority     priority,
-                        const UdpardPortID       service_id,
-                        const UdpardNodeID       client_node_id,
-                        const UdpardTransferID   transfer_id,
-                        const UdpardConstPayload payload);
-
-#endif
+void udpardTxFree(UdpardMemoryResource* const memory, UdpardTxItem* const item)
+{
+    if ((memory != NULL) && (item != NULL))
+    {
+        memory->free(memory, sizeof(TxItem) + item->datagram_payload.size, item);
+    }
+}

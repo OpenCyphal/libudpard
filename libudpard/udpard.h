@@ -193,6 +193,7 @@ extern "C" {
 /// The error code 1 is not used because -1 is often used as a generic error code in 3rd-party code.
 #define UDPARD_ERROR_INVALID_ARGUMENT 2
 #define UDPARD_ERROR_OUT_OF_MEMORY 3
+#define UDPARD_ERROR_CAPACITY_LIMIT 4
 
 /// RFC 791 states that hosts must be prepared to accept datagrams of up to 576 octets and it is expected that this
 /// library will receive non IP-fragmented datagrams thus the minimum MTU should be larger than 576.
@@ -345,7 +346,7 @@ typedef struct
     const UdpardNodeID* local_node_id;
 
     /// The maximum number of UDP datagrams this instance is allowed to enqueue.
-    /// An attempt to push more will fail with an out-of-memory error even if the memory is not exhausted.
+    /// An attempt to push more will fail with the capacity limit error even if the memory is not exhausted.
     /// The purpose of this limitation is to ensure that a blocked queue does not exhaust the memory.
     size_t queue_capacity;
 
@@ -367,7 +368,7 @@ typedef struct
     /// There is exactly one allocation per enqueued item, each allocation contains both the UdpardTxItem
     /// and its payload.
     /// In a simple application there would be just one memory resource shared by all parts of the library.
-    UdpardMemoryResource memory;
+    UdpardMemoryResource* memory;
 
     /// The number of frames that are currently contained in the queue, initially zero.
     /// READ-ONLY
@@ -427,10 +428,10 @@ struct UdpardTxItem
 /// To safely discard it, simply pop all enqueued frames from it.
 ///
 /// The time complexity is constant. This function does not invoke the dynamic memory manager.
-int8_t udpardTxInit(UdpardTx* const            self,
-                    const UdpardNodeID* const  local_node_id,
-                    const size_t               queue_capacity,
-                    const UdpardMemoryResource memory);
+int8_t udpardTxInit(UdpardTx* const             self,
+                    const UdpardNodeID* const   local_node_id,
+                    const size_t                queue_capacity,
+                    UdpardMemoryResource* const memory);
 
 /// This function serializes a message transfer into a sequence of UDP datagrams and inserts them into the prioritized
 /// transmission queue at the appropriate position. Afterwards, the application is supposed to take the enqueued frames
@@ -462,17 +463,17 @@ int8_t udpardTxInit(UdpardTx* const            self,
 /// The function returns the number of UDP datagrams enqueued, which is always a positive number, in case of success.
 /// In case of failure, the function returns a negated error code: either invalid argument or out-of-memory.
 ///
-/// An invalid argument error may be returned in the following cases:
+/// The invalid argument error may be returned in the following cases:
 ///     - Any of the input arguments except user_transfer_reference are NULL.
 ///     - The priority or the port-ID exceed their respective maximums.
 ///     - The payload pointer is NULL while the payload size is nonzero.
 ///     - The local node is anonymous (the local node-ID is unset) and the transfer payload cannot fit into
 ///       a single datagram (a multi-frame transfer is required).
 ///
-/// An out-of-memory error is returned if a TX frame could not be allocated due to the memory being exhausted,
-/// or if the capacity of the queue would be exhausted by this operation. In such cases, all frames allocated for
-/// this transfer (if any) will be deallocated automatically. In other words, either all frames of the transfer are
-/// enqueued successfully, or none are.
+/// The out-of-memory error is returned if a TX frame could not be allocated due to the memory being exhausted.
+/// The capacity error is returned if the capacity of the queue would be exhausted by this operation.
+/// In such cases, all frames allocated for this transfer (if any) will be deallocated automatically.
+/// In other words, either all frames of the transfer are enqueued successfully, or none are.
 ///
 /// The memory allocation requirement is one allocation per datagram:
 /// a single-frame transfer takes one allocation; a multi-frame transfer of N frames takes N allocations.
@@ -540,7 +541,7 @@ int32_t udpardTxRespond(UdpardTx* const          self,
 ///
 /// If the queue is non-empty, the returned value is a pointer to its top element (i.e., the next item to transmit).
 /// The returned pointer points to an object allocated in the dynamic storage; it should be eventually freed by the
-/// application by calling UdpardTx::memory.free. The memory shall not be freed before the item is removed
+/// application by calling udpardTxFree with UdpardTx::memory. The memory shall not be freed before the item is removed
 /// from the queue by calling udpardTxPop; this is because until udpardTxPop is executed, the library retains
 /// ownership of the item. The pointer retains validity until explicitly freed by the application; in other words,
 /// calling udpardTxPop does not invalidate the object.
@@ -563,6 +564,12 @@ const UdpardTxItem* udpardTxPeek(const UdpardTx* const self);
 ///
 /// The time complexity is logarithmic of the queue size. This function does not invoke the dynamic memory manager.
 UdpardTxItem* udpardTxPop(UdpardTx* const self, const UdpardTxItem* const item);
+
+/// This is a simple helper that frees the memory allocated for the item with the correct size.
+/// It is needed because the application does not have access to the required context to compute the size.
+/// If the chosen allocator does not leverage the size information, the deallocation function can be invoked directly.
+/// If any of the arguments are NULL, the function has no effect. The time complexity is constant.
+void udpardTxFree(UdpardMemoryResource* const memory, UdpardTxItem* const item);
 
 // =====================================================================================================================
 // =================================================    RX PIPELINE    =================================================
@@ -662,8 +669,8 @@ typedef struct
     /// Simpler applications may choose to use the same memory resource for both.
     /// Special snowflakes may put a limit on the maximum number of sessions in use through a constrained
     /// memory resource.
-    UdpardMemoryResource memory_for_sessions;
-    UdpardMemoryResource memory_for_payloads;
+    UdpardMemoryResource* memory_for_sessions;
+    UdpardMemoryResource* memory_for_payloads;
 } UdpardRxSubscription;
 
 /// To subscribe to a subject, the application should do this:
@@ -697,8 +704,8 @@ typedef struct
 int8_t udpardRxSubscriptionInit(UdpardRxSubscription* const self,
                                 const UdpardPortID          subject_id,
                                 const size_t                extent,
-                                const UdpardMemoryResource  memory_for_sessions,
-                                const UdpardMemoryResource  memory_for_payloads);
+                                UdpardMemoryResource* const memory_for_sessions,
+                                UdpardMemoryResource* const memory_for_payloads);
 
 /// Frees all memory held by the subscription instance.
 /// After invoking this function, the instance is no longer usable.
@@ -797,8 +804,8 @@ typedef struct
 
     /// The application may choose to use dedicated memory resources for sessions (fixed-size allocations)
     /// and for the payload buffers (extent-sized allocations).
-    UdpardMemoryResource memory_for_sessions;
-    UdpardMemoryResource memory_for_payloads;
+    UdpardMemoryResource* memory_for_sessions;
+    UdpardMemoryResource* memory_for_payloads;
 
     /// READ-ONLY
     UdpardRxService* request_ports;
@@ -839,8 +846,8 @@ typedef struct
 /// The time complexity is constant. This function does not invoke the dynamic memory manager.
 int8_t udpardRxServiceDispatcherInit(UdpardRxServiceDispatcher* const self,
                                      const UdpardNodeID               local_node_id,
-                                     const UdpardMemoryResource       memory_for_sessions,
-                                     const UdpardMemoryResource       memory_for_payloads);
+                                     UdpardMemoryResource* const      memory_for_sessions,
+                                     UdpardMemoryResource* const      memory_for_payloads);
 
 /// Frees all memory held by the RPC-service dispatcher instance.
 /// After invoking this function, the instance is no longer usable.

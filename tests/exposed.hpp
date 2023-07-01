@@ -60,5 +60,12 @@ TxChain txMakeChain(UdpardMemoryResource* const memory,
                     const UdpardUDPIPEndpoint   endpoint,
                     const UdpardConstPayload    payload,
                     void* const                 user_transfer_reference);
+
+std::int32_t txPush(UdpardTx* const           tx,
+                    const UdpardMicrosecond   deadline_usec,
+                    const Metadata            meta,
+                    const UdpardUDPIPEndpoint endpoint,
+                    const UdpardConstPayload  payload,
+                    void* const               user_transfer_reference);
 }
 }  // namespace exposed

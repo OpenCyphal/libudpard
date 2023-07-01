@@ -11,11 +11,12 @@
 
 namespace
 {
+using exposed::HeaderSize;
 using exposed::Metadata;
 using exposed::TxItem;
-using exposed::txMakeChain;
-using exposed::HeaderSize;
 using exposed::txSerializeHeader;
+using exposed::txMakeChain;
+using exposed::txPush;
 
 // >>> from pycyphal.transport.commons.crc import CRC32C
 // >>> data = b"For us, the dark forest state is all-important, but it's just a detail of the cosmos."
@@ -31,6 +32,11 @@ constexpr std::array<std::uint8_t, 4> GrandSchemeCRC{{119, 220, 185, 219}};
 
 constexpr std::string_view            InterstellarWar = "You have not seen what a true interstellar war is like.";
 constexpr std::array<std::uint8_t, 4> InterstellarWarCRC{{102, 217, 109, 188}};
+
+constexpr std::string_view EtherealStrength =
+    "All was silent except for the howl of the wind against the antenna. Ye watched as the remaining birds in the "
+    "flock gradually settled back into the forest. She stared at the antenna and thought it looked like an enormous "
+    "hand stretched open toward the sky, possessing an ethereal strength.";
 
 auto makeHeader(const Metadata meta, const std::uint32_t frame_index, const bool end_of_transfer)
 {
@@ -110,7 +116,7 @@ TEST(TxPrivate, MakeChainEmpty)
     ASSERT_EQ(1, alloc.getNumAllocatedFragments());
     ASSERT_EQ(sizeof(TxItem) + HeaderSize + 4, alloc.getTotalAllocatedAmount());
     ASSERT_EQ(1, chain.count);
-    std::cout << hexdump::hexdump(chain.head->datagram_payload.data, chain.head->datagram_payload.size) << std::endl;
+    std::cout << hexdump::hexdump(chain.head->datagram_payload.data, chain.head->datagram_payload.size) << "\n\n";
     ASSERT_EQ(chain.head, chain.tail);
     ASSERT_EQ(nullptr, chain.head->next_in_transfer);
     ASSERT_EQ(1234567890, chain.head->deadline_usec);
@@ -150,7 +156,7 @@ TEST(TxPrivate, MakeChainSingleMaxMTU)
     ASSERT_EQ(sizeof(TxItem) + HeaderSize + DetailOfTheCosmos.size() + DetailOfTheCosmosCRC.size(),
               alloc.getTotalAllocatedAmount());
     ASSERT_EQ(1, chain.count);
-    std::cout << hexdump::hexdump(chain.head->datagram_payload.data, chain.head->datagram_payload.size) << std::endl;
+    std::cout << hexdump::hexdump(chain.head->datagram_payload.data, chain.head->datagram_payload.size) << "\n\n";
     ASSERT_EQ(chain.head, chain.tail);
     ASSERT_EQ(nullptr, chain.head->next_in_transfer);
     ASSERT_EQ(1234567890, chain.head->deadline_usec);
@@ -204,7 +210,7 @@ TEST(TxPrivate, MakeChainThreeFrames)
     ASSERT_EQ(chain.tail, third);
 
     // FIRST FRAME -- contains the first part of the payload.
-    std::cout << hexdump::hexdump(first->datagram_payload.data, first->datagram_payload.size) << std::endl;
+    std::cout << hexdump::hexdump(first->datagram_payload.data, first->datagram_payload.size) << "\n\n";
     ASSERT_EQ(223574680, first->deadline_usec);
     ASSERT_EQ(55, first->dscp);
     ASSERT_EQ(0xBABA'DEDAU, first->destination.ip_address);
@@ -218,7 +224,7 @@ TEST(TxPrivate, MakeChainThreeFrames)
     ASSERT_EQ(&user_transfer_referent, first->user_transfer_reference);
 
     // SECOND FRAME -- contains the second part of the payload.
-    std::cout << hexdump::hexdump(second->datagram_payload.data, second->datagram_payload.size) << std::endl;
+    std::cout << hexdump::hexdump(second->datagram_payload.data, second->datagram_payload.size) << "\n\n";
     ASSERT_EQ(223574680, second->deadline_usec);
     ASSERT_EQ(55, second->dscp);
     ASSERT_EQ(0xBABA'DEDAU, second->destination.ip_address);
@@ -232,7 +238,7 @@ TEST(TxPrivate, MakeChainThreeFrames)
     ASSERT_EQ(&user_transfer_referent, second->user_transfer_reference);
 
     // THIRD FRAME -- contains the third part of the payload and the CRC at the end.
-    std::cout << hexdump::hexdump(third->datagram_payload.data, third->datagram_payload.size) << std::endl;
+    std::cout << hexdump::hexdump(third->datagram_payload.data, third->datagram_payload.size) << "\n\n";
     ASSERT_EQ(223574680, third->deadline_usec);
     ASSERT_EQ(55, third->dscp);
     ASSERT_EQ(0xBABA'DEDAU, third->destination.ip_address);
@@ -279,7 +285,7 @@ TEST(TxPrivate, MakeChainCRCSpill1)
     ASSERT_EQ(nullptr, chain.tail->next_in_transfer);
 
     // FIRST FRAME -- contains the payload and the first three bytes of the CRC.
-    std::cout << hexdump::hexdump(chain.head->datagram_payload.data, chain.head->datagram_payload.size) << std::endl;
+    std::cout << hexdump::hexdump(chain.head->datagram_payload.data, chain.head->datagram_payload.size) << "\n\n";
     ASSERT_EQ(223574680, chain.head->deadline_usec);
     ASSERT_EQ(55, chain.head->dscp);
     ASSERT_EQ(0xBABA'DEDAU, chain.head->destination.ip_address);
@@ -298,7 +304,7 @@ TEST(TxPrivate, MakeChainCRCSpill1)
     ASSERT_EQ(&user_transfer_referent, chain.head->user_transfer_reference);
 
     // SECOND FRAME -- contains the last byte of the CRC.
-    std::cout << hexdump::hexdump(chain.tail->datagram_payload.data, chain.tail->datagram_payload.size) << std::endl;
+    std::cout << hexdump::hexdump(chain.tail->datagram_payload.data, chain.tail->datagram_payload.size) << "\n\n";
     ASSERT_EQ(223574680, chain.tail->deadline_usec);
     ASSERT_EQ(55, chain.tail->dscp);
     ASSERT_EQ(0xBABA'DEDAU, chain.tail->destination.ip_address);
@@ -340,7 +346,7 @@ TEST(TxPrivate, MakeChainCRCSpill2)
     ASSERT_EQ(nullptr, chain.tail->next_in_transfer);
 
     // FIRST FRAME -- contains the payload and the first two bytes of the CRC.
-    std::cout << hexdump::hexdump(chain.head->datagram_payload.data, chain.head->datagram_payload.size) << std::endl;
+    std::cout << hexdump::hexdump(chain.head->datagram_payload.data, chain.head->datagram_payload.size) << "\n\n";
     ASSERT_EQ(223574680, chain.head->deadline_usec);
     ASSERT_EQ(55, chain.head->dscp);
     ASSERT_EQ(0xBABA'DEDAU, chain.head->destination.ip_address);
@@ -359,7 +365,7 @@ TEST(TxPrivate, MakeChainCRCSpill2)
     ASSERT_EQ(&user_transfer_referent, chain.head->user_transfer_reference);
 
     // SECOND FRAME -- contains the last two bytes of the CRC.
-    std::cout << hexdump::hexdump(chain.tail->datagram_payload.data, chain.tail->datagram_payload.size) << std::endl;
+    std::cout << hexdump::hexdump(chain.tail->datagram_payload.data, chain.tail->datagram_payload.size) << "\n\n";
     ASSERT_EQ(223574680, chain.tail->deadline_usec);
     ASSERT_EQ(55, chain.tail->dscp);
     ASSERT_EQ(0xBABA'DEDAU, chain.tail->destination.ip_address);
@@ -401,7 +407,7 @@ TEST(TxPrivate, MakeChainCRCSpill3)
     ASSERT_EQ(nullptr, chain.tail->next_in_transfer);
 
     // FIRST FRAME -- contains the payload and the first byte of the CRC.
-    std::cout << hexdump::hexdump(chain.head->datagram_payload.data, chain.head->datagram_payload.size) << std::endl;
+    std::cout << hexdump::hexdump(chain.head->datagram_payload.data, chain.head->datagram_payload.size) << "\n\n";
     ASSERT_EQ(223574680, chain.head->deadline_usec);
     ASSERT_EQ(55, chain.head->dscp);
     ASSERT_EQ(0xBABA'DEDAU, chain.head->destination.ip_address);
@@ -420,7 +426,7 @@ TEST(TxPrivate, MakeChainCRCSpill3)
     ASSERT_EQ(&user_transfer_referent, chain.head->user_transfer_reference);
 
     // SECOND FRAME -- contains the last three bytes of the CRC.
-    std::cout << hexdump::hexdump(chain.tail->datagram_payload.data, chain.tail->datagram_payload.size) << std::endl;
+    std::cout << hexdump::hexdump(chain.tail->datagram_payload.data, chain.tail->datagram_payload.size) << "\n\n";
     ASSERT_EQ(223574680, chain.tail->deadline_usec);
     ASSERT_EQ(55, chain.tail->dscp);
     ASSERT_EQ(0xBABA'DEDAU, chain.tail->destination.ip_address);
@@ -462,7 +468,7 @@ TEST(TxPrivate, MakeChainCRCSpillFull)
     ASSERT_EQ(nullptr, chain.tail->next_in_transfer);
 
     // FIRST FRAME -- contains the payload only.
-    std::cout << hexdump::hexdump(chain.head->datagram_payload.data, chain.head->datagram_payload.size) << std::endl;
+    std::cout << hexdump::hexdump(chain.head->datagram_payload.data, chain.head->datagram_payload.size) << "\n\n";
     ASSERT_EQ(223574680, chain.head->deadline_usec);
     ASSERT_EQ(55, chain.head->dscp);
     ASSERT_EQ(0xBABA'DEDAU, chain.head->destination.ip_address);
@@ -477,7 +483,7 @@ TEST(TxPrivate, MakeChainCRCSpillFull)
     ASSERT_EQ(&user_transfer_referent, chain.head->user_transfer_reference);
 
     // SECOND FRAME -- contains the last byte of the CRC.
-    std::cout << hexdump::hexdump(chain.tail->datagram_payload.data, chain.tail->datagram_payload.size) << std::endl;
+    std::cout << hexdump::hexdump(chain.tail->datagram_payload.data, chain.tail->datagram_payload.size) << "\n\n";
     ASSERT_EQ(223574680, chain.tail->deadline_usec);
     ASSERT_EQ(55, chain.tail->dscp);
     ASSERT_EQ(0xBABA'DEDAU, chain.tail->destination.ip_address);
@@ -489,4 +495,151 @@ TEST(TxPrivate, MakeChainCRCSpillFull)
                           static_cast<exposed::byte_t*>(chain.tail->datagram_payload.data) + HeaderSize,
                           4U));
     ASSERT_EQ(&user_transfer_referent, chain.tail->user_transfer_reference);
+}
+
+TEST(TxPrivate, PushPeekPopFree)
+{
+    helpers::TestAllocator allocator;
+    const UdpardNodeID     node_id = 1234;
+    //
+    UdpardTx tx{
+        .local_node_id           = &node_id,
+        .queue_capacity          = 3,
+        .mtu                     = (EtherealStrength.size() + 4U + 3U) / 3U,
+        .dscp_value_per_priority = {0, 1, 2, 3, 4, 5, 6, 7},
+        .memory                  = &allocator,
+        .queue_size              = 0,
+        .root                    = nullptr,
+    };
+    const Metadata meta{
+        .priority       = UdpardPriorityNominal,
+        .src_node_id    = 4321,
+        .dst_node_id    = 5432,
+        .data_specifier = 7766,
+        .transfer_id    = 0x0123'4567'89AB'CDEFULL,
+    };
+    std::monostate user_transfer_referent;
+    ASSERT_EQ(3,
+              txPush(&tx,
+                     1234567890U,
+                     meta,
+                     {.ip_address = 0xBABA'DEDAU, .udp_port = 0xD0ED},
+                     {.size = EtherealStrength.size(), .data = EtherealStrength.data()},
+                     &user_transfer_referent));
+    ASSERT_EQ(3, allocator.getNumAllocatedFragments());
+    ASSERT_EQ(3 * (sizeof(TxItem) + HeaderSize) + EtherealStrength.size() + 4U, allocator.getTotalAllocatedAmount());
+    ASSERT_EQ(3, tx.queue_size);
+
+    const auto* frame = udpardTxPeek(&tx);
+    std::cout << hexdump::hexdump(frame->datagram_payload.data, frame->datagram_payload.size) << "\n\n";
+    ASSERT_NE(nullptr, frame);
+    ASSERT_NE(nullptr, frame->next_in_transfer);
+    ASSERT_EQ(1234567890U, frame->deadline_usec);
+    ASSERT_EQ(4, frame->dscp);
+    ASSERT_EQ(0xBABA'DEDAU, frame->destination.ip_address);
+    ASSERT_EQ(0xD0ED, frame->destination.udp_port);
+    ASSERT_EQ(HeaderSize + tx.mtu, frame->datagram_payload.size);
+    ASSERT_EQ(0, std::memcmp(makeHeader(meta, 0, false).data(), frame->datagram_payload.data, HeaderSize));
+    udpardTxFree(tx.memory, udpardTxPop(&tx, frame));
+
+    ASSERT_EQ(2, allocator.getNumAllocatedFragments());
+    ASSERT_EQ(2, tx.queue_size);
+
+    frame = udpardTxPeek(&tx);
+    std::cout << hexdump::hexdump(frame->datagram_payload.data, frame->datagram_payload.size) << "\n\n";
+    ASSERT_NE(nullptr, frame);
+    ASSERT_NE(nullptr, frame->next_in_transfer);
+    ASSERT_EQ(1234567890U, frame->deadline_usec);
+    ASSERT_EQ(4, frame->dscp);
+    ASSERT_EQ(0xBABA'DEDAU, frame->destination.ip_address);
+    ASSERT_EQ(0xD0ED, frame->destination.udp_port);
+    ASSERT_EQ(HeaderSize + tx.mtu, frame->datagram_payload.size);
+    ASSERT_EQ(0, std::memcmp(makeHeader(meta, 1, false).data(), frame->datagram_payload.data, HeaderSize));
+    udpardTxFree(tx.memory, udpardTxPop(&tx, frame));
+
+    ASSERT_EQ(1, allocator.getNumAllocatedFragments());
+    ASSERT_EQ(1, tx.queue_size);
+
+    frame = udpardTxPeek(&tx);
+    std::cout << hexdump::hexdump(frame->datagram_payload.data, frame->datagram_payload.size) << "\n\n";
+    ASSERT_NE(nullptr, frame);
+    ASSERT_EQ(nullptr, frame->next_in_transfer);
+    ASSERT_EQ(1234567890U, frame->deadline_usec);
+    ASSERT_EQ(4, frame->dscp);
+    ASSERT_EQ(0xBABA'DEDAU, frame->destination.ip_address);
+    ASSERT_EQ(0xD0ED, frame->destination.udp_port);
+    ASSERT_EQ(HeaderSize + EtherealStrength.size() - 2 * tx.mtu + 4U, frame->datagram_payload.size);
+    ASSERT_EQ(0, std::memcmp(makeHeader(meta, 2, true).data(), frame->datagram_payload.data, HeaderSize));
+    udpardTxFree(tx.memory, udpardTxPop(&tx, frame));
+
+    ASSERT_EQ(0, allocator.getNumAllocatedFragments());
+    ASSERT_EQ(0, tx.queue_size);
+    ASSERT_EQ(nullptr, udpardTxPeek(&tx));
+}
+
+TEST(TxPrivate, PushCapacityLimit)
+{
+    helpers::TestAllocator allocator;
+    const UdpardNodeID     node_id = 1234;
+    //
+    UdpardTx tx{
+        .local_node_id           = &node_id,
+        .queue_capacity          = 2,
+        .mtu                     = 10U,
+        .dscp_value_per_priority = {0, 1, 2, 3, 4, 5, 6, 7},
+        .memory                  = &allocator,
+        .queue_size              = 0,
+        .root                    = nullptr,
+    };
+    const Metadata meta{
+        .priority       = UdpardPriorityNominal,
+        .src_node_id    = 4321,
+        .dst_node_id    = 5432,
+        .data_specifier = 7766,
+        .transfer_id    = 0x0123'4567'89AB'CDEFULL,
+    };
+    ASSERT_EQ(-UDPARD_ERROR_CAPACITY_LIMIT,
+              txPush(&tx,
+                     1234567890U,
+                     meta,
+                     {.ip_address = 0xBABA'DEDAU, .udp_port = 0xD0ED},
+                     {.size = EtherealStrength.size(), .data = EtherealStrength.data()},
+                     nullptr));
+    ASSERT_EQ(0, allocator.getNumAllocatedFragments());
+    ASSERT_EQ(0, allocator.getTotalAllocatedAmount());
+    ASSERT_EQ(0, tx.queue_size);
+}
+
+TEST(TxPrivate, PushOOM)
+{
+    helpers::TestAllocator allocator;
+    const UdpardNodeID     node_id = 1234;
+    //
+    UdpardTx tx{
+        .local_node_id           = &node_id,
+        .queue_capacity          = 10'000U,
+        .mtu                     = (EtherealStrength.size() + 4U + 3U) / 3U,
+        .dscp_value_per_priority = {0, 1, 2, 3, 4, 5, 6, 7},
+        .memory                  = &allocator,
+        .queue_size              = 0,
+        .root                    = nullptr,
+    };
+    const Metadata meta{
+        .priority       = UdpardPriorityNominal,
+        .src_node_id    = 4321,
+        .dst_node_id    = 5432,
+        .data_specifier = 7766,
+        .transfer_id    = 0x0123'4567'89AB'CDEFULL,
+    };
+    allocator.setAllocationCeiling(EtherealStrength.size());  // No memory for the overheads.
+    ASSERT_EQ(-UDPARD_ERROR_OUT_OF_MEMORY,
+              txPush(&tx,
+                     1234567890U,
+                     meta,
+                     {.ip_address = 0xBABA'DEDAU, .udp_port = 0xD0ED},
+                     {.size = EtherealStrength.size(), .data = EtherealStrength.data()},
+                     nullptr));
+    ASSERT_EQ(0, allocator.getNumAllocatedFragments());
+    ASSERT_EQ(0, allocator.getTotalAllocatedAmount());
+    ASSERT_EQ(0, tx.queue_size);
 }
