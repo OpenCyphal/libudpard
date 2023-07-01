@@ -426,7 +426,7 @@ UDPARD_PRIVATE int32_t txPush(UdpardTx* const           tx,
     int32_t      out         = 0;  // The number of frames enqueued or negated error.
     const size_t mtu         = larger(tx->mtu, 1U);
     const size_t frame_count = ((payload.size + TRANSFER_CRC_SIZE_BYTES + mtu) - 1U) / mtu;
-    UDPARD_ASSERT((frame_count > 0U) && (frame_count <= INT32_MAX));
+    UDPARD_ASSERT((frame_count > 0U) && ((frame_count + 0ULL) <= INT32_MAX));  // +0 is to suppress warning.
     const bool anonymous = (*tx->local_node_id) > UDPARD_NODE_ID_MAX;
     const bool service   = (meta.data_specifier & DATA_SPECIFIER_SERVICE_NOT_MESSAGE_MASK) != 0;
     if (anonymous && ((frame_count > 1) || service))
@@ -548,8 +548,8 @@ int32_t udpardTxRequest(UdpardTx* const          self,
 {
     int32_t    out     = -UDPARD_ERROR_ARGUMENT;
     const bool args_ok = (self != NULL) && (self->local_node_id != NULL) && (priority <= UDPARD_PRIORITY_MAX) &&
-                         (service_id <= UDPARD_SERVICE_ID_MAX) && (transfer_id != NULL) &&
-                         ((payload.data != NULL) || (payload.size == 0U));
+                         (service_id <= UDPARD_SERVICE_ID_MAX) && (server_node_id <= UDPARD_NODE_ID_MAX) &&
+                         (transfer_id != NULL) && ((payload.data != NULL) || (payload.size == 0U));
     if (args_ok)
     {
         out = txPush(self,
@@ -584,7 +584,8 @@ int32_t udpardTxRespond(UdpardTx* const          self,
 {
     int32_t    out     = -UDPARD_ERROR_ARGUMENT;
     const bool args_ok = (self != NULL) && (self->local_node_id != NULL) && (priority <= UDPARD_PRIORITY_MAX) &&
-                         (service_id <= UDPARD_SERVICE_ID_MAX) && ((payload.data != NULL) || (payload.size == 0U));
+                         (service_id <= UDPARD_SERVICE_ID_MAX) && (client_node_id <= UDPARD_NODE_ID_MAX) &&
+                         ((payload.data != NULL) || (payload.size == 0U));
     if (args_ok)
     {
         out = txPush(self,
