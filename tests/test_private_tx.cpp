@@ -572,6 +572,175 @@ TEST(TxPrivate, PushPeekPopFree)
     ASSERT_EQ(nullptr, udpardTxPeek(&tx));
 }
 
+TEST(TxPrivate, PushPrioritization)
+{
+    helpers::TestAllocator allocator;
+    const UdpardNodeID     node_id = 1234;
+    //
+    UdpardTx tx{
+        .local_node_id           = &node_id,
+        .queue_capacity          = 7,
+        .mtu                     = 140,  // This is chosen to match the test data.
+        .dscp_value_per_priority = {0, 1, 2, 3, 4, 5, 6, 7},
+        .memory                  = &allocator,
+        .queue_size              = 0,
+        .root                    = nullptr,
+    };
+    // A -- Push the first multi-frame transfer at nominal priority level.
+    const Metadata meta_a{
+        .priority       = UdpardPriorityNominal,
+        .src_node_id    = 100,
+        .dst_node_id    = UDPARD_NODE_ID_UNSET,
+        .data_specifier = 200,
+        .transfer_id    = 5'000,
+    };
+    ASSERT_EQ(3,
+              txPush(&tx,
+                     0,
+                     meta_a,
+                     {.ip_address = 0xAAAA'AAAA, .udp_port = 0xAAAA},
+                     {.size = EtherealStrength.size(), .data = EtherealStrength.data()},
+                     nullptr));
+    ASSERT_EQ(3, allocator.getNumAllocatedFragments());
+    ASSERT_EQ(3, tx.queue_size);
+    const auto* frame = udpardTxPeek(&tx);
+    ASSERT_NE(nullptr, frame);
+    ASSERT_EQ(0xAAAA'AAAA, frame->destination.ip_address);
+
+    // B -- Next, push a higher-priority transfer and ensure it takes precedence.
+    ASSERT_EQ(1,
+              txPush(&tx,
+                     0,
+                     {
+                         .priority       = UdpardPriorityHigh,
+                         .src_node_id    = 100,
+                         .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                         .data_specifier = 200,
+                         .transfer_id    = 100'000,
+                     },
+                     {.ip_address = 0xBBBB'BBBB, .udp_port = 0xBBBB},
+                     {.size = DetailOfTheCosmos.size(), .data = DetailOfTheCosmos.data()},
+                     nullptr));
+    ASSERT_EQ(4, allocator.getNumAllocatedFragments());
+    ASSERT_EQ(4, tx.queue_size);
+    frame = udpardTxPeek(&tx);
+    ASSERT_NE(nullptr, frame);
+    ASSERT_EQ(0xBBBB'BBBB, frame->destination.ip_address);
+
+    // C -- Next, push a lower-priority transfer and ensure it goes towards the back.
+    ASSERT_EQ(1,
+              txPush(&tx,
+                     1002,
+                     {
+                         .priority       = UdpardPriorityLow,
+                         .src_node_id    = 100,
+                         .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                         .data_specifier = 200,
+                         .transfer_id    = 10'000,
+                     },
+                     {.ip_address = 0xCCCC'CCCC, .udp_port = 0xCCCC},
+                     {.size = InterstellarWar.size(), .data = InterstellarWar.data()},
+                     nullptr));
+    ASSERT_EQ(5, allocator.getNumAllocatedFragments());
+    ASSERT_EQ(5, tx.queue_size);
+    frame = udpardTxPeek(&tx);
+    ASSERT_NE(nullptr, frame);
+    ASSERT_EQ(0xBBBB'BBBB, frame->destination.ip_address);
+
+    // D -- Add another transfer like the previous one and ensure it goes in the back.
+    ASSERT_EQ(1,
+              txPush(&tx,
+                     1003,
+                     {
+                         .priority       = UdpardPriorityLow,
+                         .src_node_id    = 100,
+                         .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                         .data_specifier = 200,
+                         .transfer_id    = 10'001,
+                     },
+                     {.ip_address = 0xDDDD'DDDD, .udp_port = 0xDDDD},
+                     {.size = InterstellarWar.size(), .data = InterstellarWar.data()},
+                     nullptr));
+    ASSERT_EQ(6, allocator.getNumAllocatedFragments());
+    ASSERT_EQ(6, tx.queue_size);
+    frame = udpardTxPeek(&tx);
+    ASSERT_NE(nullptr, frame);
+    ASSERT_EQ(0xBBBB'BBBB, frame->destination.ip_address);
+
+    // E -- Add an even higher priority transfer.
+    ASSERT_EQ(1,
+              txPush(&tx,
+                     1003,
+                     {
+                         .priority       = UdpardPriorityFast,
+                         .src_node_id    = 100,
+                         .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                         .data_specifier = 200,
+                         .transfer_id    = 1'000,
+                     },
+                     {.ip_address = 0xEEEE'EEEE, .udp_port = 0xEEEE},
+                     {.size = InterstellarWar.size(), .data = InterstellarWar.data()},
+                     nullptr));
+    ASSERT_EQ(7, allocator.getNumAllocatedFragments());
+    ASSERT_EQ(7, tx.queue_size);
+    frame = udpardTxPeek(&tx);
+    ASSERT_NE(nullptr, frame);
+    ASSERT_EQ(0xEEEE'EEEE, frame->destination.ip_address);
+
+    // Now, unwind the queue and ensure the frames are popped in the right order.
+    // E
+    udpardTxFree(tx.memory, udpardTxPop(&tx, frame));
+    ASSERT_EQ(6, allocator.getNumAllocatedFragments());
+    ASSERT_EQ(6, tx.queue_size);
+    // B
+    frame = udpardTxPeek(&tx);
+    ASSERT_NE(nullptr, frame);
+    ASSERT_EQ(0xBBBB'BBBB, frame->destination.ip_address);
+    udpardTxFree(tx.memory, udpardTxPop(&tx, frame));
+    ASSERT_EQ(5, allocator.getNumAllocatedFragments());
+    ASSERT_EQ(5, tx.queue_size);
+    // A1, three frames.
+    frame = udpardTxPeek(&tx);
+    ASSERT_NE(nullptr, frame);
+    ASSERT_EQ(0xAAAA'AAAA, frame->destination.ip_address);
+    ASSERT_EQ(0, std::memcmp(makeHeader(meta_a, 0, false).data(), frame->datagram_payload.data, HeaderSize));
+    udpardTxFree(tx.memory, udpardTxPop(&tx, frame));
+    ASSERT_EQ(4, allocator.getNumAllocatedFragments());
+    ASSERT_EQ(4, tx.queue_size);
+    // A2
+    frame = udpardTxPeek(&tx);
+    ASSERT_NE(nullptr, frame);
+    ASSERT_EQ(0xAAAA'AAAA, frame->destination.ip_address);
+    ASSERT_EQ(0, std::memcmp(makeHeader(meta_a, 1, false).data(), frame->datagram_payload.data, HeaderSize));
+    udpardTxFree(tx.memory, udpardTxPop(&tx, frame));
+    ASSERT_EQ(3, allocator.getNumAllocatedFragments());
+    ASSERT_EQ(3, tx.queue_size);
+    // A3
+    frame = udpardTxPeek(&tx);
+    ASSERT_NE(nullptr, frame);
+    ASSERT_EQ(0xAAAA'AAAA, frame->destination.ip_address);
+    ASSERT_EQ(0, std::memcmp(makeHeader(meta_a, 2, true).data(), frame->datagram_payload.data, HeaderSize));
+    udpardTxFree(tx.memory, udpardTxPop(&tx, frame));
+    ASSERT_EQ(2, allocator.getNumAllocatedFragments());
+    ASSERT_EQ(2, tx.queue_size);
+    // C
+    frame = udpardTxPeek(&tx);
+    ASSERT_NE(nullptr, frame);
+    ASSERT_EQ(0xCCCC'CCCC, frame->destination.ip_address);
+    udpardTxFree(tx.memory, udpardTxPop(&tx, frame));
+    ASSERT_EQ(1, allocator.getNumAllocatedFragments());
+    ASSERT_EQ(1, tx.queue_size);
+    // D
+    frame = udpardTxPeek(&tx);
+    ASSERT_NE(nullptr, frame);
+    ASSERT_EQ(0xDDDD'DDDD, frame->destination.ip_address);
+    udpardTxFree(tx.memory, udpardTxPop(&tx, frame));
+    ASSERT_EQ(0, allocator.getNumAllocatedFragments());
+    ASSERT_EQ(0, tx.queue_size);
+
+    ASSERT_EQ(nullptr, udpardTxPeek(&tx));
+}
+
 TEST(TxPrivate, PushCapacityLimit)
 {
     helpers::TestAllocator allocator;
