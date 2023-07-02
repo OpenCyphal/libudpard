@@ -19,24 +19,19 @@ using exposed::txMakeChain;
 using exposed::txPush;
 
 // >>> from pycyphal.transport.commons.crc import CRC32C
-// >>> data = b"For us, the dark forest state is all-important, but it's just a detail of the cosmos."
 // >>> list(CRC32C.new(data).value_as_bytes)
-constexpr std::string_view DetailOfTheCosmos =
-    "For us, the dark forest state is all-important, but it's just a detail of the cosmos.";
-constexpr std::array<std::uint8_t, 4> DetailOfTheCosmosCRC{{125, 113, 207, 171}};
-
-constexpr std::string_view GrandScheme =
-    "If you think of the cosmos as a great battlefield, dark forest strikes are nothing more than snipers shooting at "
-    "the careless---messengers, mess men, etc. In the grand scheme of the battle, they are nothing.";
-constexpr std::array<std::uint8_t, 4> GrandSchemeCRC{{119, 220, 185, 219}};
-
-constexpr std::string_view            InterstellarWar = "You have not seen what a true interstellar war is like.";
-constexpr std::array<std::uint8_t, 4> InterstellarWarCRC{{102, 217, 109, 188}};
-
 constexpr std::string_view EtherealStrength =
     "All was silent except for the howl of the wind against the antenna. Ye watched as the remaining birds in the "
     "flock gradually settled back into the forest. She stared at the antenna and thought it looked like an enormous "
     "hand stretched open toward the sky, possessing an ethereal strength.";
+constexpr std::array<std::uint8_t, 4> EtherealStrengthCRC{{209, 88, 130, 43}};
+
+constexpr std::string_view DetailOfTheCosmos =
+    "For us, the dark forest state is all-important, but it's just a detail of the cosmos.";
+constexpr std::array<std::uint8_t, 4> DetailOfTheCosmosCRC{{125, 113, 207, 171}};
+
+constexpr std::string_view            InterstellarWar = "You have not seen what a true interstellar war is like.";
+constexpr std::array<std::uint8_t, 4> InterstellarWarCRC{{102, 217, 109, 188}};
 
 auto makeHeader(const Metadata meta, const std::uint32_t frame_index, const bool end_of_transfer)
 {
@@ -188,17 +183,17 @@ TEST(TxPrivate, MakeChainThreeFrames)
                 .data_specifier = 7766,
                 .transfer_id    = 0x0123'4567'89AB'CDEFULL,
     };
-    const auto mtu   = (GrandScheme.size() + 4U + 3U) / 3U;  // Force payload split into three frames.
+    const auto mtu   = (EtherealStrength.size() + 4U + 3U) / 3U;  // Force payload split into three frames.
     const auto chain = txMakeChain(&alloc,
                                    std::array<std::uint_least8_t, 8>{{11, 22, 33, 44, 55, 66, 77, 88}}.data(),
                                    mtu,
                                    223574680,
                                    meta,
                                    UdpardUDPIPEndpoint{.ip_address = 0xBABA'DEDAU, .udp_port = 0xD0ED},
-                                   UdpardConstPayload{.size = GrandScheme.size(), .data = GrandScheme.data()},
+                                   UdpardConstPayload{.size = EtherealStrength.size(), .data = EtherealStrength.data()},
                                    &user_transfer_referent);
     ASSERT_EQ(3, alloc.getNumAllocatedFragments());
-    ASSERT_EQ(3 * (sizeof(TxItem) + HeaderSize) + GrandScheme.size() + 4U, alloc.getTotalAllocatedAmount());
+    ASSERT_EQ(3 * (sizeof(TxItem) + HeaderSize) + EtherealStrength.size() + 4U, alloc.getTotalAllocatedAmount());
     ASSERT_EQ(3, chain.count);
     const auto* const first = chain.head;
     ASSERT_NE(nullptr, first);
@@ -218,7 +213,7 @@ TEST(TxPrivate, MakeChainThreeFrames)
     ASSERT_EQ(HeaderSize + mtu, first->datagram_payload.size);
     ASSERT_EQ(0, std::memcmp(makeHeader(meta, 0, false).data(), first->datagram_payload.data, HeaderSize));
     ASSERT_EQ(0,
-              std::memcmp(GrandScheme.data(),
+              std::memcmp(EtherealStrength.data(),
                           static_cast<exposed::byte_t*>(first->datagram_payload.data) + HeaderSize,
                           mtu));
     ASSERT_EQ(&user_transfer_referent, first->user_transfer_reference);
@@ -232,7 +227,7 @@ TEST(TxPrivate, MakeChainThreeFrames)
     ASSERT_EQ(HeaderSize + mtu, second->datagram_payload.size);
     ASSERT_EQ(0, std::memcmp(makeHeader(meta, 1, false).data(), second->datagram_payload.data, HeaderSize));
     ASSERT_EQ(0,
-              std::memcmp(GrandScheme.data() + mtu,
+              std::memcmp(EtherealStrength.data() + mtu,
                           static_cast<exposed::byte_t*>(second->datagram_payload.data) + HeaderSize,
                           mtu));
     ASSERT_EQ(&user_transfer_referent, second->user_transfer_reference);
@@ -243,17 +238,17 @@ TEST(TxPrivate, MakeChainThreeFrames)
     ASSERT_EQ(55, third->dscp);
     ASSERT_EQ(0xBABA'DEDAU, third->destination.ip_address);
     ASSERT_EQ(0xD0ED, third->destination.udp_port);
-    const auto third_payload_size = GrandScheme.size() - 2 * mtu;
+    const auto third_payload_size = EtherealStrength.size() - 2 * mtu;
     ASSERT_EQ(HeaderSize + third_payload_size + 4U, third->datagram_payload.size);
     ASSERT_EQ(0, std::memcmp(makeHeader(meta, 2, true).data(), third->datagram_payload.data, HeaderSize));
     ASSERT_EQ(0,
-              std::memcmp(GrandScheme.data() + 2 * mtu,
+              std::memcmp(EtherealStrength.data() + 2 * mtu,
                           static_cast<exposed::byte_t*>(third->datagram_payload.data) + HeaderSize,
                           third_payload_size));
     ASSERT_EQ(0,
-              std::memcmp(GrandSchemeCRC.data(),
+              std::memcmp(EtherealStrengthCRC.data(),
                           static_cast<exposed::byte_t*>(third->datagram_payload.data) + HeaderSize + third_payload_size,
-                          GrandSchemeCRC.size()));
+                          EtherealStrengthCRC.size()));
     ASSERT_EQ(&user_transfer_referent, third->user_transfer_reference);
 }
 
