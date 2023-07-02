@@ -232,8 +232,8 @@ UDPARD_PRIVATE bool isValidMemoryResource(const UdpardMemoryResource* const memo
 ///     structure object, but not at its beginning.
 typedef struct
 {
-    UdpardTxItem  base;
-    uint_least8_t precedence;  ///< Lower precedence handled first.
+    UdpardTxItem   base;
+    UdpardPriority priority;  ///< Do we need this exposed in the public structure? We already have DSCP there.
     // The MISRA violation here is hard to get rid of without having to allocate a separate memory block for the
     // payload, which is much more costly risk-wise.
     byte_t payload_buffer[];  // NOSONAR MISRA C 18.7 Flexible array member.
@@ -264,12 +264,11 @@ UDPARD_PRIVATE TxItem* txNewItem(UdpardMemoryResource* const memory,
         out->base.base.lr[0] = NULL;
         out->base.base.lr[1] = NULL;
         out->base.base.bf    = 0;
-        // The TX queue prioritization is based on the Cyphal priority level only.
-        // We may add more advanced prioritization policies later.
-        out->precedence = (uint_least8_t) priority;
         // Init metadata.
-        out->base.next_in_transfer        = NULL;  // Last by default.
-        out->base.deadline_usec           = deadline_usec;
+        out->priority              = priority;
+        out->base.next_in_transfer = NULL;  // Last by default.
+        out->base.deadline_usec    = deadline_usec;
+        UDPARD_ASSERT(priority <= UDPARD_PRIORITY_MAX);
         out->base.dscp                    = dscp_value_per_priority[priority];
         out->base.destination             = endpoint;
         out->base.user_transfer_reference = user_transfer_reference;
@@ -280,15 +279,15 @@ UDPARD_PRIVATE TxItem* txNewItem(UdpardMemoryResource* const memory,
     return out;
 }
 
-/// Frames with identical precedence are processed in the FIFO order.
-/// Frames with higher precedence compare smaller (i.e., put on the left side of the tree).
+/// Frames with identical weight are processed in the FIFO order.
+/// Frames with higher weight compare smaller (i.e., put on the left side of the tree).
 UDPARD_PRIVATE int8_t txAVLPredicate(void* const user_reference,  // NOSONAR Cavl API requires pointer to non-const.
                                      const UdpardTreeNode* const node)
 {
     const TxItem* const target = (const TxItem*) user_reference;
     const TxItem* const other  = (const TxItem*) (const void*) node;
     UDPARD_ASSERT((target != NULL) && (other != NULL));
-    return (target->precedence >= other->precedence) ? +1 : -1;
+    return (target->priority >= other->priority) ? +1 : -1;
 }
 
 UDPARD_PRIVATE byte_t* txSerializeU16(byte_t* const destination_buffer, const uint16_t value)
