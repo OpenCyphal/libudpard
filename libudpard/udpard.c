@@ -54,7 +54,9 @@ typedef struct
 
 #define HEADER_SIZE_BYTES 24U
 #define HEADER_VERSION 1U
+/// The frame index is a 31-bit unsigned integer. The most significant bit is used to indicate the end of transfer.
 #define HEADER_FRAME_INDEX_EOT_MASK 0x80000000UL
+#define HEADER_FRAME_INDEX_MAX 0x7FFFFFFFUL
 
 // See Cyphal/UDP Specification, section 4.3.2.1 Endpoints.
 #define SUBJECT_MULTICAST_GROUP_ADDRESS_MASK 0xEF000000UL
@@ -331,8 +333,9 @@ UDPARD_PRIVATE byte_t* txSerializeHeader(byte_t* const          destination_buff
     p         = txSerializeU16(p, meta.dst_node_id);
     p         = txSerializeU16(p, meta.data_specifier);
     p         = txSerializeU64(p, meta.transfer_id);
-    p         = txSerializeU32(p, frame_index | (end_of_transfer ? HEADER_FRAME_INDEX_EOT_MASK : 0U));
-    p         = txSerializeU16(p, 0);  // opaque user data
+    UDPARD_ASSERT((frame_index + 0UL) <= HEADER_FRAME_INDEX_MAX);  // +0UL is to avoid a compiler warning.
+    p = txSerializeU32(p, frame_index | (end_of_transfer ? HEADER_FRAME_INDEX_EOT_MASK : 0U));
+    p = txSerializeU16(p, 0);  // opaque user data
     // Header CRC in the big endian format. Optimization prospect: the header up to frame_index is constant in
     // multi-frame transfers, so we don't really need to recompute the CRC from scratch per frame.
     const uint16_t crc = headerCRCCompute(HEADER_SIZE_BYTES - HEADER_CRC_SIZE_BYTES, destination_buffer);
@@ -408,7 +411,7 @@ UDPARD_PRIVATE TxChain txMakeChain(UdpardMemoryResource* const memory,
             (void) memcpy(write_ptr, &crc_bytes[crc_offset], write_size);
             offset += write_size;
         }
-        UDPARD_ASSERT((out.count + 0ULL) < INT32_MAX);  // +0 is to suppress warning.
+        UDPARD_ASSERT((out.count + 0ULL) < HEADER_FRAME_INDEX_MAX);  // +0 is to suppress warning.
         out.count++;
     }
     UDPARD_ASSERT((offset == payload_size_with_crc) || (out.tail == NULL));
