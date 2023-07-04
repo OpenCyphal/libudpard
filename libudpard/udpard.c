@@ -38,7 +38,7 @@
 typedef uint_least8_t byte_t;  ///< For compatibility with platforms where byte size is not 8 bits.
 
 static const uint_fast8_t ByteWidth = 8U;
-static const byte_t       ByteMax   = 0xFFU;
+static const byte_t       ByteMask  = 0xFFU;
 
 typedef struct
 {
@@ -47,12 +47,12 @@ typedef struct
     UdpardNodeID     dst_node_id;
     uint16_t         data_specifier;
     UdpardTransferID transfer_id;
-} Metadata;
+} TransferMetadata;
 
 #define DATA_SPECIFIER_SERVICE_NOT_MESSAGE_MASK 0x8000U
 #define DATA_SPECIFIER_SERVICE_REQUEST_NOT_RESPONSE_MASK 0x4000U
 
-#define HEADER_SIZE 24U
+#define HEADER_SIZE_BYTES 24U
 #define HEADER_VERSION 1U
 #define HEADER_FRAME_INDEX_EOT_MASK 0x80000000UL
 
@@ -82,7 +82,7 @@ UDPARD_PRIVATE UdpardUDPIPEndpoint makeServiceUDPIPEndpoint(const UdpardNodeID d
                                  .udp_port   = UDPARD_UDP_PORT};
 }
 
-/// Used for inserting new items into AVL trees.
+/// Used for inserting new items into AVL trees. Refer to the documentation for cavlSearch() for details.
 UDPARD_PRIVATE UdpardTreeNode* avlTrivialFactory(void* const user_reference)
 {
     return (UdpardTreeNode*) user_reference;
@@ -131,7 +131,7 @@ UDPARD_PRIVATE uint16_t headerCRCAddByte(const uint16_t crc, const byte_t byte)
         0x2E93U, 0x3EB2U, 0x0ED1U, 0x1EF0U,
     };
     return (uint16_t) ((uint16_t) (crc << ByteWidth) ^
-                       Table[(uint16_t) ((uint16_t) (crc >> ByteWidth) ^ byte) & ByteMax]);
+                       Table[(uint16_t) ((uint16_t) (crc >> ByteWidth) ^ byte) & ByteMask]);
 }
 
 UDPARD_PRIVATE uint16_t headerCRCCompute(const size_t size, const void* const data)
@@ -190,7 +190,7 @@ UDPARD_PRIVATE uint32_t transferCRCAddByte(const uint32_t crc, const byte_t byte
         0xF36E6F75UL, 0x0105EC76UL, 0x12551F82UL, 0xE03E9C81UL, 0x34F4F86AUL, 0xC69F7B69UL, 0xD5CF889DUL, 0x27A40B9EUL,
         0x79B737BAUL, 0x8BDCB4B9UL, 0x988C474DUL, 0x6AE7C44EUL, 0xBE2DA0A5UL, 0x4C4623A6UL, 0x5F16D052UL, 0xAD7D5351UL,
     };
-    return (crc >> ByteWidth) ^ Table[byte ^ (crc & ByteMax)];
+    return (crc >> ByteWidth) ^ Table[byte ^ (crc & ByteMask)];
 }
 
 /// Do not forget to apply the output XOR when done, or use transferCRCCompute().
@@ -290,11 +290,12 @@ UDPARD_PRIVATE int8_t txAVLPredicate(void* const user_reference,  // NOSONAR Cav
     return (target->priority >= other->priority) ? +1 : -1;
 }
 
+/// The primitive serialization functions are endian-agnostic.
 UDPARD_PRIVATE byte_t* txSerializeU16(byte_t* const destination_buffer, const uint16_t value)
 {
     byte_t* p = destination_buffer;
-    *p++      = (byte_t) (value & ByteMax);
-    *p++      = (byte_t) ((byte_t) (value >> ByteWidth) & ByteMax);
+    *p++      = (byte_t) (value & ByteMask);
+    *p++      = (byte_t) ((byte_t) (value >> ByteWidth) & ByteMask);
     return p;
 }
 
@@ -303,7 +304,7 @@ UDPARD_PRIVATE byte_t* txSerializeU32(byte_t* const destination_buffer, const ui
     byte_t* p = destination_buffer;
     for (size_t i = 0; i < sizeof(value); i++)  // We sincerely hope that the compiler will use memcpy.
     {
-        *p++ = (byte_t) ((byte_t) (value >> (i * ByteWidth)) & ByteMax);
+        *p++ = (byte_t) ((byte_t) (value >> (i * ByteWidth)) & ByteMask);
     }
     return p;
 }
@@ -313,15 +314,15 @@ UDPARD_PRIVATE byte_t* txSerializeU64(byte_t* const destination_buffer, const ui
     byte_t* p = destination_buffer;
     for (size_t i = 0; i < sizeof(value); i++)  // We sincerely hope that the compiler will use memcpy.
     {
-        *p++ = (byte_t) ((byte_t) (value >> (i * ByteWidth)) & ByteMax);
+        *p++ = (byte_t) ((byte_t) (value >> (i * ByteWidth)) & ByteMask);
     }
     return p;
 }
 
-UDPARD_PRIVATE byte_t* txSerializeHeader(byte_t* const  destination_buffer,
-                                         const Metadata meta,
-                                         const uint32_t frame_index,
-                                         const bool     end_of_transfer)
+UDPARD_PRIVATE byte_t* txSerializeHeader(byte_t* const          destination_buffer,
+                                         const TransferMetadata meta,
+                                         const uint32_t         frame_index,
+                                         const bool             end_of_transfer)
 {
     byte_t* p = destination_buffer;
     *p++      = HEADER_VERSION;
@@ -334,10 +335,10 @@ UDPARD_PRIVATE byte_t* txSerializeHeader(byte_t* const  destination_buffer,
     p         = txSerializeU16(p, 0);  // opaque user data
     // Header CRC in the big endian format. Optimization prospect: the header up to frame_index is constant in
     // multi-frame transfers, so we don't really need to recompute the CRC from scratch per frame.
-    const uint16_t crc = headerCRCCompute(HEADER_SIZE - HEADER_CRC_SIZE_BYTES, destination_buffer);
-    *p++               = (byte_t) ((byte_t) (crc >> ByteWidth) & ByteMax);
-    *p++               = (byte_t) (crc & ByteMax);
-    UDPARD_ASSERT(p == (destination_buffer + HEADER_SIZE));
+    const uint16_t crc = headerCRCCompute(HEADER_SIZE_BYTES - HEADER_CRC_SIZE_BYTES, destination_buffer);
+    *p++               = (byte_t) ((byte_t) (crc >> ByteWidth) & ByteMask);
+    *p++               = (byte_t) (crc & ByteMask);
+    UDPARD_ASSERT(p == (destination_buffer + HEADER_SIZE_BYTES));
     return p;
 }
 
@@ -347,7 +348,7 @@ UDPARD_PRIVATE TxChain txMakeChain(UdpardMemoryResource* const memory,
                                    const uint_least8_t         dscp_value_per_priority[UDPARD_PRIORITY_MAX + 1U],
                                    const size_t                mtu,
                                    const UdpardMicrosecond     deadline_usec,
-                                   const Metadata              meta,
+                                   const TransferMetadata      meta,
                                    const UdpardUDPIPEndpoint   endpoint,
                                    const UdpardConstPayload    payload,
                                    void* const                 user_transfer_reference)
@@ -367,7 +368,7 @@ UDPARD_PRIVATE TxChain txMakeChain(UdpardMemoryResource* const memory,
                                       deadline_usec,
                                       meta.priority,
                                       endpoint,
-                                      smaller(payload_size_with_crc - offset, mtu) + HEADER_SIZE,
+                                      smaller(payload_size_with_crc - offset, mtu) + HEADER_SIZE_BYTES,
                                       user_transfer_reference);
         if (NULL == out.head)
         {
@@ -407,8 +408,8 @@ UDPARD_PRIVATE TxChain txMakeChain(UdpardMemoryResource* const memory,
             (void) memcpy(write_ptr, &crc_bytes[crc_offset], write_size);
             offset += write_size;
         }
+        UDPARD_ASSERT((out.count + 0ULL) < INT32_MAX);  // +0 is to suppress warning.
         out.count++;
-        UDPARD_ASSERT((out.count + 0ULL) <= INT32_MAX);  // +0 is to suppress warning.
     }
     UDPARD_ASSERT((offset == payload_size_with_crc) || (out.tail == NULL));
     return out;
@@ -416,7 +417,7 @@ UDPARD_PRIVATE TxChain txMakeChain(UdpardMemoryResource* const memory,
 
 UDPARD_PRIVATE int32_t txPush(UdpardTx* const           tx,
                               const UdpardMicrosecond   deadline_usec,
-                              const Metadata            meta,
+                              const TransferMetadata    meta,
                               const UdpardUDPIPEndpoint endpoint,
                               const UdpardConstPayload  payload,
                               void* const               user_transfer_reference)
@@ -518,7 +519,7 @@ int32_t udpardTxPublish(UdpardTx* const          self,
     {
         out = txPush(self,
                      deadline_usec,
-                     (Metadata){
+                     (TransferMetadata){
                          .priority       = priority,
                          .src_node_id    = *self->local_node_id,
                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
@@ -553,7 +554,7 @@ int32_t udpardTxRequest(UdpardTx* const          self,
     {
         out = txPush(self,
                      deadline_usec,
-                     (Metadata){
+                     (TransferMetadata){
                          .priority       = priority,
                          .src_node_id    = *self->local_node_id,
                          .dst_node_id    = server_node_id,
@@ -589,7 +590,7 @@ int32_t udpardTxRespond(UdpardTx* const          self,
     {
         out = txPush(self,
                      deadline_usec,
-                     (Metadata){
+                     (TransferMetadata){
                          .priority       = priority,
                          .src_node_id    = *self->local_node_id,
                          .dst_node_id    = client_node_id,

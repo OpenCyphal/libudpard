@@ -19,7 +19,7 @@ using byte_t = std::uint_least8_t;
 
 constexpr std::size_t HeaderSize = 24U;
 
-struct Metadata final
+struct TransferMetadata final
 {
     UdpardPriority   priority;
     UdpardNodeID     src_node_id;
@@ -30,7 +30,7 @@ struct Metadata final
 
 struct TxItem final : public UdpardTxItem
 {
-    std::uint_least8_t precedence;
+    UdpardPriority priority;
     // flex array not included
 };
 
@@ -46,23 +46,23 @@ std::uint16_t headerCRCCompute(const std::size_t size, const void* const data);
 
 std::uint32_t transferCRCAdd(const std::uint32_t crc, const std::size_t size, const void* const data);
 
-byte_t* txSerializeHeader(byte_t* const       destination_buffer,
-                          const Metadata      meta,
-                          const std::uint32_t frame_index,
-                          const bool          end_of_transfer);
+byte_t* txSerializeHeader(byte_t* const          destination_buffer,
+                          const TransferMetadata meta,
+                          const std::uint32_t    frame_index,
+                          const bool             end_of_transfer);
 
 TxChain txMakeChain(UdpardMemoryResource* const memory,
                     const std::uint_least8_t    dscp_value_per_priority[UDPARD_PRIORITY_MAX + 1U],
                     const std::size_t           mtu,
                     const UdpardMicrosecond     deadline_usec,
-                    const Metadata              meta,
+                    const TransferMetadata      meta,
                     const UdpardUDPIPEndpoint   endpoint,
                     const UdpardConstPayload    payload,
                     void* const                 user_transfer_reference);
 
 std::int32_t txPush(UdpardTx* const           tx,
                     const UdpardMicrosecond   deadline_usec,
-                    const Metadata            meta,
+                    const TransferMetadata    meta,
                     const UdpardUDPIPEndpoint endpoint,
                     const UdpardConstPayload  payload,
                     void* const               user_transfer_reference);

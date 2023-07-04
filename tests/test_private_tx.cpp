@@ -12,7 +12,7 @@
 namespace
 {
 using exposed::HeaderSize;
-using exposed::Metadata;
+using exposed::TransferMetadata;
 using exposed::TxItem;
 using exposed::txSerializeHeader;
 using exposed::txMakeChain;
@@ -33,7 +33,7 @@ constexpr std::array<std::uint8_t, 4> DetailOfTheCosmosCRC{{125, 113, 207, 171}}
 constexpr std::string_view            InterstellarWar = "You have not seen what a true interstellar war is like.";
 constexpr std::array<std::uint8_t, 4> InterstellarWarCRC{{102, 217, 109, 188}};
 
-auto makeHeader(const Metadata meta, const std::uint32_t frame_index, const bool end_of_transfer)
+auto makeHeader(const TransferMetadata meta, const std::uint32_t frame_index, const bool end_of_transfer)
 {
     std::array<exposed::byte_t, HeaderSize> buffer{};
     (void) txSerializeHeader(buffer.data(), meta, frame_index, end_of_transfer);
@@ -93,12 +93,12 @@ TEST(TxPrivate, MakeChainEmpty)
 {
     helpers::TestAllocator alloc;
     std::monostate         user_transfer_referent;
-    const Metadata         meta{
-                .priority       = UdpardPriorityFast,
-                .src_node_id    = 1234,
-                .dst_node_id    = 2345,
-                .data_specifier = 5432,
-                .transfer_id    = 0xBADC'0FFE'E0DD'F00DULL,
+    const TransferMetadata meta{
+        .priority       = UdpardPriorityFast,
+        .src_node_id    = 1234,
+        .dst_node_id    = 2345,
+        .data_specifier = 5432,
+        .transfer_id    = 0xBADC'0FFE'E0DD'F00DULL,
     };
     const auto chain = txMakeChain(&alloc,
                                    std::array<std::uint_least8_t, 8>{{11, 22, 33, 44, 55, 66, 77, 88}}.data(),
@@ -131,12 +131,12 @@ TEST(TxPrivate, MakeChainSingleMaxMTU)
 {
     helpers::TestAllocator alloc;
     std::monostate         user_transfer_referent;
-    const Metadata         meta{
-                .priority       = UdpardPrioritySlow,
-                .src_node_id    = 4321,
-                .dst_node_id    = 5432,
-                .data_specifier = 7766,
-                .transfer_id    = 0x0123'4567'89AB'CDEFULL,
+    const TransferMetadata meta{
+        .priority       = UdpardPrioritySlow,
+        .src_node_id    = 4321,
+        .dst_node_id    = 5432,
+        .data_specifier = 7766,
+        .transfer_id    = 0x0123'4567'89AB'CDEFULL,
     };
     const auto chain =
         txMakeChain(&alloc,
@@ -176,12 +176,12 @@ TEST(TxPrivate, MakeChainThreeFrames)
 {
     helpers::TestAllocator alloc;
     std::monostate         user_transfer_referent;
-    const Metadata         meta{
-                .priority       = UdpardPriorityNominal,
-                .src_node_id    = 4321,
-                .dst_node_id    = 5432,
-                .data_specifier = 7766,
-                .transfer_id    = 0x0123'4567'89AB'CDEFULL,
+    const TransferMetadata meta{
+        .priority       = UdpardPriorityNominal,
+        .src_node_id    = 4321,
+        .dst_node_id    = 5432,
+        .data_specifier = 7766,
+        .transfer_id    = 0x0123'4567'89AB'CDEFULL,
     };
     const auto mtu   = (EtherealStrength.size() + 4U + 3U) / 3U;  // Force payload split into three frames.
     const auto chain = txMakeChain(&alloc,
@@ -256,12 +256,12 @@ TEST(TxPrivate, MakeChainCRCSpill1)
 {
     helpers::TestAllocator alloc;
     std::monostate         user_transfer_referent;
-    const Metadata         meta{
-                .priority       = UdpardPriorityNominal,
-                .src_node_id    = 4321,
-                .dst_node_id    = 5432,
-                .data_specifier = 7766,
-                .transfer_id    = 0x0123'4567'89AB'CDEFULL,
+    const TransferMetadata meta{
+        .priority       = UdpardPriorityNominal,
+        .src_node_id    = 4321,
+        .dst_node_id    = 5432,
+        .data_specifier = 7766,
+        .transfer_id    = 0x0123'4567'89AB'CDEFULL,
     };
     const auto mtu   = InterstellarWar.size() + 3U;
     const auto chain = txMakeChain(&alloc,
@@ -317,12 +317,12 @@ TEST(TxPrivate, MakeChainCRCSpill2)
 {
     helpers::TestAllocator alloc;
     std::monostate         user_transfer_referent;
-    const Metadata         meta{
-                .priority       = UdpardPriorityNominal,
-                .src_node_id    = 4321,
-                .dst_node_id    = 5432,
-                .data_specifier = 7766,
-                .transfer_id    = 0x0123'4567'89AB'CDEFULL,
+    const TransferMetadata meta{
+        .priority       = UdpardPriorityNominal,
+        .src_node_id    = 4321,
+        .dst_node_id    = 5432,
+        .data_specifier = 7766,
+        .transfer_id    = 0x0123'4567'89AB'CDEFULL,
     };
     const auto mtu   = InterstellarWar.size() + 2U;
     const auto chain = txMakeChain(&alloc,
@@ -378,12 +378,12 @@ TEST(TxPrivate, MakeChainCRCSpill3)
 {
     helpers::TestAllocator alloc;
     std::monostate         user_transfer_referent;
-    const Metadata         meta{
-                .priority       = UdpardPriorityNominal,
-                .src_node_id    = 4321,
-                .dst_node_id    = 5432,
-                .data_specifier = 7766,
-                .transfer_id    = 0x0123'4567'89AB'CDEFULL,
+    const TransferMetadata meta{
+        .priority       = UdpardPriorityNominal,
+        .src_node_id    = 4321,
+        .dst_node_id    = 5432,
+        .data_specifier = 7766,
+        .transfer_id    = 0x0123'4567'89AB'CDEFULL,
     };
     const auto mtu   = InterstellarWar.size() + 1U;
     const auto chain = txMakeChain(&alloc,
@@ -439,12 +439,12 @@ TEST(TxPrivate, MakeChainCRCSpillFull)
 {
     helpers::TestAllocator alloc;
     std::monostate         user_transfer_referent;
-    const Metadata         meta{
-                .priority       = UdpardPriorityNominal,
-                .src_node_id    = 4321,
-                .dst_node_id    = 5432,
-                .data_specifier = 7766,
-                .transfer_id    = 0x0123'4567'89AB'CDEFULL,
+    const TransferMetadata meta{
+        .priority       = UdpardPriorityNominal,
+        .src_node_id    = 4321,
+        .dst_node_id    = 5432,
+        .data_specifier = 7766,
+        .transfer_id    = 0x0123'4567'89AB'CDEFULL,
     };
     const auto mtu   = InterstellarWar.size();
     const auto chain = txMakeChain(&alloc,
@@ -506,7 +506,7 @@ TEST(TxPrivate, PushPeekPopFree)
         .queue_size              = 0,
         .root                    = nullptr,
     };
-    const Metadata meta{
+    const TransferMetadata meta{
         .priority       = UdpardPriorityNominal,
         .src_node_id    = 4321,
         .dst_node_id    = 5432,
@@ -587,7 +587,7 @@ TEST(TxPrivate, PushPrioritization)
         .root                    = nullptr,
     };
     // A -- Push the first multi-frame transfer at nominal priority level.
-    const Metadata meta_a{
+    const TransferMetadata meta_a{
         .priority       = UdpardPriorityNominal,
         .src_node_id    = 100,
         .dst_node_id    = UDPARD_NODE_ID_UNSET,
@@ -755,7 +755,7 @@ TEST(TxPrivate, PushCapacityLimit)
         .queue_size              = 0,
         .root                    = nullptr,
     };
-    const Metadata meta{
+    const TransferMetadata meta{
         .priority       = UdpardPriorityNominal,
         .src_node_id    = 4321,
         .dst_node_id    = 5432,
@@ -788,7 +788,7 @@ TEST(TxPrivate, PushOOM)
         .queue_size              = 0,
         .root                    = nullptr,
     };
-    const Metadata meta{
+    const TransferMetadata meta{
         .priority       = UdpardPriorityNominal,
         .src_node_id    = 4321,
         .dst_node_id    = 5432,
@@ -822,7 +822,7 @@ TEST(TxPrivate, PushAnonymousMultiFrame)
         .queue_size              = 0,
         .root                    = nullptr,
     };
-    const Metadata meta{
+    const TransferMetadata meta{
         .priority       = UdpardPriorityNominal,
         .src_node_id    = 4321,
         .dst_node_id    = 5432,
@@ -855,7 +855,7 @@ TEST(TxPrivate, PushAnonymousService)
         .queue_size              = 0,
         .root                    = nullptr,
     };
-    const Metadata meta{
+    const TransferMetadata meta{
         .priority       = UdpardPriorityNominal,
         .src_node_id    = 4321,
         .dst_node_id    = 5432,

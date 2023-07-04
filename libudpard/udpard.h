@@ -764,7 +764,7 @@ void udpardRxSubscriptionDestroy(UdpardRxSubscription* const self);
 int8_t udpardRxSubscriptionReceive(UdpardRxSubscription* const self,
                                    const UdpardMicrosecond     timestamp_usec,
                                    const UdpardConstPayload    datagram_payload,
-                                   const uint_least8_t         redundant_iface_index,
+                                   const uint_fast8_t          redundant_iface_index,
                                    UdpardRxTransfer* const     received_transfer);
 
 // ---------------------------------------------  RPC-SERVICES  ---------------------------------------------
@@ -903,7 +903,7 @@ int8_t udpardRxServiceDispatcherReceive(UdpardRxServiceDispatcher* const self,
                                         UdpardRxService** const          service,
                                         const UdpardMicrosecond          timestamp_usec,
                                         const UdpardConstPayload         datagram_payload,
-                                        const uint_least8_t              redundant_iface_index,
+                                        const uint_fast8_t               redundant_iface_index,
                                         UdpardRxServiceTransfer* const   received_transfer);
 
 #ifdef __cplusplus
