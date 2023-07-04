@@ -58,6 +58,9 @@ typedef struct
 #define HEADER_FRAME_INDEX_EOT_MASK 0x80000000UL
 #define HEADER_FRAME_INDEX_MAX 0x7FFFFFFFUL
 
+/// The port number is defined in the Cyphal/UDP Specification.
+#define UDP_PORT 9382U
+
 // See Cyphal/UDP Specification, section 4.3.2.1 Endpoints.
 #define SUBJECT_MULTICAST_GROUP_ADDRESS_MASK 0xEF000000UL
 #define SERVICE_MULTICAST_GROUP_ADDRESS_MASK 0xEF010000UL
@@ -74,14 +77,12 @@ UDPARD_PRIVATE uint32_t makeServiceIPGroupAddress(const UdpardNodeID destination
 
 UDPARD_PRIVATE UdpardUDPIPEndpoint makeSubjectUDPIPEndpoint(const UdpardPortID subject_id)
 {
-    return (UdpardUDPIPEndpoint){.ip_address = makeSubjectIPGroupAddress(subject_id),  //
-                                 .udp_port   = UDPARD_UDP_PORT};
+    return (UdpardUDPIPEndpoint){.ip_address = makeSubjectIPGroupAddress(subject_id), .udp_port = UDP_PORT};
 }
 
 UDPARD_PRIVATE UdpardUDPIPEndpoint makeServiceUDPIPEndpoint(const UdpardNodeID destination_node_id)
 {
-    return (UdpardUDPIPEndpoint){.ip_address = makeServiceIPGroupAddress(destination_node_id),
-                                 .udp_port   = UDPARD_UDP_PORT};
+    return (UdpardUDPIPEndpoint){.ip_address = makeServiceIPGroupAddress(destination_node_id), .udp_port = UDP_PORT};
 }
 
 /// Used for inserting new items into AVL trees. Refer to the documentation for cavlSearch() for details.

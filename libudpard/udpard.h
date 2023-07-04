@@ -204,9 +204,6 @@ extern "C" {
 /// To guarantee a single frame transfer, the maximum payload size shall be 4 bytes less to accommodate for the CRC.
 #define UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME (UDPARD_MTU_MAX - 4U)
 
-/// The port number is defined in the Cyphal/UDP Specification. The same port number is used for all transfer kinds.
-#define UDPARD_UDP_PORT 9382U
-
 /// Parameter ranges are inclusive; the lower bound is zero for all. See Cyphal/UDP Specification for background.
 #define UDPARD_SUBJECT_ID_MAX 8191U
 #define UDPARD_SERVICE_ID_MAX 511U

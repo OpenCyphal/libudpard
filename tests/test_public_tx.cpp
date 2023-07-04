@@ -106,7 +106,7 @@ TEST(TxPublic, Publish)
     ASSERT_EQ(1234567890, frame->deadline_usec);
     ASSERT_EQ(4, frame->dscp);
     ASSERT_EQ(0xEF00'1432UL, frame->destination.ip_address);
-    ASSERT_EQ(UDPARD_UDP_PORT, frame->destination.udp_port);
+    ASSERT_EQ(9382, frame->destination.udp_port);
     ASSERT_EQ(&user_transfer_referent, frame->user_transfer_reference);
     ASSERT_EQ(24 + FleetingEvents.size() + 4, frame->datagram_payload.size);
     ASSERT_EQ(0,
@@ -252,7 +252,7 @@ TEST(TxPublic, Request)
     ASSERT_EQ(1234567890, frame->deadline_usec);
     ASSERT_EQ(4, frame->dscp);
     ASSERT_EQ(0xEF01'1538UL, frame->destination.ip_address);
-    ASSERT_EQ(UDPARD_UDP_PORT, frame->destination.udp_port);
+    ASSERT_EQ(9382, frame->destination.udp_port);
     ASSERT_EQ(&user_transfer_referent, frame->user_transfer_reference);
     ASSERT_EQ(24 + FleetingEvents.size() + 4, frame->datagram_payload.size);
     ASSERT_EQ(0,
@@ -415,7 +415,7 @@ TEST(TxPublic, Response)
     ASSERT_EQ(1234567890, frame->deadline_usec);
     ASSERT_EQ(4, frame->dscp);
     ASSERT_EQ(0xEF01'1538UL, frame->destination.ip_address);
-    ASSERT_EQ(UDPARD_UDP_PORT, frame->destination.udp_port);
+    ASSERT_EQ(9382, frame->destination.udp_port);
     ASSERT_EQ(&user_transfer_referent, frame->user_transfer_reference);
     ASSERT_EQ(24 + FleetingEvents.size() + 4, frame->datagram_payload.size);
     ASSERT_EQ(0,
