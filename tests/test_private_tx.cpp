@@ -3,7 +3,7 @@
 /// Copyright Amazon.com Inc. or its affiliates.
 /// SPDX-License-Identifier: MIT
 
-#include <udpard.c>  // NOLINT(bugprone-suspicious-include)
+#include "exposed.hpp"
 #include "helpers.hpp"
 #include "hexdump.hpp"
 #include <gtest/gtest.h>
@@ -11,6 +11,13 @@
 
 namespace
 {
+using exposed::HeaderSize;
+using exposed::TransferMetadata;
+using exposed::TxItem;
+using exposed::txSerializeHeader;
+using exposed::txMakeChain;
+using exposed::txPush;
+
 // >>> from pycyphal.transport.commons.crc import CRC32C
 // >>> list(CRC32C.new(data).value_as_bytes)
 constexpr std::string_view EtherealStrength =
@@ -28,7 +35,7 @@ constexpr std::array<std::uint8_t, 4> InterstellarWarCRC{{102, 217, 109, 188}};
 
 auto makeHeader(const TransferMetadata meta, const std::uint32_t frame_index, const bool end_of_transfer)
 {
-    std::array<byte_t, HEADER_SIZE_BYTES> buffer{};
+    std::array<exposed::byte_t, HeaderSize> buffer{};
     (void) txSerializeHeader(buffer.data(), meta, frame_index, end_of_transfer);
     return buffer;
 }
@@ -45,7 +52,7 @@ auto makeHeader(const TransferMetadata meta, const std::uint32_t frame_index, co
 // [1, 2, 41, 9, 56, 21, 230, 29, 13, 240, 221, 224, 254, 15, 220, 186, 57, 48, 0, 0, 0, 0, 224, 60]
 TEST(TxPrivate, SerializeHeader)
 {
-    using HeaderBuffer = std::array<byte_t, HEADER_SIZE_BYTES>;
+    using HeaderBuffer = std::array<exposed::byte_t, HeaderSize>;
     {
         HeaderBuffer buffer{};
         ASSERT_EQ(buffer.end(),
@@ -102,24 +109,22 @@ TEST(TxPrivate, MakeChainEmpty)
                                    UdpardConstPayload{.size = 0, .data = ""},
                                    &user_transfer_referent);
     ASSERT_EQ(1, alloc.getNumAllocatedFragments());
-    ASSERT_EQ(sizeof(TxItem) + HEADER_SIZE_BYTES + 4, alloc.getTotalAllocatedAmount());
+    ASSERT_EQ(sizeof(TxItem) + HeaderSize + 4, alloc.getTotalAllocatedAmount());
     ASSERT_EQ(1, chain.count);
-    std::cout << hexdump::hexdump(chain.head->base.datagram_payload.data, chain.head->base.datagram_payload.size)
-              << "\n\n";
+    std::cout << hexdump::hexdump(chain.head->datagram_payload.data, chain.head->datagram_payload.size) << "\n\n";
     ASSERT_EQ(chain.head, chain.tail);
-    ASSERT_EQ(nullptr, chain.head->base.next_in_transfer);
-    ASSERT_EQ(1234567890, chain.head->base.deadline_usec);
-    ASSERT_EQ(33, chain.head->base.dscp);
-    ASSERT_EQ(0x0A0B'0C0DU, chain.head->base.destination.ip_address);
-    ASSERT_EQ(0x1234, chain.head->base.destination.udp_port);
-    ASSERT_EQ(HEADER_SIZE_BYTES + 4, chain.head->base.datagram_payload.size);
-    ASSERT_EQ(0,
-              std::memcmp(makeHeader(meta, 0, true).data(), chain.head->base.datagram_payload.data, HEADER_SIZE_BYTES));
+    ASSERT_EQ(nullptr, chain.head->next_in_transfer);
+    ASSERT_EQ(1234567890, chain.head->deadline_usec);
+    ASSERT_EQ(33, chain.head->dscp);
+    ASSERT_EQ(0x0A0B'0C0DU, chain.head->destination.ip_address);
+    ASSERT_EQ(0x1234, chain.head->destination.udp_port);
+    ASSERT_EQ(HeaderSize + 4, chain.head->datagram_payload.size);
+    ASSERT_EQ(0, std::memcmp(makeHeader(meta, 0, true).data(), chain.head->datagram_payload.data, HeaderSize));
     ASSERT_EQ(0,
               std::memcmp("\x00\x00\x00\x00",  // CRC of the empty transfer.
-                          static_cast<byte_t*>(chain.head->base.datagram_payload.data) + HEADER_SIZE_BYTES,
+                          static_cast<exposed::byte_t*>(chain.head->datagram_payload.data) + HeaderSize,
                           4));
-    ASSERT_EQ(&user_transfer_referent, chain.head->base.user_transfer_reference);
+    ASSERT_EQ(&user_transfer_referent, chain.head->user_transfer_reference);
 }
 
 TEST(TxPrivate, MakeChainSingleMaxMTU)
@@ -143,31 +148,28 @@ TEST(TxPrivate, MakeChainSingleMaxMTU)
                     UdpardConstPayload{.size = DetailOfTheCosmos.size(), .data = DetailOfTheCosmos.data()},
                     &user_transfer_referent);
     ASSERT_EQ(1, alloc.getNumAllocatedFragments());
-    ASSERT_EQ(sizeof(TxItem) + HEADER_SIZE_BYTES + DetailOfTheCosmos.size() + DetailOfTheCosmosCRC.size(),
+    ASSERT_EQ(sizeof(TxItem) + HeaderSize + DetailOfTheCosmos.size() + DetailOfTheCosmosCRC.size(),
               alloc.getTotalAllocatedAmount());
     ASSERT_EQ(1, chain.count);
-    std::cout << hexdump::hexdump(chain.head->base.datagram_payload.data, chain.head->base.datagram_payload.size)
-              << "\n\n";
+    std::cout << hexdump::hexdump(chain.head->datagram_payload.data, chain.head->datagram_payload.size) << "\n\n";
     ASSERT_EQ(chain.head, chain.tail);
-    ASSERT_EQ(nullptr, chain.head->base.next_in_transfer);
-    ASSERT_EQ(1234567890, chain.head->base.deadline_usec);
-    ASSERT_EQ(77, chain.head->base.dscp);
-    ASSERT_EQ(0x0A0B'0C00U, chain.head->base.destination.ip_address);
-    ASSERT_EQ(7474, chain.head->base.destination.udp_port);
-    ASSERT_EQ(HEADER_SIZE_BYTES + DetailOfTheCosmos.size() + DetailOfTheCosmosCRC.size(),
-              chain.head->base.datagram_payload.size);
-    ASSERT_EQ(0,
-              std::memcmp(makeHeader(meta, 0, true).data(), chain.head->base.datagram_payload.data, HEADER_SIZE_BYTES));
+    ASSERT_EQ(nullptr, chain.head->next_in_transfer);
+    ASSERT_EQ(1234567890, chain.head->deadline_usec);
+    ASSERT_EQ(77, chain.head->dscp);
+    ASSERT_EQ(0x0A0B'0C00U, chain.head->destination.ip_address);
+    ASSERT_EQ(7474, chain.head->destination.udp_port);
+    ASSERT_EQ(HeaderSize + DetailOfTheCosmos.size() + DetailOfTheCosmosCRC.size(), chain.head->datagram_payload.size);
+    ASSERT_EQ(0, std::memcmp(makeHeader(meta, 0, true).data(), chain.head->datagram_payload.data, HeaderSize));
     ASSERT_EQ(0,
               std::memcmp(DetailOfTheCosmos.data(),
-                          static_cast<byte_t*>(chain.head->base.datagram_payload.data) + HEADER_SIZE_BYTES,
+                          static_cast<exposed::byte_t*>(chain.head->datagram_payload.data) + HeaderSize,
                           DetailOfTheCosmos.size()));
     ASSERT_EQ(0,
               std::memcmp(DetailOfTheCosmosCRC.data(),
-                          static_cast<byte_t*>(chain.head->base.datagram_payload.data) + HEADER_SIZE_BYTES +
+                          static_cast<exposed::byte_t*>(chain.head->datagram_payload.data) + HeaderSize +
                               DetailOfTheCosmos.size(),
                           DetailOfTheCosmosCRC.size()));
-    ASSERT_EQ(&user_transfer_referent, chain.head->base.user_transfer_reference);
+    ASSERT_EQ(&user_transfer_referent, chain.head->user_transfer_reference);
 }
 
 TEST(TxPrivate, MakeChainThreeFrames)
@@ -191,64 +193,63 @@ TEST(TxPrivate, MakeChainThreeFrames)
                                    UdpardConstPayload{.size = EtherealStrength.size(), .data = EtherealStrength.data()},
                                    &user_transfer_referent);
     ASSERT_EQ(3, alloc.getNumAllocatedFragments());
-    ASSERT_EQ(3 * (sizeof(TxItem) + HEADER_SIZE_BYTES) + EtherealStrength.size() + 4U, alloc.getTotalAllocatedAmount());
+    ASSERT_EQ(3 * (sizeof(TxItem) + HeaderSize) + EtherealStrength.size() + 4U, alloc.getTotalAllocatedAmount());
     ASSERT_EQ(3, chain.count);
     const auto* const first = chain.head;
     ASSERT_NE(nullptr, first);
-    const auto* const second = reinterpret_cast<TxItem*>(first->base.next_in_transfer);
+    const auto* const second = first->next_in_transfer;
     ASSERT_NE(nullptr, second);
-    const auto* const third = reinterpret_cast<TxItem*>(second->base.next_in_transfer);
+    const auto* const third = second->next_in_transfer;
     ASSERT_NE(nullptr, third);
-    ASSERT_EQ(nullptr, third->base.next_in_transfer);
+    ASSERT_EQ(nullptr, third->next_in_transfer);
     ASSERT_EQ(chain.tail, third);
 
     // FIRST FRAME -- contains the first part of the payload.
-    std::cout << hexdump::hexdump(first->base.datagram_payload.data, first->base.datagram_payload.size) << "\n\n";
-    ASSERT_EQ(223574680, first->base.deadline_usec);
-    ASSERT_EQ(55, first->base.dscp);
-    ASSERT_EQ(0xBABA'DEDAU, first->base.destination.ip_address);
-    ASSERT_EQ(0xD0ED, first->base.destination.udp_port);
-    ASSERT_EQ(HEADER_SIZE_BYTES + mtu, first->base.datagram_payload.size);
-    ASSERT_EQ(0, std::memcmp(makeHeader(meta, 0, false).data(), first->base.datagram_payload.data, HEADER_SIZE_BYTES));
+    std::cout << hexdump::hexdump(first->datagram_payload.data, first->datagram_payload.size) << "\n\n";
+    ASSERT_EQ(223574680, first->deadline_usec);
+    ASSERT_EQ(55, first->dscp);
+    ASSERT_EQ(0xBABA'DEDAU, first->destination.ip_address);
+    ASSERT_EQ(0xD0ED, first->destination.udp_port);
+    ASSERT_EQ(HeaderSize + mtu, first->datagram_payload.size);
+    ASSERT_EQ(0, std::memcmp(makeHeader(meta, 0, false).data(), first->datagram_payload.data, HeaderSize));
     ASSERT_EQ(0,
               std::memcmp(EtherealStrength.data(),
-                          static_cast<byte_t*>(first->base.datagram_payload.data) + HEADER_SIZE_BYTES,
+                          static_cast<exposed::byte_t*>(first->datagram_payload.data) + HeaderSize,
                           mtu));
-    ASSERT_EQ(&user_transfer_referent, first->base.user_transfer_reference);
+    ASSERT_EQ(&user_transfer_referent, first->user_transfer_reference);
 
     // SECOND FRAME -- contains the second part of the payload.
-    std::cout << hexdump::hexdump(second->base.datagram_payload.data, second->base.datagram_payload.size) << "\n\n";
-    ASSERT_EQ(223574680, second->base.deadline_usec);
-    ASSERT_EQ(55, second->base.dscp);
-    ASSERT_EQ(0xBABA'DEDAU, second->base.destination.ip_address);
-    ASSERT_EQ(0xD0ED, second->base.destination.udp_port);
-    ASSERT_EQ(HEADER_SIZE_BYTES + mtu, second->base.datagram_payload.size);
-    ASSERT_EQ(0, std::memcmp(makeHeader(meta, 1, false).data(), second->base.datagram_payload.data, HEADER_SIZE_BYTES));
+    std::cout << hexdump::hexdump(second->datagram_payload.data, second->datagram_payload.size) << "\n\n";
+    ASSERT_EQ(223574680, second->deadline_usec);
+    ASSERT_EQ(55, second->dscp);
+    ASSERT_EQ(0xBABA'DEDAU, second->destination.ip_address);
+    ASSERT_EQ(0xD0ED, second->destination.udp_port);
+    ASSERT_EQ(HeaderSize + mtu, second->datagram_payload.size);
+    ASSERT_EQ(0, std::memcmp(makeHeader(meta, 1, false).data(), second->datagram_payload.data, HeaderSize));
     ASSERT_EQ(0,
               std::memcmp(EtherealStrength.data() + mtu,
-                          static_cast<byte_t*>(second->base.datagram_payload.data) + HEADER_SIZE_BYTES,
+                          static_cast<exposed::byte_t*>(second->datagram_payload.data) + HeaderSize,
                           mtu));
-    ASSERT_EQ(&user_transfer_referent, second->base.user_transfer_reference);
+    ASSERT_EQ(&user_transfer_referent, second->user_transfer_reference);
 
     // THIRD FRAME -- contains the third part of the payload and the CRC at the end.
-    std::cout << hexdump::hexdump(third->base.datagram_payload.data, third->base.datagram_payload.size) << "\n\n";
-    ASSERT_EQ(223574680, third->base.deadline_usec);
-    ASSERT_EQ(55, third->base.dscp);
-    ASSERT_EQ(0xBABA'DEDAU, third->base.destination.ip_address);
-    ASSERT_EQ(0xD0ED, third->base.destination.udp_port);
+    std::cout << hexdump::hexdump(third->datagram_payload.data, third->datagram_payload.size) << "\n\n";
+    ASSERT_EQ(223574680, third->deadline_usec);
+    ASSERT_EQ(55, third->dscp);
+    ASSERT_EQ(0xBABA'DEDAU, third->destination.ip_address);
+    ASSERT_EQ(0xD0ED, third->destination.udp_port);
     const auto third_payload_size = EtherealStrength.size() - 2 * mtu;
-    ASSERT_EQ(HEADER_SIZE_BYTES + third_payload_size + 4U, third->base.datagram_payload.size);
-    ASSERT_EQ(0, std::memcmp(makeHeader(meta, 2, true).data(), third->base.datagram_payload.data, HEADER_SIZE_BYTES));
+    ASSERT_EQ(HeaderSize + third_payload_size + 4U, third->datagram_payload.size);
+    ASSERT_EQ(0, std::memcmp(makeHeader(meta, 2, true).data(), third->datagram_payload.data, HeaderSize));
     ASSERT_EQ(0,
               std::memcmp(EtherealStrength.data() + 2 * mtu,
-                          static_cast<byte_t*>(third->base.datagram_payload.data) + HEADER_SIZE_BYTES,
+                          static_cast<exposed::byte_t*>(third->datagram_payload.data) + HeaderSize,
                           third_payload_size));
     ASSERT_EQ(0,
               std::memcmp(EtherealStrengthCRC.data(),
-                          static_cast<byte_t*>(third->base.datagram_payload.data) + HEADER_SIZE_BYTES +
-                              third_payload_size,
+                          static_cast<exposed::byte_t*>(third->datagram_payload.data) + HeaderSize + third_payload_size,
                           EtherealStrengthCRC.size()));
-    ASSERT_EQ(&user_transfer_referent, third->base.user_transfer_reference);
+    ASSERT_EQ(&user_transfer_referent, third->user_transfer_reference);
 }
 
 TEST(TxPrivate, MakeChainCRCSpill1)
@@ -272,50 +273,44 @@ TEST(TxPrivate, MakeChainCRCSpill1)
                                    UdpardConstPayload{.size = InterstellarWar.size(), .data = InterstellarWar.data()},
                                    &user_transfer_referent);
     ASSERT_EQ(2, alloc.getNumAllocatedFragments());
-    ASSERT_EQ(2 * (sizeof(TxItem) + HEADER_SIZE_BYTES) + InterstellarWar.size() + 4U, alloc.getTotalAllocatedAmount());
+    ASSERT_EQ(2 * (sizeof(TxItem) + HeaderSize) + InterstellarWar.size() + 4U, alloc.getTotalAllocatedAmount());
     ASSERT_EQ(2, chain.count);
     ASSERT_NE(chain.head, chain.tail);
-    ASSERT_EQ(chain.tail, reinterpret_cast<TxItem*>(chain.head->base.next_in_transfer));
-    ASSERT_EQ(nullptr, chain.tail->base.next_in_transfer);
+    ASSERT_EQ(chain.tail, chain.head->next_in_transfer);
+    ASSERT_EQ(nullptr, chain.tail->next_in_transfer);
 
     // FIRST FRAME -- contains the payload and the first three bytes of the CRC.
-    std::cout << hexdump::hexdump(chain.head->base.datagram_payload.data, chain.head->base.datagram_payload.size)
-              << "\n\n";
-    ASSERT_EQ(223574680, chain.head->base.deadline_usec);
-    ASSERT_EQ(55, chain.head->base.dscp);
-    ASSERT_EQ(0xBABA'DEDAU, chain.head->base.destination.ip_address);
-    ASSERT_EQ(0xD0ED, chain.head->base.destination.udp_port);
-    ASSERT_EQ(HEADER_SIZE_BYTES + mtu, chain.head->base.datagram_payload.size);
-    ASSERT_EQ(0,
-              std::memcmp(makeHeader(meta, 0, false).data(),
-                          chain.head->base.datagram_payload.data,
-                          HEADER_SIZE_BYTES));
+    std::cout << hexdump::hexdump(chain.head->datagram_payload.data, chain.head->datagram_payload.size) << "\n\n";
+    ASSERT_EQ(223574680, chain.head->deadline_usec);
+    ASSERT_EQ(55, chain.head->dscp);
+    ASSERT_EQ(0xBABA'DEDAU, chain.head->destination.ip_address);
+    ASSERT_EQ(0xD0ED, chain.head->destination.udp_port);
+    ASSERT_EQ(HeaderSize + mtu, chain.head->datagram_payload.size);
+    ASSERT_EQ(0, std::memcmp(makeHeader(meta, 0, false).data(), chain.head->datagram_payload.data, HeaderSize));
     ASSERT_EQ(0,
               std::memcmp(InterstellarWar.data(),
-                          static_cast<byte_t*>(chain.head->base.datagram_payload.data) + HEADER_SIZE_BYTES,
+                          static_cast<exposed::byte_t*>(chain.head->datagram_payload.data) + HeaderSize,
                           InterstellarWar.size()));
     ASSERT_EQ(0,
               std::memcmp(InterstellarWarCRC.data(),
-                          static_cast<byte_t*>(chain.head->base.datagram_payload.data) + HEADER_SIZE_BYTES +
+                          static_cast<exposed::byte_t*>(chain.head->datagram_payload.data) + HeaderSize +
                               InterstellarWar.size(),
                           3U));
-    ASSERT_EQ(&user_transfer_referent, chain.head->base.user_transfer_reference);
+    ASSERT_EQ(&user_transfer_referent, chain.head->user_transfer_reference);
 
     // SECOND FRAME -- contains the last byte of the CRC.
-    std::cout << hexdump::hexdump(chain.tail->base.datagram_payload.data, chain.tail->base.datagram_payload.size)
-              << "\n\n";
-    ASSERT_EQ(223574680, chain.tail->base.deadline_usec);
-    ASSERT_EQ(55, chain.tail->base.dscp);
-    ASSERT_EQ(0xBABA'DEDAU, chain.tail->base.destination.ip_address);
-    ASSERT_EQ(0xD0ED, chain.tail->base.destination.udp_port);
-    ASSERT_EQ(HEADER_SIZE_BYTES + 1U, chain.tail->base.datagram_payload.size);
-    ASSERT_EQ(0,
-              std::memcmp(makeHeader(meta, 1, true).data(), chain.tail->base.datagram_payload.data, HEADER_SIZE_BYTES));
+    std::cout << hexdump::hexdump(chain.tail->datagram_payload.data, chain.tail->datagram_payload.size) << "\n\n";
+    ASSERT_EQ(223574680, chain.tail->deadline_usec);
+    ASSERT_EQ(55, chain.tail->dscp);
+    ASSERT_EQ(0xBABA'DEDAU, chain.tail->destination.ip_address);
+    ASSERT_EQ(0xD0ED, chain.tail->destination.udp_port);
+    ASSERT_EQ(HeaderSize + 1U, chain.tail->datagram_payload.size);
+    ASSERT_EQ(0, std::memcmp(makeHeader(meta, 1, true).data(), chain.tail->datagram_payload.data, HeaderSize));
     ASSERT_EQ(0,
               std::memcmp(InterstellarWarCRC.data() + 3U,
-                          static_cast<byte_t*>(chain.tail->base.datagram_payload.data) + HEADER_SIZE_BYTES,
+                          static_cast<exposed::byte_t*>(chain.tail->datagram_payload.data) + HeaderSize,
                           1U));
-    ASSERT_EQ(&user_transfer_referent, chain.tail->base.user_transfer_reference);
+    ASSERT_EQ(&user_transfer_referent, chain.tail->user_transfer_reference);
 }
 
 TEST(TxPrivate, MakeChainCRCSpill2)
@@ -339,50 +334,44 @@ TEST(TxPrivate, MakeChainCRCSpill2)
                                    UdpardConstPayload{.size = InterstellarWar.size(), .data = InterstellarWar.data()},
                                    &user_transfer_referent);
     ASSERT_EQ(2, alloc.getNumAllocatedFragments());
-    ASSERT_EQ(2 * (sizeof(TxItem) + HEADER_SIZE_BYTES) + InterstellarWar.size() + 4U, alloc.getTotalAllocatedAmount());
+    ASSERT_EQ(2 * (sizeof(TxItem) + HeaderSize) + InterstellarWar.size() + 4U, alloc.getTotalAllocatedAmount());
     ASSERT_EQ(2, chain.count);
     ASSERT_NE(chain.head, chain.tail);
-    ASSERT_EQ(chain.tail, reinterpret_cast<TxItem*>(chain.head->base.next_in_transfer));
-    ASSERT_EQ(nullptr, chain.tail->base.next_in_transfer);
+    ASSERT_EQ(chain.tail, chain.head->next_in_transfer);
+    ASSERT_EQ(nullptr, chain.tail->next_in_transfer);
 
     // FIRST FRAME -- contains the payload and the first two bytes of the CRC.
-    std::cout << hexdump::hexdump(chain.head->base.datagram_payload.data, chain.head->base.datagram_payload.size)
-              << "\n\n";
-    ASSERT_EQ(223574680, chain.head->base.deadline_usec);
-    ASSERT_EQ(55, chain.head->base.dscp);
-    ASSERT_EQ(0xBABA'DEDAU, chain.head->base.destination.ip_address);
-    ASSERT_EQ(0xD0ED, chain.head->base.destination.udp_port);
-    ASSERT_EQ(HEADER_SIZE_BYTES + mtu, chain.head->base.datagram_payload.size);
-    ASSERT_EQ(0,
-              std::memcmp(makeHeader(meta, 0, false).data(),
-                          chain.head->base.datagram_payload.data,
-                          HEADER_SIZE_BYTES));
+    std::cout << hexdump::hexdump(chain.head->datagram_payload.data, chain.head->datagram_payload.size) << "\n\n";
+    ASSERT_EQ(223574680, chain.head->deadline_usec);
+    ASSERT_EQ(55, chain.head->dscp);
+    ASSERT_EQ(0xBABA'DEDAU, chain.head->destination.ip_address);
+    ASSERT_EQ(0xD0ED, chain.head->destination.udp_port);
+    ASSERT_EQ(HeaderSize + mtu, chain.head->datagram_payload.size);
+    ASSERT_EQ(0, std::memcmp(makeHeader(meta, 0, false).data(), chain.head->datagram_payload.data, HeaderSize));
     ASSERT_EQ(0,
               std::memcmp(InterstellarWar.data(),
-                          static_cast<byte_t*>(chain.head->base.datagram_payload.data) + HEADER_SIZE_BYTES,
+                          static_cast<exposed::byte_t*>(chain.head->datagram_payload.data) + HeaderSize,
                           InterstellarWar.size()));
     ASSERT_EQ(0,
               std::memcmp(InterstellarWarCRC.data(),
-                          static_cast<byte_t*>(chain.head->base.datagram_payload.data) + HEADER_SIZE_BYTES +
+                          static_cast<exposed::byte_t*>(chain.head->datagram_payload.data) + HeaderSize +
                               InterstellarWar.size(),
                           2U));
-    ASSERT_EQ(&user_transfer_referent, chain.head->base.user_transfer_reference);
+    ASSERT_EQ(&user_transfer_referent, chain.head->user_transfer_reference);
 
     // SECOND FRAME -- contains the last two bytes of the CRC.
-    std::cout << hexdump::hexdump(chain.tail->base.datagram_payload.data, chain.tail->base.datagram_payload.size)
-              << "\n\n";
-    ASSERT_EQ(223574680, chain.tail->base.deadline_usec);
-    ASSERT_EQ(55, chain.tail->base.dscp);
-    ASSERT_EQ(0xBABA'DEDAU, chain.tail->base.destination.ip_address);
-    ASSERT_EQ(0xD0ED, chain.tail->base.destination.udp_port);
-    ASSERT_EQ(HEADER_SIZE_BYTES + 2U, chain.tail->base.datagram_payload.size);
-    ASSERT_EQ(0,
-              std::memcmp(makeHeader(meta, 1, true).data(), chain.tail->base.datagram_payload.data, HEADER_SIZE_BYTES));
+    std::cout << hexdump::hexdump(chain.tail->datagram_payload.data, chain.tail->datagram_payload.size) << "\n\n";
+    ASSERT_EQ(223574680, chain.tail->deadline_usec);
+    ASSERT_EQ(55, chain.tail->dscp);
+    ASSERT_EQ(0xBABA'DEDAU, chain.tail->destination.ip_address);
+    ASSERT_EQ(0xD0ED, chain.tail->destination.udp_port);
+    ASSERT_EQ(HeaderSize + 2U, chain.tail->datagram_payload.size);
+    ASSERT_EQ(0, std::memcmp(makeHeader(meta, 1, true).data(), chain.tail->datagram_payload.data, HeaderSize));
     ASSERT_EQ(0,
               std::memcmp(InterstellarWarCRC.data() + 2U,
-                          static_cast<byte_t*>(chain.tail->base.datagram_payload.data) + HEADER_SIZE_BYTES,
+                          static_cast<exposed::byte_t*>(chain.tail->datagram_payload.data) + HeaderSize,
                           2U));
-    ASSERT_EQ(&user_transfer_referent, chain.tail->base.user_transfer_reference);
+    ASSERT_EQ(&user_transfer_referent, chain.tail->user_transfer_reference);
 }
 
 TEST(TxPrivate, MakeChainCRCSpill3)
@@ -406,50 +395,44 @@ TEST(TxPrivate, MakeChainCRCSpill3)
                                    UdpardConstPayload{.size = InterstellarWar.size(), .data = InterstellarWar.data()},
                                    &user_transfer_referent);
     ASSERT_EQ(2, alloc.getNumAllocatedFragments());
-    ASSERT_EQ(2 * (sizeof(TxItem) + HEADER_SIZE_BYTES) + InterstellarWar.size() + 4U, alloc.getTotalAllocatedAmount());
+    ASSERT_EQ(2 * (sizeof(TxItem) + HeaderSize) + InterstellarWar.size() + 4U, alloc.getTotalAllocatedAmount());
     ASSERT_EQ(2, chain.count);
     ASSERT_NE(chain.head, chain.tail);
-    ASSERT_EQ(chain.tail, reinterpret_cast<TxItem*>(chain.head->base.next_in_transfer));
-    ASSERT_EQ(nullptr, chain.tail->base.next_in_transfer);
+    ASSERT_EQ(chain.tail, chain.head->next_in_transfer);
+    ASSERT_EQ(nullptr, chain.tail->next_in_transfer);
 
     // FIRST FRAME -- contains the payload and the first byte of the CRC.
-    std::cout << hexdump::hexdump(chain.head->base.datagram_payload.data, chain.head->base.datagram_payload.size)
-              << "\n\n";
-    ASSERT_EQ(223574680, chain.head->base.deadline_usec);
-    ASSERT_EQ(55, chain.head->base.dscp);
-    ASSERT_EQ(0xBABA'DEDAU, chain.head->base.destination.ip_address);
-    ASSERT_EQ(0xD0ED, chain.head->base.destination.udp_port);
-    ASSERT_EQ(HEADER_SIZE_BYTES + mtu, chain.head->base.datagram_payload.size);
-    ASSERT_EQ(0,
-              std::memcmp(makeHeader(meta, 0, false).data(),
-                          chain.head->base.datagram_payload.data,
-                          HEADER_SIZE_BYTES));
+    std::cout << hexdump::hexdump(chain.head->datagram_payload.data, chain.head->datagram_payload.size) << "\n\n";
+    ASSERT_EQ(223574680, chain.head->deadline_usec);
+    ASSERT_EQ(55, chain.head->dscp);
+    ASSERT_EQ(0xBABA'DEDAU, chain.head->destination.ip_address);
+    ASSERT_EQ(0xD0ED, chain.head->destination.udp_port);
+    ASSERT_EQ(HeaderSize + mtu, chain.head->datagram_payload.size);
+    ASSERT_EQ(0, std::memcmp(makeHeader(meta, 0, false).data(), chain.head->datagram_payload.data, HeaderSize));
     ASSERT_EQ(0,
               std::memcmp(InterstellarWar.data(),
-                          static_cast<byte_t*>(chain.head->base.datagram_payload.data) + HEADER_SIZE_BYTES,
+                          static_cast<exposed::byte_t*>(chain.head->datagram_payload.data) + HeaderSize,
                           InterstellarWar.size()));
     ASSERT_EQ(0,
               std::memcmp(InterstellarWarCRC.data(),
-                          static_cast<byte_t*>(chain.head->base.datagram_payload.data) + HEADER_SIZE_BYTES +
+                          static_cast<exposed::byte_t*>(chain.head->datagram_payload.data) + HeaderSize +
                               InterstellarWar.size(),
                           1U));
-    ASSERT_EQ(&user_transfer_referent, chain.head->base.user_transfer_reference);
+    ASSERT_EQ(&user_transfer_referent, chain.head->user_transfer_reference);
 
     // SECOND FRAME -- contains the last three bytes of the CRC.
-    std::cout << hexdump::hexdump(chain.tail->base.datagram_payload.data, chain.tail->base.datagram_payload.size)
-              << "\n\n";
-    ASSERT_EQ(223574680, chain.tail->base.deadline_usec);
-    ASSERT_EQ(55, chain.tail->base.dscp);
-    ASSERT_EQ(0xBABA'DEDAU, chain.tail->base.destination.ip_address);
-    ASSERT_EQ(0xD0ED, chain.tail->base.destination.udp_port);
-    ASSERT_EQ(HEADER_SIZE_BYTES + 3U, chain.tail->base.datagram_payload.size);
-    ASSERT_EQ(0,
-              std::memcmp(makeHeader(meta, 1, true).data(), chain.tail->base.datagram_payload.data, HEADER_SIZE_BYTES));
+    std::cout << hexdump::hexdump(chain.tail->datagram_payload.data, chain.tail->datagram_payload.size) << "\n\n";
+    ASSERT_EQ(223574680, chain.tail->deadline_usec);
+    ASSERT_EQ(55, chain.tail->dscp);
+    ASSERT_EQ(0xBABA'DEDAU, chain.tail->destination.ip_address);
+    ASSERT_EQ(0xD0ED, chain.tail->destination.udp_port);
+    ASSERT_EQ(HeaderSize + 3U, chain.tail->datagram_payload.size);
+    ASSERT_EQ(0, std::memcmp(makeHeader(meta, 1, true).data(), chain.tail->datagram_payload.data, HeaderSize));
     ASSERT_EQ(0,
               std::memcmp(InterstellarWarCRC.data() + 1U,
-                          static_cast<byte_t*>(chain.tail->base.datagram_payload.data) + HEADER_SIZE_BYTES,
+                          static_cast<exposed::byte_t*>(chain.tail->datagram_payload.data) + HeaderSize,
                           3U));
-    ASSERT_EQ(&user_transfer_referent, chain.tail->base.user_transfer_reference);
+    ASSERT_EQ(&user_transfer_referent, chain.tail->user_transfer_reference);
 }
 
 TEST(TxPrivate, MakeChainCRCSpillFull)
@@ -473,46 +456,40 @@ TEST(TxPrivate, MakeChainCRCSpillFull)
                                    UdpardConstPayload{.size = InterstellarWar.size(), .data = InterstellarWar.data()},
                                    &user_transfer_referent);
     ASSERT_EQ(2, alloc.getNumAllocatedFragments());
-    ASSERT_EQ(2 * (sizeof(TxItem) + HEADER_SIZE_BYTES) + InterstellarWar.size() + 4U, alloc.getTotalAllocatedAmount());
+    ASSERT_EQ(2 * (sizeof(TxItem) + HeaderSize) + InterstellarWar.size() + 4U, alloc.getTotalAllocatedAmount());
     ASSERT_EQ(2, chain.count);
     ASSERT_NE(chain.head, chain.tail);
-    ASSERT_EQ(chain.tail, reinterpret_cast<TxItem*>(chain.head->base.next_in_transfer));
-    ASSERT_EQ(nullptr, chain.tail->base.next_in_transfer);
+    ASSERT_EQ(chain.tail, chain.head->next_in_transfer);
+    ASSERT_EQ(nullptr, chain.tail->next_in_transfer);
 
     // FIRST FRAME -- contains the payload only.
-    std::cout << hexdump::hexdump(chain.head->base.datagram_payload.data, chain.head->base.datagram_payload.size)
-              << "\n\n";
-    ASSERT_EQ(223574680, chain.head->base.deadline_usec);
-    ASSERT_EQ(55, chain.head->base.dscp);
-    ASSERT_EQ(0xBABA'DEDAU, chain.head->base.destination.ip_address);
-    ASSERT_EQ(0xD0ED, chain.head->base.destination.udp_port);
-    ASSERT_EQ(HEADER_SIZE_BYTES + mtu, chain.head->base.datagram_payload.size);
-    ASSERT_EQ(HEADER_SIZE_BYTES + InterstellarWar.size(), chain.head->base.datagram_payload.size);
-    ASSERT_EQ(0,
-              std::memcmp(makeHeader(meta, 0, false).data(),
-                          chain.head->base.datagram_payload.data,
-                          HEADER_SIZE_BYTES));
+    std::cout << hexdump::hexdump(chain.head->datagram_payload.data, chain.head->datagram_payload.size) << "\n\n";
+    ASSERT_EQ(223574680, chain.head->deadline_usec);
+    ASSERT_EQ(55, chain.head->dscp);
+    ASSERT_EQ(0xBABA'DEDAU, chain.head->destination.ip_address);
+    ASSERT_EQ(0xD0ED, chain.head->destination.udp_port);
+    ASSERT_EQ(HeaderSize + mtu, chain.head->datagram_payload.size);
+    ASSERT_EQ(HeaderSize + InterstellarWar.size(), chain.head->datagram_payload.size);
+    ASSERT_EQ(0, std::memcmp(makeHeader(meta, 0, false).data(), chain.head->datagram_payload.data, HeaderSize));
     ASSERT_EQ(0,
               std::memcmp(InterstellarWar.data(),
-                          static_cast<byte_t*>(chain.head->base.datagram_payload.data) + HEADER_SIZE_BYTES,
+                          static_cast<exposed::byte_t*>(chain.head->datagram_payload.data) + HeaderSize,
                           InterstellarWar.size()));
-    ASSERT_EQ(&user_transfer_referent, chain.head->base.user_transfer_reference);
+    ASSERT_EQ(&user_transfer_referent, chain.head->user_transfer_reference);
 
     // SECOND FRAME -- contains the last byte of the CRC.
-    std::cout << hexdump::hexdump(chain.tail->base.datagram_payload.data, chain.tail->base.datagram_payload.size)
-              << "\n\n";
-    ASSERT_EQ(223574680, chain.tail->base.deadline_usec);
-    ASSERT_EQ(55, chain.tail->base.dscp);
-    ASSERT_EQ(0xBABA'DEDAU, chain.tail->base.destination.ip_address);
-    ASSERT_EQ(0xD0ED, chain.tail->base.destination.udp_port);
-    ASSERT_EQ(HEADER_SIZE_BYTES + 4U, chain.tail->base.datagram_payload.size);
-    ASSERT_EQ(0,
-              std::memcmp(makeHeader(meta, 1, true).data(), chain.tail->base.datagram_payload.data, HEADER_SIZE_BYTES));
+    std::cout << hexdump::hexdump(chain.tail->datagram_payload.data, chain.tail->datagram_payload.size) << "\n\n";
+    ASSERT_EQ(223574680, chain.tail->deadline_usec);
+    ASSERT_EQ(55, chain.tail->dscp);
+    ASSERT_EQ(0xBABA'DEDAU, chain.tail->destination.ip_address);
+    ASSERT_EQ(0xD0ED, chain.tail->destination.udp_port);
+    ASSERT_EQ(HeaderSize + 4U, chain.tail->datagram_payload.size);
+    ASSERT_EQ(0, std::memcmp(makeHeader(meta, 1, true).data(), chain.tail->datagram_payload.data, HeaderSize));
     ASSERT_EQ(0,
               std::memcmp(InterstellarWarCRC.data(),
-                          static_cast<byte_t*>(chain.tail->base.datagram_payload.data) + HEADER_SIZE_BYTES,
+                          static_cast<exposed::byte_t*>(chain.tail->datagram_payload.data) + HeaderSize,
                           4U));
-    ASSERT_EQ(&user_transfer_referent, chain.tail->base.user_transfer_reference);
+    ASSERT_EQ(&user_transfer_referent, chain.tail->user_transfer_reference);
 }
 
 TEST(TxPrivate, PushPeekPopFree)
@@ -545,51 +522,50 @@ TEST(TxPrivate, PushPeekPopFree)
                      {.size = EtherealStrength.size(), .data = EtherealStrength.data()},
                      &user_transfer_referent));
     ASSERT_EQ(3, allocator.getNumAllocatedFragments());
-    ASSERT_EQ(3 * (sizeof(TxItem) + HEADER_SIZE_BYTES) + EtherealStrength.size() + 4U,
-              allocator.getTotalAllocatedAmount());
+    ASSERT_EQ(3 * (sizeof(TxItem) + HeaderSize) + EtherealStrength.size() + 4U, allocator.getTotalAllocatedAmount());
     ASSERT_EQ(3, tx.queue_size);
 
-    const auto* frame = reinterpret_cast<const TxItem*>(udpardTxPeek(&tx));
-    std::cout << hexdump::hexdump(frame->base.datagram_payload.data, frame->base.datagram_payload.size) << "\n\n";
+    const auto* frame = udpardTxPeek(&tx);
+    std::cout << hexdump::hexdump(frame->datagram_payload.data, frame->datagram_payload.size) << "\n\n";
     ASSERT_NE(nullptr, frame);
-    ASSERT_NE(nullptr, frame->base.next_in_transfer);
-    ASSERT_EQ(1234567890U, frame->base.deadline_usec);
-    ASSERT_EQ(4, frame->base.dscp);
-    ASSERT_EQ(0xBABA'DEDAU, frame->base.destination.ip_address);
-    ASSERT_EQ(0xD0ED, frame->base.destination.udp_port);
-    ASSERT_EQ(HEADER_SIZE_BYTES + tx.mtu, frame->base.datagram_payload.size);
-    ASSERT_EQ(0, std::memcmp(makeHeader(meta, 0, false).data(), frame->base.datagram_payload.data, HEADER_SIZE_BYTES));
-    udpardTxFree(tx.memory, udpardTxPop(&tx, &frame->base));
+    ASSERT_NE(nullptr, frame->next_in_transfer);
+    ASSERT_EQ(1234567890U, frame->deadline_usec);
+    ASSERT_EQ(4, frame->dscp);
+    ASSERT_EQ(0xBABA'DEDAU, frame->destination.ip_address);
+    ASSERT_EQ(0xD0ED, frame->destination.udp_port);
+    ASSERT_EQ(HeaderSize + tx.mtu, frame->datagram_payload.size);
+    ASSERT_EQ(0, std::memcmp(makeHeader(meta, 0, false).data(), frame->datagram_payload.data, HeaderSize));
+    udpardTxFree(tx.memory, udpardTxPop(&tx, frame));
 
     ASSERT_EQ(2, allocator.getNumAllocatedFragments());
     ASSERT_EQ(2, tx.queue_size);
 
-    frame = reinterpret_cast<const TxItem*>(udpardTxPeek(&tx));
-    std::cout << hexdump::hexdump(frame->base.datagram_payload.data, frame->base.datagram_payload.size) << "\n\n";
+    frame = udpardTxPeek(&tx);
+    std::cout << hexdump::hexdump(frame->datagram_payload.data, frame->datagram_payload.size) << "\n\n";
     ASSERT_NE(nullptr, frame);
-    ASSERT_NE(nullptr, frame->base.next_in_transfer);
-    ASSERT_EQ(1234567890U, frame->base.deadline_usec);
-    ASSERT_EQ(4, frame->base.dscp);
-    ASSERT_EQ(0xBABA'DEDAU, frame->base.destination.ip_address);
-    ASSERT_EQ(0xD0ED, frame->base.destination.udp_port);
-    ASSERT_EQ(HEADER_SIZE_BYTES + tx.mtu, frame->base.datagram_payload.size);
-    ASSERT_EQ(0, std::memcmp(makeHeader(meta, 1, false).data(), frame->base.datagram_payload.data, HEADER_SIZE_BYTES));
-    udpardTxFree(tx.memory, udpardTxPop(&tx, &frame->base));
+    ASSERT_NE(nullptr, frame->next_in_transfer);
+    ASSERT_EQ(1234567890U, frame->deadline_usec);
+    ASSERT_EQ(4, frame->dscp);
+    ASSERT_EQ(0xBABA'DEDAU, frame->destination.ip_address);
+    ASSERT_EQ(0xD0ED, frame->destination.udp_port);
+    ASSERT_EQ(HeaderSize + tx.mtu, frame->datagram_payload.size);
+    ASSERT_EQ(0, std::memcmp(makeHeader(meta, 1, false).data(), frame->datagram_payload.data, HeaderSize));
+    udpardTxFree(tx.memory, udpardTxPop(&tx, frame));
 
     ASSERT_EQ(1, allocator.getNumAllocatedFragments());
     ASSERT_EQ(1, tx.queue_size);
 
-    frame = reinterpret_cast<const TxItem*>(udpardTxPeek(&tx));
-    std::cout << hexdump::hexdump(frame->base.datagram_payload.data, frame->base.datagram_payload.size) << "\n\n";
+    frame = udpardTxPeek(&tx);
+    std::cout << hexdump::hexdump(frame->datagram_payload.data, frame->datagram_payload.size) << "\n\n";
     ASSERT_NE(nullptr, frame);
-    ASSERT_EQ(nullptr, frame->base.next_in_transfer);
-    ASSERT_EQ(1234567890U, frame->base.deadline_usec);
-    ASSERT_EQ(4, frame->base.dscp);
-    ASSERT_EQ(0xBABA'DEDAU, frame->base.destination.ip_address);
-    ASSERT_EQ(0xD0ED, frame->base.destination.udp_port);
-    ASSERT_EQ(HEADER_SIZE_BYTES + EtherealStrength.size() - 2 * tx.mtu + 4U, frame->base.datagram_payload.size);
-    ASSERT_EQ(0, std::memcmp(makeHeader(meta, 2, true).data(), frame->base.datagram_payload.data, HEADER_SIZE_BYTES));
-    udpardTxFree(tx.memory, udpardTxPop(&tx, &frame->base));
+    ASSERT_EQ(nullptr, frame->next_in_transfer);
+    ASSERT_EQ(1234567890U, frame->deadline_usec);
+    ASSERT_EQ(4, frame->dscp);
+    ASSERT_EQ(0xBABA'DEDAU, frame->destination.ip_address);
+    ASSERT_EQ(0xD0ED, frame->destination.udp_port);
+    ASSERT_EQ(HeaderSize + EtherealStrength.size() - 2 * tx.mtu + 4U, frame->datagram_payload.size);
+    ASSERT_EQ(0, std::memcmp(makeHeader(meta, 2, true).data(), frame->datagram_payload.data, HeaderSize));
+    udpardTxFree(tx.memory, udpardTxPop(&tx, frame));
 
     ASSERT_EQ(0, allocator.getNumAllocatedFragments());
     ASSERT_EQ(0, tx.queue_size);
@@ -627,9 +603,9 @@ TEST(TxPrivate, PushPrioritization)
                      nullptr));
     ASSERT_EQ(3, allocator.getNumAllocatedFragments());
     ASSERT_EQ(3, tx.queue_size);
-    const auto* frame = reinterpret_cast<const TxItem*>(udpardTxPeek(&tx));
+    const auto* frame = udpardTxPeek(&tx);
     ASSERT_NE(nullptr, frame);
-    ASSERT_EQ(0xAAAA'AAAA, frame->base.destination.ip_address);
+    ASSERT_EQ(0xAAAA'AAAA, frame->destination.ip_address);
 
     // B -- Next, push a higher-priority transfer and ensure it takes precedence.
     ASSERT_EQ(1,
@@ -647,9 +623,9 @@ TEST(TxPrivate, PushPrioritization)
                      nullptr));
     ASSERT_EQ(4, allocator.getNumAllocatedFragments());
     ASSERT_EQ(4, tx.queue_size);
-    frame = reinterpret_cast<const TxItem*>(udpardTxPeek(&tx));
+    frame = udpardTxPeek(&tx);
     ASSERT_NE(nullptr, frame);
-    ASSERT_EQ(0xBBBB'BBBB, frame->base.destination.ip_address);
+    ASSERT_EQ(0xBBBB'BBBB, frame->destination.ip_address);
 
     // C -- Next, push a lower-priority transfer and ensure it goes towards the back.
     ASSERT_EQ(1,
@@ -667,9 +643,9 @@ TEST(TxPrivate, PushPrioritization)
                      nullptr));
     ASSERT_EQ(5, allocator.getNumAllocatedFragments());
     ASSERT_EQ(5, tx.queue_size);
-    frame = reinterpret_cast<const TxItem*>(udpardTxPeek(&tx));
+    frame = udpardTxPeek(&tx);
     ASSERT_NE(nullptr, frame);
-    ASSERT_EQ(0xBBBB'BBBB, frame->base.destination.ip_address);
+    ASSERT_EQ(0xBBBB'BBBB, frame->destination.ip_address);
 
     // D -- Add another transfer like the previous one and ensure it goes in the back.
     ASSERT_EQ(1,
@@ -687,9 +663,9 @@ TEST(TxPrivate, PushPrioritization)
                      nullptr));
     ASSERT_EQ(6, allocator.getNumAllocatedFragments());
     ASSERT_EQ(6, tx.queue_size);
-    frame = reinterpret_cast<const TxItem*>(udpardTxPeek(&tx));
+    frame = udpardTxPeek(&tx);
     ASSERT_NE(nullptr, frame);
-    ASSERT_EQ(0xBBBB'BBBB, frame->base.destination.ip_address);
+    ASSERT_EQ(0xBBBB'BBBB, frame->destination.ip_address);
 
     // E -- Add an even higher priority transfer.
     ASSERT_EQ(1,
@@ -707,60 +683,58 @@ TEST(TxPrivate, PushPrioritization)
                      nullptr));
     ASSERT_EQ(7, allocator.getNumAllocatedFragments());
     ASSERT_EQ(7, tx.queue_size);
-    frame = reinterpret_cast<const TxItem*>(udpardTxPeek(&tx));
+    frame = udpardTxPeek(&tx);
     ASSERT_NE(nullptr, frame);
-    ASSERT_EQ(0xEEEE'EEEE, frame->base.destination.ip_address);
+    ASSERT_EQ(0xEEEE'EEEE, frame->destination.ip_address);
 
     // Now, unwind the queue and ensure the frames are popped in the right order.
     // E
-    udpardTxFree(tx.memory, udpardTxPop(&tx, &frame->base));
+    udpardTxFree(tx.memory, udpardTxPop(&tx, frame));
     ASSERT_EQ(6, allocator.getNumAllocatedFragments());
     ASSERT_EQ(6, tx.queue_size);
     // B
-    frame = reinterpret_cast<const TxItem*>(udpardTxPeek(&tx));
+    frame = udpardTxPeek(&tx);
     ASSERT_NE(nullptr, frame);
-    ASSERT_EQ(0xBBBB'BBBB, frame->base.destination.ip_address);
-    udpardTxFree(tx.memory, udpardTxPop(&tx, &frame->base));
+    ASSERT_EQ(0xBBBB'BBBB, frame->destination.ip_address);
+    udpardTxFree(tx.memory, udpardTxPop(&tx, frame));
     ASSERT_EQ(5, allocator.getNumAllocatedFragments());
     ASSERT_EQ(5, tx.queue_size);
     // A1, three frames.
-    frame = reinterpret_cast<const TxItem*>(udpardTxPeek(&tx));
+    frame = udpardTxPeek(&tx);
     ASSERT_NE(nullptr, frame);
-    ASSERT_EQ(0xAAAA'AAAA, frame->base.destination.ip_address);
-    ASSERT_EQ(0,
-              std::memcmp(makeHeader(meta_a, 0, false).data(), frame->base.datagram_payload.data, HEADER_SIZE_BYTES));
-    udpardTxFree(tx.memory, udpardTxPop(&tx, &frame->base));
+    ASSERT_EQ(0xAAAA'AAAA, frame->destination.ip_address);
+    ASSERT_EQ(0, std::memcmp(makeHeader(meta_a, 0, false).data(), frame->datagram_payload.data, HeaderSize));
+    udpardTxFree(tx.memory, udpardTxPop(&tx, frame));
     ASSERT_EQ(4, allocator.getNumAllocatedFragments());
     ASSERT_EQ(4, tx.queue_size);
     // A2
-    frame = reinterpret_cast<const TxItem*>(udpardTxPeek(&tx));
+    frame = udpardTxPeek(&tx);
     ASSERT_NE(nullptr, frame);
-    ASSERT_EQ(0xAAAA'AAAA, frame->base.destination.ip_address);
-    ASSERT_EQ(0,
-              std::memcmp(makeHeader(meta_a, 1, false).data(), frame->base.datagram_payload.data, HEADER_SIZE_BYTES));
-    udpardTxFree(tx.memory, udpardTxPop(&tx, &frame->base));
+    ASSERT_EQ(0xAAAA'AAAA, frame->destination.ip_address);
+    ASSERT_EQ(0, std::memcmp(makeHeader(meta_a, 1, false).data(), frame->datagram_payload.data, HeaderSize));
+    udpardTxFree(tx.memory, udpardTxPop(&tx, frame));
     ASSERT_EQ(3, allocator.getNumAllocatedFragments());
     ASSERT_EQ(3, tx.queue_size);
     // A3
-    frame = reinterpret_cast<const TxItem*>(udpardTxPeek(&tx));
+    frame = udpardTxPeek(&tx);
     ASSERT_NE(nullptr, frame);
-    ASSERT_EQ(0xAAAA'AAAA, frame->base.destination.ip_address);
-    ASSERT_EQ(0, std::memcmp(makeHeader(meta_a, 2, true).data(), frame->base.datagram_payload.data, HEADER_SIZE_BYTES));
-    udpardTxFree(tx.memory, udpardTxPop(&tx, &frame->base));
+    ASSERT_EQ(0xAAAA'AAAA, frame->destination.ip_address);
+    ASSERT_EQ(0, std::memcmp(makeHeader(meta_a, 2, true).data(), frame->datagram_payload.data, HeaderSize));
+    udpardTxFree(tx.memory, udpardTxPop(&tx, frame));
     ASSERT_EQ(2, allocator.getNumAllocatedFragments());
     ASSERT_EQ(2, tx.queue_size);
     // C
-    frame = reinterpret_cast<const TxItem*>(udpardTxPeek(&tx));
+    frame = udpardTxPeek(&tx);
     ASSERT_NE(nullptr, frame);
-    ASSERT_EQ(0xCCCC'CCCC, frame->base.destination.ip_address);
-    udpardTxFree(tx.memory, udpardTxPop(&tx, &frame->base));
+    ASSERT_EQ(0xCCCC'CCCC, frame->destination.ip_address);
+    udpardTxFree(tx.memory, udpardTxPop(&tx, frame));
     ASSERT_EQ(1, allocator.getNumAllocatedFragments());
     ASSERT_EQ(1, tx.queue_size);
     // D
-    frame = reinterpret_cast<const TxItem*>(udpardTxPeek(&tx));
+    frame = udpardTxPeek(&tx);
     ASSERT_NE(nullptr, frame);
-    ASSERT_EQ(0xDDDD'DDDD, frame->base.destination.ip_address);
-    udpardTxFree(tx.memory, udpardTxPop(&tx, &frame->base));
+    ASSERT_EQ(0xDDDD'DDDD, frame->destination.ip_address);
+    udpardTxFree(tx.memory, udpardTxPop(&tx, frame));
     ASSERT_EQ(0, allocator.getNumAllocatedFragments());
     ASSERT_EQ(0, tx.queue_size);
 
