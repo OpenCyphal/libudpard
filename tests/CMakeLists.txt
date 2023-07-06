@@ -40,13 +40,13 @@ endif ()
 
 add_compile_options(
         -Wall -Wextra -Werror -pedantic -Wdouble-promotion -Wswitch-enum -Wfloat-equal -Wundef
-        -Wconversion -Wtype-limits -Wsign-conversion -Wcast-align
+        -Wconversion -Wtype-limits -Wsign-conversion -Wcast-align -Wmissing-declarations
 )
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Woverloaded-virtual -Wnon-virtual-dtor -Wsign-promo")
 
 function(gen_test name files compile_definitions compile_flags link_flags c_standard)
-    add_executable(${name} ${library_dir}/udpard.c ${files})
-    target_include_directories(${name} PUBLIC ${library_dir})
+    add_executable(${name} ${files})
+    target_include_directories(${name} PUBLIC SYSTEM ${library_dir})
     target_compile_definitions(${name} PUBLIC ${compile_definitions})
     # We're not using find_package(GTest) because this method can only find the package for one specific architecture,
     # which is not what we want. We build tests for AMD64 and x86 separately, which requires linking against different
@@ -64,22 +64,18 @@ function(gen_test name files compile_definitions compile_flags link_flags c_stan
     add_test("run_${name}" "${name}" --gtest_random_seed=0 --gtest_color=yes)
 endfunction()
 
-function(gen_test_matrix name files compile_definitions compile_flags link_flags)
-    gen_test("${name}_x64_c99" "${files}" "${compile_definitions}" "${compile_flags} -m64" "-m64 ${link_flags}" "99")
-    gen_test("${name}_x32_c99" "${files}" "${compile_definitions}" "${compile_flags} -m32" "-m32 ${link_flags}" "99")
-    gen_test("${name}_x64_c11" "${files}" "${compile_definitions}" "${compile_flags} -m64" "-m64 ${link_flags}" "11")
-    gen_test("${name}_x32_c11" "${files}" "${compile_definitions}" "${compile_flags} -m32" "-m32 ${link_flags}" "11")
+function(gen_test_matrix name files)
+    gen_test("${name}_x64_c99" "${files}" "" "-m64" "-m64" "99")
+    gen_test("${name}_x32_c99" "${files}" "" "-m32" "-m32" "99")
+    gen_test("${name}_x64_c11" "${files}" "" "-m64" "-m64" "11")
+    gen_test("${name}_x32_c11" "${files}" "" "-m32" "-m32" "11")
 endfunction()
 
-# Disable missing declaration warning to allow exposure of private definitions.
-gen_test_matrix(test_private
-        "test_private_cavl.cpp;test_private_crc.cpp;test_private_tx.cpp;"
-        "-DUDPARD_CONFIG_HEADER=\"${CMAKE_CURRENT_SOURCE_DIR}/udpard_config_private.h\""
-        "-Wno-missing-declarations"
-        "")
+gen_test_matrix(test_main "${library_dir}/udpard.c;test_self.cpp;test_tx.cpp;")
 
-gen_test_matrix(test_public
-        "test_self.cpp;test_public_tx.cpp;"
-        ""
-        "-Wmissing-declarations"
-        "")
+file(GLOB_RECURSE intrusive_test_files "${CMAKE_CURRENT_SOURCE_DIR}/test_intrusive_*.cpp")
+foreach (file ${intrusive_test_files})
+    string(REGEX REPLACE "^.*/(test_intrusive_.*).cpp" "\\1" name "${file}")
+    message(STATUS "Generating test for ${name} obtained from ${file}")
+    gen_test_matrix("test_intrusive_${name}" "${file}")
+endforeach ()
