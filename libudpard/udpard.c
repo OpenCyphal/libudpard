@@ -535,7 +535,7 @@ int32_t udpardTxPublish(UdpardTx* const          self,
                      user_transfer_reference);
         if (out > 0)
         {
-            ++*transfer_id;
+            ++(*transfer_id);
         }
     }
     return out;
@@ -571,7 +571,7 @@ int32_t udpardTxRequest(UdpardTx* const          self,
                      user_transfer_reference);
         if (out > 0)
         {
-            ++*transfer_id;
+            ++(*transfer_id);
         }
     }
     return out;
@@ -634,6 +634,7 @@ UdpardTxItem* udpardTxPop(UdpardTx* const self, const UdpardTxItem* const item)
         // Note that the highest-priority frame is always a leaf node in the AVL tree, which means that it is very
         // cheap to remove.
         cavlRemove(&self->root, &item->base);
+        UDPARD_ASSERT(self->queue_size > 0U);
         self->queue_size--;
     }
     return out;
