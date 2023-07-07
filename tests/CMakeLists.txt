@@ -58,10 +58,6 @@ function(gen_test name files compile_definitions compile_flags link_flags c_stan
     add_executable(${name} ${files})
     target_include_directories(${name} PUBLIC ${library_dir})
     target_compile_definitions(${name} PUBLIC ${compile_definitions})
-    # We're not using find_package(GTest) because this method can only find the package for one specific architecture,
-    # which is not what we want. We build tests for AMD64 and x86 separately, which requires linking against different
-    # GTest libraries located in different directories. Instead of doing it the hard way via find_package separately
-    # per architecture, we just pass the library names directly and let the linker figure out where to find them.
     target_link_libraries(${name} "${name}_unity")
     set_target_properties(
             ${name}
@@ -74,7 +70,7 @@ function(gen_test name files compile_definitions compile_flags link_flags c_stan
             C_CLANG_TIDY "${clang_tidy}"
             CXX_CLANG_TIDY "${clang_tidy}"
     )
-    add_test("run_${name}" "${name}" --gtest_random_seed=0 --gtest_color=yes)
+    add_test("run_${name}" "${name}")
 endfunction()
 
 function(gen_test_matrix name files)
