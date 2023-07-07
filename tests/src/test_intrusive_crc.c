@@ -27,13 +27,9 @@ static void testTransferCRC(void)
     TEST_ASSERT_EQUAL_UINT32(0x48674BC7UL, crc ^ TRANSFER_CRC_OUTPUT_XOR);
 }
 
-void setUp(void)
-{
-}
+void setUp(void) {}
 
-void tearDown(void)
-{
-}
+void tearDown(void) {}
 
 int main(void)
 {

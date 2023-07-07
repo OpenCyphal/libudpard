@@ -33,7 +33,10 @@ find_program(clang_format NAMES clang-format)
 if (NOT clang_format)
     message(STATUS "Could not locate clang-format")
 else ()
-    file(GLOB format_files ${library_dir}/*.[ch] ${CMAKE_SOURCE_DIR}/*.[ch]pp)
+    file(GLOB_RECURSE format_files
+            ${library_dir}/*.[ch]
+            ${CMAKE_SOURCE_DIR}/src/*.[ch]
+            ${CMAKE_SOURCE_DIR}/src/*.[ch]pp)
     message(STATUS "Using clang-format: ${clang_format}; files: ${format_files}")
     add_custom_target(format COMMAND ${clang_format} -i -fallback-style=none -style=file --verbose ${format_files})
 endif ()

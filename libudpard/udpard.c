@@ -331,7 +331,7 @@ static inline byte_t* txSerializeHeader(byte_t* const          destination_buffe
     p         = txSerializeU64(p, meta.transfer_id);
     UDPARD_ASSERT((frame_index + 0UL) <= HEADER_FRAME_INDEX_MAX);  // +0UL is to avoid a compiler warning.
     p = txSerializeU32(p, frame_index | (end_of_transfer ? HEADER_FRAME_INDEX_EOT_MASK : 0U));
-    p = txSerializeU16(p, 0);                                      // opaque user data
+    p = txSerializeU16(p, 0);  // opaque user data
     // Header CRC in the big endian format. Optimization prospect: the header up to frame_index is constant in
     // multi-frame transfers, so we don't really need to recompute the CRC from scratch per frame.
     const uint16_t crc = headerCRCCompute(HEADER_SIZE_BYTES - HEADER_CRC_SIZE_BYTES, destination_buffer);
