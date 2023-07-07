@@ -20,12 +20,6 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       # language=bash
-      - run: |
-          # TODO https://github.com/OpenCyphal/docker_toolchains/issues/36
-          dpkg --add-architecture i386
-          apt-get update
-          apt-get install -y libgtest-dev libgtest-dev:i386
-      # language=bash
       - run: >
           cmake
           -B ${{ github.workspace }}/build
@@ -65,12 +59,6 @@ jobs:
             cxx-compiler: clang++
     steps:
       - uses: actions/checkout@v3
-      # language=bash
-      - run: |
-          # TODO https://github.com/OpenCyphal/docker_toolchains/issues/36
-          dpkg --add-architecture i386
-          apt-get update
-          apt-get install -y libgtest-dev libgtest-dev:i386
       # language=bash
       - run: >
           cmake
@@ -154,10 +142,6 @@ jobs:
       # language=bash
       - run: |
           clang --version
-          # TODO https://github.com/OpenCyphal/docker_toolchains/issues/36
-          dpkg --add-architecture i386
-          apt-get update
-          apt-get install -y libgtest-dev libgtest-dev:i386
       - name: Install Sonar tools
         env:
           SONAR_SCANNER_DOWNLOAD_URL: https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-${{ env.SONAR_SCANNER_VERSION }}-linux.zip

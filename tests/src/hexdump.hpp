@@ -5,6 +5,7 @@
 /// Author: Pavel Kirienko <pavel@opencyphal.org>
 
 #include <string>
+#include <cstdint>
 #include <sstream>
 #include <iomanip>
 

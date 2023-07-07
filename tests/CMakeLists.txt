@@ -6,14 +6,16 @@ cmake_minimum_required(VERSION 3.12)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Woverloaded-virtual -Wnon-virtual-dtor -Wsign-promo")
 
 project(udpard_tests C CXX)
 enable_testing()
 
 set(CTEST_OUTPUT_ON_FAILURE ON)
-set(library_dir "${CMAKE_SOURCE_DIR}/../libudpard")
-
 set(NO_STATIC_ANALYSIS OFF CACHE BOOL "disable udpard static analysis")
+
+set(library_dir "${CMAKE_SOURCE_DIR}/../libudpard")
+set(unity_root "${CMAKE_CURRENT_SOURCE_DIR}/../submodules/unity")
 
 # Use -DNO_STATIC_ANALYSIS=1 to suppress static analysis.
 # If not suppressed, the tools used here shall be available, otherwise the build will fail.
@@ -24,8 +26,6 @@ if (NOT NO_STATIC_ANALYSIS)
         message(FATAL_ERROR "Could not locate clang-tidy")
     endif ()
     message(STATUS "Using clang-tidy: ${clang_tidy}")
-    set(CMAKE_C_CLANG_TIDY ${clang_tidy})
-    set(CMAKE_CXX_CLANG_TIDY ${clang_tidy})
 endif ()
 
 # clang-format
@@ -38,48 +38,53 @@ else ()
     add_custom_target(format COMMAND ${clang_format} -i -fallback-style=none -style=file --verbose ${format_files})
 endif ()
 
-add_compile_options(
-        -Wall -Wextra -Werror -pedantic -Wdouble-promotion -Wswitch-enum -Wfloat-equal -Wundef
-        -Wconversion -Wtype-limits -Wsign-conversion -Wcast-align
-)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Woverloaded-virtual -Wnon-virtual-dtor -Wsign-promo")
-
 function(gen_test name files compile_definitions compile_flags link_flags c_standard)
-    add_executable(${name} ${library_dir}/udpard.c ${files})
+    # Unity
+    add_library("${name}_unity" STATIC "${unity_root}/src/unity.c")
+    target_include_directories("${name}_unity" SYSTEM PUBLIC "${unity_root}/src/")
+    target_compile_definitions("${name}_unity" PUBLIC
+            UNITY_INCLUDE_DOUBLE=1 UNITY_OUTPUT_COLOR=1 UNITY_SUPPORT_64=1 UNITY_SHORTHAND_AS_RAW=1)
+    set_target_properties(
+            "${name}_unity"
+            PROPERTIES
+            COMPILE_FLAGS "${compile_flags} -Wno-sign-conversion -Wno-conversion -Wno-switch-enum -Wno-float-equal -Wno-double-promotion"
+            LINK_FLAGS "${link_flags}"
+    )
+    # Target executable
+    add_executable(${name} ${files})
     target_include_directories(${name} PUBLIC ${library_dir})
     target_compile_definitions(${name} PUBLIC ${compile_definitions})
     # We're not using find_package(GTest) because this method can only find the package for one specific architecture,
     # which is not what we want. We build tests for AMD64 and x86 separately, which requires linking against different
     # GTest libraries located in different directories. Instead of doing it the hard way via find_package separately
     # per architecture, we just pass the library names directly and let the linker figure out where to find them.
-    target_link_libraries(${name} pthread gtest gtest_main)
+    target_link_libraries(${name} "${name}_unity")
     set_target_properties(
             ${name}
             PROPERTIES
-            COMPILE_FLAGS "${compile_flags}"
+            COMPILE_FLAGS "${compile_flags} -Wall -Wextra -Werror -pedantic -Wdouble-promotion -Wswitch-enum \
+            -Wfloat-equal -Wundef -Wconversion -Wtype-limits -Wsign-conversion -Wcast-align -Wmissing-declarations"
             LINK_FLAGS "${link_flags}"
             C_STANDARD "${c_standard}"
             C_EXTENSIONS OFF
+            C_CLANG_TIDY "${clang_tidy}"
+            CXX_CLANG_TIDY "${clang_tidy}"
     )
     add_test("run_${name}" "${name}" --gtest_random_seed=0 --gtest_color=yes)
 endfunction()
 
-function(gen_test_matrix name files compile_definitions compile_flags link_flags)
-    gen_test("${name}_x64_c99" "${files}" "${compile_definitions}" "${compile_flags} -m64" "-m64 ${link_flags}" "99")
-    gen_test("${name}_x32_c99" "${files}" "${compile_definitions}" "${compile_flags} -m32" "-m32 ${link_flags}" "99")
-    gen_test("${name}_x64_c11" "${files}" "${compile_definitions}" "${compile_flags} -m64" "-m64 ${link_flags}" "11")
-    gen_test("${name}_x32_c11" "${files}" "${compile_definitions}" "${compile_flags} -m32" "-m32 ${link_flags}" "11")
+function(gen_test_matrix name files)
+    gen_test("${name}_x64_c99" "${files}" "" "-m64" "-m64" "99")
+    gen_test("${name}_x32_c99" "${files}" "" "-m32" "-m32" "99")
+    gen_test("${name}_x64_c11" "${files}" "" "-m64" "-m64" "11")
+    gen_test("${name}_x32_c11" "${files}" "" "-m32" "-m32" "11")
 endfunction()
 
-# Disable missing declaration warning to allow exposure of private definitions.
-gen_test_matrix(test_private
-        "test_private_cavl.cpp;test_private_crc.cpp;test_private_tx.cpp;"
-        "-DUDPARD_CONFIG_HEADER=\"${CMAKE_CURRENT_SOURCE_DIR}/udpard_config_private.h\""
-        "-Wno-missing-declarations"
-        "")
-
-gen_test_matrix(test_public
-        "test_self.cpp;test_public_tx.cpp;"
-        ""
-        "-Wmissing-declarations"
-        "")
+# Add the test targets.
+# Those that are written in C may #include <udpard.c> to reach its internals; they are called "intrusive".
+# The public interface tests may be written in C++ for convenience.
+gen_test_matrix(test_helpers "src/test_helpers.c")
+gen_test_matrix(test_cavl "src/test_cavl.cpp")
+gen_test_matrix(test_tx "${library_dir}/udpard.c;src/test_tx.cpp")
+gen_test_matrix(test_intrusive_crc "src/test_intrusive_crc.c")
+gen_test_matrix(test_intrusive_tx "src/test_intrusive_tx.c")
