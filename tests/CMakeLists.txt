@@ -50,7 +50,8 @@ function(gen_test name files compile_definitions compile_flags link_flags c_stan
     set_target_properties(
             "${name}_unity"
             PROPERTIES
-            COMPILE_FLAGS "${compile_flags} -Wno-sign-conversion -Wno-conversion -Wno-switch-enum -Wno-float-equal -Wno-double-promotion"
+            COMPILE_FLAGS "${compile_flags} \
+            -Wno-sign-conversion -Wno-conversion -Wno-switch-enum -Wno-float-equal -Wno-double-promotion"
             LINK_FLAGS "${link_flags}"
     )
     # Target executable
