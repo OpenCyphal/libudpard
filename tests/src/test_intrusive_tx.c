@@ -9,21 +9,21 @@
 
 // >>> from pycyphal.transport.commons.crc import CRC32C
 // >>> list(CRC32C.new(data).value_as_bytes)
-static const char* const EtherealStrength =
+static const char EtherealStrength[] =
     "All was silent except for the howl of the wind against the antenna. Ye watched as the remaining birds in the "
     "flock gradually settled back into the forest. She stared at the antenna and thought it looked like an enormous "
     "hand stretched open toward the sky, possessing an ethereal strength.";
-static const size_t EtherealStrengthSize   = strlen(EtherealStrength);
+static const size_t EtherealStrengthSize   = sizeof(EtherealStrength) - 1;
 static const byte_t EtherealStrengthCRC[4] = {209, 88, 130, 43};
 
-static const char* const DetailOfTheCosmos =
+static const char DetailOfTheCosmos[] =
     "For us, the dark forest state is all-important, but it's just a detail of the cosmos.";
-static const size_t DetailOfTheCosmosSize   = strlen(DetailOfTheCosmos);
+static const size_t DetailOfTheCosmosSize   = sizeof(DetailOfTheCosmos) - 1;
 static const byte_t DetailOfTheCosmosCRC[4] = {125, 113, 207, 171};
 
-static const char* const InterstellarWar       = "You have not seen what a true interstellar war is like.";
-static const size_t      InterstellarWarSize   = strlen(InterstellarWar);
-static const byte_t      InterstellarWarCRC[4] = {102, 217, 109, 188};
+static const char   InterstellarWar[]     = "You have not seen what a true interstellar war is like.";
+static const size_t InterstellarWarSize   = sizeof(InterstellarWar) - 1;
+static const byte_t InterstellarWarCRC[4] = {102, 217, 109, 188};
 
 typedef struct
 {
