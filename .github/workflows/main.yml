@@ -19,6 +19,8 @@ jobs:
             cxx-compiler: clang++
     steps:
       - uses: actions/checkout@v3
+        with:
+          submodules: true
       # language=bash
       - run: >
           cmake
@@ -59,6 +61,8 @@ jobs:
             cxx-compiler: clang++
     steps:
       - uses: actions/checkout@v3
+        with:
+          submodules: true
       # language=bash
       - run: >
           cmake
@@ -135,6 +139,7 @@ jobs:
       - uses: actions/checkout@v3
         with:
           fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
+          submodules: true
       - uses: actions/setup-java@v3
         with:
           java-version: 11
