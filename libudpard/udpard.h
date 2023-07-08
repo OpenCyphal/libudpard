@@ -202,7 +202,7 @@ extern "C" {
 ///     1500B Ethernet MTU (RFC 894) - 60B IPv4 max header - 8B UDP Header - 24B Cyphal header
 #define UDPARD_MTU_DEFAULT 1408U
 /// To guarantee a single frame transfer, the maximum payload size shall be 4 bytes less to accommodate for the CRC.
-#define UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME (UDPARD_MTU_MAX - 4U)
+#define UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME (UDPARD_MTU_DEFAULT - 4U)
 
 /// Parameter ranges are inclusive; the lower bound is zero for all. See Cyphal/UDP Specification for background.
 #define UDPARD_SUBJECT_ID_MAX 8191U

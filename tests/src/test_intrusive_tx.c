@@ -173,6 +173,60 @@ static void testMakeChainSingleMaxMTU(void)
     TEST_ASSERT_EQUAL(&user_transfer_referent, chain.head->base.user_transfer_reference);
 }
 
+static void testMakeChainSingleFrameDefaultMTU(void)
+{
+    const byte_t payload[UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME + 1] = {0};
+    {  // Ensure UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME bytes fit in a single frame with the default MTU.
+        InstrumentedAllocator alloc;
+        instrumentedAllocatorNew(&alloc);
+        const TxChain chain =
+            txMakeChain(&alloc.base,
+                        (byte_t[]){11, 22, 33, 44, 55, 66, 77, 88},
+                        UDPARD_MTU_DEFAULT,
+                        1234567890,
+                        (TransferMetadata){.priority       = UdpardPrioritySlow,
+                                           .src_node_id    = 4321,
+                                           .dst_node_id    = 5432,
+                                           .data_specifier = 7766,
+                                           .transfer_id    = 0x0123456789ABCDEFULL},
+                        (UdpardUDPIPEndpoint){.ip_address = 0x0A0B0C00U, .udp_port = 7474},
+                        (UdpardConstPayload){.size = UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME, .data = payload},
+                        NULL);
+        TEST_ASSERT_EQUAL(1, alloc.allocated_fragments);
+        TEST_ASSERT_EQUAL(sizeof(TxItem) + HEADER_SIZE_BYTES + UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME +
+                              TRANSFER_CRC_SIZE_BYTES,
+                          alloc.allocated_bytes);
+        TEST_ASSERT_EQUAL(1, chain.count);
+        TEST_ASSERT_EQUAL(chain.head, chain.tail);
+        TEST_ASSERT_EQUAL(NULL, chain.head->base.next_in_transfer);
+    }
+    {  // Increase the payload by 1 byte and ensure it spills over.
+        InstrumentedAllocator alloc;
+        instrumentedAllocatorNew(&alloc);
+        const TxChain chain =
+            txMakeChain(&alloc.base,
+                        (byte_t[]){11, 22, 33, 44, 55, 66, 77, 88},
+                        UDPARD_MTU_DEFAULT,
+                        1234567890,
+                        (TransferMetadata){.priority       = UdpardPrioritySlow,
+                                           .src_node_id    = 4321,
+                                           .dst_node_id    = 5432,
+                                           .data_specifier = 7766,
+                                           .transfer_id    = 0x0123456789ABCDEFULL},
+                        (UdpardUDPIPEndpoint){.ip_address = 0x0A0B0C00U, .udp_port = 7474},
+                        (UdpardConstPayload){.size = UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME + 1, .data = payload},
+                        NULL);
+        TEST_ASSERT_EQUAL(2, alloc.allocated_fragments);
+        TEST_ASSERT_EQUAL((sizeof(TxItem) + HEADER_SIZE_BYTES) * 2 + UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME + 1 +
+                              TRANSFER_CRC_SIZE_BYTES,
+                          alloc.allocated_bytes);
+        TEST_ASSERT_EQUAL(2, chain.count);
+        TEST_ASSERT_NOT_EQUAL(chain.head, chain.tail);
+        TEST_ASSERT_EQUAL((UdpardTxItem*) chain.tail, chain.head->base.next_in_transfer);
+        TEST_ASSERT_EQUAL(NULL, chain.tail->base.next_in_transfer);
+    }
+}
+
 static void testMakeChainThreeFrames(void)
 {
     InstrumentedAllocator alloc;
@@ -903,6 +957,7 @@ int main(void)
     RUN_TEST(testTxSerializeHeader);
     RUN_TEST(testMakeChainEmpty);
     RUN_TEST(testMakeChainSingleMaxMTU);
+    RUN_TEST(testMakeChainSingleFrameDefaultMTU);
     RUN_TEST(testMakeChainThreeFrames);
     RUN_TEST(testMakeChainCRCSpill1);
     RUN_TEST(testMakeChainCRCSpill2);
