@@ -123,6 +123,8 @@ static void testMakeChainEmpty(void)
                              (byte_t*) (chain.head->base.datagram_payload.data) + HEADER_SIZE_BYTES,
                              4));
     TEST_ASSERT_EQUAL(&user_transfer_referent, chain.head->base.user_transfer_reference);
+    alloc.base.free(&alloc.base, sizeof(TxItem) + HEADER_SIZE_BYTES + 4, chain.head);
+    TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
 }
 
 static void testMakeChainSingleMaxMTU(void)
@@ -171,14 +173,18 @@ static void testMakeChainSingleMaxMTU(void)
                                  DetailOfTheCosmosSize,
                              TRANSFER_CRC_SIZE_BYTES));
     TEST_ASSERT_EQUAL(&user_transfer_referent, chain.head->base.user_transfer_reference);
+    alloc.base.free(&alloc.base,
+                    sizeof(TxItem) + HEADER_SIZE_BYTES + DetailOfTheCosmosSize + TRANSFER_CRC_SIZE_BYTES,
+                    chain.head);
+    TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
 }
 
 static void testMakeChainSingleFrameDefaultMTU(void)
 {
+    InstrumentedAllocator alloc;
+    instrumentedAllocatorNew(&alloc);
     const byte_t payload[UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME + 1] = {0};
     {  // Ensure UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME bytes fit in a single frame with the default MTU.
-        InstrumentedAllocator alloc;
-        instrumentedAllocatorNew(&alloc);
         const TxChain chain =
             txMakeChain(&alloc.base,
                         (byte_t[]){11, 22, 33, 44, 55, 66, 77, 88},
@@ -199,10 +205,13 @@ static void testMakeChainSingleFrameDefaultMTU(void)
         TEST_ASSERT_EQUAL(1, chain.count);
         TEST_ASSERT_EQUAL(chain.head, chain.tail);
         TEST_ASSERT_EQUAL(NULL, chain.head->base.next_in_transfer);
+        alloc.base.free(&alloc.base,
+                        sizeof(TxItem) + HEADER_SIZE_BYTES + UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME +
+                            TRANSFER_CRC_SIZE_BYTES,
+                        chain.head);
+        TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
     }
     {  // Increase the payload by 1 byte and ensure it spills over.
-        InstrumentedAllocator alloc;
-        instrumentedAllocatorNew(&alloc);
         const TxChain chain =
             txMakeChain(&alloc.base,
                         (byte_t[]){11, 22, 33, 44, 55, 66, 77, 88},
@@ -224,6 +233,9 @@ static void testMakeChainSingleFrameDefaultMTU(void)
         TEST_ASSERT_NOT_EQUAL(chain.head, chain.tail);
         TEST_ASSERT_EQUAL((UdpardTxItem*) chain.tail, chain.head->base.next_in_transfer);
         TEST_ASSERT_EQUAL(NULL, chain.tail->base.next_in_transfer);
+        alloc.base.free(&alloc.base, sizeof(TxItem) + HEADER_SIZE_BYTES + UDPARD_MTU_DEFAULT, chain.head);
+        alloc.base.free(&alloc.base, alloc.allocated_bytes, chain.tail);
+        TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
     }
 }
 
@@ -300,6 +312,12 @@ static void testMakeChainThreeFrames(void)
                              (byte_t*) (third->datagram_payload.data) + HEADER_SIZE_BYTES + third_payload_size,
                              TRANSFER_CRC_SIZE_BYTES));
     TEST_ASSERT_EQUAL(&user_transfer_referent, third->user_transfer_reference);
+
+    // Clean up.
+    alloc.base.free(&alloc.base, sizeof(TxItem) + HEADER_SIZE_BYTES + mtu, (void*) first);
+    alloc.base.free(&alloc.base, sizeof(TxItem) + HEADER_SIZE_BYTES + mtu, (void*) second);
+    alloc.base.free(&alloc.base, alloc.allocated_bytes, (void*) third);
+    TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
 }
 
 static void testMakeChainCRCSpill1(void)
@@ -366,6 +384,11 @@ static void testMakeChainCRCSpill1(void)
                              (byte_t*) (chain.tail->base.datagram_payload.data) + HEADER_SIZE_BYTES,
                              1U));
     TEST_ASSERT_EQUAL(&user_transfer_referent, chain.tail->base.user_transfer_reference);
+
+    // Clean up.
+    alloc.base.free(&alloc.base, sizeof(TxItem) + HEADER_SIZE_BYTES + mtu, chain.head);
+    alloc.base.free(&alloc.base, alloc.allocated_bytes, chain.tail);
+    TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
 }
 
 static void testMakeChainCRCSpill2(void)
@@ -432,6 +455,11 @@ static void testMakeChainCRCSpill2(void)
                              (byte_t*) (chain.tail->base.datagram_payload.data) + HEADER_SIZE_BYTES,
                              2U));
     TEST_ASSERT_EQUAL(&user_transfer_referent, chain.tail->base.user_transfer_reference);
+
+    // Clean up.
+    alloc.base.free(&alloc.base, sizeof(TxItem) + HEADER_SIZE_BYTES + mtu, chain.head);
+    alloc.base.free(&alloc.base, alloc.allocated_bytes, chain.tail);
+    TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
 }
 
 static void testMakeChainCRCSpill3(void)
@@ -498,6 +526,11 @@ static void testMakeChainCRCSpill3(void)
                              (byte_t*) (chain.tail->base.datagram_payload.data) + HEADER_SIZE_BYTES,
                              3U));
     TEST_ASSERT_EQUAL(&user_transfer_referent, chain.tail->base.user_transfer_reference);
+
+    // Clean up.
+    alloc.base.free(&alloc.base, sizeof(TxItem) + HEADER_SIZE_BYTES + mtu, chain.head);
+    alloc.base.free(&alloc.base, alloc.allocated_bytes, chain.tail);
+    TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
 }
 
 static void testMakeChainCRCSpillFull(void)
@@ -560,6 +593,11 @@ static void testMakeChainCRCSpillFull(void)
                              (byte_t*) (chain.tail->base.datagram_payload.data) + HEADER_SIZE_BYTES,
                              4U));
     TEST_ASSERT_EQUAL(&user_transfer_referent, chain.tail->base.user_transfer_reference);
+
+    // Clean up.
+    alloc.base.free(&alloc.base, sizeof(TxItem) + HEADER_SIZE_BYTES + mtu, chain.head);
+    alloc.base.free(&alloc.base, alloc.allocated_bytes, chain.tail);
+    TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
 }
 
 static void testPushPeekPopFree(void)

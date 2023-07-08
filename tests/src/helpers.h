@@ -22,11 +22,12 @@
 extern "C" {
 #endif
 
-#define TEST_PANIC(message)                                                   \
-    do                                                                        \
-    {                                                                         \
-        printf("%s:%u: PANIC: %s\n", __FILE__, (unsigned) __LINE__, message); \
-        abort();                                                              \
+#define TEST_PANIC(message)                                                            \
+    do                                                                                 \
+    {                                                                                  \
+        fprintf(stderr, "%s:%u: PANIC: %s\n", __FILE__, (unsigned) __LINE__, message); \
+        fflush(stderr);                                                                \
+        abort();                                                                       \
     } while (0)
 #define TEST_PANIC_UNLESS(condition) \
     do                               \
