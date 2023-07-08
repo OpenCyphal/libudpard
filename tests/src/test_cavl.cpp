@@ -3,10 +3,11 @@
 // These tests have been adapted from the Cavl test suite that you can find at https://github.com/pavel-kirienko/cavl
 
 #include <_udpard_cavl.h>
-#include <gtest/gtest.h>
+#include <unity.h>
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <ctime>
 #include <cstdlib>
 #include <optional>
 #include <numeric>
@@ -23,7 +24,9 @@ template <typename T>
 struct Node final : Cavl
 {
     explicit Node(const T val) : Cavl{Cavl{}}, value(val) {}
+
     Node(const Cavl& cv, const T val) : Cavl{cv}, value(val) {}
+
     Node() : Cavl{Cavl{}} {}
 
     T value{};
@@ -42,6 +45,7 @@ struct Node final : Cavl
     }
 
     auto min() -> Node* { return static_cast<Node*>(cavlFindExtremum(this, false)); }
+
     auto max() -> Node* { return static_cast<Node*>(cavlFindExtremum(this, true)); }
 
     auto operator=(const Cavl& cv) -> Node&
@@ -82,6 +86,7 @@ auto search(Node<T>** const root, const Predicate& predicate, const Factory& fac
     Cavl* const out = cavlSearch(reinterpret_cast<Cavl**>(root), &refs, &Refs::callPredicate, &Refs::callFactory);
     return static_cast<Node<T>*>(out);
 }
+
 template <typename T, typename Predicate>
 auto search(Node<T>** const root, const Predicate& predicate) -> Node<T>*
 {
@@ -106,7 +111,7 @@ auto getHeight(const Node<T>* const n) -> std::uint8_t  // NOLINT recursion
 template <typename T>
 void print(const Node<T>* const nd, const std::uint8_t depth = 0, const char marker = 'T')  // NOLINT recursion
 {
-    ASSERT_TRUE(10 > getHeight(nd));  // Fail early for malformed cyclic trees, do not overwhelm stdout.
+    TEST_ASSERT(10 > getHeight(nd));  // Fail early for malformed cyclic trees, do not overwhelm stdout.
     if (nd != nullptr)
     {
         print<T>(static_cast<const Node<T>*>(nd->lr[0]), static_cast<std::uint8_t>(depth + 1U), 'L');
@@ -203,9 +208,8 @@ auto findBrokenBalanceFactor(const Node<T>* const n) -> const Cavl*  // NOLINT r
     }
     return nullptr;
 }
-}  // namespace
 
-TEST(Cavl, CheckAscension)
+void testCheckAscension()
 {
     using N = Node<std::uint8_t>;
     N t{2};
@@ -216,23 +220,23 @@ TEST(Cavl, CheckAscension)
     t.lr[0] = &l;
     t.lr[1] = &r;
     r.lr[1] = &rr;
-    ASSERT_TRUE(4 == checkAscension(&t));
-    ASSERT_TRUE(3 == getHeight(&t));
+    TEST_ASSERT(4 == checkAscension(&t));
+    TEST_ASSERT(3 == getHeight(&t));
     // Break the arrangement and make sure the breakage is detected.
     t.lr[1] = &l;
     t.lr[0] = &r;
-    ASSERT_TRUE(4 != checkAscension(&t));
-    ASSERT_TRUE(3 == getHeight(&t));
-    ASSERT_TRUE(&t == findBrokenBalanceFactor(&t));  // All zeros, incorrect.
+    TEST_ASSERT(4 != checkAscension(&t));
+    TEST_ASSERT(3 == getHeight(&t));
+    TEST_ASSERT(&t == findBrokenBalanceFactor(&t));  // All zeros, incorrect.
     r.lr[1] = nullptr;
     std::cout << __LINE__ << ": " << static_cast<std::int32_t>(getHeight(&t)) << std::endl;
     print(&t);
     std::cout << __LINE__ << ": " << static_cast<std::int32_t>(getHeight(&t)) << std::endl;
-    ASSERT_EQ(2, getHeight(&t));
-    ASSERT_TRUE(nullptr == findBrokenBalanceFactor(&t));  // Balanced now as we removed one node.
+    TEST_ASSERT_EQUAL_size_t(2, getHeight(&t));
+    TEST_ASSERT(nullptr == findBrokenBalanceFactor(&t));  // Balanced now as we removed one node.
 }
 
-TEST(Cavl, Rotation)
+void testRotation()
 {
     using N = Node<std::uint8_t>;
     // Original state:
@@ -256,29 +260,29 @@ TEST(Cavl, Rotation)
     a.up = &x;
 
     std::cout << "Before rotation:\n";
-    ASSERT_TRUE(nullptr == findBrokenAncestry(&x));
+    TEST_ASSERT(nullptr == findBrokenAncestry(&x));
     print(&x);
 
     std::cout << "After left rotation:\n";
     cavlPrivateRotate(&x, false);  // z is now the root
-    ASSERT_TRUE(nullptr == findBrokenAncestry(&z));
+    TEST_ASSERT(nullptr == findBrokenAncestry(&z));
     print(&z);
-    ASSERT_TRUE(&a == x.lr[0]);
-    ASSERT_TRUE(&b == x.lr[1]);
-    ASSERT_TRUE(&x == z.lr[0]);
-    ASSERT_TRUE(&c == z.lr[1]);
+    TEST_ASSERT(&a == x.lr[0]);
+    TEST_ASSERT(&b == x.lr[1]);
+    TEST_ASSERT(&x == z.lr[0]);
+    TEST_ASSERT(&c == z.lr[1]);
 
     std::cout << "After right rotation, back into the original configuration:\n";
     cavlPrivateRotate(&z, true);  // x is now the root
-    ASSERT_TRUE(nullptr == findBrokenAncestry(&x));
+    TEST_ASSERT(nullptr == findBrokenAncestry(&x));
     print(&x);
-    ASSERT_TRUE(&a == x.lr[0]);
-    ASSERT_TRUE(&z == x.lr[1]);
-    ASSERT_TRUE(&b == z.lr[0]);
-    ASSERT_TRUE(&c == z.lr[1]);
+    TEST_ASSERT(&a == x.lr[0]);
+    TEST_ASSERT(&z == x.lr[1]);
+    TEST_ASSERT(&b == z.lr[0]);
+    TEST_ASSERT(&c == z.lr[1]);
 }
 
-TEST(Cavl, BalancingA)
+void testBalancingA()
 {
     using N = Node<std::uint8_t>;
     // Double left-right rotation.
@@ -303,32 +307,32 @@ TEST(Cavl, BalancingA)
     y.lr[0] = &f;
     y.lr[1] = &g;
     print(&x);
-    ASSERT_TRUE(nullptr == findBrokenAncestry(&x));
-    ASSERT_TRUE(&x == cavlPrivateAdjustBalance(&x, false));  // bf = -1, same topology
-    ASSERT_TRUE(-1 == x.bf);
-    ASSERT_TRUE(&z == cavlPrivateAdjustBalance(&z, true));  // bf = +1, same topology
-    ASSERT_TRUE(+1 == z.bf);
-    ASSERT_TRUE(&y == cavlPrivateAdjustBalance(&x, false));  // bf = -2, rotation needed
+    TEST_ASSERT(nullptr == findBrokenAncestry(&x));
+    TEST_ASSERT(&x == cavlPrivateAdjustBalance(&x, false));  // bf = -1, same topology
+    TEST_ASSERT(-1 == x.bf);
+    TEST_ASSERT(&z == cavlPrivateAdjustBalance(&z, true));  // bf = +1, same topology
+    TEST_ASSERT(+1 == z.bf);
+    TEST_ASSERT(&y == cavlPrivateAdjustBalance(&x, false));  // bf = -2, rotation needed
     print(&y);
-    ASSERT_TRUE(nullptr == findBrokenBalanceFactor(&y));  // Should be balanced now.
-    ASSERT_TRUE(nullptr == findBrokenAncestry(&y));
-    ASSERT_TRUE(&z == y.lr[0]);
-    ASSERT_TRUE(&x == y.lr[1]);
-    ASSERT_TRUE(&d == z.lr[0]);
-    ASSERT_TRUE(&f == z.lr[1]);
-    ASSERT_TRUE(&g == x.lr[0]);
-    ASSERT_TRUE(&c == x.lr[1]);
-    ASSERT_TRUE(Zz == d.lr[0]);
-    ASSERT_TRUE(Zz == d.lr[1]);
-    ASSERT_TRUE(Zz == f.lr[0]);
-    ASSERT_TRUE(Zz == f.lr[1]);
-    ASSERT_TRUE(Zz == g.lr[0]);
-    ASSERT_TRUE(Zz == g.lr[1]);
-    ASSERT_TRUE(Zz == c.lr[0]);
-    ASSERT_TRUE(Zz == c.lr[1]);
+    TEST_ASSERT(nullptr == findBrokenBalanceFactor(&y));  // Should be balanced now.
+    TEST_ASSERT(nullptr == findBrokenAncestry(&y));
+    TEST_ASSERT(&z == y.lr[0]);
+    TEST_ASSERT(&x == y.lr[1]);
+    TEST_ASSERT(&d == z.lr[0]);
+    TEST_ASSERT(&f == z.lr[1]);
+    TEST_ASSERT(&g == x.lr[0]);
+    TEST_ASSERT(&c == x.lr[1]);
+    TEST_ASSERT(Zz == d.lr[0]);
+    TEST_ASSERT(Zz == d.lr[1]);
+    TEST_ASSERT(Zz == f.lr[0]);
+    TEST_ASSERT(Zz == f.lr[1]);
+    TEST_ASSERT(Zz == g.lr[0]);
+    TEST_ASSERT(Zz == g.lr[1]);
+    TEST_ASSERT(Zz == c.lr[0]);
+    TEST_ASSERT(Zz == c.lr[1]);
 }
 
-TEST(Cavl, BalancingB)
+void testBalancingB()
 {
     using N = Node<std::uint8_t>;
     // Without F the handling of Z and Y is more complex; Z flips the sign of its balance factor:
@@ -352,32 +356,32 @@ TEST(Cavl, BalancingB)
     y = {{&z, {Zz, &g}, 0}, 5};  // bf = +1
     g = {{&y, {Zz, Zz}, 0}, 7};
     print(&x);
-    ASSERT_TRUE(nullptr == findBrokenAncestry(&x));
-    ASSERT_TRUE(&x == cavlPrivateAdjustBalance(&x, false));  // bf = -1, same topology
-    ASSERT_TRUE(-1 == x.bf);
-    ASSERT_TRUE(&z == cavlPrivateAdjustBalance(&z, true));  // bf = +1, same topology
-    ASSERT_TRUE(+1 == z.bf);
-    ASSERT_TRUE(&y == cavlPrivateAdjustBalance(&y, true));  // bf = +1, same topology
-    ASSERT_TRUE(+1 == y.bf);
-    ASSERT_TRUE(&y == cavlPrivateAdjustBalance(&x, false));  // bf = -2, rotation needed
+    TEST_ASSERT(nullptr == findBrokenAncestry(&x));
+    TEST_ASSERT(&x == cavlPrivateAdjustBalance(&x, false));  // bf = -1, same topology
+    TEST_ASSERT(-1 == x.bf);
+    TEST_ASSERT(&z == cavlPrivateAdjustBalance(&z, true));  // bf = +1, same topology
+    TEST_ASSERT(+1 == z.bf);
+    TEST_ASSERT(&y == cavlPrivateAdjustBalance(&y, true));  // bf = +1, same topology
+    TEST_ASSERT(+1 == y.bf);
+    TEST_ASSERT(&y == cavlPrivateAdjustBalance(&x, false));  // bf = -2, rotation needed
     print(&y);
-    ASSERT_TRUE(nullptr == findBrokenBalanceFactor(&y));  // Should be balanced now.
-    ASSERT_TRUE(nullptr == findBrokenAncestry(&y));
-    ASSERT_TRUE(&z == y.lr[0]);
-    ASSERT_TRUE(&x == y.lr[1]);
-    ASSERT_TRUE(&d == z.lr[0]);
-    ASSERT_TRUE(Zz == z.lr[1]);
-    ASSERT_TRUE(&g == x.lr[0]);
-    ASSERT_TRUE(&c == x.lr[1]);
-    ASSERT_TRUE(Zz == d.lr[0]);
-    ASSERT_TRUE(Zz == d.lr[1]);
-    ASSERT_TRUE(Zz == g.lr[0]);
-    ASSERT_TRUE(Zz == g.lr[1]);
-    ASSERT_TRUE(Zz == c.lr[0]);
-    ASSERT_TRUE(Zz == c.lr[1]);
+    TEST_ASSERT(nullptr == findBrokenBalanceFactor(&y));  // Should be balanced now.
+    TEST_ASSERT(nullptr == findBrokenAncestry(&y));
+    TEST_ASSERT(&z == y.lr[0]);
+    TEST_ASSERT(&x == y.lr[1]);
+    TEST_ASSERT(&d == z.lr[0]);
+    TEST_ASSERT(Zz == z.lr[1]);
+    TEST_ASSERT(&g == x.lr[0]);
+    TEST_ASSERT(&c == x.lr[1]);
+    TEST_ASSERT(Zz == d.lr[0]);
+    TEST_ASSERT(Zz == d.lr[1]);
+    TEST_ASSERT(Zz == g.lr[0]);
+    TEST_ASSERT(Zz == g.lr[1]);
+    TEST_ASSERT(Zz == c.lr[0]);
+    TEST_ASSERT(Zz == c.lr[1]);
 }
 
-TEST(Cavl, BalancingC)
+void testBalancingC()
 {
     using N = Node<std::uint8_t>;
     // Both X and Z are heavy on the same side.
@@ -403,32 +407,32 @@ TEST(Cavl, BalancingC)
     f = {{&d, {Zz, Zz}, 0}, 6};
     g = {{&d, {Zz, Zz}, 0}, 7};
     print(&x);
-    ASSERT_TRUE(nullptr == findBrokenAncestry(&x));
-    ASSERT_TRUE(&x == cavlPrivateAdjustBalance(&x, false));  // bf = -1, same topology
-    ASSERT_TRUE(-1 == x.bf);
-    ASSERT_TRUE(&z == cavlPrivateAdjustBalance(&z, false));  // bf = -1, same topology
-    ASSERT_TRUE(-1 == z.bf);
-    ASSERT_TRUE(&z == cavlPrivateAdjustBalance(&x, false));
+    TEST_ASSERT(nullptr == findBrokenAncestry(&x));
+    TEST_ASSERT(&x == cavlPrivateAdjustBalance(&x, false));  // bf = -1, same topology
+    TEST_ASSERT(-1 == x.bf);
+    TEST_ASSERT(&z == cavlPrivateAdjustBalance(&z, false));  // bf = -1, same topology
+    TEST_ASSERT(-1 == z.bf);
+    TEST_ASSERT(&z == cavlPrivateAdjustBalance(&x, false));
     print(&z);
-    ASSERT_TRUE(nullptr == findBrokenBalanceFactor(&z));
-    ASSERT_TRUE(nullptr == findBrokenAncestry(&z));
-    ASSERT_TRUE(&d == z.lr[0]);
-    ASSERT_TRUE(&x == z.lr[1]);
-    ASSERT_TRUE(&f == d.lr[0]);
-    ASSERT_TRUE(&g == d.lr[1]);
-    ASSERT_TRUE(&y == x.lr[0]);
-    ASSERT_TRUE(&c == x.lr[1]);
-    ASSERT_TRUE(Zz == f.lr[0]);
-    ASSERT_TRUE(Zz == f.lr[1]);
-    ASSERT_TRUE(Zz == g.lr[0]);
-    ASSERT_TRUE(Zz == g.lr[1]);
-    ASSERT_TRUE(Zz == y.lr[0]);
-    ASSERT_TRUE(Zz == y.lr[1]);
-    ASSERT_TRUE(Zz == c.lr[0]);
-    ASSERT_TRUE(Zz == c.lr[1]);
+    TEST_ASSERT(nullptr == findBrokenBalanceFactor(&z));
+    TEST_ASSERT(nullptr == findBrokenAncestry(&z));
+    TEST_ASSERT(&d == z.lr[0]);
+    TEST_ASSERT(&x == z.lr[1]);
+    TEST_ASSERT(&f == d.lr[0]);
+    TEST_ASSERT(&g == d.lr[1]);
+    TEST_ASSERT(&y == x.lr[0]);
+    TEST_ASSERT(&c == x.lr[1]);
+    TEST_ASSERT(Zz == f.lr[0]);
+    TEST_ASSERT(Zz == f.lr[1]);
+    TEST_ASSERT(Zz == g.lr[0]);
+    TEST_ASSERT(Zz == g.lr[1]);
+    TEST_ASSERT(Zz == y.lr[0]);
+    TEST_ASSERT(Zz == y.lr[1]);
+    TEST_ASSERT(Zz == c.lr[0]);
+    TEST_ASSERT(Zz == c.lr[1]);
 }
 
-TEST(Cavl, RetracingOnGrowth)
+void testRetracingOnGrowth()
 {
     using N = Node<std::uint8_t>;
     std::array<N, 100> t{};
@@ -450,46 +454,46 @@ TEST(Cavl, RetracingOnGrowth)
     t[40] = {&t[30], {Zzzzzz, Zzzzzz}, 00};
     t[10] = {&t[20], {Zzzzzz, Zzzzzz}, 00};
     print(&t[50]);  // The tree is imbalanced because we just added 1 and are about to retrace it.
-    ASSERT_TRUE(nullptr == findBrokenAncestry(&t[50]));
-    ASSERT_TRUE(6 == checkAscension(&t[50]));
-    ASSERT_TRUE(&t[30] == cavlPrivateRetraceOnGrowth(&t[10]));
+    TEST_ASSERT(nullptr == findBrokenAncestry(&t[50]));
+    TEST_ASSERT(6 == checkAscension(&t[50]));
+    TEST_ASSERT(&t[30] == cavlPrivateRetraceOnGrowth(&t[10]));
     std::puts("ADD 10:");
     print(&t[30]);  // This is the new root.
-    ASSERT_TRUE(&t[20] == t[30].lr[0]);
-    ASSERT_TRUE(&t[50] == t[30].lr[1]);
-    ASSERT_TRUE(&t[10] == t[20].lr[0]);
-    ASSERT_TRUE(Zzzzzz == t[20].lr[1]);
-    ASSERT_TRUE(&t[40] == t[50].lr[0]);
-    ASSERT_TRUE(&t[60] == t[50].lr[1]);
-    ASSERT_TRUE(Zzzzzz == t[10].lr[0]);
-    ASSERT_TRUE(Zzzzzz == t[10].lr[1]);
-    ASSERT_TRUE(Zzzzzz == t[40].lr[0]);
-    ASSERT_TRUE(Zzzzzz == t[40].lr[1]);
-    ASSERT_TRUE(Zzzzzz == t[60].lr[0]);
-    ASSERT_TRUE(Zzzzzz == t[60].lr[1]);
-    ASSERT_TRUE(-1 == t[20].bf);
-    ASSERT_TRUE(+0 == t[30].bf);
-    ASSERT_TRUE(nullptr == findBrokenAncestry(&t[30]));
-    ASSERT_TRUE(nullptr == findBrokenBalanceFactor(&t[30]));
-    ASSERT_TRUE(6 == checkAscension(&t[30]));
+    TEST_ASSERT(&t[20] == t[30].lr[0]);
+    TEST_ASSERT(&t[50] == t[30].lr[1]);
+    TEST_ASSERT(&t[10] == t[20].lr[0]);
+    TEST_ASSERT(Zzzzzz == t[20].lr[1]);
+    TEST_ASSERT(&t[40] == t[50].lr[0]);
+    TEST_ASSERT(&t[60] == t[50].lr[1]);
+    TEST_ASSERT(Zzzzzz == t[10].lr[0]);
+    TEST_ASSERT(Zzzzzz == t[10].lr[1]);
+    TEST_ASSERT(Zzzzzz == t[40].lr[0]);
+    TEST_ASSERT(Zzzzzz == t[40].lr[1]);
+    TEST_ASSERT(Zzzzzz == t[60].lr[0]);
+    TEST_ASSERT(Zzzzzz == t[60].lr[1]);
+    TEST_ASSERT(-1 == t[20].bf);
+    TEST_ASSERT(+0 == t[30].bf);
+    TEST_ASSERT(nullptr == findBrokenAncestry(&t[30]));
+    TEST_ASSERT(nullptr == findBrokenBalanceFactor(&t[30]));
+    TEST_ASSERT(6 == checkAscension(&t[30]));
     // Add a new child under 20 and ensure that retracing stops at 20 because it becomes perfectly balanced:
     //          30
     //         /   `
     //       20    50
     //      /  `  /  `
     //     10 21 40 60
-    ASSERT_TRUE(nullptr == findBrokenAncestry(&t[30]));
-    ASSERT_TRUE(nullptr == findBrokenBalanceFactor(&t[30]));
+    TEST_ASSERT(nullptr == findBrokenAncestry(&t[30]));
+    TEST_ASSERT(nullptr == findBrokenBalanceFactor(&t[30]));
     t[21]       = {&t[20], {Zzzzzz, Zzzzzz}, 0};
     t[20].lr[1] = &t[21];
-    ASSERT_TRUE(nullptr == cavlPrivateRetraceOnGrowth(&t[21]));  // Root not reached, NULL returned.
+    TEST_ASSERT(nullptr == cavlPrivateRetraceOnGrowth(&t[21]));  // Root not reached, NULL returned.
     std::puts("ADD 21:");
     print(&t[30]);
-    ASSERT_TRUE(0 == t[20].bf);
-    ASSERT_TRUE(0 == t[30].bf);
-    ASSERT_TRUE(nullptr == findBrokenAncestry(&t[30]));
-    ASSERT_TRUE(nullptr == findBrokenBalanceFactor(&t[30]));
-    ASSERT_TRUE(7 == checkAscension(&t[30]));
+    TEST_ASSERT(0 == t[20].bf);
+    TEST_ASSERT(0 == t[30].bf);
+    TEST_ASSERT(nullptr == findBrokenAncestry(&t[30]));
+    TEST_ASSERT(nullptr == findBrokenBalanceFactor(&t[30]));
+    TEST_ASSERT(7 == checkAscension(&t[30]));
     //         30
     //       /    `
     //      20     50
@@ -544,97 +548,97 @@ TEST(Cavl, RetracingOnGrowth)
     //   /   / `
     //  10  18 21
     std::puts("ADD 15:");
-    ASSERT_TRUE(nullptr == findBrokenAncestry(&t[30]));
-    ASSERT_TRUE(nullptr == findBrokenBalanceFactor(&t[30]));
-    ASSERT_TRUE(7 == checkAscension(&t[30]));
+    TEST_ASSERT(nullptr == findBrokenAncestry(&t[30]));
+    TEST_ASSERT(nullptr == findBrokenBalanceFactor(&t[30]));
+    TEST_ASSERT(7 == checkAscension(&t[30]));
     t[15]       = {&t[10], {Zzzzzz, Zzzzzz}, 0};
     t[10].lr[1] = &t[15];
-    ASSERT_TRUE(&t[30] == cavlPrivateRetraceOnGrowth(&t[15]));  // Same root, its balance becomes -1.
+    TEST_ASSERT(&t[30] == cavlPrivateRetraceOnGrowth(&t[15]));  // Same root, its balance becomes -1.
     print(&t[30]);
-    ASSERT_TRUE(+1 == t[10].bf);
-    ASSERT_TRUE(-1 == t[20].bf);
-    ASSERT_TRUE(-1 == t[30].bf);
-    ASSERT_TRUE(nullptr == findBrokenAncestry(&t[30]));
-    ASSERT_TRUE(nullptr == findBrokenBalanceFactor(&t[30]));
-    ASSERT_TRUE(8 == checkAscension(&t[30]));
+    TEST_ASSERT(+1 == t[10].bf);
+    TEST_ASSERT(-1 == t[20].bf);
+    TEST_ASSERT(-1 == t[30].bf);
+    TEST_ASSERT(nullptr == findBrokenAncestry(&t[30]));
+    TEST_ASSERT(nullptr == findBrokenBalanceFactor(&t[30]));
+    TEST_ASSERT(8 == checkAscension(&t[30]));
 
     std::puts("ADD 17:");
     t[17]       = {&t[15], {Zzzzzz, Zzzzzz}, 0};
     t[15].lr[1] = &t[17];
-    ASSERT_TRUE(nullptr == cavlPrivateRetraceOnGrowth(&t[17]));  // Same root, same balance, 10 rotated left.
+    TEST_ASSERT(nullptr == cavlPrivateRetraceOnGrowth(&t[17]));  // Same root, same balance, 10 rotated left.
     print(&t[30]);
     // Check 10
-    ASSERT_TRUE(&t[15] == t[10].up);
-    ASSERT_TRUE(0 == t[10].bf);
-    ASSERT_TRUE(nullptr == t[10].lr[0]);
-    ASSERT_TRUE(nullptr == t[10].lr[1]);
+    TEST_ASSERT(&t[15] == t[10].up);
+    TEST_ASSERT(0 == t[10].bf);
+    TEST_ASSERT(nullptr == t[10].lr[0]);
+    TEST_ASSERT(nullptr == t[10].lr[1]);
     // Check 17
-    ASSERT_TRUE(&t[15] == t[17].up);
-    ASSERT_TRUE(0 == t[17].bf);
-    ASSERT_TRUE(nullptr == t[17].lr[0]);
-    ASSERT_TRUE(nullptr == t[17].lr[1]);
+    TEST_ASSERT(&t[15] == t[17].up);
+    TEST_ASSERT(0 == t[17].bf);
+    TEST_ASSERT(nullptr == t[17].lr[0]);
+    TEST_ASSERT(nullptr == t[17].lr[1]);
     // Check 15
-    ASSERT_TRUE(&t[20] == t[15].up);
-    ASSERT_TRUE(0 == t[15].bf);
-    ASSERT_TRUE(&t[10] == t[15].lr[0]);
-    ASSERT_TRUE(&t[17] == t[15].lr[1]);
+    TEST_ASSERT(&t[20] == t[15].up);
+    TEST_ASSERT(0 == t[15].bf);
+    TEST_ASSERT(&t[10] == t[15].lr[0]);
+    TEST_ASSERT(&t[17] == t[15].lr[1]);
     // Check 20 -- leaning left
-    ASSERT_TRUE(&t[30] == t[20].up);
-    ASSERT_TRUE(-1 == t[20].bf);
-    ASSERT_TRUE(&t[15] == t[20].lr[0]);
-    ASSERT_TRUE(&t[21] == t[20].lr[1]);
+    TEST_ASSERT(&t[30] == t[20].up);
+    TEST_ASSERT(-1 == t[20].bf);
+    TEST_ASSERT(&t[15] == t[20].lr[0]);
+    TEST_ASSERT(&t[21] == t[20].lr[1]);
     // Check the root -- still leaning left by one.
-    ASSERT_TRUE(nullptr == t[30].up);
-    ASSERT_TRUE(-1 == t[30].bf);
-    ASSERT_TRUE(&t[20] == t[30].lr[0]);
-    ASSERT_TRUE(&t[50] == t[30].lr[1]);
+    TEST_ASSERT(nullptr == t[30].up);
+    TEST_ASSERT(-1 == t[30].bf);
+    TEST_ASSERT(&t[20] == t[30].lr[0]);
+    TEST_ASSERT(&t[50] == t[30].lr[1]);
     // Check hard invariants.
-    ASSERT_TRUE(nullptr == findBrokenAncestry(&t[30]));
-    ASSERT_TRUE(nullptr == findBrokenBalanceFactor(&t[30]));
-    ASSERT_TRUE(9 == checkAscension(&t[30]));
+    TEST_ASSERT(nullptr == findBrokenAncestry(&t[30]));
+    TEST_ASSERT(nullptr == findBrokenBalanceFactor(&t[30]));
+    TEST_ASSERT(9 == checkAscension(&t[30]));
 
     std::puts("ADD 18:");
     t[18]       = {&t[17], {Zzzzzz, Zzzzzz}, 0};
     t[17].lr[1] = &t[18];
-    ASSERT_TRUE(nullptr == cavlPrivateRetraceOnGrowth(&t[18]));  // Same root, 15 went left, 20 went right.
+    TEST_ASSERT(nullptr == cavlPrivateRetraceOnGrowth(&t[18]));  // Same root, 15 went left, 20 went right.
     print(&t[30]);
     // Check 17
-    ASSERT_TRUE(&t[30] == t[17].up);
-    ASSERT_TRUE(0 == t[17].bf);
-    ASSERT_TRUE(&t[15] == t[17].lr[0]);
-    ASSERT_TRUE(&t[20] == t[17].lr[1]);
+    TEST_ASSERT(&t[30] == t[17].up);
+    TEST_ASSERT(0 == t[17].bf);
+    TEST_ASSERT(&t[15] == t[17].lr[0]);
+    TEST_ASSERT(&t[20] == t[17].lr[1]);
     // Check 15
-    ASSERT_TRUE(&t[17] == t[15].up);
-    ASSERT_TRUE(-1 == t[15].bf);
-    ASSERT_TRUE(&t[10] == t[15].lr[0]);
-    ASSERT_TRUE(nullptr == t[15].lr[1]);
+    TEST_ASSERT(&t[17] == t[15].up);
+    TEST_ASSERT(-1 == t[15].bf);
+    TEST_ASSERT(&t[10] == t[15].lr[0]);
+    TEST_ASSERT(nullptr == t[15].lr[1]);
     // Check 20
-    ASSERT_TRUE(&t[17] == t[20].up);
-    ASSERT_TRUE(0 == t[20].bf);
-    ASSERT_TRUE(&t[18] == t[20].lr[0]);
-    ASSERT_TRUE(&t[21] == t[20].lr[1]);
+    TEST_ASSERT(&t[17] == t[20].up);
+    TEST_ASSERT(0 == t[20].bf);
+    TEST_ASSERT(&t[18] == t[20].lr[0]);
+    TEST_ASSERT(&t[21] == t[20].lr[1]);
     // Check 10
-    ASSERT_TRUE(&t[15] == t[10].up);
-    ASSERT_TRUE(0 == t[10].bf);
-    ASSERT_TRUE(nullptr == t[10].lr[0]);
-    ASSERT_TRUE(nullptr == t[10].lr[1]);
+    TEST_ASSERT(&t[15] == t[10].up);
+    TEST_ASSERT(0 == t[10].bf);
+    TEST_ASSERT(nullptr == t[10].lr[0]);
+    TEST_ASSERT(nullptr == t[10].lr[1]);
     // Check 18
-    ASSERT_TRUE(&t[20] == t[18].up);
-    ASSERT_TRUE(0 == t[18].bf);
-    ASSERT_TRUE(nullptr == t[18].lr[0]);
-    ASSERT_TRUE(nullptr == t[18].lr[1]);
+    TEST_ASSERT(&t[20] == t[18].up);
+    TEST_ASSERT(0 == t[18].bf);
+    TEST_ASSERT(nullptr == t[18].lr[0]);
+    TEST_ASSERT(nullptr == t[18].lr[1]);
     // Check 21
-    ASSERT_TRUE(&t[20] == t[21].up);
-    ASSERT_TRUE(0 == t[21].bf);
-    ASSERT_TRUE(nullptr == t[21].lr[0]);
-    ASSERT_TRUE(nullptr == t[21].lr[1]);
+    TEST_ASSERT(&t[20] == t[21].up);
+    TEST_ASSERT(0 == t[21].bf);
+    TEST_ASSERT(nullptr == t[21].lr[0]);
+    TEST_ASSERT(nullptr == t[21].lr[1]);
     // Check hard invariants.
-    ASSERT_TRUE(nullptr == findBrokenAncestry(&t[30]));
-    ASSERT_TRUE(nullptr == findBrokenBalanceFactor(&t[30]));
-    ASSERT_TRUE(10 == checkAscension(&t[30]));
+    TEST_ASSERT(nullptr == findBrokenAncestry(&t[30]));
+    TEST_ASSERT(nullptr == findBrokenBalanceFactor(&t[30]));
+    TEST_ASSERT(10 == checkAscension(&t[30]));
 }
 
-TEST(Cavl, SearchTrivial)
+void testSearchTrivial()
 {
     using N = Node<std::uint8_t>;
     //      A
@@ -656,29 +660,29 @@ TEST(Cavl, SearchTrivial)
     f = {&c, {Zz, Zz}, 0};
     g = {&c, {Zz, Zz}, 0};
     q = {Zz, {Zz, Zz}, 0};
-    ASSERT_TRUE(nullptr == findBrokenBalanceFactor(&a));
-    ASSERT_TRUE(nullptr == findBrokenAncestry(&a));
-    ASSERT_TRUE(7 == checkAscension(&a));
+    TEST_ASSERT(nullptr == findBrokenBalanceFactor(&a));
+    TEST_ASSERT(nullptr == findBrokenAncestry(&a));
+    TEST_ASSERT(7 == checkAscension(&a));
     N* root = &a;
-    ASSERT_TRUE(nullptr == cavlSearch(reinterpret_cast<Cavl**>(&root), nullptr, nullptr, nullptr));  // Bad arguments.
-    ASSERT_TRUE(&a == root);
-    ASSERT_TRUE(nullptr == search(&root, [&](const N& v) { return q.value - v.value; }));
-    ASSERT_TRUE(&a == root);
-    ASSERT_TRUE(&e == search(&root, [&](const N& v) { return e.value - v.value; }));
-    ASSERT_TRUE(&b == search(&root, [&](const N& v) { return b.value - v.value; }));
-    ASSERT_TRUE(&a == root);
+    TEST_ASSERT(nullptr == cavlSearch(reinterpret_cast<Cavl**>(&root), nullptr, nullptr, nullptr));  // Bad arguments.
+    TEST_ASSERT(&a == root);
+    TEST_ASSERT(nullptr == search(&root, [&](const N& v) { return q.value - v.value; }));
+    TEST_ASSERT(&a == root);
+    TEST_ASSERT(&e == search(&root, [&](const N& v) { return e.value - v.value; }));
+    TEST_ASSERT(&b == search(&root, [&](const N& v) { return b.value - v.value; }));
+    TEST_ASSERT(&a == root);
     print(&a);
-    ASSERT_TRUE(nullptr == cavlFindExtremum(nullptr, true));
-    ASSERT_TRUE(nullptr == cavlFindExtremum(nullptr, false));
-    ASSERT_TRUE(&g == a.max());
-    ASSERT_TRUE(&d == a.min());
-    ASSERT_TRUE(&g == g.max());
-    ASSERT_TRUE(&g == g.min());
-    ASSERT_TRUE(&d == d.max());
-    ASSERT_TRUE(&d == d.min());
+    TEST_ASSERT(nullptr == cavlFindExtremum(nullptr, true));
+    TEST_ASSERT(nullptr == cavlFindExtremum(nullptr, false));
+    TEST_ASSERT(&g == a.max());
+    TEST_ASSERT(&d == a.min());
+    TEST_ASSERT(&g == g.max());
+    TEST_ASSERT(&g == g.min());
+    TEST_ASSERT(&d == d.max());
+    TEST_ASSERT(&d == d.min());
 }
 
-TEST(Cavl, RemovalA)
+void testRemovalA()
 {
     using N = Node<std::uint8_t>;
     //        4
@@ -704,9 +708,9 @@ TEST(Cavl, RemovalA)
     t[9]    = {&t[8], {Zzzzz, Zzzzz}, 00};
     N* root = &t[4];
     print(root);
-    ASSERT_TRUE(nullptr == findBrokenBalanceFactor(root));
-    ASSERT_TRUE(nullptr == findBrokenAncestry(root));
-    ASSERT_TRUE(9 == checkAscension(root));
+    TEST_ASSERT(nullptr == findBrokenBalanceFactor(root));
+    TEST_ASSERT(nullptr == findBrokenAncestry(root));
+    TEST_ASSERT(9 == checkAscension(root));
 
     // Remove 9, the easiest case. The rest of the tree remains unchanged.
     //        4
@@ -718,51 +722,51 @@ TEST(Cavl, RemovalA)
     //            7
     std::puts("REMOVE 9:");
     remove(&root, &t[9]);
-    ASSERT_TRUE(&t[4] == root);
+    TEST_ASSERT(&t[4] == root);
     print(root);
-    ASSERT_TRUE(nullptr == findBrokenBalanceFactor(root));
-    ASSERT_TRUE(nullptr == findBrokenAncestry(root));
-    ASSERT_TRUE(8 == checkAscension(root));
+    TEST_ASSERT(nullptr == findBrokenBalanceFactor(root));
+    TEST_ASSERT(nullptr == findBrokenAncestry(root));
+    TEST_ASSERT(8 == checkAscension(root));
     // 1
-    ASSERT_TRUE(&t[2] == t[1].up);
-    ASSERT_TRUE(Zzzzz == t[1].lr[0]);
-    ASSERT_TRUE(Zzzzz == t[1].lr[1]);
-    ASSERT_TRUE(00 == t[1].bf);
+    TEST_ASSERT(&t[2] == t[1].up);
+    TEST_ASSERT(Zzzzz == t[1].lr[0]);
+    TEST_ASSERT(Zzzzz == t[1].lr[1]);
+    TEST_ASSERT(00 == t[1].bf);
     // 2
-    ASSERT_TRUE(&t[4] == t[2].up);
-    ASSERT_TRUE(&t[1] == t[2].lr[0]);
-    ASSERT_TRUE(&t[3] == t[2].lr[1]);
-    ASSERT_TRUE(00 == t[2].bf);
+    TEST_ASSERT(&t[4] == t[2].up);
+    TEST_ASSERT(&t[1] == t[2].lr[0]);
+    TEST_ASSERT(&t[3] == t[2].lr[1]);
+    TEST_ASSERT(00 == t[2].bf);
     // 3
-    ASSERT_TRUE(&t[2] == t[3].up);
-    ASSERT_TRUE(Zzzzz == t[3].lr[0]);
-    ASSERT_TRUE(Zzzzz == t[3].lr[1]);
-    ASSERT_TRUE(00 == t[3].bf);
+    TEST_ASSERT(&t[2] == t[3].up);
+    TEST_ASSERT(Zzzzz == t[3].lr[0]);
+    TEST_ASSERT(Zzzzz == t[3].lr[1]);
+    TEST_ASSERT(00 == t[3].bf);
     // 4
-    ASSERT_TRUE(Zzzzz == t[4].up);  // Nihil Supernum
-    ASSERT_TRUE(&t[2] == t[4].lr[0]);
-    ASSERT_TRUE(&t[6] == t[4].lr[1]);
-    ASSERT_TRUE(+1 == t[4].bf);
+    TEST_ASSERT(Zzzzz == t[4].up);  // Nihil Supernum
+    TEST_ASSERT(&t[2] == t[4].lr[0]);
+    TEST_ASSERT(&t[6] == t[4].lr[1]);
+    TEST_ASSERT(+1 == t[4].bf);
     // 5
-    ASSERT_TRUE(&t[6] == t[5].up);
-    ASSERT_TRUE(Zzzzz == t[5].lr[0]);
-    ASSERT_TRUE(Zzzzz == t[5].lr[1]);
-    ASSERT_TRUE(00 == t[5].bf);
+    TEST_ASSERT(&t[6] == t[5].up);
+    TEST_ASSERT(Zzzzz == t[5].lr[0]);
+    TEST_ASSERT(Zzzzz == t[5].lr[1]);
+    TEST_ASSERT(00 == t[5].bf);
     // 6
-    ASSERT_TRUE(&t[4] == t[6].up);
-    ASSERT_TRUE(&t[5] == t[6].lr[0]);
-    ASSERT_TRUE(&t[8] == t[6].lr[1]);
-    ASSERT_TRUE(+1 == t[6].bf);
+    TEST_ASSERT(&t[4] == t[6].up);
+    TEST_ASSERT(&t[5] == t[6].lr[0]);
+    TEST_ASSERT(&t[8] == t[6].lr[1]);
+    TEST_ASSERT(+1 == t[6].bf);
     // 7
-    ASSERT_TRUE(&t[8] == t[7].up);
-    ASSERT_TRUE(Zzzzz == t[7].lr[0]);
-    ASSERT_TRUE(Zzzzz == t[7].lr[1]);
-    ASSERT_TRUE(00 == t[7].bf);
+    TEST_ASSERT(&t[8] == t[7].up);
+    TEST_ASSERT(Zzzzz == t[7].lr[0]);
+    TEST_ASSERT(Zzzzz == t[7].lr[1]);
+    TEST_ASSERT(00 == t[7].bf);
     // 8
-    ASSERT_TRUE(&t[6] == t[8].up);
-    ASSERT_TRUE(&t[7] == t[8].lr[0]);
-    ASSERT_TRUE(Zzzzz == t[8].lr[1]);
-    ASSERT_TRUE(-1 == t[8].bf);
+    TEST_ASSERT(&t[6] == t[8].up);
+    TEST_ASSERT(&t[7] == t[8].lr[0]);
+    TEST_ASSERT(Zzzzz == t[8].lr[1]);
+    TEST_ASSERT(-1 == t[8].bf);
 
     // Remove 8, 7 takes its place (the one-child case). The rest of the tree remains unchanged.
     //        4
@@ -772,46 +776,46 @@ TEST(Cavl, RemovalA)
     //  1   3   5   7
     std::puts("REMOVE 8:");
     remove(&root, &t[8]);
-    ASSERT_TRUE(&t[4] == root);
+    TEST_ASSERT(&t[4] == root);
     print(root);
-    ASSERT_TRUE(nullptr == findBrokenBalanceFactor(root));
-    ASSERT_TRUE(nullptr == findBrokenAncestry(root));
-    ASSERT_TRUE(7 == checkAscension(root));
+    TEST_ASSERT(nullptr == findBrokenBalanceFactor(root));
+    TEST_ASSERT(nullptr == findBrokenAncestry(root));
+    TEST_ASSERT(7 == checkAscension(root));
     // 1
-    ASSERT_TRUE(&t[2] == t[1].up);
-    ASSERT_TRUE(Zzzzz == t[1].lr[0]);
-    ASSERT_TRUE(Zzzzz == t[1].lr[1]);
-    ASSERT_TRUE(00 == t[1].bf);
+    TEST_ASSERT(&t[2] == t[1].up);
+    TEST_ASSERT(Zzzzz == t[1].lr[0]);
+    TEST_ASSERT(Zzzzz == t[1].lr[1]);
+    TEST_ASSERT(00 == t[1].bf);
     // 2
-    ASSERT_TRUE(&t[4] == t[2].up);
-    ASSERT_TRUE(&t[1] == t[2].lr[0]);
-    ASSERT_TRUE(&t[3] == t[2].lr[1]);
-    ASSERT_TRUE(00 == t[2].bf);
+    TEST_ASSERT(&t[4] == t[2].up);
+    TEST_ASSERT(&t[1] == t[2].lr[0]);
+    TEST_ASSERT(&t[3] == t[2].lr[1]);
+    TEST_ASSERT(00 == t[2].bf);
     // 3
-    ASSERT_TRUE(&t[2] == t[3].up);
-    ASSERT_TRUE(Zzzzz == t[3].lr[0]);
-    ASSERT_TRUE(Zzzzz == t[3].lr[1]);
-    ASSERT_TRUE(00 == t[3].bf);
+    TEST_ASSERT(&t[2] == t[3].up);
+    TEST_ASSERT(Zzzzz == t[3].lr[0]);
+    TEST_ASSERT(Zzzzz == t[3].lr[1]);
+    TEST_ASSERT(00 == t[3].bf);
     // 4
-    ASSERT_TRUE(Zzzzz == t[4].up);  // Nihil Supernum
-    ASSERT_TRUE(&t[2] == t[4].lr[0]);
-    ASSERT_TRUE(&t[6] == t[4].lr[1]);
-    ASSERT_TRUE(00 == t[4].bf);
+    TEST_ASSERT(Zzzzz == t[4].up);  // Nihil Supernum
+    TEST_ASSERT(&t[2] == t[4].lr[0]);
+    TEST_ASSERT(&t[6] == t[4].lr[1]);
+    TEST_ASSERT(00 == t[4].bf);
     // 5
-    ASSERT_TRUE(&t[6] == t[5].up);
-    ASSERT_TRUE(Zzzzz == t[5].lr[0]);
-    ASSERT_TRUE(Zzzzz == t[5].lr[1]);
-    ASSERT_TRUE(00 == t[5].bf);
+    TEST_ASSERT(&t[6] == t[5].up);
+    TEST_ASSERT(Zzzzz == t[5].lr[0]);
+    TEST_ASSERT(Zzzzz == t[5].lr[1]);
+    TEST_ASSERT(00 == t[5].bf);
     // 6
-    ASSERT_TRUE(&t[4] == t[6].up);
-    ASSERT_TRUE(&t[5] == t[6].lr[0]);
-    ASSERT_TRUE(&t[7] == t[6].lr[1]);
-    ASSERT_TRUE(00 == t[6].bf);
+    TEST_ASSERT(&t[4] == t[6].up);
+    TEST_ASSERT(&t[5] == t[6].lr[0]);
+    TEST_ASSERT(&t[7] == t[6].lr[1]);
+    TEST_ASSERT(00 == t[6].bf);
     // 7
-    ASSERT_TRUE(&t[6] == t[7].up);
-    ASSERT_TRUE(Zzzzz == t[7].lr[0]);
-    ASSERT_TRUE(Zzzzz == t[7].lr[1]);
-    ASSERT_TRUE(00 == t[7].bf);
+    TEST_ASSERT(&t[6] == t[7].up);
+    TEST_ASSERT(Zzzzz == t[7].lr[0]);
+    TEST_ASSERT(Zzzzz == t[7].lr[1]);
+    TEST_ASSERT(00 == t[7].bf);
 
     // Remove the root node 4, 5 takes its place. The overall structure remains unchanged except that 5 is now the root.
     //        5
@@ -822,40 +826,40 @@ TEST(Cavl, RemovalA)
     std::puts("REMOVE 4:");
     remove(&root, &t[4]);
     print(root);
-    ASSERT_TRUE(&t[5] == root);
-    ASSERT_TRUE(nullptr == findBrokenBalanceFactor(root));
-    ASSERT_TRUE(nullptr == findBrokenAncestry(root));
-    ASSERT_TRUE(6 == checkAscension(root));
+    TEST_ASSERT(&t[5] == root);
+    TEST_ASSERT(nullptr == findBrokenBalanceFactor(root));
+    TEST_ASSERT(nullptr == findBrokenAncestry(root));
+    TEST_ASSERT(6 == checkAscension(root));
     // 1
-    ASSERT_TRUE(&t[2] == t[1].up);
-    ASSERT_TRUE(Zzzzz == t[1].lr[0]);
-    ASSERT_TRUE(Zzzzz == t[1].lr[1]);
-    ASSERT_TRUE(00 == t[1].bf);
+    TEST_ASSERT(&t[2] == t[1].up);
+    TEST_ASSERT(Zzzzz == t[1].lr[0]);
+    TEST_ASSERT(Zzzzz == t[1].lr[1]);
+    TEST_ASSERT(00 == t[1].bf);
     // 2
-    ASSERT_TRUE(&t[5] == t[2].up);
-    ASSERT_TRUE(&t[1] == t[2].lr[0]);
-    ASSERT_TRUE(&t[3] == t[2].lr[1]);
-    ASSERT_TRUE(00 == t[2].bf);
+    TEST_ASSERT(&t[5] == t[2].up);
+    TEST_ASSERT(&t[1] == t[2].lr[0]);
+    TEST_ASSERT(&t[3] == t[2].lr[1]);
+    TEST_ASSERT(00 == t[2].bf);
     // 3
-    ASSERT_TRUE(&t[2] == t[3].up);
-    ASSERT_TRUE(Zzzzz == t[3].lr[0]);
-    ASSERT_TRUE(Zzzzz == t[3].lr[1]);
-    ASSERT_TRUE(00 == t[3].bf);
+    TEST_ASSERT(&t[2] == t[3].up);
+    TEST_ASSERT(Zzzzz == t[3].lr[0]);
+    TEST_ASSERT(Zzzzz == t[3].lr[1]);
+    TEST_ASSERT(00 == t[3].bf);
     // 5
-    ASSERT_TRUE(Zzzzz == t[5].up);  // Nihil Supernum
-    ASSERT_TRUE(&t[2] == t[5].lr[0]);
-    ASSERT_TRUE(&t[6] == t[5].lr[1]);
-    ASSERT_TRUE(00 == t[5].bf);
+    TEST_ASSERT(Zzzzz == t[5].up);  // Nihil Supernum
+    TEST_ASSERT(&t[2] == t[5].lr[0]);
+    TEST_ASSERT(&t[6] == t[5].lr[1]);
+    TEST_ASSERT(00 == t[5].bf);
     // 6
-    ASSERT_TRUE(&t[5] == t[6].up);
-    ASSERT_TRUE(Zzzzz == t[6].lr[0]);
-    ASSERT_TRUE(&t[7] == t[6].lr[1]);
-    ASSERT_TRUE(+1 == t[6].bf);
+    TEST_ASSERT(&t[5] == t[6].up);
+    TEST_ASSERT(Zzzzz == t[6].lr[0]);
+    TEST_ASSERT(&t[7] == t[6].lr[1]);
+    TEST_ASSERT(+1 == t[6].bf);
     // 7
-    ASSERT_TRUE(&t[6] == t[7].up);
-    ASSERT_TRUE(Zzzzz == t[7].lr[0]);
-    ASSERT_TRUE(Zzzzz == t[7].lr[1]);
-    ASSERT_TRUE(00 == t[7].bf);
+    TEST_ASSERT(&t[6] == t[7].up);
+    TEST_ASSERT(Zzzzz == t[7].lr[0]);
+    TEST_ASSERT(Zzzzz == t[7].lr[1]);
+    TEST_ASSERT(00 == t[7].bf);
 
     // Remove the root node 5, 6 takes its place.
     //        6
@@ -865,36 +869,36 @@ TEST(Cavl, RemovalA)
     //  1   3
     std::puts("REMOVE 5:");
     remove(&root, &t[5]);
-    ASSERT_TRUE(&t[6] == root);
+    TEST_ASSERT(&t[6] == root);
     print(root);
-    ASSERT_TRUE(nullptr == findBrokenBalanceFactor(root));
-    ASSERT_TRUE(nullptr == findBrokenAncestry(root));
-    ASSERT_TRUE(5 == checkAscension(root));
+    TEST_ASSERT(nullptr == findBrokenBalanceFactor(root));
+    TEST_ASSERT(nullptr == findBrokenAncestry(root));
+    TEST_ASSERT(5 == checkAscension(root));
     // 1
-    ASSERT_TRUE(&t[2] == t[1].up);
-    ASSERT_TRUE(Zzzzz == t[1].lr[0]);
-    ASSERT_TRUE(Zzzzz == t[1].lr[1]);
-    ASSERT_TRUE(00 == t[1].bf);
+    TEST_ASSERT(&t[2] == t[1].up);
+    TEST_ASSERT(Zzzzz == t[1].lr[0]);
+    TEST_ASSERT(Zzzzz == t[1].lr[1]);
+    TEST_ASSERT(00 == t[1].bf);
     // 2
-    ASSERT_TRUE(&t[6] == t[2].up);
-    ASSERT_TRUE(&t[1] == t[2].lr[0]);
-    ASSERT_TRUE(&t[3] == t[2].lr[1]);
-    ASSERT_TRUE(00 == t[2].bf);
+    TEST_ASSERT(&t[6] == t[2].up);
+    TEST_ASSERT(&t[1] == t[2].lr[0]);
+    TEST_ASSERT(&t[3] == t[2].lr[1]);
+    TEST_ASSERT(00 == t[2].bf);
     // 3
-    ASSERT_TRUE(&t[2] == t[3].up);
-    ASSERT_TRUE(Zzzzz == t[3].lr[0]);
-    ASSERT_TRUE(Zzzzz == t[3].lr[1]);
-    ASSERT_TRUE(00 == t[3].bf);
+    TEST_ASSERT(&t[2] == t[3].up);
+    TEST_ASSERT(Zzzzz == t[3].lr[0]);
+    TEST_ASSERT(Zzzzz == t[3].lr[1]);
+    TEST_ASSERT(00 == t[3].bf);
     // 6
-    ASSERT_TRUE(Zzzzz == t[6].up);  // Nihil Supernum
-    ASSERT_TRUE(&t[2] == t[6].lr[0]);
-    ASSERT_TRUE(&t[7] == t[6].lr[1]);
-    ASSERT_TRUE(-1 == t[6].bf);
+    TEST_ASSERT(Zzzzz == t[6].up);  // Nihil Supernum
+    TEST_ASSERT(&t[2] == t[6].lr[0]);
+    TEST_ASSERT(&t[7] == t[6].lr[1]);
+    TEST_ASSERT(-1 == t[6].bf);
     // 7
-    ASSERT_TRUE(&t[6] == t[7].up);
-    ASSERT_TRUE(Zzzzz == t[7].lr[0]);
-    ASSERT_TRUE(Zzzzz == t[7].lr[1]);
-    ASSERT_TRUE(00 == t[7].bf);
+    TEST_ASSERT(&t[6] == t[7].up);
+    TEST_ASSERT(Zzzzz == t[7].lr[0]);
+    TEST_ASSERT(Zzzzz == t[7].lr[1]);
+    TEST_ASSERT(00 == t[7].bf);
 
     // Remove the root node 6, 7 takes its place, then right rotation is done to restore balance, 2 is the new root.
     //          2
@@ -904,31 +908,31 @@ TEST(Cavl, RemovalA)
     //           3
     std::puts("REMOVE 6:");
     remove(&root, &t[6]);
-    ASSERT_TRUE(&t[2] == root);
+    TEST_ASSERT(&t[2] == root);
     print(root);
-    ASSERT_TRUE(nullptr == findBrokenBalanceFactor(root));
-    ASSERT_TRUE(nullptr == findBrokenAncestry(root));
-    ASSERT_TRUE(4 == checkAscension(root));
+    TEST_ASSERT(nullptr == findBrokenBalanceFactor(root));
+    TEST_ASSERT(nullptr == findBrokenAncestry(root));
+    TEST_ASSERT(4 == checkAscension(root));
     // 1
-    ASSERT_TRUE(&t[2] == t[1].up);
-    ASSERT_TRUE(Zzzzz == t[1].lr[0]);
-    ASSERT_TRUE(Zzzzz == t[1].lr[1]);
-    ASSERT_TRUE(00 == t[1].bf);
+    TEST_ASSERT(&t[2] == t[1].up);
+    TEST_ASSERT(Zzzzz == t[1].lr[0]);
+    TEST_ASSERT(Zzzzz == t[1].lr[1]);
+    TEST_ASSERT(00 == t[1].bf);
     // 2
-    ASSERT_TRUE(Zzzzz == t[2].up);  // Nihil Supernum
-    ASSERT_TRUE(&t[1] == t[2].lr[0]);
-    ASSERT_TRUE(&t[7] == t[2].lr[1]);
-    ASSERT_TRUE(+1 == t[2].bf);
+    TEST_ASSERT(Zzzzz == t[2].up);  // Nihil Supernum
+    TEST_ASSERT(&t[1] == t[2].lr[0]);
+    TEST_ASSERT(&t[7] == t[2].lr[1]);
+    TEST_ASSERT(+1 == t[2].bf);
     // 3
-    ASSERT_TRUE(&t[7] == t[3].up);
-    ASSERT_TRUE(Zzzzz == t[3].lr[0]);
-    ASSERT_TRUE(Zzzzz == t[3].lr[1]);
-    ASSERT_TRUE(00 == t[3].bf);
+    TEST_ASSERT(&t[7] == t[3].up);
+    TEST_ASSERT(Zzzzz == t[3].lr[0]);
+    TEST_ASSERT(Zzzzz == t[3].lr[1]);
+    TEST_ASSERT(00 == t[3].bf);
     // 7
-    ASSERT_TRUE(&t[2] == t[7].up);
-    ASSERT_TRUE(&t[3] == t[7].lr[0]);
-    ASSERT_TRUE(Zzzzz == t[7].lr[1]);
-    ASSERT_TRUE(-1 == t[7].bf);
+    TEST_ASSERT(&t[2] == t[7].up);
+    TEST_ASSERT(&t[3] == t[7].lr[0]);
+    TEST_ASSERT(Zzzzz == t[7].lr[1]);
+    TEST_ASSERT(-1 == t[7].bf);
 
     // Remove 1, then balancing makes 3 the new root node.
     //          3
@@ -936,26 +940,26 @@ TEST(Cavl, RemovalA)
     //       2     7
     std::puts("REMOVE 1:");
     remove(&root, &t[1]);
-    ASSERT_TRUE(&t[3] == root);
+    TEST_ASSERT(&t[3] == root);
     print(root);
-    ASSERT_TRUE(nullptr == findBrokenBalanceFactor(root));
-    ASSERT_TRUE(nullptr == findBrokenAncestry(root));
-    ASSERT_TRUE(3 == checkAscension(root));
+    TEST_ASSERT(nullptr == findBrokenBalanceFactor(root));
+    TEST_ASSERT(nullptr == findBrokenAncestry(root));
+    TEST_ASSERT(3 == checkAscension(root));
     // 2
-    ASSERT_TRUE(&t[3] == t[2].up);
-    ASSERT_TRUE(Zzzzz == t[2].lr[0]);
-    ASSERT_TRUE(Zzzzz == t[2].lr[1]);
-    ASSERT_TRUE(0 == t[2].bf);
+    TEST_ASSERT(&t[3] == t[2].up);
+    TEST_ASSERT(Zzzzz == t[2].lr[0]);
+    TEST_ASSERT(Zzzzz == t[2].lr[1]);
+    TEST_ASSERT(0 == t[2].bf);
     // 3
-    ASSERT_TRUE(Zzzzz == t[3].up);  // Nihil Supernum
-    ASSERT_TRUE(&t[2] == t[3].lr[0]);
-    ASSERT_TRUE(&t[7] == t[3].lr[1]);
-    ASSERT_TRUE(00 == t[3].bf);
+    TEST_ASSERT(Zzzzz == t[3].up);  // Nihil Supernum
+    TEST_ASSERT(&t[2] == t[3].lr[0]);
+    TEST_ASSERT(&t[7] == t[3].lr[1]);
+    TEST_ASSERT(00 == t[3].bf);
     // 7
-    ASSERT_TRUE(&t[3] == t[7].up);
-    ASSERT_TRUE(Zzzzz == t[7].lr[0]);
-    ASSERT_TRUE(Zzzzz == t[7].lr[1]);
-    ASSERT_TRUE(00 == t[7].bf);
+    TEST_ASSERT(&t[3] == t[7].up);
+    TEST_ASSERT(Zzzzz == t[7].lr[0]);
+    TEST_ASSERT(Zzzzz == t[7].lr[1]);
+    TEST_ASSERT(00 == t[7].bf);
 
     // Remove 7.
     //          3
@@ -963,43 +967,43 @@ TEST(Cavl, RemovalA)
     //       2
     std::puts("REMOVE 7:");
     remove(&root, &t[7]);
-    ASSERT_TRUE(&t[3] == root);
+    TEST_ASSERT(&t[3] == root);
     print(root);
-    ASSERT_TRUE(nullptr == findBrokenBalanceFactor(root));
-    ASSERT_TRUE(nullptr == findBrokenAncestry(root));
-    ASSERT_TRUE(2 == checkAscension(root));
+    TEST_ASSERT(nullptr == findBrokenBalanceFactor(root));
+    TEST_ASSERT(nullptr == findBrokenAncestry(root));
+    TEST_ASSERT(2 == checkAscension(root));
     // 2
-    ASSERT_TRUE(&t[3] == t[2].up);
-    ASSERT_TRUE(Zzzzz == t[2].lr[0]);
-    ASSERT_TRUE(Zzzzz == t[2].lr[1]);
-    ASSERT_TRUE(0 == t[2].bf);
+    TEST_ASSERT(&t[3] == t[2].up);
+    TEST_ASSERT(Zzzzz == t[2].lr[0]);
+    TEST_ASSERT(Zzzzz == t[2].lr[1]);
+    TEST_ASSERT(0 == t[2].bf);
     // 3
-    ASSERT_TRUE(Zzzzz == t[3].up);  // Nihil Supernum
-    ASSERT_TRUE(&t[2] == t[3].lr[0]);
-    ASSERT_TRUE(Zzzzz == t[3].lr[1]);
-    ASSERT_TRUE(-1 == t[3].bf);
+    TEST_ASSERT(Zzzzz == t[3].up);  // Nihil Supernum
+    TEST_ASSERT(&t[2] == t[3].lr[0]);
+    TEST_ASSERT(Zzzzz == t[3].lr[1]);
+    TEST_ASSERT(-1 == t[3].bf);
 
     // Remove 3. Only 2 is left, which is now obviously the root.
     std::puts("REMOVE 3:");
     remove(&root, &t[3]);
-    ASSERT_TRUE(&t[2] == root);
+    TEST_ASSERT(&t[2] == root);
     print(root);
-    ASSERT_TRUE(nullptr == findBrokenBalanceFactor(root));
-    ASSERT_TRUE(nullptr == findBrokenAncestry(root));
-    ASSERT_TRUE(1 == checkAscension(root));
+    TEST_ASSERT(nullptr == findBrokenBalanceFactor(root));
+    TEST_ASSERT(nullptr == findBrokenAncestry(root));
+    TEST_ASSERT(1 == checkAscension(root));
     // 2
-    ASSERT_TRUE(Zzzzz == t[2].up);
-    ASSERT_TRUE(Zzzzz == t[2].lr[0]);
-    ASSERT_TRUE(Zzzzz == t[2].lr[1]);
-    ASSERT_TRUE(0 == t[2].bf);
+    TEST_ASSERT(Zzzzz == t[2].up);
+    TEST_ASSERT(Zzzzz == t[2].lr[0]);
+    TEST_ASSERT(Zzzzz == t[2].lr[1]);
+    TEST_ASSERT(0 == t[2].bf);
 
     // Remove 2. The tree is now empty, make sure the root pointer is updated accordingly.
     std::puts("REMOVE 2:");
     remove(&root, &t[2]);
-    ASSERT_TRUE(nullptr == root);
+    TEST_ASSERT(nullptr == root);
 }
 
-TEST(Cavl, MutationManual)
+void testMutationManual()
 {
     using N = Node<std::uint8_t>;
     // Build a tree with 31 elements from 1 to 31 inclusive by adding new elements successively:
@@ -1022,27 +1026,27 @@ TEST(Cavl, MutationManual)
     for (std::uint8_t i = 1; i < 32; i++)
     {
         const auto pred = [&](const N& v) { return t.at(i).value - v.value; };
-        ASSERT_TRUE(nullptr == search(&root, pred));
-        ASSERT_TRUE(&t[i] == search(&root, pred, [&]() { return &t.at(i); }));
-        ASSERT_TRUE(&t[i] == search(&root, pred));
+        TEST_ASSERT(nullptr == search(&root, pred));
+        TEST_ASSERT(&t[i] == search(&root, pred, [&]() { return &t.at(i); }));
+        TEST_ASSERT(&t[i] == search(&root, pred));
         // Validate the tree after every mutation.
-        ASSERT_TRUE(nullptr != root);
-        ASSERT_TRUE(nullptr == findBrokenBalanceFactor(root));
-        ASSERT_TRUE(nullptr == findBrokenAncestry(root));
-        ASSERT_TRUE(i == checkAscension(root));
+        TEST_ASSERT(nullptr != root);
+        TEST_ASSERT(nullptr == findBrokenBalanceFactor(root));
+        TEST_ASSERT(nullptr == findBrokenAncestry(root));
+        TEST_ASSERT(i == checkAscension(root));
     }
     print(root);
-    ASSERT_TRUE(nullptr == findBrokenBalanceFactor(root));
-    ASSERT_TRUE(nullptr == findBrokenAncestry(root));
-    ASSERT_TRUE(31 == checkAscension(root));
+    TEST_ASSERT(nullptr == findBrokenBalanceFactor(root));
+    TEST_ASSERT(nullptr == findBrokenAncestry(root));
+    TEST_ASSERT(31 == checkAscension(root));
     // Check composition -- ensure that every element is in the tree and it is there exactly once.
     {
         std::array<bool, 32> seen{};
         traverse<true>(root, [&](const N* const n) {
-            ASSERT_TRUE(!seen.at(n->value));
+            TEST_ASSERT(!seen.at(n->value));
             seen[n->value] = true;
         });
-        ASSERT_TRUE(std::all_of(&seen[1], &seen[31], [](bool x) { return x; }));
+        TEST_ASSERT(std::all_of(&seen[1], &seen[31], [](bool x) { return x; }));
     }
 
     // REMOVE 24
@@ -1056,15 +1060,15 @@ TEST(Cavl, MutationManual)
     //  / `     / `     / `     / `     / `     / `       `     / `
     // 1   3   5   7   9  11  13  15  17  19  21  23      27  29  31
     std::puts("REMOVE 24:");
-    ASSERT_TRUE(t[24].checkLinkageUpLeftRightBF(&t[16], &t[20], &t[28], 00));
+    TEST_ASSERT(t[24].checkLinkageUpLeftRightBF(&t[16], &t[20], &t[28], 00));
     remove(&root, &t[24]);
-    ASSERT_TRUE(&t[16] == root);
+    TEST_ASSERT(&t[16] == root);
     print(root);
-    ASSERT_TRUE(t[25].checkLinkageUpLeftRightBF(&t[16], &t[20], &t[28], 00));
-    ASSERT_TRUE(t[26].checkLinkageUpLeftRightBF(&t[28], Zzzzzz, &t[27], +1));
-    ASSERT_TRUE(nullptr == findBrokenBalanceFactor(root));
-    ASSERT_TRUE(nullptr == findBrokenAncestry(root));
-    ASSERT_TRUE(30 == checkAscension(root));
+    TEST_ASSERT(t[25].checkLinkageUpLeftRightBF(&t[16], &t[20], &t[28], 00));
+    TEST_ASSERT(t[26].checkLinkageUpLeftRightBF(&t[28], Zzzzzz, &t[27], +1));
+    TEST_ASSERT(nullptr == findBrokenBalanceFactor(root));
+    TEST_ASSERT(nullptr == findBrokenAncestry(root));
+    TEST_ASSERT(30 == checkAscension(root));
 
     // REMOVE 25
     //                               16
@@ -1077,15 +1081,15 @@ TEST(Cavl, MutationManual)
     //  / `     / `     / `     / `     / `     / `             / `
     // 1   3   5   7   9  11  13  15  17  19  21  23          29  31
     std::puts("REMOVE 25:");
-    ASSERT_TRUE(t[25].checkLinkageUpLeftRightBF(&t[16], &t[20], &t[28], 00));
+    TEST_ASSERT(t[25].checkLinkageUpLeftRightBF(&t[16], &t[20], &t[28], 00));
     remove(&root, &t[25]);
-    ASSERT_TRUE(&t[16] == root);
+    TEST_ASSERT(&t[16] == root);
     print(root);
-    ASSERT_TRUE(t[26].checkLinkageUpLeftRightBF(&t[16], &t[20], &t[28], 00));
-    ASSERT_TRUE(t[28].checkLinkageUpLeftRightBF(&t[26], &t[27], &t[30], +1));
-    ASSERT_TRUE(nullptr == findBrokenBalanceFactor(root));
-    ASSERT_TRUE(nullptr == findBrokenAncestry(root));
-    ASSERT_TRUE(29 == checkAscension(root));
+    TEST_ASSERT(t[26].checkLinkageUpLeftRightBF(&t[16], &t[20], &t[28], 00));
+    TEST_ASSERT(t[28].checkLinkageUpLeftRightBF(&t[26], &t[27], &t[30], +1));
+    TEST_ASSERT(nullptr == findBrokenBalanceFactor(root));
+    TEST_ASSERT(nullptr == findBrokenAncestry(root));
+    TEST_ASSERT(29 == checkAscension(root));
 
     // REMOVE 26
     //                               16
@@ -1098,16 +1102,16 @@ TEST(Cavl, MutationManual)
     //  / `     / `     / `     / `     / `     / `       `
     // 1   3   5   7   9  11  13  15  17  19  21  23      29
     std::puts("REMOVE 26:");
-    ASSERT_TRUE(t[26].checkLinkageUpLeftRightBF(&t[16], &t[20], &t[28], 00));
+    TEST_ASSERT(t[26].checkLinkageUpLeftRightBF(&t[16], &t[20], &t[28], 00));
     remove(&root, &t[26]);
-    ASSERT_TRUE(&t[16] == root);
+    TEST_ASSERT(&t[16] == root);
     print(root);
-    ASSERT_TRUE(t[27].checkLinkageUpLeftRightBF(&t[16], &t[20], &t[30], 00));
-    ASSERT_TRUE(t[30].checkLinkageUpLeftRightBF(&t[27], &t[28], &t[31], -1));
-    ASSERT_TRUE(t[28].checkLinkageUpLeftRightBF(&t[30], Zzzzzz, &t[29], +1));
-    ASSERT_TRUE(nullptr == findBrokenBalanceFactor(root));
-    ASSERT_TRUE(nullptr == findBrokenAncestry(root));
-    ASSERT_TRUE(28 == checkAscension(root));
+    TEST_ASSERT(t[27].checkLinkageUpLeftRightBF(&t[16], &t[20], &t[30], 00));
+    TEST_ASSERT(t[30].checkLinkageUpLeftRightBF(&t[27], &t[28], &t[31], -1));
+    TEST_ASSERT(t[28].checkLinkageUpLeftRightBF(&t[30], Zzzzzz, &t[29], +1));
+    TEST_ASSERT(nullptr == findBrokenBalanceFactor(root));
+    TEST_ASSERT(nullptr == findBrokenAncestry(root));
+    TEST_ASSERT(28 == checkAscension(root));
 
     // REMOVE 20
     //                               16
@@ -1120,15 +1124,15 @@ TEST(Cavl, MutationManual)
     //  / `     / `     / `     / `     / `       `       `
     // 1   3   5   7   9  11  13  15  17  19      23      29
     std::puts("REMOVE 20:");
-    ASSERT_TRUE(t[20].checkLinkageUpLeftRightBF(&t[27], &t[18], &t[22], 00));
+    TEST_ASSERT(t[20].checkLinkageUpLeftRightBF(&t[27], &t[18], &t[22], 00));
     remove(&root, &t[20]);
-    ASSERT_TRUE(&t[16] == root);
+    TEST_ASSERT(&t[16] == root);
     print(root);
-    ASSERT_TRUE(t[21].checkLinkageUpLeftRightBF(&t[27], &t[18], &t[22], 00));
-    ASSERT_TRUE(t[22].checkLinkageUpLeftRightBF(&t[21], Zzzzzz, &t[23], +1));
-    ASSERT_TRUE(nullptr == findBrokenBalanceFactor(root));
-    ASSERT_TRUE(nullptr == findBrokenAncestry(root));
-    ASSERT_TRUE(27 == checkAscension(root));
+    TEST_ASSERT(t[21].checkLinkageUpLeftRightBF(&t[27], &t[18], &t[22], 00));
+    TEST_ASSERT(t[22].checkLinkageUpLeftRightBF(&t[21], Zzzzzz, &t[23], +1));
+    TEST_ASSERT(nullptr == findBrokenBalanceFactor(root));
+    TEST_ASSERT(nullptr == findBrokenAncestry(root));
+    TEST_ASSERT(27 == checkAscension(root));
 
     // REMOVE 27
     //                               16
@@ -1141,15 +1145,15 @@ TEST(Cavl, MutationManual)
     //  / `     / `     / `     / `     / `       `
     // 1   3   5   7   9  11  13  15  17  19      23
     std::puts("REMOVE 27:");
-    ASSERT_TRUE(t[27].checkLinkageUpLeftRightBF(&t[16], &t[21], &t[30], 00));
+    TEST_ASSERT(t[27].checkLinkageUpLeftRightBF(&t[16], &t[21], &t[30], 00));
     remove(&root, &t[27]);
-    ASSERT_TRUE(&t[16] == root);
+    TEST_ASSERT(&t[16] == root);
     print(root);
-    ASSERT_TRUE(t[28].checkLinkageUpLeftRightBF(&t[16], &t[21], &t[30], -1));
-    ASSERT_TRUE(t[30].checkLinkageUpLeftRightBF(&t[28], &t[29], &t[31], 00));
-    ASSERT_TRUE(nullptr == findBrokenBalanceFactor(root));
-    ASSERT_TRUE(nullptr == findBrokenAncestry(root));
-    ASSERT_TRUE(26 == checkAscension(root));
+    TEST_ASSERT(t[28].checkLinkageUpLeftRightBF(&t[16], &t[21], &t[30], -1));
+    TEST_ASSERT(t[30].checkLinkageUpLeftRightBF(&t[28], &t[29], &t[31], 00));
+    TEST_ASSERT(nullptr == findBrokenBalanceFactor(root));
+    TEST_ASSERT(nullptr == findBrokenAncestry(root));
+    TEST_ASSERT(26 == checkAscension(root));
 
     // REMOVE 28
     //                               16
@@ -1162,15 +1166,15 @@ TEST(Cavl, MutationManual)
     //  / `     / `     / `     / `     / `       `
     // 1   3   5   7   9  11  13  15  17  19      23
     std::puts("REMOVE 28:");
-    ASSERT_TRUE(t[28].checkLinkageUpLeftRightBF(&t[16], &t[21], &t[30], -1));
+    TEST_ASSERT(t[28].checkLinkageUpLeftRightBF(&t[16], &t[21], &t[30], -1));
     remove(&root, &t[28]);
-    ASSERT_TRUE(&t[16] == root);
+    TEST_ASSERT(&t[16] == root);
     print(root);
-    ASSERT_TRUE(t[29].checkLinkageUpLeftRightBF(&t[16], &t[21], &t[30], -1));
-    ASSERT_TRUE(t[30].checkLinkageUpLeftRightBF(&t[29], Zzzzzz, &t[31], +1));
-    ASSERT_TRUE(nullptr == findBrokenBalanceFactor(root));
-    ASSERT_TRUE(nullptr == findBrokenAncestry(root));
-    ASSERT_TRUE(25 == checkAscension(root));
+    TEST_ASSERT(t[29].checkLinkageUpLeftRightBF(&t[16], &t[21], &t[30], -1));
+    TEST_ASSERT(t[30].checkLinkageUpLeftRightBF(&t[29], Zzzzzz, &t[31], +1));
+    TEST_ASSERT(nullptr == findBrokenBalanceFactor(root));
+    TEST_ASSERT(nullptr == findBrokenAncestry(root));
+    TEST_ASSERT(25 == checkAscension(root));
 
     // REMOVE 29; UNBALANCED TREE BEFORE ROTATION:
     //                               16
@@ -1194,18 +1198,18 @@ TEST(Cavl, MutationManual)
     //  / `     / `     / `     / `                       `
     // 1   3   5   7   9  11  13  15                      23
     std::puts("REMOVE 29:");
-    ASSERT_TRUE(t[29].checkLinkageUpLeftRightBF(&t[16], &t[21], &t[30], -1));
+    TEST_ASSERT(t[29].checkLinkageUpLeftRightBF(&t[16], &t[21], &t[30], -1));
     remove(&root, &t[29]);
-    ASSERT_TRUE(&t[16] == root);
+    TEST_ASSERT(&t[16] == root);
     print(root);
-    ASSERT_TRUE(t[21].checkLinkageUpLeftRightBF(&t[16], &t[18], &t[30], +1));
-    ASSERT_TRUE(t[18].checkLinkageUpLeftRightBF(&t[21], &t[17], &t[19], 00));
-    ASSERT_TRUE(t[30].checkLinkageUpLeftRightBF(&t[21], &t[22], &t[31], -1));
-    ASSERT_TRUE(t[22].checkLinkageUpLeftRightBF(&t[30], Zzzzzz, &t[23], +1));
-    ASSERT_TRUE(t[16].checkLinkageUpLeftRightBF(Zzzzzz, &t[8], &t[21], 00));
-    ASSERT_TRUE(nullptr == findBrokenBalanceFactor(root));
-    ASSERT_TRUE(nullptr == findBrokenAncestry(root));
-    ASSERT_TRUE(24 == checkAscension(root));
+    TEST_ASSERT(t[21].checkLinkageUpLeftRightBF(&t[16], &t[18], &t[30], +1));
+    TEST_ASSERT(t[18].checkLinkageUpLeftRightBF(&t[21], &t[17], &t[19], 00));
+    TEST_ASSERT(t[30].checkLinkageUpLeftRightBF(&t[21], &t[22], &t[31], -1));
+    TEST_ASSERT(t[22].checkLinkageUpLeftRightBF(&t[30], Zzzzzz, &t[23], +1));
+    TEST_ASSERT(t[16].checkLinkageUpLeftRightBF(Zzzzzz, &t[8], &t[21], 00));
+    TEST_ASSERT(nullptr == findBrokenBalanceFactor(root));
+    TEST_ASSERT(nullptr == findBrokenAncestry(root));
+    TEST_ASSERT(24 == checkAscension(root));
 
     // REMOVE 8
     //                               16
@@ -1218,15 +1222,15 @@ TEST(Cavl, MutationManual)
     //  / `     / `       `     / `                       `
     // 1   3   5   7      11  13  15                      23
     std::puts("REMOVE 8:");
-    ASSERT_TRUE(t[8].checkLinkageUpLeftRightBF(&t[16], &t[4], &t[12], 00));
+    TEST_ASSERT(t[8].checkLinkageUpLeftRightBF(&t[16], &t[4], &t[12], 00));
     remove(&root, &t[8]);
-    ASSERT_TRUE(&t[16] == root);
+    TEST_ASSERT(&t[16] == root);
     print(root);
-    ASSERT_TRUE(t[9].checkLinkageUpLeftRightBF(&t[16], &t[4], &t[12], 00));
-    ASSERT_TRUE(t[10].checkLinkageUpLeftRightBF(&t[12], Zzzzz, &t[11], +1));
-    ASSERT_TRUE(nullptr == findBrokenBalanceFactor(root));
-    ASSERT_TRUE(nullptr == findBrokenAncestry(root));
-    ASSERT_TRUE(23 == checkAscension(root));
+    TEST_ASSERT(t[9].checkLinkageUpLeftRightBF(&t[16], &t[4], &t[12], 00));
+    TEST_ASSERT(t[10].checkLinkageUpLeftRightBF(&t[12], Zzzzz, &t[11], +1));
+    TEST_ASSERT(nullptr == findBrokenBalanceFactor(root));
+    TEST_ASSERT(nullptr == findBrokenAncestry(root));
+    TEST_ASSERT(23 == checkAscension(root));
 
     // REMOVE 9
     //                               16
@@ -1239,15 +1243,15 @@ TEST(Cavl, MutationManual)
     //  / `     / `             / `                       `
     // 1   3   5   7          13  15                      23
     std::puts("REMOVE 9:");
-    ASSERT_TRUE(t[9].checkLinkageUpLeftRightBF(&t[16], &t[4], &t[12], 00));
+    TEST_ASSERT(t[9].checkLinkageUpLeftRightBF(&t[16], &t[4], &t[12], 00));
     remove(&root, &t[9]);
-    ASSERT_TRUE(&t[16] == root);
+    TEST_ASSERT(&t[16] == root);
     print(root);
-    ASSERT_TRUE(t[10].checkLinkageUpLeftRightBF(&t[16], &t[4], &t[12], 00));
-    ASSERT_TRUE(t[12].checkLinkageUpLeftRightBF(&t[10], &t[11], &t[14], +1));
-    ASSERT_TRUE(nullptr == findBrokenBalanceFactor(root));
-    ASSERT_TRUE(nullptr == findBrokenAncestry(root));
-    ASSERT_TRUE(22 == checkAscension(root));
+    TEST_ASSERT(t[10].checkLinkageUpLeftRightBF(&t[16], &t[4], &t[12], 00));
+    TEST_ASSERT(t[12].checkLinkageUpLeftRightBF(&t[10], &t[11], &t[14], +1));
+    TEST_ASSERT(nullptr == findBrokenBalanceFactor(root));
+    TEST_ASSERT(nullptr == findBrokenAncestry(root));
+    TEST_ASSERT(22 == checkAscension(root));
 
     // REMOVE 1
     //                               16
@@ -1260,14 +1264,14 @@ TEST(Cavl, MutationManual)
     //    `     / `             / `                       `
     //     3   5   7          13  15                      23
     std::puts("REMOVE 1:");
-    ASSERT_TRUE(t[1].checkLinkageUpLeftRightBF(&t[2], Zzzzz, Zzzzz, 00));
+    TEST_ASSERT(t[1].checkLinkageUpLeftRightBF(&t[2], Zzzzz, Zzzzz, 00));
     remove(&root, &t[1]);
-    ASSERT_TRUE(&t[16] == root);
+    TEST_ASSERT(&t[16] == root);
     print(root);
-    ASSERT_TRUE(t[2].checkLinkageUpLeftRightBF(&t[4], Zzzzz, &t[3], +1));
-    ASSERT_TRUE(nullptr == findBrokenBalanceFactor(root));
-    ASSERT_TRUE(nullptr == findBrokenAncestry(root));
-    ASSERT_TRUE(21 == checkAscension(root));
+    TEST_ASSERT(t[2].checkLinkageUpLeftRightBF(&t[4], Zzzzz, &t[3], +1));
+    TEST_ASSERT(nullptr == findBrokenBalanceFactor(root));
+    TEST_ASSERT(nullptr == findBrokenAncestry(root));
+    TEST_ASSERT(21 == checkAscension(root));
 }
 
 auto getRandomByte()
@@ -1275,7 +1279,7 @@ auto getRandomByte()
     return static_cast<std::uint8_t>((0xFFLL * std::rand()) / RAND_MAX);
 }
 
-TEST(Cavl, MutationRandomized)
+void testMutationRandomized()
 {
     using N = Node<std::uint8_t>;
     std::array<N, 256> t{};
@@ -1291,15 +1295,15 @@ TEST(Cavl, MutationRandomized)
     std::uint64_t cnt_removal  = 0;
 
     const auto validate = [&] {
-        ASSERT_TRUE(size == std::accumulate(mask.begin(), mask.end(), 0U, [](const std::size_t a, const std::size_t b) {
+        TEST_ASSERT(size == std::accumulate(mask.begin(), mask.end(), 0U, [](const std::size_t a, const std::size_t b) {
                         return a + b;
                     }));
-        ASSERT_TRUE(nullptr == findBrokenBalanceFactor(root));
-        ASSERT_TRUE(nullptr == findBrokenAncestry(root));
-        ASSERT_TRUE(size == checkAscension(root));
+        TEST_ASSERT(nullptr == findBrokenBalanceFactor(root));
+        TEST_ASSERT(nullptr == findBrokenAncestry(root));
+        TEST_ASSERT(size == checkAscension(root));
         std::array<bool, 256> new_mask{};
         traverse<true>(root, [&](const N* node) { new_mask.at(node->value) = true; });
-        ASSERT_TRUE(mask == new_mask);  // Otherwise, the contents of the tree does not match our expectations.
+        TEST_ASSERT(mask == new_mask);  // Otherwise, the contents of the tree does not match our expectations.
     };
     validate();
 
@@ -1307,21 +1311,21 @@ TEST(Cavl, MutationRandomized)
         const auto predicate = [&](const N& v) { return x - v.value; };
         if (N* const existing = search(&root, predicate))
         {
-            ASSERT_TRUE(mask.at(x));
-            ASSERT_TRUE(x == existing->value);
-            ASSERT_TRUE(x == search(&root, predicate, []() -> N* {
+            TEST_ASSERT(mask.at(x));
+            TEST_ASSERT(x == existing->value);
+            TEST_ASSERT(x == search(&root, predicate, []() -> N* {
                                  throw std::logic_error("Attempted to create a new node when there is one already");
                              })->value);
         }
         else
         {
-            ASSERT_TRUE(!mask.at(x));
+            TEST_ASSERT(!mask.at(x));
             bool factory_called = false;
-            ASSERT_TRUE(x == search(&root, predicate, [&]() -> N* {
-                                 factory_called = true;
+            TEST_ASSERT(x == search(&root, predicate, [&]() -> N* {
+                                 factory_called = true;  // NOLINT(bugprone-assignment-in-if-condition)
                                  return &t.at(x);
                              })->value);
-            ASSERT_TRUE(factory_called);
+            TEST_ASSERT(factory_called);
             size++;
             cnt_addition++;
             mask.at(x) = true;
@@ -1332,17 +1336,17 @@ TEST(Cavl, MutationRandomized)
         const auto predicate = [&](const N& v) { return x - v.value; };
         if (N* const existing = search(&root, predicate))
         {
-            ASSERT_TRUE(mask.at(x));
-            ASSERT_TRUE(x == existing->value);
+            TEST_ASSERT(mask.at(x));
+            TEST_ASSERT(x == existing->value);
             remove(&root, existing);
             size--;
             cnt_removal++;
             mask.at(x) = false;
-            ASSERT_TRUE(nullptr == search(&root, predicate));
+            TEST_ASSERT(nullptr == search(&root, predicate));
         }
         else
         {
-            ASSERT_TRUE(!mask.at(x));
+            TEST_ASSERT(!mask.at(x));
         }
     };
 
@@ -1372,4 +1376,29 @@ TEST(Cavl, MutationRandomized)
                   << std::endl;
     }
     validate();
+}
+
+}  // namespace
+
+void setUp() {}
+
+void tearDown() {}
+
+int main(const int argc, const char* const argv[])
+{
+    const auto seed = static_cast<unsigned>((argc > 1) ? std::atoll(argv[1]) : std::time(nullptr));  // NOLINT
+    std::cout << "Randomness seed: " << seed << std::endl;
+    std::srand(seed);
+    UNITY_BEGIN();
+    RUN_TEST(testCheckAscension);
+    RUN_TEST(testRotation);
+    RUN_TEST(testBalancingA);
+    RUN_TEST(testBalancingB);
+    RUN_TEST(testBalancingC);
+    RUN_TEST(testRetracingOnGrowth);
+    RUN_TEST(testSearchTrivial);
+    RUN_TEST(testRemovalA);
+    RUN_TEST(testMutationManual);
+    RUN_TEST(testMutationRandomized);
+    return UNITY_END();
 }
