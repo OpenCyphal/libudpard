@@ -224,7 +224,7 @@ static inline bool isValidMemoryResource(const UdpardMemoryResource* const memor
 // =====================================================================================================================
 
 /// This is a subclass of UdpardTxItem. A pointer to this type can be cast to UdpardTxItem safely.
-/// This is standard-compliant. The paragraph 6.7.2.1.15 says:
+/// This is compliant with the C99 standard; paragraph 6.7.2.1.15 says:
 ///     A pointer to a structure object, suitably converted, points to its initial member (or if that member is a
 ///     bit-field, then to the unit in which it resides), and vice versa. There may be unnamed padding within a
 ///     structure object, but not at its beginning.
@@ -291,30 +291,30 @@ static inline int8_t txAVLPredicate(void* const user_reference,  // NOSONAR Cavl
 /// The primitive serialization functions are endian-agnostic.
 static inline byte_t* txSerializeU16(byte_t* const destination_buffer, const uint16_t value)
 {
-    byte_t* p = destination_buffer;
-    *p++      = (byte_t) (value & ByteMask);
-    *p++      = (byte_t) ((byte_t) (value >> ByteWidth) & ByteMask);
-    return p;
+    byte_t* ptr = destination_buffer;
+    *ptr++      = (byte_t) (value & ByteMask);
+    *ptr++      = (byte_t) ((byte_t) (value >> ByteWidth) & ByteMask);
+    return ptr;
 }
 
 static inline byte_t* txSerializeU32(byte_t* const destination_buffer, const uint32_t value)
 {
-    byte_t* p = destination_buffer;
+    byte_t* ptr = destination_buffer;
     for (size_t i = 0; i < sizeof(value); i++)  // We sincerely hope that the compiler will use memcpy.
     {
-        *p++ = (byte_t) ((byte_t) (value >> (i * ByteWidth)) & ByteMask);
+        *ptr++ = (byte_t) ((byte_t) (value >> (i * ByteWidth)) & ByteMask);
     }
-    return p;
+    return ptr;
 }
 
 static inline byte_t* txSerializeU64(byte_t* const destination_buffer, const uint64_t value)
 {
-    byte_t* p = destination_buffer;
+    byte_t* ptr = destination_buffer;
     for (size_t i = 0; i < sizeof(value); i++)  // We sincerely hope that the compiler will use memcpy.
     {
-        *p++ = (byte_t) ((byte_t) (value >> (i * ByteWidth)) & ByteMask);
+        *ptr++ = (byte_t) ((byte_t) (value >> (i * ByteWidth)) & ByteMask);
     }
-    return p;
+    return ptr;
 }
 
 static inline byte_t* txSerializeHeader(byte_t* const          destination_buffer,
@@ -322,23 +322,23 @@ static inline byte_t* txSerializeHeader(byte_t* const          destination_buffe
                                         const uint32_t         frame_index,
                                         const bool             end_of_transfer)
 {
-    byte_t* p = destination_buffer;
-    *p++      = HEADER_VERSION;
-    *p++      = (byte_t) meta.priority;
-    p         = txSerializeU16(p, meta.src_node_id);
-    p         = txSerializeU16(p, meta.dst_node_id);
-    p         = txSerializeU16(p, meta.data_specifier);
-    p         = txSerializeU64(p, meta.transfer_id);
+    byte_t* ptr = destination_buffer;
+    *ptr++      = HEADER_VERSION;
+    *ptr++      = (byte_t) meta.priority;
+    ptr         = txSerializeU16(ptr, meta.src_node_id);
+    ptr         = txSerializeU16(ptr, meta.dst_node_id);
+    ptr         = txSerializeU16(ptr, meta.data_specifier);
+    ptr         = txSerializeU64(ptr, meta.transfer_id);
     UDPARD_ASSERT((frame_index + 0UL) <= HEADER_FRAME_INDEX_MAX);  // +0UL is to avoid a compiler warning.
-    p = txSerializeU32(p, frame_index | (end_of_transfer ? HEADER_FRAME_INDEX_EOT_MASK : 0U));
-    p = txSerializeU16(p, 0);  // opaque user data
+    ptr = txSerializeU32(ptr, frame_index | (end_of_transfer ? HEADER_FRAME_INDEX_EOT_MASK : 0U));
+    ptr = txSerializeU16(ptr, 0);  // opaque user data
     // Header CRC in the big endian format. Optimization prospect: the header up to frame_index is constant in
     // multi-frame transfers, so we don't really need to recompute the CRC from scratch per frame.
     const uint16_t crc = headerCRCCompute(HEADER_SIZE_BYTES - HEADER_CRC_SIZE_BYTES, destination_buffer);
-    *p++               = (byte_t) ((byte_t) (crc >> ByteWidth) & ByteMask);
-    *p++               = (byte_t) (crc & ByteMask);
-    UDPARD_ASSERT(p == (destination_buffer + HEADER_SIZE_BYTES));
-    return p;
+    *ptr++             = (byte_t) ((byte_t) (crc >> ByteWidth) & ByteMask);
+    *ptr++             = (byte_t) (crc & ByteMask);
+    UDPARD_ASSERT(ptr == (destination_buffer + HEADER_SIZE_BYTES));
+    return ptr;
 }
 
 /// Produces a chain of Tx queue items for later insertion into the Tx queue. The tail is NULL if OOM.
@@ -362,30 +362,30 @@ static inline TxChain txMakeChain(UdpardMemoryResource* const memory,
     size_t  offset = 0U;
     while (offset < payload_size_with_crc)
     {
-        TxItem* const tqi = txNewItem(memory,
-                                      dscp_value_per_priority,
-                                      deadline_usec,
-                                      meta.priority,
-                                      endpoint,
-                                      smaller(payload_size_with_crc - offset, mtu) + HEADER_SIZE_BYTES,
-                                      user_transfer_reference);
+        TxItem* const item = txNewItem(memory,
+                                       dscp_value_per_priority,
+                                       deadline_usec,
+                                       meta.priority,
+                                       endpoint,
+                                       smaller(payload_size_with_crc - offset, mtu) + HEADER_SIZE_BYTES,
+                                       user_transfer_reference);
         if (NULL == out.head)
         {
-            out.head = tqi;
+            out.head = item;
         }
         else
         {
             // C std, 6.7.2.1.15: A pointer to a structure object <...> points to its initial member, and vice versa.
             // Can't just read tqi->base because tqi may be NULL; https://github.com/OpenCyphal/libcanard/issues/203.
-            out.tail->base.next_in_transfer = (UdpardTxItem*) tqi;
+            out.tail->base.next_in_transfer = (UdpardTxItem*) item;
         }
-        out.tail = tqi;
+        out.tail = item;
         if (NULL == out.tail)
         {
             break;
         }
         const bool last      = (payload_size_with_crc - offset) <= mtu;
-        byte_t*    write_ptr = txSerializeHeader(&tqi->payload_buffer[0], meta, (uint32_t) out.count, last);
+        byte_t*    write_ptr = txSerializeHeader(&item->payload_buffer[0], meta, (uint32_t) out.count, last);
         if (offset < payload.size)
         {
             const size_t progress = smaller(payload.size - offset, mtu);
@@ -400,7 +400,7 @@ static inline TxChain txMakeChain(UdpardMemoryResource* const memory,
         {
             const size_t crc_offset = offset - payload.size;
             UDPARD_ASSERT(crc_offset < TRANSFER_CRC_SIZE_BYTES);
-            const size_t available = tqi->base.datagram_payload.size - (size_t) (write_ptr - &tqi->payload_buffer[0]);
+            const size_t available = item->base.datagram_payload.size - (size_t) (write_ptr - &item->payload_buffer[0]);
             UDPARD_ASSERT(available <= TRANSFER_CRC_SIZE_BYTES);
             const size_t write_size = smaller(TRANSFER_CRC_SIZE_BYTES - crc_offset, available);
             // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
