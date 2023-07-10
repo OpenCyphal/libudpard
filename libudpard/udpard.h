@@ -191,20 +191,18 @@ extern "C" {
 /// No other error states may occur in the library.
 /// By contract, a well-characterized application with properly sized memory pools will never encounter errors.
 /// The error code 1 is not used because -1 is often used as a generic error code in 3rd-party code.
-#define UDPARD_ERROR_INVALID_ARGUMENT 2
-#define UDPARD_ERROR_OUT_OF_MEMORY 3
+#define UDPARD_ERROR_ARGUMENT 2
+#define UDPARD_ERROR_MEMORY 3
+#define UDPARD_ERROR_CAPACITY 4
+#define UDPARD_ERROR_ANONYMOUS 5
 
-/// MTU values for the supported protocols.
 /// RFC 791 states that hosts must be prepared to accept datagrams of up to 576 octets and it is expected that this
 /// library will receive non IP-fragmented datagrams thus the minimum MTU should be larger than 576.
 /// That being said, the MTU here is set to 1408 which is derived as:
 ///     1500B Ethernet MTU (RFC 894) - 60B IPv4 max header - 8B UDP Header - 24B Cyphal header
-#define UDPARD_MTU_MAX 1408U
+#define UDPARD_MTU_DEFAULT 1408U
 /// To guarantee a single frame transfer, the maximum payload size shall be 4 bytes less to accommodate for the CRC.
-#define UDPARD_MTU_MAX_SINGLE_FRAME (UDPARD_MTU_MAX - 4U)
-
-/// The port number is defined in the Cyphal/UDP Specification. The same port number is used for all transfer kinds.
-#define UDPARD_UDP_PORT 9382U
+#define UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME (UDPARD_MTU_DEFAULT - 4U)
 
 /// Parameter ranges are inclusive; the lower bound is zero for all. See Cyphal/UDP Specification for background.
 #define UDPARD_SUBJECT_ID_MAX 8191U
@@ -275,9 +273,9 @@ typedef struct
     uint16_t udp_port;
 } UdpardUDPIPEndpoint;
 
-// =============================================================================================================
-// =============================================  MEMORY RESOURCE  =============================================
-// =============================================================================================================
+// =====================================================================================================================
+// =================================================  MEMORY RESOURCE  =================================================
+// =====================================================================================================================
 
 /// A pointer to the memory allocation function. The semantics are similar to malloc():
 ///     - The returned pointer shall point to an uninitialized block of memory that is at least "size" bytes large.
@@ -309,9 +307,9 @@ struct UdpardMemoryResource
     void* user_reference;
 };
 
-// =============================================================================================================
-// =============================================    TX PIPELINE    =============================================
-// =============================================================================================================
+// =====================================================================================================================
+// =================================================    TX PIPELINE    =================================================
+// =====================================================================================================================
 
 /// The transmission pipeline is a prioritized transmission queue that keeps UDP datagrams (aka transport frames)
 /// destined for transmission via one network interface.
@@ -346,36 +344,33 @@ typedef struct
     const UdpardNodeID* local_node_id;
 
     /// The maximum number of UDP datagrams this instance is allowed to enqueue.
-    /// An attempt to push more will fail with an out-of-memory error even if the memory is not exhausted.
+    /// An attempt to push more will fail with UDPARD_ERROR_CAPACITY.
     /// The purpose of this limitation is to ensure that a blocked queue does not exhaust the memory.
     size_t queue_capacity;
 
-    /// The transport-layer maximum transmission unit (MTU).
-    /// It defines the maximum number of data bytes per UDP data frame in outgoing transfers via this queue.
+    /// The maximum number of Cyphal transfer payload bytes per UDP datagram.
+    /// The Cyphal/UDP header and the final CRC are added to this value to obtain the total UDP datagram payload size.
     /// See UDPARD_MTU_*.
     /// The value can be changed arbitrarily at any time between enqueue operations.
-    size_t mtu_bytes;
+    /// The value is constrained by the library to be positive.
+    size_t mtu;
 
     /// The mapping from the Cyphal priority level in [0,7], where the highest priority is at index 0
     /// and the lowest priority is at the last element of the array, to the IP DSCP field value.
     /// See UdpardPriority.
     /// By default, the mapping is initialized per the recommendations given in the Cyphal/UDP specification.
     /// The value can be changed arbitrarily at any time between enqueue operations.
-    uint8_t dscp_value_per_priority[UDPARD_PRIORITY_MAX + 1U];
-
-    /// This field can be arbitrarily mutated by the user. It is never accessed by the library.
-    /// Its purpose is to simplify integration with OOP interfaces.
-    void* user_reference;
+    uint_least8_t dscp_value_per_priority[UDPARD_PRIORITY_MAX + 1U];
 
     /// The memory resource used by this queue for allocating the enqueued items (UDP datagrams).
     /// There is exactly one allocation per enqueued item, each allocation contains both the UdpardTxItem
     /// and its payload.
     /// In a simple application there would be just one memory resource shared by all parts of the library.
-    UdpardMemoryResource memory;
+    UdpardMemoryResource* memory;
 
     /// The number of frames that are currently contained in the queue, initially zero.
     /// READ-ONLY
-    size_t size;
+    size_t queue_size;
 
     /// Internal use only.
     /// READ-ONLY
@@ -404,7 +399,7 @@ struct UdpardTxItem
 
     /// The IP differentiated services code point (DSCP) is used to prioritize UDP frames on the network.
     /// LibUDPard selects the DSCP value based on the transfer priority level and the configured DSCP mapping.
-    uint8_t dscp;
+    uint_least8_t dscp;
 
     /// This UDP/IP datagram compiled by libudpard should be sent to this endpoint.
     /// The endpoint is always at a multicast address.
@@ -431,10 +426,10 @@ struct UdpardTxItem
 /// To safely discard it, simply pop all enqueued frames from it.
 ///
 /// The time complexity is constant. This function does not invoke the dynamic memory manager.
-int8_t udpardTxInit(UdpardTx* const            self,
-                    const UdpardNodeID* const  local_node_id,
-                    const size_t               queue_capacity,
-                    const UdpardMemoryResource memory);
+int8_t udpardTxInit(UdpardTx* const             self,
+                    const UdpardNodeID* const   local_node_id,
+                    const size_t                queue_capacity,
+                    UdpardMemoryResource* const memory);
 
 /// This function serializes a message transfer into a sequence of UDP datagrams and inserts them into the prioritized
 /// transmission queue at the appropriate position. Afterwards, the application is supposed to take the enqueued frames
@@ -452,6 +447,7 @@ int8_t udpardTxInit(UdpardTx* const            self,
 /// There shall be a separate transfer-ID counter per subject (topic).
 /// The lifetime of the pointed-to transfer-ID counter must exceed the lifetime of the intent to publish on this
 /// subject (topic); one common approach is to use a static variable.
+/// The transfer-ID counter is not modified if the function fails.
 ///
 /// The user_transfer_reference is an opaque pointer that will be assigned to the user_transfer_reference field of
 /// each enqueued item. The library itself does not use or check this value in any way, so it can be NULL if not needed.
@@ -464,19 +460,20 @@ int8_t udpardTxInit(UdpardTx* const            self,
 /// (this is not recommended for real-time systems).
 ///
 /// The function returns the number of UDP datagrams enqueued, which is always a positive number, in case of success.
-/// In case of failure, the function returns a negated error code: either invalid argument or out-of-memory.
+/// In case of failure, the function returns a negated error code.
 ///
-/// An invalid argument error may be returned in the following cases:
+/// UDPARD_ERROR_ARGUMENT may be returned in the following cases:
 ///     - Any of the input arguments except user_transfer_reference are NULL.
 ///     - The priority or the port-ID exceed their respective maximums.
 ///     - The payload pointer is NULL while the payload size is nonzero.
-///     - The local node is anonymous (the local node-ID is unset) and the transfer payload cannot fit into
-///       a single datagram (a multi-frame transfer is required).
 ///
-/// An out-of-memory error is returned if a TX frame could not be allocated due to the memory being exhausted,
-/// or if the capacity of the queue would be exhausted by this operation. In such cases, all frames allocated for
-/// this transfer (if any) will be deallocated automatically. In other words, either all frames of the transfer are
-/// enqueued successfully, or none are.
+/// UDPARD_ERROR_ANONYMOUS is returned if local node is anonymous (the local node-ID is unset) and
+/// the transfer payload cannot fit into a single datagram (a multi-frame transfer is required).
+///
+/// UDPARD_ERROR_MEMORY is returned if a TX frame could not be allocated due to the memory being exhausted.
+/// UDPARD_ERROR_CAPACITY is returned if the capacity of the queue would be exceeded by this operation.
+/// In such cases, all frames allocated for this transfer (if any) will be deallocated automatically.
+/// In other words, either all frames of the transfer are enqueued successfully, or none are.
 ///
 /// The memory allocation requirement is one allocation per datagram:
 /// a single-frame transfer takes one allocation; a multi-frame transfer of N frames takes N allocations.
@@ -486,12 +483,12 @@ int8_t udpardTxInit(UdpardTx* const            self,
 /// The time complexity is O(p + log e), where p is the amount of payload in the transfer, and e is the number of
 /// frames already enqueued in the transmission queue.
 int32_t udpardTxPublish(UdpardTx* const          self,
-                        void* const              user_transfer_reference,
                         const UdpardMicrosecond  deadline_usec,
                         const UdpardPriority     priority,
                         const UdpardPortID       subject_id,
                         UdpardTransferID* const  transfer_id,
-                        const UdpardConstPayload payload);
+                        const UdpardConstPayload payload,
+                        void* const              user_transfer_reference);
 
 /// This is similar to udpardTxPublish except that it is intended for service request transfers.
 /// It takes the node-ID of the server that is intended to receive the request.
@@ -503,33 +500,32 @@ int32_t udpardTxPublish(UdpardTx* const          self,
 /// on this server node; one common approach is to use a static array indexed by the server node-ID per service-ID
 /// (memory-constrained applications may choose a more compact container).
 ///
-/// Aside from the errors defined for udpardTxPublish, this function may also return an invalid argument error
-/// in the following cases:
-///     - The server node-ID value exceeds UDPARD_NODE_ID_MAX.
-///     - The local node is anonymous (the local node-ID is unset).
+/// Additional error conditions:
+///     - UDPARD_ERROR_ARGUMENT if the server node-ID value is invalid.
+///     - UDPARD_ERROR_ANONYMOUS if the local node is anonymous (the local node-ID is unset).
 ///
 /// Other considerations are the same as for udpardTxPublish.
 int32_t udpardTxRequest(UdpardTx* const          self,
-                        void* const              user_transfer_reference,
                         const UdpardMicrosecond  deadline_usec,
                         const UdpardPriority     priority,
                         const UdpardPortID       service_id,
                         const UdpardNodeID       server_node_id,
                         UdpardTransferID* const  transfer_id,
-                        const UdpardConstPayload payload);
+                        const UdpardConstPayload payload,
+                        void* const              user_transfer_reference);
 
 /// This is similar to udpardTxRequest except that it takes the node-ID of the client instead of server,
 /// and the transfer-ID is passed by value rather than by pointer.
 /// The transfer-ID is passed by value because when responding to an RPC-service request, the server must
 /// reuse the transfer-ID value of the request (this is to allow the client to match responses with their requests).
 int32_t udpardTxRespond(UdpardTx* const          self,
-                        void* const              user_transfer_reference,
                         const UdpardMicrosecond  deadline_usec,
                         const UdpardPriority     priority,
                         const UdpardPortID       service_id,
                         const UdpardNodeID       client_node_id,
                         const UdpardTransferID   transfer_id,
-                        const UdpardConstPayload payload);
+                        const UdpardConstPayload payload,
+                        void* const              user_transfer_reference);
 
 /// This function accesses the enqueued UDP datagram scheduled for transmission next. The queue itself is not modified
 /// (i.e., the accessed element is not removed). The application should invoke this function to collect the datagrams
@@ -544,7 +540,7 @@ int32_t udpardTxRespond(UdpardTx* const          self,
 ///
 /// If the queue is non-empty, the returned value is a pointer to its top element (i.e., the next item to transmit).
 /// The returned pointer points to an object allocated in the dynamic storage; it should be eventually freed by the
-/// application by calling UdpardTx::memory.free. The memory shall not be freed before the item is removed
+/// application by calling udpardTxFree with UdpardTx::memory. The memory shall not be freed before the item is removed
 /// from the queue by calling udpardTxPop; this is because until udpardTxPop is executed, the library retains
 /// ownership of the item. The pointer retains validity until explicitly freed by the application; in other words,
 /// calling udpardTxPop does not invalidate the object.
@@ -568,9 +564,15 @@ const UdpardTxItem* udpardTxPeek(const UdpardTx* const self);
 /// The time complexity is logarithmic of the queue size. This function does not invoke the dynamic memory manager.
 UdpardTxItem* udpardTxPop(UdpardTx* const self, const UdpardTxItem* const item);
 
-// =============================================================================================================
-// =============================================    RX PIPELINE    =============================================
-// =============================================================================================================
+/// This is a simple helper that frees the memory allocated for the item with the correct size.
+/// It is needed because the application does not have access to the required context to compute the size.
+/// If the chosen allocator does not leverage the size information, the deallocation function can be invoked directly.
+/// If any of the arguments are NULL, the function has no effect. The time complexity is constant.
+void udpardTxFree(UdpardMemoryResource* const memory, UdpardTxItem* const item);
+
+// =====================================================================================================================
+// =================================================    RX PIPELINE    =================================================
+// =====================================================================================================================
 
 /// This type represents an open input port, such as a subscription to a subject (topic), a service server port
 /// that accepts RPC-service requests, or a service client port that accepts RPC-service responses.
@@ -666,8 +668,8 @@ typedef struct
     /// Simpler applications may choose to use the same memory resource for both.
     /// Special snowflakes may put a limit on the maximum number of sessions in use through a constrained
     /// memory resource.
-    UdpardMemoryResource memory_for_sessions;
-    UdpardMemoryResource memory_for_payloads;
+    UdpardMemoryResource* memory_for_sessions;
+    UdpardMemoryResource* memory_for_payloads;
 } UdpardRxSubscription;
 
 /// To subscribe to a subject, the application should do this:
@@ -695,14 +697,14 @@ typedef struct
 /// It can be changed by the user at any time by modifying the corresponding field in the subscription instance.
 ///
 /// The return value is 0 on success.
-/// The return value is a negated invalid argument error if any of the input arguments are invalid.
+/// The return value is a negated UDPARD_ERROR_ARGUMENT if any of the input arguments are invalid.
 ///
 /// The time complexity is constant. This function does not invoke the dynamic memory manager.
 int8_t udpardRxSubscriptionInit(UdpardRxSubscription* const self,
                                 const UdpardPortID          subject_id,
                                 const size_t                extent,
-                                const UdpardMemoryResource  memory_for_sessions,
-                                const UdpardMemoryResource  memory_for_payloads);
+                                UdpardMemoryResource* const memory_for_sessions,
+                                UdpardMemoryResource* const memory_for_payloads);
 
 /// Frees all memory held by the subscription instance.
 /// After invoking this function, the instance is no longer usable.
@@ -754,13 +756,12 @@ void udpardRxSubscriptionDestroy(UdpardRxSubscription* const self);
 /// and p is the amount of payload in the received frame (because it will be copied into an internal contiguous buffer).
 /// Malformed frames are discarded in constant time.
 ///
-/// A negated out-of-memory error is returned if the function fails to allocate memory.
-/// A negated invalid argument error is returned if any of the input arguments are invalid.
-/// No other errors are possible.
+/// UDPARD_ERROR_MEMORY is returned if the function fails to allocate memory.
+/// UDPARD_ERROR_ARGUMENT is returned if any of the input arguments are invalid.
 int8_t udpardRxSubscriptionReceive(UdpardRxSubscription* const self,
                                    const UdpardMicrosecond     timestamp_usec,
                                    const UdpardConstPayload    datagram_payload,
-                                   const uint8_t               redundant_iface_index,
+                                   const uint_fast8_t          redundant_iface_index,
                                    UdpardRxTransfer* const     received_transfer);
 
 // ---------------------------------------------  RPC-SERVICES  ---------------------------------------------
@@ -801,8 +802,8 @@ typedef struct
 
     /// The application may choose to use dedicated memory resources for sessions (fixed-size allocations)
     /// and for the payload buffers (extent-sized allocations).
-    UdpardMemoryResource memory_for_sessions;
-    UdpardMemoryResource memory_for_payloads;
+    UdpardMemoryResource* memory_for_sessions;
+    UdpardMemoryResource* memory_for_payloads;
 
     /// READ-ONLY
     UdpardRxService* request_ports;
@@ -838,13 +839,13 @@ typedef struct
 ///        the datagram was received on. Only those services that were announced in step 4 will be processed.
 ///
 /// The return value is 0 on success.
-/// The return value is a negated invalid argument error if any of the input arguments are invalid.
+/// The return value is a negated UDPARD_ERROR_ARGUMENT if any of the input arguments are invalid.
 ///
 /// The time complexity is constant. This function does not invoke the dynamic memory manager.
 int8_t udpardRxServiceDispatcherInit(UdpardRxServiceDispatcher* const self,
                                      const UdpardNodeID               local_node_id,
-                                     const UdpardMemoryResource       memory_for_sessions,
-                                     const UdpardMemoryResource       memory_for_payloads);
+                                     UdpardMemoryResource* const      memory_for_sessions,
+                                     UdpardMemoryResource* const      memory_for_payloads);
 
 /// Frees all memory held by the RPC-service dispatcher instance.
 /// After invoking this function, the instance is no longer usable.
@@ -866,7 +867,7 @@ void udpardRxServiceDispatcherDestroy(UdpardRxServiceDispatcher* const self);
 /// The return value is 1 if a new registration has been created as requested.
 /// The return value is 0 if such registration existed at the time the function was invoked. In this case,
 /// the existing registration is terminated and then a new one is created in its place. Pending transfers may be lost.
-/// The return value is a negated invalid argument error if any of the input arguments are invalid.
+/// The return value is a negated UDPARD_ERROR_ARGUMENT if any of the input arguments are invalid.
 ///
 /// The time complexity is logarithmic from the number of current registrations under the specified transfer kind
 /// (request or response).
@@ -884,7 +885,7 @@ int8_t udpardRxServiceDispatcherListen(UdpardRxServiceDispatcher* const self,
 ///
 /// The return value is 1 if such registration existed (and, therefore, it was removed).
 /// The return value is 0 if such registration does not exist. In this case, the function has no effect.
-/// The return value is a negated invalid argument error if any of the input arguments are invalid.
+/// The return value is a negated UDPARD_ERROR_ARGUMENT if any of the input arguments are invalid.
 ///
 /// The time complexity is logarithmic from the number of current registration under the specified transfer kind.
 /// This function does not allocate new memory.
@@ -899,7 +900,7 @@ int8_t udpardRxServiceDispatcherReceive(UdpardRxServiceDispatcher* const self,
                                         UdpardRxService** const          service,
                                         const UdpardMicrosecond          timestamp_usec,
                                         const UdpardConstPayload         datagram_payload,
-                                        const uint8_t                    redundant_iface_index,
+                                        const uint_fast8_t               redundant_iface_index,
                                         UdpardRxServiceTransfer* const   received_transfer);
 
 #ifdef __cplusplus
