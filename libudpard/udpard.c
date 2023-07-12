@@ -328,7 +328,7 @@ static inline byte_t* txSerializeHeader(byte_t* const          destination_buffe
     ptr         = txSerializeU64(ptr, meta.transfer_id);
     UDPARD_ASSERT((frame_index + 0UL) <= HEADER_FRAME_INDEX_MAX);  // +0UL is to avoid a compiler warning.
     ptr = txSerializeU32(ptr, frame_index | (end_of_transfer ? HEADER_FRAME_INDEX_EOT_MASK : 0U));
-    ptr = txSerializeU16(ptr, 0);                                  // opaque user data
+    ptr = txSerializeU16(ptr, 0);  // opaque user data
     // Header CRC in the big endian format. Optimization prospect: the header up to frame_index is constant in
     // multi-frame transfers, so we don't really need to recompute the CRC from scratch per frame.
     const uint16_t crc = headerCRCCompute(HEADER_SIZE_BYTES - HEADER_CRC_SIZE_BYTES, destination_buffer);
@@ -669,7 +669,7 @@ static inline const byte_t* txDeserializeU32(const byte_t* const source_buffer, 
     *out_value        = 0;
     for (size_t i = 0; i < sizeof(*out_value); i++)  // We sincerely hope that the compiler will use memcpy.
     {
-        *out_value |= (uint32_t) ((uint32_t) *ptr++ << (i * ByteWidth));
+        *out_value |= (uint32_t) ((uint32_t) *ptr++ << (i * ByteWidth));  // NOLINT(google-readability-casting)
     }
     return ptr;
 }
@@ -681,7 +681,7 @@ static inline const byte_t* txDeserializeU64(const byte_t* const source_buffer, 
     *out_value        = 0;
     for (size_t i = 0; i < sizeof(*out_value); i++)  // We sincerely hope that the compiler will use memcpy.
     {
-        *out_value |= (uint64_t) ((uint64_t) *ptr++ << (i * ByteWidth));
+        *out_value |= (uint64_t) ((uint64_t) *ptr++ << (i * ByteWidth));  // NOLINT(google-readability-casting)
     }
     return ptr;
 }
@@ -689,7 +689,7 @@ static inline const byte_t* txDeserializeU64(const byte_t* const source_buffer, 
 /// This is roughly the inverse of the txSerializeHeader function, but it also handles the frame payload.
 static inline bool rxParseFrame(const UdpardConstPayload datagram_payload, RxFrame* const out)
 {
-    UDPARD_ASSERT((out != NULL) && ((datagram_payload.data != NULL) || (datagram_payload.size == 0U)));
+    UDPARD_ASSERT((out != NULL) && (datagram_payload.data != NULL));
     bool               ok      = false;
     const byte_t*      ptr     = (const byte_t*) datagram_payload.data;
     const uint_fast8_t version = *ptr++;
@@ -720,4 +720,19 @@ static inline bool rxParseFrame(const UdpardConstPayload datagram_payload, RxFra
     }
     // Parsers for other header versions may be added here later.
     return ok;
+}
+
+int8_t udpardRxSubscriptionInit(UdpardRxSubscription* const self,
+                                const UdpardPortID          subject_id,
+                                const size_t                extent,
+                                UdpardMemoryResource* const memory_for_sessions,
+                                UdpardMemoryResource* const memory_for_payloads)
+{
+    (void) self;
+    (void) subject_id;
+    (void) extent;
+    (void) memory_for_sessions;
+    (void) memory_for_payloads;
+    (void) rxParseFrame;
+    return 0;
 }

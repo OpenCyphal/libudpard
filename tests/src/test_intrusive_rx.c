@@ -16,9 +16,9 @@
 //  data_specifier=MessageDataSpecifier(7654), user_data=0)
 // >>> list(frame.compile_header_and_payload()[0])
 // [1, 2, 41, 9, 56, 21, 230, 29, 13, 240, 221, 224, 254, 15, 220, 186, 57, 48, 0, 0, 0, 0, 224, 60]
-void testRxParseFrame(void)
+static void testRxParseFrame(void)
 {
-    {                                                                                  // Valid frame.
+    {  // Valid frame.
         const byte_t data[] = {1,   2,   41,  9,   56, 21, 230, 29, 13, 240, 221, 224,
                                254, 15,  220, 186, 57, 48, 0,   0,  0,  0,   224, 60,  //
                                'a', 'b', 'c'};
@@ -34,7 +34,7 @@ void testRxParseFrame(void)
         TEST_ASSERT_EQUAL_UINT64(3, rxf.payload.size);
         TEST_ASSERT_EQUAL_UINT8_ARRAY("abc", rxf.payload.data, 3);
     }
-    {                                                                                  // Bad header CRC.
+    {  // Bad header CRC.
         const byte_t data[] = {1,   2,   41,  9,   56, 21, 230, 29, 13, 240, 221, 224,
                                254, 15,  220, 186, 57, 48, 0,   0,  0,  0,   224, 61,  //
                                'a', 'b', 'c'};
