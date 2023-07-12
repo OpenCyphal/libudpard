@@ -604,7 +604,7 @@ struct UdpardRxPort
     /// by destroying and re-creating them immediately.
     ///
     /// Each session instance takes sizeof(UdpardInternalRxSession) bytes of dynamic memory,
-    /// which is at most 128 bytes on wide-word platforms (on small word size platforms it is usually much smaller).
+    /// which is at most 256 bytes on wide-word platforms (on small word size platforms it is usually much smaller).
     /// On top of that, each session instance may have one transfer payload buffer allocated per redundant interface;
     /// the size of each buffer equals the extent (see above).
     /// The payload buffer is only allocated while reassembly is in progress; when the session is idle,
@@ -622,7 +622,7 @@ struct UdpardRxPort
     /// for a detailed review of this matter please refer to the documentation of O1Heap.
     ///
     /// READ-ONLY
-    struct UdpardTreeNode* sessions;
+    struct UdpardInternalRxSession* sessions;
 };
 
 /// Represents a received Cyphal transfer.

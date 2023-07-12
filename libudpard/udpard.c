@@ -721,6 +721,16 @@ static inline bool rxParseFrame(const struct UdpardConstPayload datagram_payload
         }
     }
     // Parsers for other header versions may be added here later.
+    if (ok)  // Version-agnostic semantics check.
+    {
+        const bool anonymous    = out->meta.src_node_id == UDPARD_NODE_ID_UNSET;
+        const bool broadcast    = out->meta.dst_node_id == UDPARD_NODE_ID_UNSET;
+        const bool service      = (out->meta.data_specifier & DATA_SPECIFIER_SERVICE_NOT_MESSAGE_MASK) != 0;
+        const bool single_frame = (out->frame_index == 0) && out->end_of_transfer;
+        ok                      = service  //
+                                      ? ((!broadcast) && (!anonymous))
+                                      : (broadcast && (anonymous ? single_frame : true));
+    }
     return ok;
 }
 
