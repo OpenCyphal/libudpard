@@ -52,6 +52,7 @@ typedef struct
 /// The frame index is a 31-bit unsigned integer. The most significant bit is used to indicate the end of transfer.
 #define HEADER_FRAME_INDEX_EOT_MASK 0x80000000UL
 #define HEADER_FRAME_INDEX_MAX 0x7FFFFFFFUL
+#define HEADER_FRAME_INDEX_MASK HEADER_FRAME_INDEX_MAX
 
 /// The port number is defined in the Cyphal/UDP Specification.
 #define UDP_PORT 9382U
@@ -94,6 +95,11 @@ static inline size_t smaller(const size_t a, const size_t b)
 static inline size_t larger(const size_t a, const size_t b)
 {
     return (a > b) ? a : b;
+}
+
+static inline bool isValidMemoryResource(const UdpardMemoryResource* const memory)
+{
+    return (memory != NULL) && (memory->allocate != NULL) && (memory->free != NULL);
 }
 
 // --------------------------------------------- HEADER CRC ---------------------------------------------
@@ -211,15 +217,6 @@ static inline uint32_t transferCRCCompute(const size_t size, const void* const d
 }
 
 // =====================================================================================================================
-// =================================================  MEMORY RESOURCE  =================================================
-// =====================================================================================================================
-
-static inline bool isValidMemoryResource(const UdpardMemoryResource* const memory)
-{
-    return (memory != NULL) && (memory->allocate != NULL) && (memory->free != NULL);
-}
-
-// =====================================================================================================================
 // =================================================    TX PIPELINE    =================================================
 // =====================================================================================================================
 
@@ -331,7 +328,7 @@ static inline byte_t* txSerializeHeader(byte_t* const          destination_buffe
     ptr         = txSerializeU64(ptr, meta.transfer_id);
     UDPARD_ASSERT((frame_index + 0UL) <= HEADER_FRAME_INDEX_MAX);  // +0UL is to avoid a compiler warning.
     ptr = txSerializeU32(ptr, frame_index | (end_of_transfer ? HEADER_FRAME_INDEX_EOT_MASK : 0U));
-    ptr = txSerializeU16(ptr, 0);  // opaque user data
+    ptr = txSerializeU16(ptr, 0);                                  // opaque user data
     // Header CRC in the big endian format. Optimization prospect: the header up to frame_index is constant in
     // multi-frame transfers, so we don't really need to recompute the CRC from scratch per frame.
     const uint16_t crc = headerCRCCompute(HEADER_SIZE_BYTES - HEADER_CRC_SIZE_BYTES, destination_buffer);
@@ -641,4 +638,86 @@ void udpardTxFree(UdpardMemoryResource* const memory, UdpardTxItem* const item)
     {
         memory->free(memory, sizeof(TxItem) + item->datagram_payload.size, item);
     }
+}
+
+// =====================================================================================================================
+// =================================================    RX PIPELINE    =================================================
+// =====================================================================================================================
+
+typedef struct
+{
+    TransferMetadata   meta;
+    uint32_t           frame_index;
+    bool               end_of_transfer;
+    UdpardConstPayload payload;  ///< Also contains the transfer CRC (but not the header CRC).
+} RxFrame;
+
+/// The primitive deserialization functions are endian-agnostic.
+static inline const byte_t* txDeserializeU16(const byte_t* const source_buffer, uint16_t* const out_value)
+{
+    UDPARD_ASSERT((source_buffer != NULL) && (out_value != NULL));
+    const byte_t* ptr = source_buffer;
+    *out_value        = *ptr++;
+    *out_value |= (uint16_t) (((uint16_t) *ptr++) << ByteWidth);
+    return ptr;
+}
+
+static inline const byte_t* txDeserializeU32(const byte_t* const source_buffer, uint32_t* const out_value)
+{
+    UDPARD_ASSERT((source_buffer != NULL) && (out_value != NULL));
+    const byte_t* ptr = source_buffer;
+    *out_value        = 0;
+    for (size_t i = 0; i < sizeof(*out_value); i++)  // We sincerely hope that the compiler will use memcpy.
+    {
+        *out_value |= (uint32_t) ((uint32_t) *ptr++ << (i * ByteWidth));
+    }
+    return ptr;
+}
+
+static inline const byte_t* txDeserializeU64(const byte_t* const source_buffer, uint64_t* const out_value)
+{
+    UDPARD_ASSERT((source_buffer != NULL) && (out_value != NULL));
+    const byte_t* ptr = source_buffer;
+    *out_value        = 0;
+    for (size_t i = 0; i < sizeof(*out_value); i++)  // We sincerely hope that the compiler will use memcpy.
+    {
+        *out_value |= (uint64_t) ((uint64_t) *ptr++ << (i * ByteWidth));
+    }
+    return ptr;
+}
+
+/// This is roughly the inverse of the txSerializeHeader function, but it also handles the frame payload.
+static inline bool rxParseFrame(const UdpardConstPayload datagram_payload, RxFrame* const out)
+{
+    UDPARD_ASSERT((out != NULL) && ((datagram_payload.data != NULL) || (datagram_payload.size == 0U)));
+    bool               ok      = false;
+    const byte_t*      ptr     = (const byte_t*) datagram_payload.data;
+    const uint_fast8_t version = *ptr++;
+    // The frame payload cannot be empty because every transfer has at least four bytes of CRC.
+    if ((datagram_payload.size > HEADER_SIZE_BYTES) && (version == HEADER_VERSION) &&
+        (headerCRCCompute(HEADER_SIZE_BYTES, datagram_payload.data) == HEADER_CRC_RESIDUE))
+    {
+        const uint_fast8_t prio = *ptr++;
+        if (prio <= UDPARD_PRIORITY_MAX)
+        {
+            out->meta.priority       = (UdpardPriority) prio;
+            ptr                      = txDeserializeU16(ptr, &out->meta.src_node_id);
+            ptr                      = txDeserializeU16(ptr, &out->meta.dst_node_id);
+            ptr                      = txDeserializeU16(ptr, &out->meta.data_specifier);
+            ptr                      = txDeserializeU64(ptr, &out->meta.transfer_id);
+            uint32_t frame_index_eot = 0;
+            ptr                      = txDeserializeU32(ptr, &frame_index_eot);
+            out->frame_index         = (uint32_t) (frame_index_eot & HEADER_FRAME_INDEX_MASK);
+            out->end_of_transfer     = (frame_index_eot & HEADER_FRAME_INDEX_EOT_MASK) != 0U;
+            ptr += 2;  // Opaque user data.
+            ptr += HEADER_CRC_SIZE_BYTES;
+            out->payload.data = ptr;
+            out->payload.size = datagram_payload.size - HEADER_SIZE_BYTES;
+            ok                = true;
+            UDPARD_ASSERT((ptr == (((const byte_t*) datagram_payload.data) + HEADER_SIZE_BYTES)) &&
+                          (out->payload.size > 0U));
+        }
+    }
+    // Parsers for other header versions may be added here later.
+    return ok;
 }
