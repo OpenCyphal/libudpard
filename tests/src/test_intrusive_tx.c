@@ -25,6 +25,12 @@ static const char   InterstellarWar[]     = "You have not seen what a true inter
 static const size_t InterstellarWarSize   = sizeof(InterstellarWar) - 1;
 static const byte_t InterstellarWarCRC[4] = {102, 217, 109, 188};
 
+// These aliases cannot be defined in the public API section: https://github.com/OpenCyphal-Garage/libudpard/issues/36
+typedef struct UdpardConstPayload  UdpardConstPayload;
+typedef struct UdpardUDPIPEndpoint UdpardUDPIPEndpoint;
+typedef struct UdpardTx            UdpardTx;
+typedef struct UdpardTxItem        UdpardTxItem;
+
 typedef struct
 {
     byte_t data[HEADER_SIZE_BYTES];

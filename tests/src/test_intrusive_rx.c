@@ -23,7 +23,7 @@ static void testRxParseFrame(void)
                                254, 15,  220, 186, 57, 48, 0,   0,  0,  0,   224, 60,  //
                                'a', 'b', 'c'};
         RxFrame      rxf    = {0};
-        TEST_ASSERT(rxParseFrame((UdpardConstPayload){.data = data, .size = sizeof(data)}, &rxf));
+        TEST_ASSERT(rxParseFrame((struct UdpardConstPayload){.data = data, .size = sizeof(data)}, &rxf));
         TEST_ASSERT_EQUAL_UINT64(UdpardPriorityFast, rxf.meta.priority);
         TEST_ASSERT_EQUAL_UINT64(2345, rxf.meta.src_node_id);
         TEST_ASSERT_EQUAL_UINT64(5432, rxf.meta.dst_node_id);
@@ -39,7 +39,7 @@ static void testRxParseFrame(void)
                                254, 15,  220, 186, 57, 48, 0,   0,  0,  0,   224, 61,  //
                                'a', 'b', 'c'};
         RxFrame      rxf    = {0};
-        TEST_ASSERT_FALSE(rxParseFrame((UdpardConstPayload){.data = data, .size = sizeof(data)}, &rxf));
+        TEST_ASSERT_FALSE(rxParseFrame((struct UdpardConstPayload){.data = data, .size = sizeof(data)}, &rxf));
     }
     {  // Unsupported header version.
         // >>> from pycyphal.transport.commons.crc import CRC16CCITT
@@ -49,13 +49,13 @@ static void testRxParseFrame(void)
                                254, 15,  220, 186, 57, 48, 0,   0,  0,  0,   141, 228,  //
                                'a', 'b', 'c'};
         RxFrame      rxf    = {0};
-        TEST_ASSERT_FALSE(rxParseFrame((UdpardConstPayload){.data = data, .size = sizeof(data)}, &rxf));
+        TEST_ASSERT_FALSE(rxParseFrame((struct UdpardConstPayload){.data = data, .size = sizeof(data)}, &rxf));
     }
     {  // No frame payload, just the valid header (not acceptable).
         const byte_t data[] = {1,   2,  41,  9,   56, 21, 230, 29, 13, 240, 221, 224,
                                254, 15, 220, 186, 57, 48, 0,   0,  0,  0,   224, 60};
         RxFrame      rxf    = {0};
-        TEST_ASSERT_FALSE(rxParseFrame((UdpardConstPayload){.data = data, .size = sizeof(data)}, &rxf));
+        TEST_ASSERT_FALSE(rxParseFrame((struct UdpardConstPayload){.data = data, .size = sizeof(data)}, &rxf));
     }
 }
 
