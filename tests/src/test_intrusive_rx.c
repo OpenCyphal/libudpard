@@ -29,7 +29,7 @@ static void testRxParseFrame(void)
         TEST_ASSERT_EQUAL_UINT64(UDPARD_NODE_ID_UNSET, rxf.meta.dst_node_id);
         TEST_ASSERT_EQUAL_UINT64(7654, rxf.meta.data_specifier);
         TEST_ASSERT_EQUAL_UINT64(0xbadc0ffee0ddf00d, rxf.meta.transfer_id);
-        TEST_ASSERT_EQUAL_UINT64(12345, rxf.frame_index);
+        TEST_ASSERT_EQUAL_UINT64(12345, rxf.index);
         TEST_ASSERT_FALSE(rxf.end_of_transfer);
         TEST_ASSERT_EQUAL_UINT64(3, rxf.payload.size);
         TEST_ASSERT_EQUAL_UINT8_ARRAY("abc", rxf.payload.data, 3);
@@ -50,7 +50,7 @@ static void testRxParseFrame(void)
                                      DATA_SPECIFIER_SERVICE_REQUEST_NOT_RESPONSE_MASK,
                                  rxf.meta.data_specifier);
         TEST_ASSERT_EQUAL_UINT64(0xbadc0ffee0ddf00d, rxf.meta.transfer_id);
-        TEST_ASSERT_EQUAL_UINT64(6654, rxf.frame_index);
+        TEST_ASSERT_EQUAL_UINT64(6654, rxf.index);
         TEST_ASSERT_FALSE(rxf.end_of_transfer);
         TEST_ASSERT_EQUAL_UINT64(3, rxf.payload.size);
         TEST_ASSERT_EQUAL_UINT8_ARRAY("abc", rxf.payload.data, 3);
@@ -66,7 +66,7 @@ static void testRxParseFrame(void)
         TEST_ASSERT_EQUAL_UINT64(UDPARD_NODE_ID_UNSET, rxf.meta.dst_node_id);
         TEST_ASSERT_EQUAL_UINT64(7654, rxf.meta.data_specifier);
         TEST_ASSERT_EQUAL_UINT64(0xbadc0ffee0ddf00d, rxf.meta.transfer_id);
-        TEST_ASSERT_EQUAL_UINT64(0, rxf.frame_index);
+        TEST_ASSERT_EQUAL_UINT64(0, rxf.index);
         TEST_ASSERT_TRUE(rxf.end_of_transfer);
         TEST_ASSERT_EQUAL_UINT64(3, rxf.payload.size);
         TEST_ASSERT_EQUAL_UINT8_ARRAY("abc", rxf.payload.data, 3);

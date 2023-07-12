@@ -649,7 +649,7 @@ void udpardTxFree(struct UdpardMemoryResource* const memory, struct UdpardTxItem
 typedef struct
 {
     TransferMetadata          meta;
-    uint32_t                  frame_index;
+    uint32_t                  index;
     bool                      end_of_transfer;
     struct UdpardConstPayload payload;  ///< Also contains the transfer CRC (but not the header CRC).
 } RxFrame;
@@ -702,15 +702,15 @@ static inline bool rxParseFrame(const struct UdpardConstPayload datagram_payload
         const uint_fast8_t prio = *ptr++;
         if (prio <= UDPARD_PRIORITY_MAX)
         {
-            out->meta.priority       = (enum UdpardPriority) prio;
-            ptr                      = txDeserializeU16(ptr, &out->meta.src_node_id);
-            ptr                      = txDeserializeU16(ptr, &out->meta.dst_node_id);
-            ptr                      = txDeserializeU16(ptr, &out->meta.data_specifier);
-            ptr                      = txDeserializeU64(ptr, &out->meta.transfer_id);
-            uint32_t frame_index_eot = 0;
-            ptr                      = txDeserializeU32(ptr, &frame_index_eot);
-            out->frame_index         = (uint32_t) (frame_index_eot & HEADER_FRAME_INDEX_MASK);
-            out->end_of_transfer     = (frame_index_eot & HEADER_FRAME_INDEX_EOT_MASK) != 0U;
+            out->meta.priority   = (enum UdpardPriority) prio;
+            ptr                  = txDeserializeU16(ptr, &out->meta.src_node_id);
+            ptr                  = txDeserializeU16(ptr, &out->meta.dst_node_id);
+            ptr                  = txDeserializeU16(ptr, &out->meta.data_specifier);
+            ptr                  = txDeserializeU64(ptr, &out->meta.transfer_id);
+            uint32_t index_eot   = 0;
+            ptr                  = txDeserializeU32(ptr, &index_eot);
+            out->index           = (uint32_t) (index_eot & HEADER_FRAME_INDEX_MASK);
+            out->end_of_transfer = (index_eot & HEADER_FRAME_INDEX_EOT_MASK) != 0U;
             ptr += 2;  // Opaque user data.
             ptr += HEADER_CRC_SIZE_BYTES;
             out->payload.data = ptr;
@@ -723,10 +723,11 @@ static inline bool rxParseFrame(const struct UdpardConstPayload datagram_payload
     // Parsers for other header versions may be added here later.
     if (ok)  // Version-agnostic semantics check.
     {
+        UDPARD_ASSERT(out->payload.size > 0);  // Follows from the prior checks.
         const bool anonymous    = out->meta.src_node_id == UDPARD_NODE_ID_UNSET;
         const bool broadcast    = out->meta.dst_node_id == UDPARD_NODE_ID_UNSET;
         const bool service      = (out->meta.data_specifier & DATA_SPECIFIER_SERVICE_NOT_MESSAGE_MASK) != 0;
-        const bool single_frame = (out->frame_index == 0) && out->end_of_transfer;
+        const bool single_frame = (out->index == 0) && out->end_of_transfer;
         ok                      = service  //
                                       ? ((!broadcast) && (!anonymous))
                                       : (broadcast && (anonymous ? single_frame : true));
