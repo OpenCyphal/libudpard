@@ -30,13 +30,14 @@
 /// POSIX-based systems may use the standard Berkeley sockets API, while more constrained embedded systems may choose
 /// to rely either on a third-party solution like LwIP or a custom UDP/IP stack implementation.
 ///
-/// Cyphal/UDP leverages only multicast IP addresses; the underlying UDP/IP stack does not need to support ARP.
+/// Cyphal/UDP leverages only multicast IP addresses; the underlying UDP/IP stack does not need to support ARP or ICMP.
 ///
 ///
 ///         ARCHITECTURE
 ///
 /// In the following description, the terms "local Cyphal node" and "application" are used interchangeably.
 /// Some applications may require more than one logical Cyphal node to operate side-by-side.
+/// Each logical node may utilize more than one network interface for redundancy.
 ///
 /// This library implements the Cyphal/UDP transport protocol. Resembling the conventional OSI model, the Cyphal
 /// protocol stack --- when implemented with the help of this library --- consists of the following layers:
@@ -260,6 +261,37 @@ struct UdpardConstPayload
     const void* data;
 };
 
+/// This type represents payload as an ordered sequence of its fragments to eliminate data copying.
+/// To free a fragmented payload buffer, the application needs to traverse the list and free each fragment's payload
+/// as well as the payload structure itself, assuming that it is also heap-allocated.
+/// The model is as follows:
+///
+///     (payload header) ---> UdpardPayloadFragmentHandle:
+///                               next  ---> UdpardPayloadFragmentHandle...
+///                               owner ---> (the free()able payload data buffer)
+///                               view  ---> (somewhere inside the payload data buffer)
+///
+/// Payloads of received transfers are represented using this type, where each fragment corresponds to a frame.
+/// The application can either consume them directly or to copy the data into a contiguous buffer beforehand
+/// at the expense of extra time and memory utilization.
+struct UdpardPayloadFragmentHandle
+{
+    /// Internal use only.
+    struct UdpardTreeNode base;
+
+    /// Points to the next fragment in the fragmented buffer; NULL if this is the last fragment.
+    struct UdpardPayloadFragmentHandle* next;
+
+    /// Contains the actual data to be used by the application.
+    /// The memory pointed to by this fragment shall not be freed by the application.
+    struct UdpardConstPayload view;
+
+    /// This entity points to the base buffer that contains this fragment.
+    /// The application can use this pointer to free the outer buffer after the payload has been consumed.
+    /// In the most simple case this field is identical to the "view" field above, but it is not always the case.
+    struct UdpardMutablePayload owner;
+};
+
 /// Cyphal/UDP uses only multicast traffic.
 /// Unicast support is not required; one consequence is that ARP tables are not needed.
 struct UdpardUDPIPEndpoint
@@ -295,6 +327,8 @@ typedef void (*UdpardMemoryFree)(struct UdpardMemoryResource* const self, const 
 /// A memory resource encapsulates the dynamic memory allocation and deallocation facilities.
 /// The time complexity models given in the API documentation are made on the assumption that the memory management
 /// functions have constant complexity O(1).
+/// Note that the library allocates a large amount of small fixed-size objects for bookkeeping purposes;
+/// allocators for them can be implemented using fixed-size block pools to eliminate memory fragmentation.
 struct UdpardMemoryResource
 {
     /// The function pointers shall be valid at all times.
@@ -361,8 +395,9 @@ struct UdpardTx
 
     /// The memory resource used by this queue for allocating the enqueued items (UDP datagrams).
     /// There is exactly one allocation per enqueued item, each allocation contains both the UdpardTxItem
-    /// and its payload.
+    /// and its payload, hence the size is variable.
     /// In a simple application there would be just one memory resource shared by all parts of the library.
+    /// If the application knows its MTU, it can use block allocation to avoid fragmentation.
     struct UdpardMemoryResource* memory;
 
     /// The number of frames that are currently contained in the queue, initially zero.
@@ -603,21 +638,30 @@ struct UdpardRxPort
     /// Applications where this is not the case may consider cycling their ports periodically
     /// by destroying and re-creating them immediately.
     ///
-    /// Each session instance takes sizeof(UdpardInternalRxSession) bytes of dynamic memory,
-    /// which is at most 256 bytes on wide-word platforms (on small word size platforms it is usually much smaller).
-    /// On top of that, each session instance may have one transfer payload buffer allocated per redundant interface;
-    /// the size of each buffer equals the extent (see above).
-    /// The payload buffer is only allocated while reassembly is in progress; when the session is idle,
-    /// no additional memory is held by the session instance.
+    /// Each session instance takes sizeof(UdpardInternalRxSession) bytes of dynamic memory for itself,
+    /// which is at most 512 bytes on wide-word platforms (on small word size platforms it is usually much smaller).
+    /// On top of that, each session instance holds memory for the transfer payload fragments and small fixed-size
+    /// metadata objects called "payload fragment handles" (at most 128 bytes large, usually much smaller,
+    /// depending on the pointer width and the word size).
     ///
-    /// To summarize, a node with R redundant network interfaces subscribed to a subject with extent E bytes
-    /// requires at most (sizeof(UdpardInternalRxSession) + R*E) bytes of dynamic memory per session instance,
-    /// and there is a session instance per remote node that publishes on this subject. Same holds for services.
+    /// The transfer payload memory is not allocated by the library but rather moved from the application
+    /// when the corresponding frame is received. If the library chooses to keep the frame payload
+    /// (which is the case if the frame is not a duplicate, the frame sequence is valid, and the received payload
+    /// does not exceed the extent configured for the port), a new fragment handle is allocated and it takes ownership
+    /// of the payload. If the library does not need the payload to reassemble the transfer, it is freed immediately.
+    /// There is a 1-to-1 correspondence between the payload fragment handles and the payload fragments.
+    /// In the worst case, the library may keep up to two full transfer payloads in memory at the same time
+    /// (two transfer states are kept to allow acceptance of interleaved frames).
+    ///
+    /// Ultimately, the worst-case memory consumption is dependent on the configured extent and the transmitting
+    /// side's MTU, as these parameters affect the number of payload buffers retained in memory.
     ///
     /// The worst situation from the memory management standpoint is when there is a large number of nodes emitting
     /// data such that each node begins a multi-frame transfer while never completing it.
     ///
-    /// If the dynamic memory pool is sized correctly, the application is guaranteed to never encounter an
+    /// Everything stated above holds for service transfers as well.
+    ///
+    /// If the dynamic memory pool(s) is(are) sized correctly, the application is guaranteed to never encounter an
     /// out-of-memory (OOM) error at runtime. The actual size of the dynamic memory pool is typically larger;
     /// for a detailed review of this matter please refer to the documentation of O1Heap.
     ///
@@ -625,17 +669,53 @@ struct UdpardRxPort
     struct UdpardInternalRxSession* sessions;
 };
 
+/// The set of memory resources is used per an RX pipeline instance such as subscription or a service dispatcher.
+/// These are used to serve the memory needs of the library to keep state while reassembling incoming transfers.
+/// Several memory resources are provided to enable fine control over the allocated memory;
+/// simple applications may choose to use the same memory resource implemented via malloc()/free() for all of them.
+struct UdpardRxMemoryResources
+{
+    /// The session memory resource is used to provide memory for the session instances described above.
+    /// Each instance is fixed-size, so a trivial zero-fragmentation block allocator is sufficient.
+    struct UdpardMemoryResource* session;
+
+    /// The payload fragment handles are allocated per payload fragment; each handle contains a pointer to its fragment.
+    /// Each instance is of a very small fixed size, so a trivial zero-fragmentation block allocator is sufficient.
+    struct UdpardMemoryResource* payload_fragment_handle;
+
+    /// The library never allocates payload buffers itself, as they are handed over by the application via
+    /// udpardRx*Receive. Once a buffer is handed over, the library may choose to keep it if it is deemed to be
+    /// necessary to complete a transfer reassembly, or to discard it if it is deemed to be unnecessary.
+    /// Discarded payload buffers are freed using this memory resource.
+    /// As this resource is never used to allocate memory, the "allocate" pointer can be NULL.
+    struct UdpardMemoryResource* payload;
+};
+
 /// Represents a received Cyphal transfer.
-/// The payload buffer is owned by this instance, so the application is required to free it after use
-/// by calling UdpardMemoryResource::free(payload.data).
+/// The payload is owned by this instance, so the application must free it after use; see udpardRxTransferFree.
 struct UdpardRxTransfer
 {
-    UdpardMicrosecond           timestamp_usec;
-    enum UdpardPriority         priority;
-    UdpardNodeID                source_node_id;
-    UdpardTransferID            transfer_id;
-    struct UdpardMutablePayload payload;
+    UdpardMicrosecond   timestamp_usec;
+    enum UdpardPriority priority;
+    UdpardNodeID        source_node_id;
+    UdpardTransferID    transfer_id;
+
+    /// The total size of the payload is provided for convenience; it is the sum of the sizes of all fragments.
+    /// The application is given ownership of the payload buffer, so it is required to free it after use;
+    /// this requires freeing both the handles and the payload buffers they point to.
+    /// Beware that different memory resources may have been used to allocate the handles and the payload buffers.
+    size_t                              payload_size;
+    struct UdpardPayloadFragmentHandle* payload;
 };
+
+/// This is, essentially, a helper that frees the memory allocated for the payload and its fragment headers
+/// using the correct memory resource. The application can do the same thing manually if it has access to the
+/// required context to compute the size, or if the memory resource implementation does not require deallocation size.
+///
+/// If any of the arguments are NULL, the function has no effect.
+void udpardRxTransferFree(struct UdpardRxTransfer* const     self,
+                          struct UdpardMemoryResource* const memory_for_payload_fragment_handle,
+                          struct UdpardMemoryResource* const memory_for_payload);
 
 // ---------------------------------------------  SUBJECTS  ---------------------------------------------
 
@@ -660,13 +740,8 @@ struct UdpardRxSubscription
     /// READ-ONLY
     struct UdpardUDPIPEndpoint udp_ip_endpoint;
 
-    /// The application may choose to use dedicated memory resources for sessions (fixed-size allocations)
-    /// and for the payload buffers (extent-sized allocations).
-    /// Simpler applications may choose to use the same memory resource for both.
-    /// Special snowflakes may put a limit on the maximum number of sessions in use through a constrained
-    /// memory resource.
-    struct UdpardMemoryResource* memory_for_sessions;
-    struct UdpardMemoryResource* memory_for_payloads;
+    /// Refer to UdpardRxMemoryResources.
+    struct UdpardRxMemoryResources memory;
 };
 
 /// To subscribe to a subject, the application should do this:
@@ -683,8 +758,8 @@ struct UdpardRxSubscription
 ///     4. Read data from the sockets continuously and forward each received UDP datagram to
 ///        udpardRxSubscriptionReceive, along with the index of the redundant interface the datagram was received on.
 ///
-/// The extent defines the size of the transfer payload memory buffer; or, in other words, the maximum possible size
-/// of received objects, considering also possible future versions with new fields. It is safe to pick larger values.
+/// The extent defines the maximum possible size of received objects, considering also possible future data type
+/// versions with new fields. It is safe to pick larger values.
 /// Note well that the extent is not the same thing as the maximum size of the object, it is usually larger!
 /// Transfers that carry payloads that exceed the specified extent will be accepted anyway but the excess payload
 /// will be truncated away, as mandated by the Specification. The transfer CRC is always validated regardless of
@@ -697,11 +772,10 @@ struct UdpardRxSubscription
 /// The return value is a negated UDPARD_ERROR_ARGUMENT if any of the input arguments are invalid.
 ///
 /// The time complexity is constant. This function does not invoke the dynamic memory manager.
-int8_t udpardRxSubscriptionInit(struct UdpardRxSubscription* const self,
-                                const UdpardPortID                 subject_id,
-                                const size_t                       extent,
-                                struct UdpardMemoryResource* const memory_for_sessions,
-                                struct UdpardMemoryResource* const memory_for_payloads);
+int8_t udpardRxSubscriptionInit(struct UdpardRxSubscription* const   self,
+                                const UdpardPortID                   subject_id,
+                                const size_t                         extent,
+                                const struct UdpardRxMemoryResources memory);
 
 /// Frees all memory held by the subscription instance.
 /// After invoking this function, the instance is no longer usable.
@@ -710,7 +784,7 @@ void udpardRxSubscriptionDestroy(struct UdpardRxSubscription* const self);
 
 /// Datagrams received from the sockets of this subscription are fed into this function.
 ///
-/// The timestamp value indicates the arrival time of the datagram; the arrival time of the first datagram of
+/// The timestamp value indicates the arrival time of the datagram; the arrival time of the earliest datagram of
 /// a transfer becomes the transfer timestamp upon successful reassembly.
 /// This value is also used for the transfer-ID timeout management.
 /// Usually, naive software timestamping is adequate for these purposes, but some applications may require
@@ -718,34 +792,31 @@ void udpardRxSubscriptionDestroy(struct UdpardRxSubscription* const self);
 ///
 /// The redundant interface index shall not exceed UDPARD_NETWORK_INTERFACE_COUNT_MAX.
 ///
+/// The function takes ownership of the passed datagram payload buffer. The library will either store it as a
+/// fragment of the reassembled transfer payload or free it using the corresponding memory resource
+/// (see UdpardRxMemoryResources) if the datagram is not needed for reassembly.
+///
 /// The accepted datagram may either be invalid, carry a non-final part of a multi-frame transfer,
 /// carry a final part of a valid multi-frame transfer, or carry a valid single-frame transfer.
 /// The last two cases are said to complete a transfer.
 ///
 /// If the datagram completes a transfer, the received_transfer argument is filled with the transfer details
 /// and the return value is one.
-/// The caller is assigned ownership of the transfer payload buffer memory; it has to be freed after use by calling
-/// UdpardRxSubscription::memory_for_payloads.free(received_transfer->payload.data).
-/// The lifetime of the resulting transfer object is not related to the lifetime of the input datagram (that is,
-/// even if it is a single-frame transfer, its payload is copied out into a new dynamically allocated buffer).
-/// If the extent is zero, the payload pointer may be NULL, since there is no data to store and so no buffer is needed.
+/// The caller is assigned ownership of the transfer payload buffer memory; it has to be freed after use as described
+/// in the documentation for UdpardRxTransfer.
 ///
 /// If the datagram does not complete a transfer or is malformed, the function returns zero and the received_transfer
 /// is not modified. Observe that malformed frames are not treated as errors, as the local application is not
 /// responsible for the behavior of external agents producing the datagrams.
 ///
-/// The function invokes the dynamic memory manager in the following cases only:
+/// The function invokes the dynamic memory manager in the following cases only (refer to UdpardRxPort for details):
 ///
 ///     1. A new session state instance is allocated when a new session is initiated.
-///        Please refer to UdpardRxPort for further information about the session state management.
 ///
-///     2. A new transfer payload buffer is allocated when a new transfer is initiated, unless the buffer
-///        was already allocated at the time. This event occurs when a valid transport frame is received and it
-///        begins a new transfer on its interface (that is, the frame index is zero and it is not a duplicate).
-///        The amount of the allocated memory equals the extent configured during initialization of the subscription.
+///     2. A new transfer payload fragment handle is allocated when a new transfer fragment is accepted.
 ///
-///     3. Transfer payload buffers may occasionally be deallocated at the discretion of the library.
-///        This operation does not increase the worst case execution time and does not improve the worst case memory
+///     3. Allocated objects may occasionally be deallocated at the discretion of the library.
+///        This behavior does not increase the worst case execution time and does not improve the worst case memory
 ///        consumption, so a deterministic application need not consider this behavior in its resource analysis.
 ///        This behavior is implemented for the benefit of applications where rigorous characterization is unnecessary.
 ///
@@ -797,10 +868,8 @@ struct UdpardRxServiceDispatcher
     /// READ-ONLY
     struct UdpardUDPIPEndpoint udp_ip_endpoint;
 
-    /// The application may choose to use dedicated memory resources for sessions (fixed-size allocations)
-    /// and for the payload buffers (extent-sized allocations).
-    struct UdpardMemoryResource* memory_for_sessions;
-    struct UdpardMemoryResource* memory_for_payloads;
+    /// Refer to UdpardRxMemoryResources.
+    struct UdpardRxMemoryResources memory;
 
     /// READ-ONLY
     struct UdpardRxService* request_ports;
@@ -841,8 +910,7 @@ struct UdpardRxServiceTransfer
 /// The time complexity is constant. This function does not invoke the dynamic memory manager.
 int8_t udpardRxServiceDispatcherInit(struct UdpardRxServiceDispatcher* const self,
                                      const UdpardNodeID                      local_node_id,
-                                     struct UdpardMemoryResource* const      memory_for_sessions,
-                                     struct UdpardMemoryResource* const      memory_for_payloads);
+                                     const struct UdpardRxMemoryResources    memory);
 
 /// Frees all memory held by the RPC-service dispatcher instance.
 /// After invoking this function, the instance is no longer usable.

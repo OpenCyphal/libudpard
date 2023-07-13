@@ -728,24 +728,20 @@ static inline bool rxParseFrame(const struct UdpardConstPayload datagram_payload
         const bool broadcast    = out->meta.dst_node_id == UDPARD_NODE_ID_UNSET;
         const bool service      = (out->meta.data_specifier & DATA_SPECIFIER_SERVICE_NOT_MESSAGE_MASK) != 0;
         const bool single_frame = (out->index == 0) && out->end_of_transfer;
-        ok                      = service  //
-                                      ? ((!broadcast) && (!anonymous))
-                                      : (broadcast && (anonymous ? single_frame : true));
+        ok = service ? ((!broadcast) && (!anonymous)) : (broadcast && (anonymous ? single_frame : true));
     }
     return ok;
 }
 
-int8_t udpardRxSubscriptionInit(struct UdpardRxSubscription* const self,
-                                const UdpardPortID                 subject_id,
-                                const size_t                       extent,
-                                struct UdpardMemoryResource* const memory_for_sessions,
-                                struct UdpardMemoryResource* const memory_for_payloads)
+int8_t udpardRxSubscriptionInit(struct UdpardRxSubscription* const   self,
+                                const UdpardPortID                   subject_id,
+                                const size_t                         extent,
+                                const struct UdpardRxMemoryResources memory)
 {
     (void) self;
     (void) subject_id;
     (void) extent;
-    (void) memory_for_sessions;
-    (void) memory_for_payloads;
+    (void) memory;
     (void) rxParseFrame;
     return 0;
 }
