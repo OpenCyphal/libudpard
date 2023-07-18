@@ -71,6 +71,7 @@
 /// As will be shown below, a typical application with R redundant network interfaces and S topic subscriptions needs
 /// R*(S+2) sockets (or equivalent abstractions provided by the underlying UDP/IP stack).
 ///
+///
 ///     Transmission pipeline
 ///
 /// The transmission pipeline is used to publish messages and send RPC-service requests and responses to the network
@@ -157,6 +158,21 @@
 /// a service dispatcher with a registered RPC-service RX port to receive the response. Same holds if the
 /// application needs to handle a service request, except that the RX port will be used to accept the request
 /// and the TX pipeline will be used to transmit the response.
+///
+///
+///     Memory management
+///
+/// The library can be used either with a regular heap (preferably constant-time) or with a collection of fixed-size
+/// block pool allocators (in safety-certified systems). It is up to the application to choose the desired memory
+/// management strategy; the library is interfaced with the memory managers via a special memory resource abstraction.
+///
+/// Typically, if block pool allocators are used, the following block sizes should be served:
+///
+///     - (MTU+library overhead) blocks for the TX and RX pipelines (usually less than 2048 bytes);
+///     - RX session object sized blocks for the RX pipeline (less than 512 bytes);
+///     - RX payload fragment handle sized blocks for the RX pipeline (less than 128 bytes).
+///
+/// The detailed information is given in the API documentation.
 ///
 /// --------------------------------------------------------------------------------------------------------------------
 ///
