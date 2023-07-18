@@ -276,9 +276,6 @@ struct UdpardConstPayload
 /// at the expense of extra time and memory utilization.
 struct UdpardPayloadFragmentHandle
 {
-    /// Internal use only.
-    struct UdpardTreeNode base;
-
     /// Points to the next fragment in the fragmented buffer; NULL if this is the last fragment.
     struct UdpardPayloadFragmentHandle* next;
 
@@ -700,12 +697,19 @@ struct UdpardRxTransfer
     UdpardNodeID        source_node_id;
     UdpardTransferID    transfer_id;
 
-    /// The total size of the payload is provided for convenience; it is the sum of the sizes of all fragments.
+    /// The total size of the payload available to the application, in bytes, is provided for convenience;
+    /// it is the sum of the sizes of all its fragments. For example, if the sender emitted a transfer of 2000
+    /// bytes split into two frames, 1408 bytes in the first frame and 592 bytes in the second frame,
+    /// then the payload_size will be 2000 and the payload buffer will contain two fragments of 1408 and 592 bytes.
+    /// The transfer CRC is not included here. If the received payload exceeds the configured extent,
+    /// the excess payload will be discarded and the payload_size will be set to the extent.
+    ///
     /// The application is given ownership of the payload buffer, so it is required to free it after use;
     /// this requires freeing both the handles and the payload buffers they point to.
-    /// Beware that different memory resources may have been used to allocate the handles and the payload buffers.
-    size_t                              payload_size;
-    struct UdpardPayloadFragmentHandle* payload;
+    /// Beware that different memory resources may have been used to allocate the handles and the payload buffers;
+    /// the application is responsible for freeing them using the correct memory resource.
+    size_t                             payload_size;
+    struct UdpardPayloadFragmentHandle payload;
 };
 
 /// This is, essentially, a helper that frees the memory allocated for the payload and its fragment headers

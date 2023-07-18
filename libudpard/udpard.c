@@ -654,6 +654,21 @@ typedef struct
     struct UdpardConstPayload payload;  ///< Also contains the transfer CRC (but not the header CRC).
 } RxFrame;
 
+typedef struct
+{
+    struct UdpardTreeNode base;
+    struct RxFragment*    owner;  // This is needed only to avoid pointer arithmetic. Ugly but safe.
+} RxFragmentTreeNode;
+
+/// This is designed to be convertible to/from UdpardPayloadFragmentHandle, so that the application could be
+/// given a linked list of these objects represented as a list of UdpardPayloadFragmentHandle.
+typedef struct RxFragment
+{
+    struct UdpardPayloadFragmentHandle base;
+    RxFragmentTreeNode                 tree;
+    uint32_t                           frame_index;
+} RxFragment;
+
 /// The primitive deserialization functions are endian-agnostic.
 static inline const byte_t* txDeserializeU16(const byte_t* const source_buffer, uint16_t* const out_value)
 {
