@@ -707,32 +707,35 @@ static inline const byte_t* txDeserializeU64(const byte_t* const source_buffer, 
 static inline bool rxParseFrame(const struct UdpardConstPayload datagram_payload, RxFrame* const out)
 {
     UDPARD_ASSERT((out != NULL) && (datagram_payload.data != NULL));
-    bool               ok      = false;
-    const byte_t*      ptr     = (const byte_t*) datagram_payload.data;
-    const uint_fast8_t version = *ptr++;
-    // The frame payload cannot be empty because every transfer has at least four bytes of CRC.
-    if ((datagram_payload.size > HEADER_SIZE_BYTES) && (version == HEADER_VERSION) &&
-        (headerCRCCompute(HEADER_SIZE_BYTES, datagram_payload.data) == HEADER_CRC_RESIDUE))
+    bool ok = false;
+    if (datagram_payload.size > 0)  // HEADER_SIZE_BYTES may change in the future depending on the header version.
     {
-        const uint_fast8_t prio = *ptr++;
-        if (prio <= UDPARD_PRIORITY_MAX)
+        const byte_t*      ptr     = (const byte_t*) datagram_payload.data;
+        const uint_fast8_t version = *ptr++;
+        // The frame payload cannot be empty because every transfer has at least four bytes of CRC.
+        if ((datagram_payload.size > HEADER_SIZE_BYTES) && (version == HEADER_VERSION) &&
+            (headerCRCCompute(HEADER_SIZE_BYTES, datagram_payload.data) == HEADER_CRC_RESIDUE))
         {
-            out->meta.priority   = (enum UdpardPriority) prio;
-            ptr                  = txDeserializeU16(ptr, &out->meta.src_node_id);
-            ptr                  = txDeserializeU16(ptr, &out->meta.dst_node_id);
-            ptr                  = txDeserializeU16(ptr, &out->meta.data_specifier);
-            ptr                  = txDeserializeU64(ptr, &out->meta.transfer_id);
-            uint32_t index_eot   = 0;
-            ptr                  = txDeserializeU32(ptr, &index_eot);
-            out->index           = (uint32_t) (index_eot & HEADER_FRAME_INDEX_MASK);
-            out->end_of_transfer = (index_eot & HEADER_FRAME_INDEX_EOT_MASK) != 0U;
-            ptr += 2;  // Opaque user data.
-            ptr += HEADER_CRC_SIZE_BYTES;
-            out->payload.data = ptr;
-            out->payload.size = datagram_payload.size - HEADER_SIZE_BYTES;
-            ok                = true;
-            UDPARD_ASSERT((ptr == (((const byte_t*) datagram_payload.data) + HEADER_SIZE_BYTES)) &&
-                          (out->payload.size > 0U));
+            const uint_fast8_t prio = *ptr++;
+            if (prio <= UDPARD_PRIORITY_MAX)
+            {
+                out->meta.priority   = (enum UdpardPriority) prio;
+                ptr                  = txDeserializeU16(ptr, &out->meta.src_node_id);
+                ptr                  = txDeserializeU16(ptr, &out->meta.dst_node_id);
+                ptr                  = txDeserializeU16(ptr, &out->meta.data_specifier);
+                ptr                  = txDeserializeU64(ptr, &out->meta.transfer_id);
+                uint32_t index_eot   = 0;
+                ptr                  = txDeserializeU32(ptr, &index_eot);
+                out->index           = (uint32_t) (index_eot & HEADER_FRAME_INDEX_MASK);
+                out->end_of_transfer = (index_eot & HEADER_FRAME_INDEX_EOT_MASK) != 0U;
+                ptr += 2;  // Opaque user data.
+                ptr += HEADER_CRC_SIZE_BYTES;
+                out->payload.data = ptr;
+                out->payload.size = datagram_payload.size - HEADER_SIZE_BYTES;
+                ok                = true;
+                UDPARD_ASSERT((ptr == (((const byte_t*) datagram_payload.data) + HEADER_SIZE_BYTES)) &&
+                              (out->payload.size > 0U));
+            }
         }
     }
     // Parsers for other header versions may be added here later.

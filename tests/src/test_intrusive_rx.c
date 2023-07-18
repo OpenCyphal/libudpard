@@ -131,6 +131,12 @@ static void testRxParseFrameHeaderWithoutPayload(void)
     TEST_ASSERT_FALSE(rxParseFrame((struct UdpardConstPayload){.data = data, .size = sizeof(data)}, &rxf));
 }
 
+static void testRxParseFrameEmpty(void)
+{
+    RxFrame rxf = {0};
+    TEST_ASSERT_FALSE(rxParseFrame((struct UdpardConstPayload){.data = "", .size = 0}, &rxf));
+}
+
 void setUp(void) {}
 
 void tearDown(void) {}
@@ -147,5 +153,6 @@ int main(void)
     RUN_TEST(testRxParseFrameBadHeaderCRC);
     RUN_TEST(testRxParseFrameUnknownHeaderVersion);
     RUN_TEST(testRxParseFrameHeaderWithoutPayload);
+    RUN_TEST(testRxParseFrameEmpty);
     return UNITY_END();
 }
