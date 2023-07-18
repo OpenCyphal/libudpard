@@ -750,7 +750,7 @@ static inline bool rxParseFrame(const struct UdpardConstPayload datagram_payload
         const bool broadcast    = out->meta.dst_node_id == UDPARD_NODE_ID_UNSET;
         const bool service      = (out->meta.data_specifier & DATA_SPECIFIER_SERVICE_NOT_MESSAGE_MASK) != 0;
         const bool single_frame = (out->index == 0) && out->end_of_transfer;
-        ok = service ? ((!broadcast) && (!anonymous)) : (broadcast && (single_frame || !anonymous));
+        ok = service ? ((!broadcast) && (!anonymous)) : (broadcast && ((!anonymous) || single_frame));
     }
     return ok;
 }
