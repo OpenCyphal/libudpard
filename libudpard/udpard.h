@@ -847,7 +847,7 @@ int8_t udpardRxSubscriptionReceive(struct UdpardRxSubscription* const self,
 
 /// An RPC-service RX port models the interest of the application in receiving RPC-service transfers of
 /// a particular kind (request or response) and a particular service-ID.
-struct UdpardRxService
+struct UdpardRxRPC
 {
     /// READ-ONLY
     struct UdpardTreeNode base;
@@ -868,11 +868,11 @@ struct UdpardRxService
 /// the place of the subject-ID. The IP multicast group address is derived from the local node-ID.
 /// This address is available in the field named "udp_ip_endpoint".
 /// The application is expected to open a separate socket bound to that endpoint per redundant interface,
-/// and then feed the UDP datagrams received from these sockets into udpardRxServiceDispatcherReceive,
-/// collecting UdpardRxServiceTransfer instances at the output.
+/// and then feed the UDP datagrams received from these sockets into udpardRxRPCDispatcherReceive,
+/// collecting UdpardRxRPCTransfer instances at the output.
 ///
 /// Anonymous nodes (nodes without a node-ID of their own) cannot use RPC-services.
-struct UdpardRxServiceDispatcher
+struct UdpardRxRPCDispatcher
 {
     /// The IP address and UDP port number where UDP/IP datagrams carrying RPC-service transfers destined to this node
     /// will be sent.
@@ -883,12 +883,12 @@ struct UdpardRxServiceDispatcher
     struct UdpardRxMemoryResources memory;
 
     /// READ-ONLY
-    struct UdpardRxService* request_ports;
-    struct UdpardRxService* response_ports;
+    struct UdpardRxRPC* request_ports;
+    struct UdpardRxRPC* response_ports;
 };
 
 /// Represents a received Cyphal RPC-service transfer -- either request or response.
-struct UdpardRxServiceTransfer
+struct UdpardRxRPCTransfer
 {
     struct UdpardRxTransfer base;
     UdpardPortID            service_id;
@@ -897,9 +897,9 @@ struct UdpardRxServiceTransfer
 
 /// To begin receiving RPC-service requests and/or responses, the application should do this:
 ///
-///     1. Create a new UdpardRxServiceDispatcher instance.
+///     1. Create a new UdpardRxRPCDispatcher instance.
 ///
-///     2. Initialize it by calling udpardRxServiceDispatcherInit. Observe that a valid node-ID is required here.
+///     2. Initialize it by calling udpardRxRPCDispatcherInit. Observe that a valid node-ID is required here.
 ///        If the application has to perform a plug-and-play node-ID allocation, it has to complete that beforehand.
 ///        The dispatcher is not needed to perform PnP node-ID allocation.
 ///
@@ -909,30 +909,30 @@ struct UdpardRxServiceTransfer
 ///          endpoint to use based on the node-ID.
 ///
 ///     4. Announce its interest in specific RPC-services (requests and/or responses) by calling
-///        udpardRxServiceDispatcherListen per each. This can be done at any later point as well.
+///        udpardRxRPCDispatcherListen per each. This can be done at any later point as well.
 ///
 ///     5. Read data from the sockets continuously and forward each received UDP datagram to
-///        udpardRxServiceDispatcherReceive, along with the index of the redundant interface
+///        udpardRxRPCDispatcherReceive, along with the index of the redundant interface
 ///        the datagram was received on. Only those services that were announced in step 4 will be processed.
 ///
 /// The return value is 0 on success.
 /// The return value is a negated UDPARD_ERROR_ARGUMENT if any of the input arguments are invalid.
 ///
 /// The time complexity is constant. This function does not invoke the dynamic memory manager.
-int8_t udpardRxServiceDispatcherInit(struct UdpardRxServiceDispatcher* const self,
-                                     const UdpardNodeID                      local_node_id,
-                                     const struct UdpardRxMemoryResources    memory);
+int8_t udpardRxRPCDispatcherInit(struct UdpardRxRPCDispatcher* const  self,
+                                 const UdpardNodeID                   local_node_id,
+                                 const struct UdpardRxMemoryResources memory);
 
 /// Frees all memory held by the RPC-service dispatcher instance.
 /// After invoking this function, the instance is no longer usable.
 /// Do not forget to close the sockets that were opened for this instance.
-void udpardRxServiceDispatcherDestroy(struct UdpardRxServiceDispatcher* const self);
+void udpardRxRPCDispatcherDestroy(struct UdpardRxRPCDispatcher* const self);
 
 /// This function lets the application register its interest in a particular service-ID and kind (request/response)
 /// by creating an RPC-service RX port. The service pointer shall retain validity until its unregistration or until
 /// the dispatcher is destroyed. The service instance shall not be moved or destroyed.
 ///
-/// If such registration already exists, it will be unregistered first as if udpardRxServiceDispatcherCancel was
+/// If such registration already exists, it will be unregistered first as if udpardRxRPCDispatcherCancel was
 /// invoked by the application, and then re-created anew with the new parameters.
 ///
 /// For the meaning of extent, please refer to the documentation of the subscription pipeline.
@@ -948,14 +948,14 @@ void udpardRxServiceDispatcherDestroy(struct UdpardRxServiceDispatcher* const se
 /// The time complexity is logarithmic from the number of current registrations under the specified transfer kind
 /// (request or response).
 /// This function does not allocate new memory. The function may deallocate memory if such registration already
-/// existed; the deallocation behavior is specified in the documentation for udpardRxServiceDispatcherCancel.
-int8_t udpardRxServiceDispatcherListen(struct UdpardRxServiceDispatcher* const self,
-                                       struct UdpardRxService* const           service,
-                                       const UdpardPortID                      service_id,
-                                       const bool                              is_request,
-                                       const size_t                            extent);
+/// existed; the deallocation behavior is specified in the documentation for udpardRxRPCDispatcherCancel.
+int8_t udpardRxRPCDispatcherListen(struct UdpardRxRPCDispatcher* const self,
+                                   struct UdpardRxRPC* const           service,
+                                   const UdpardPortID                  service_id,
+                                   const bool                          is_request,
+                                   const size_t                        extent);
 
-/// This function reverses the effect of udpardRxServiceDispatcherListen.
+/// This function reverses the effect of udpardRxRPCDispatcherListen.
 /// If the registration is found, all its memory is de-allocated (session states and payload buffers).
 /// Please refer to the UdpardRxPort session description for detailed information on the amount of memory freed.
 ///
@@ -965,19 +965,19 @@ int8_t udpardRxServiceDispatcherListen(struct UdpardRxServiceDispatcher* const s
 ///
 /// The time complexity is logarithmic from the number of current registration under the specified transfer kind.
 /// This function does not allocate new memory.
-int8_t udpardRxServiceDispatcherCancel(struct UdpardRxServiceDispatcher* const self,
-                                       const UdpardPortID                      service_id,
-                                       const bool                              is_request);
+int8_t udpardRxRPCDispatcherCancel(struct UdpardRxRPCDispatcher* const self,
+                                   const UdpardPortID                  service_id,
+                                   const bool                          is_request);
 
 /// Datagrams received from the sockets of this service dispatcher are fed into this function.
 /// It is the analog of udpardRxSubscriptionReceive for RPC-service transfers.
 /// Please refer to the documentation of udpardRxSubscriptionReceive for the usage information.
-int8_t udpardRxServiceDispatcherReceive(struct UdpardRxServiceDispatcher* const self,
-                                        struct UdpardRxService** const          service,
-                                        const UdpardMicrosecond                 timestamp_usec,
-                                        const struct UdpardConstPayload         datagram_payload,
-                                        const uint_fast8_t                      redundant_iface_index,
-                                        struct UdpardRxServiceTransfer* const   received_transfer);
+int8_t udpardRxRPCDispatcherReceive(struct UdpardRxRPCDispatcher* const self,
+                                    struct UdpardRxRPC** const          service,
+                                    const UdpardMicrosecond             timestamp_usec,
+                                    const struct UdpardConstPayload     datagram_payload,
+                                    const uint_fast8_t                  redundant_iface_index,
+                                    struct UdpardRxRPCTransfer* const   received_transfer);
 
 #ifdef __cplusplus
 }
