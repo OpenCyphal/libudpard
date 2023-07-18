@@ -624,7 +624,7 @@ struct UdpardRxPort
     /// This field can be adjusted at runtime arbitrarily; e.g., this is useful to implement adaptive timeouts.
     UdpardMicrosecond transfer_id_timeout_usec;
 
-    /// A new session instance is created per remote node-ID that emits transfers matching this port.
+    /// Libudpard creates a new session instance per remote node-ID that emits transfers matching this port.
     /// For example, if the local node is subscribed to a certain subject and there are X nodes publishing
     /// transfers on that subject, then there will be X sessions created for that subject.
     /// Same applies to RPC-services as well.
@@ -639,28 +639,36 @@ struct UdpardRxPort
     /// which is at most 512 bytes on wide-word platforms (on small word size platforms it is usually much smaller).
     /// On top of that, each session instance holds memory for the transfer payload fragments and small fixed-size
     /// metadata objects called "payload fragment handles" (at most 128 bytes large, usually much smaller,
-    /// depending on the pointer width and the word size).
+    /// depending on the pointer width and the word size), one handle per fragment.
     ///
     /// The transfer payload memory is not allocated by the library but rather moved from the application
-    /// when the corresponding frame is received. If the library chooses to keep the frame payload
+    /// when the corresponding UDP datagram is received. If the library chooses to keep the frame payload
     /// (which is the case if the frame is not a duplicate, the frame sequence is valid, and the received payload
     /// does not exceed the extent configured for the port), a new fragment handle is allocated and it takes ownership
-    /// of the payload. If the library does not need the payload to reassemble the transfer, it is freed immediately.
+    /// of the entire datagram payload (including all overheads such as the Cyphal/UDP frame header and possible
+    /// data that spills over the configured extent value for this port).
+    /// If the library does not need the datagram to reassemble the transfer, its payload buffer is freed immediately.
     /// There is a 1-to-1 correspondence between the payload fragment handles and the payload fragments.
+    /// Remote nodes that emit highly fragmented transfers cause a higher memory utilization in the local node
+    /// because of the increased number of payload fragment handles and per-datagram overheads.
+    ///
     /// In the worst case, the library may keep up to two full transfer payloads in memory at the same time
     /// (two transfer states are kept to allow acceptance of interleaved frames).
     ///
     /// Ultimately, the worst-case memory consumption is dependent on the configured extent and the transmitting
     /// side's MTU, as these parameters affect the number of payload buffers retained in memory.
     ///
-    /// The worst situation from the memory management standpoint is when there is a large number of nodes emitting
-    /// data such that each node begins a multi-frame transfer while never completing it.
+    /// The maximum memory consumption is when there is a large number of nodes emitting data such that each node
+    /// begins a multi-frame transfer while never completing it.
     ///
     /// Everything stated above holds for service transfers as well.
     ///
-    /// If the dynamic memory pool(s) is(are) sized correctly, the application is guaranteed to never encounter an
-    /// out-of-memory (OOM) error at runtime. The actual size of the dynamic memory pool is typically larger;
-    /// for a detailed review of this matter please refer to the documentation of O1Heap.
+    /// If the dynamic memory pool(s) is(are) sized correctly, and all transmitting nodes are known to avoid excessive
+    /// fragmentation of egress transfers (which can be ensured by not using MTU values smaller than the default),
+    /// the application is guaranteed to never encounter an out-of-memory (OOM) error at runtime.
+    /// High-integrity applications can optionally police ingress traffic for MTU violations and filter it before
+    /// passing it to the library; alternatively, applications could limit memory consumption per port,
+    /// which is easy to implement since each port gets a dedicated set of memory resources.
     ///
     /// READ-ONLY
     struct UdpardInternalRxSession* sessions;
@@ -824,9 +832,8 @@ void udpardRxSubscriptionDestroy(struct UdpardRxSubscription* const self);
 ///        consumption, so a deterministic application need not consider this behavior in its resource analysis.
 ///        This behavior is implemented for the benefit of applications where rigorous characterization is unnecessary.
 ///
-/// The time complexity is O(p + log n) where n is the number of remote notes publishing on this subject (topic),
-/// and p is the amount of payload in the received frame (because it will be copied into an internal contiguous buffer).
-/// Malformed frames are discarded in constant time.
+/// The time complexity is O(log n) where n is the number of remote notes publishing on this subject (topic).
+/// No data copy takes place. Malformed frames are discarded in constant time.
 ///
 /// UDPARD_ERROR_MEMORY is returned if the function fails to allocate memory.
 /// UDPARD_ERROR_ARGUMENT is returned if any of the input arguments are invalid.
