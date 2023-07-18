@@ -726,8 +726,8 @@ struct UdpardRxTransfer
 ///
 /// If any of the arguments are NULL, the function has no effect.
 void udpardRxTransferFree(struct UdpardRxTransfer* const     self,
-                          struct UdpardMemoryResource* const memory_for_payload_fragment_handle,
-                          struct UdpardMemoryResource* const memory_for_payload);
+                          struct UdpardMemoryResource* const memory_payload_fragment_handle,
+                          struct UdpardMemoryResource* const memory_payload);
 
 // ---------------------------------------------  SUBJECTS  ---------------------------------------------
 

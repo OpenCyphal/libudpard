@@ -674,8 +674,10 @@ static inline const byte_t* txDeserializeU16(const byte_t* const source_buffer, 
 {
     UDPARD_ASSERT((source_buffer != NULL) && (out_value != NULL));
     const byte_t* ptr = source_buffer;
-    *out_value        = *ptr++;
-    *out_value |= (uint16_t) (((uint16_t) *ptr++) << ByteWidth);
+    *out_value        = *ptr;
+    ptr++;
+    *out_value |= (uint16_t) (((uint16_t) *ptr) << ByteWidth);
+    ptr++;
     return ptr;
 }
 
@@ -686,7 +688,8 @@ static inline const byte_t* txDeserializeU32(const byte_t* const source_buffer, 
     *out_value        = 0;
     for (size_t i = 0; i < sizeof(*out_value); i++)  // We sincerely hope that the compiler will use memcpy.
     {
-        *out_value |= (uint32_t) ((uint32_t) *ptr++ << (i * ByteWidth));  // NOLINT(google-readability-casting)
+        *out_value |= (uint32_t) ((uint32_t) *ptr << (i * ByteWidth));  // NOLINT(google-readability-casting) NOSONAR
+        ptr++;
     }
     return ptr;
 }
@@ -698,7 +701,8 @@ static inline const byte_t* txDeserializeU64(const byte_t* const source_buffer, 
     *out_value        = 0;
     for (size_t i = 0; i < sizeof(*out_value); i++)  // We sincerely hope that the compiler will use memcpy.
     {
-        *out_value |= (uint64_t) ((uint64_t) *ptr++ << (i * ByteWidth));  // NOLINT(google-readability-casting)
+        *out_value |= ((uint64_t) *ptr << (i * ByteWidth));
+        ptr++;
     }
     return ptr;
 }
@@ -746,7 +750,7 @@ static inline bool rxParseFrame(const struct UdpardConstPayload datagram_payload
         const bool broadcast    = out->meta.dst_node_id == UDPARD_NODE_ID_UNSET;
         const bool service      = (out->meta.data_specifier & DATA_SPECIFIER_SERVICE_NOT_MESSAGE_MASK) != 0;
         const bool single_frame = (out->index == 0) && out->end_of_transfer;
-        ok = service ? ((!broadcast) && (!anonymous)) : (broadcast && (anonymous ? single_frame : true));
+        ok = service ? ((!broadcast) && (!anonymous)) : (broadcast && (single_frame || !anonymous));
     }
     return ok;
 }
