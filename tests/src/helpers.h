@@ -22,12 +22,12 @@
 extern "C" {
 #endif
 
-#define TEST_PANIC(message)                                                            \
-    do                                                                                 \
-    {                                                                                  \
-        fprintf(stderr, "%s:%u: PANIC: %s\n", __FILE__, (unsigned) __LINE__, message); \
-        fflush(stderr);                                                                \
-        abort();                                                                       \
+#define TEST_PANIC(message)                                                                   \
+    do                                                                                        \
+    {                                                                                         \
+        (void) fprintf(stderr, "%s:%u: PANIC: %s\n", __FILE__, (unsigned) __LINE__, message); \
+        (void) fflush(stderr);                                                                \
+        abort();                                                                              \
     } while (0)
 #define TEST_PANIC_UNLESS(condition) \
     do                               \
@@ -38,14 +38,14 @@ extern "C" {
         }                            \
     } while (0)
 
-static inline void* dummyAllocatorAllocate(UdpardMemoryResource* const self, const size_t size)
+static inline void* dummyAllocatorAllocate(struct UdpardMemoryResource* const self, const size_t size)
 {
     (void) self;
     (void) size;
     return NULL;
 }
 
-static inline void dummyAllocatorFree(UdpardMemoryResource* const self, const size_t size, void* const pointer)
+static inline void dummyAllocatorFree(struct UdpardMemoryResource* const self, const size_t size, void* const pointer)
 {
     (void) size;
     TEST_PANIC_UNLESS(self != NULL);
@@ -57,8 +57,8 @@ static inline void dummyAllocatorFree(UdpardMemoryResource* const self, const si
 #define INSTRUMENTED_ALLOCATOR_CANARY_SIZE 1024U
 typedef struct
 {
-    UdpardMemoryResource base;
-    uint_least8_t        canary[INSTRUMENTED_ALLOCATOR_CANARY_SIZE];
+    struct UdpardMemoryResource base;
+    uint_least8_t               canary[INSTRUMENTED_ALLOCATOR_CANARY_SIZE];
     /// The limit can be changed at any moment to control the maximum amount of memory that can be allocated.
     /// It may be set to a value less than the currently allocated amount.
     size_t limit_bytes;
@@ -67,7 +67,7 @@ typedef struct
     size_t allocated_bytes;
 } InstrumentedAllocator;
 
-static inline void* instrumentedAllocatorAllocate(UdpardMemoryResource* const base, const size_t size)
+static inline void* instrumentedAllocatorAllocate(struct UdpardMemoryResource* const base, const size_t size)
 {
     InstrumentedAllocator* const self = (InstrumentedAllocator*) base;
     TEST_PANIC_UNLESS(self->base.allocate == &instrumentedAllocatorAllocate);
@@ -98,7 +98,9 @@ static inline void* instrumentedAllocatorAllocate(UdpardMemoryResource* const ba
     return result;
 }
 
-static inline void instrumentedAllocatorFree(UdpardMemoryResource* const base, const size_t size, void* const pointer)
+static inline void instrumentedAllocatorFree(struct UdpardMemoryResource* const base,
+                                             const size_t                       size,
+                                             void* const                        pointer)
 {
     InstrumentedAllocator* const self = (InstrumentedAllocator*) base;
     TEST_PANIC_UNLESS(self->base.allocate == &instrumentedAllocatorAllocate);
