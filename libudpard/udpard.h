@@ -852,6 +852,8 @@ void udpardRxSubscriptionDestroy(struct UdpardRxSubscription* const self);
 /// The time complexity is O(log n) where n is the number of remote notes publishing on this subject (topic).
 /// No data copy takes place. Malformed frames are discarded in constant time.
 ///
+/// This function performs log(n) of recursive calls internally, where n is the number of frames in a transfer.
+///
 /// UDPARD_ERROR_MEMORY is returned if the function fails to allocate memory.
 /// UDPARD_ERROR_ARGUMENT is returned if any of the input arguments are invalid.
 int8_t udpardRxSubscriptionReceive(struct UdpardRxSubscription* const self,
