@@ -352,7 +352,7 @@ static inline byte_t* txSerializeHeader(byte_t* const          destination_buffe
     ptr         = txSerializeU64(ptr, meta.transfer_id);
     UDPARD_ASSERT((frame_index + 0UL) <= HEADER_FRAME_INDEX_MAX);  // +0UL is to avoid a compiler warning.
     ptr = txSerializeU32(ptr, frame_index | (end_of_transfer ? HEADER_FRAME_INDEX_EOT_MASK : 0U));
-    ptr = txSerializeU16(ptr, 0);                                  // opaque user data
+    ptr = txSerializeU16(ptr, 0);  // opaque user data
     // Header CRC in the big endian format. Optimization prospect: the header up to frame_index is constant in
     // multi-frame transfers, so we don't really need to recompute the CRC from scratch per frame.
     const uint16_t crc = headerCRCCompute(HEADER_SIZE_BYTES - HEADER_CRC_SIZE_BYTES, destination_buffer);
@@ -752,7 +752,7 @@ static inline bool rxParseFrame(const struct UdpardMutablePayload datagram_paylo
         }
         // Parsers for other header versions may be added here later.
     }
-    if (ok)                                    // Version-agnostic semantics check.
+    if (ok)  // Version-agnostic semantics check.
     {
         UDPARD_ASSERT(out->payload.size > 0);  // Follows from the prior checks.
         const bool anonymous    = out->meta.src_node_id == UDPARD_NODE_ID_UNSET;
@@ -801,7 +801,7 @@ typedef struct RxFragment
 /// (this is possible because all common CRC functions are linear).
 typedef struct
 {
-    UdpardMicrosecond   ts_usec;    ///< Timestamp of the earliest frame; UINT64_MAX initially.
+    UdpardMicrosecond   ts_usec;  ///< Timestamp of the earliest frame; UINT64_MAX initially.
     UdpardTransferID    transfer_id;
     uint32_t            max_index;  ///< Maximum observed frame index in this transfer (so far); zero initially.
     uint32_t            eot_index;  ///< Frame index where the end-of-transfer flag was observed; UINT32_MAX initially.
@@ -901,10 +901,11 @@ static inline struct UdpardTreeNode* rxSessionSlotFragmentFactory(void* const us
     RxFragment* const      frag = memAlloc(ctx->memory_payload_fragment_handle, sizeof(RxFragment));
     if (frag != NULL)
     {
+        // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
         (void) memset(frag, 0, sizeof(RxFragment));
         out               = &frag->tree.base;  // this is not an escape bug, we retain the pointer via "this"
         frag->frame_index = ctx->frame_index;
-        frag->tree.this   = frag;              // <-- right here, see?
+        frag->tree.this   = frag;  // <-- right here, see?
         ctx->accepted     = true;
     }
     return out;  // OOM handled by the caller
@@ -965,6 +966,7 @@ static inline void rxSessionSlotEject(RxFragment* const frag, RxSessionSlotEject
     {
         rxSessionSlotEject(((RxFragmentTreeNode*) frag->tree.base.lr[1])->this, ctx);
     }
+    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     (void) memset(&frag->tree.base, 0, sizeof(struct UdpardTreeNode));  // Avoid dangling pointers.
     // Drop the unneeded fragments and their handles after the sub-tree is fully traversed.
     if ((!retain) || (frag->base.view.size == 0))
@@ -1149,7 +1151,7 @@ static inline int_fast8_t rxSessionIfaceUpdate(RxSessionIface* const            
     {
         if (slot->ts_usec == UINT64_MAX)
         {
-            slot->ts_usec = ts_usec;        // Transfer timestamp is the timestamp of the earliest frame.
+            slot->ts_usec = ts_usec;  // Transfer timestamp is the timestamp of the earliest frame.
         }
         result = rxSessionSlotUpdate(slot,  // Takes ownership of the frame payload; may free or keep it.
                                      frame,

@@ -18,11 +18,11 @@
 // [1, 2, 41, 9, 56, 21, 230, 29, 13, 240, 221, 224, 254, 15, 220, 186, 57, 48, 0, 0, 0, 0, 224, 60]
 static void testRxParseFrameValidMessage(void)
 {
-    const byte_t data[] = {1,   2,   41,  9,   255, 255, 230, 29, 13, 240, 221, 224,
-                           254, 15,  220, 186, 57,  48,  0,   0,  0,  0,   30,  179,  //
-                           'a', 'b', 'c'};
-    RxFrame      rxf    = {0};
-    TEST_ASSERT(rxParseFrame((struct UdpardConstPayload){.data = data, .size = sizeof(data)}, &rxf));
+    byte_t  data[] = {1,   2,   41,  9,   255, 255, 230, 29, 13, 240, 221, 224,
+                      254, 15,  220, 186, 57,  48,  0,   0,  0,  0,   30,  179,  //
+                      'a', 'b', 'c'};
+    RxFrame rxf    = {0};
+    TEST_ASSERT(rxParseFrame((struct UdpardMutablePayload){.data = data, .size = sizeof(data)}, &rxf));
     TEST_ASSERT_EQUAL_UINT64(UdpardPriorityFast, rxf.meta.priority);
     TEST_ASSERT_EQUAL_UINT64(2345, rxf.meta.src_node_id);
     TEST_ASSERT_EQUAL_UINT64(UDPARD_NODE_ID_UNSET, rxf.meta.dst_node_id);
@@ -39,11 +39,11 @@ static void testRxParseFrameValidRPCService(void)
     // frame = UDPFrame(priority=Priority.FAST, transfer_id=0xbadc0ffee0ddf00d, index=6654, end_of_transfer=False,
     // payload=memoryview(b''), source_node_id=2345, destination_node_id=4567,
     // data_specifier=ServiceDataSpecifier(role=ServiceDataSpecifier.Role.REQUEST, service_id=123), user_data=0)
-    const byte_t data[] = {1,   2,   41,  9,   215, 17, 123, 192, 13, 240, 221, 224,
-                           254, 15,  220, 186, 254, 25, 0,   0,   0,  0,   173, 122,  //
-                           'a', 'b', 'c'};
-    RxFrame      rxf    = {0};
-    TEST_ASSERT(rxParseFrame((struct UdpardConstPayload){.data = data, .size = sizeof(data)}, &rxf));
+    byte_t  data[] = {1,   2,   41,  9,   215, 17, 123, 192, 13, 240, 221, 224,
+                      254, 15,  220, 186, 254, 25, 0,   0,   0,  0,   173, 122,  //
+                      'a', 'b', 'c'};
+    RxFrame rxf    = {0};
+    TEST_ASSERT(rxParseFrame((struct UdpardMutablePayload){.data = data, .size = sizeof(data)}, &rxf));
     TEST_ASSERT_EQUAL_UINT64(UdpardPriorityFast, rxf.meta.priority);
     TEST_ASSERT_EQUAL_UINT64(2345, rxf.meta.src_node_id);
     TEST_ASSERT_EQUAL_UINT64(4567, rxf.meta.dst_node_id);
@@ -59,11 +59,11 @@ static void testRxParseFrameValidRPCService(void)
 
 static void testRxParseFrameValidMessageAnonymous(void)
 {
-    const byte_t data[] = {1,   2,   255, 255, 255, 255, 230, 29,  13, 240, 221, 224,
-                           254, 15,  220, 186, 0,   0,   0,   128, 0,  0,   168, 92,  //
-                           'a', 'b', 'c'};
-    RxFrame      rxf    = {0};
-    TEST_ASSERT(rxParseFrame((struct UdpardConstPayload){.data = data, .size = sizeof(data)}, &rxf));
+    byte_t  data[] = {1,   2,   255, 255, 255, 255, 230, 29,  13, 240, 221, 224,
+                      254, 15,  220, 186, 0,   0,   0,   128, 0,  0,   168, 92,  //
+                      'a', 'b', 'c'};
+    RxFrame rxf    = {0};
+    TEST_ASSERT(rxParseFrame((struct UdpardMutablePayload){.data = data, .size = sizeof(data)}, &rxf));
     TEST_ASSERT_EQUAL_UINT64(UdpardPriorityFast, rxf.meta.priority);
     TEST_ASSERT_EQUAL_UINT64(UDPARD_NODE_ID_UNSET, rxf.meta.src_node_id);
     TEST_ASSERT_EQUAL_UINT64(UDPARD_NODE_ID_UNSET, rxf.meta.dst_node_id);
@@ -77,38 +77,38 @@ static void testRxParseFrameValidMessageAnonymous(void)
 
 static void testRxParseFrameRPCServiceAnonymous(void)
 {
-    const byte_t data[] = {1,   2,   255, 255, 215, 17, 123, 192, 13, 240, 221, 224,
-                           254, 15,  220, 186, 254, 25, 0,   0,   0,  0,   75,  79,  //
-                           'a', 'b', 'c'};
-    RxFrame      rxf    = {0};
-    TEST_ASSERT_FALSE(rxParseFrame((struct UdpardConstPayload){.data = data, .size = sizeof(data)}, &rxf));
+    byte_t  data[] = {1,   2,   255, 255, 215, 17, 123, 192, 13, 240, 221, 224,
+                      254, 15,  220, 186, 254, 25, 0,   0,   0,  0,   75,  79,  //
+                      'a', 'b', 'c'};
+    RxFrame rxf    = {0};
+    TEST_ASSERT_FALSE(rxParseFrame((struct UdpardMutablePayload){.data = data, .size = sizeof(data)}, &rxf));
 }
 
 static void testRxParseFrameRPCServiceBroadcast(void)
 {
-    const byte_t data[] = {1,   2,   41,  9,   255, 255, 123, 192, 13, 240, 221, 224,
-                           254, 15,  220, 186, 254, 25,  0,   0,   0,  0,   248, 152,  //
-                           'a', 'b', 'c'};
-    RxFrame      rxf    = {0};
-    TEST_ASSERT_FALSE(rxParseFrame((struct UdpardConstPayload){.data = data, .size = sizeof(data)}, &rxf));
+    byte_t  data[] = {1,   2,   41,  9,   255, 255, 123, 192, 13, 240, 221, 224,
+                      254, 15,  220, 186, 254, 25,  0,   0,   0,  0,   248, 152,  //
+                      'a', 'b', 'c'};
+    RxFrame rxf    = {0};
+    TEST_ASSERT_FALSE(rxParseFrame((struct UdpardMutablePayload){.data = data, .size = sizeof(data)}, &rxf));
 }
 
 static void testRxParseFrameAnonymousNonSingleFrame(void)
 {  // Invalid anonymous message frame because EOT not set (multi-frame anonymous transfers are not allowed).
-    const byte_t data[] = {1,   2,   255, 255, 255, 255, 230, 29, 13, 240, 221, 224,
-                           254, 15,  220, 186, 0,   0,   0,   0,  0,  0,   147, 6,  //
-                           'a', 'b', 'c'};
-    RxFrame      rxf    = {0};
-    TEST_ASSERT_FALSE(rxParseFrame((struct UdpardConstPayload){.data = data, .size = sizeof(data)}, &rxf));
+    byte_t  data[] = {1,   2,   255, 255, 255, 255, 230, 29, 13, 240, 221, 224,
+                      254, 15,  220, 186, 0,   0,   0,   0,  0,  0,   147, 6,  //
+                      'a', 'b', 'c'};
+    RxFrame rxf    = {0};
+    TEST_ASSERT_FALSE(rxParseFrame((struct UdpardMutablePayload){.data = data, .size = sizeof(data)}, &rxf));
 }
 
 static void testRxParseFrameBadHeaderCRC(void)
 {  // Bad header CRC.
-    const byte_t data[] = {1,   2,   41,  9,   255, 255, 230, 29, 13, 240, 221, 224,
-                           254, 15,  220, 186, 57,  48,  0,   0,  0,  0,   30,  180,  //
-                           'a', 'b', 'c'};
-    RxFrame      rxf    = {0};
-    TEST_ASSERT_FALSE(rxParseFrame((struct UdpardConstPayload){.data = data, .size = sizeof(data)}, &rxf));
+    byte_t  data[] = {1,   2,   41,  9,   255, 255, 230, 29, 13, 240, 221, 224,
+                      254, 15,  220, 186, 57,  48,  0,   0,  0,  0,   30,  180,  //
+                      'a', 'b', 'c'};
+    RxFrame rxf    = {0};
+    TEST_ASSERT_FALSE(rxParseFrame((struct UdpardMutablePayload){.data = data, .size = sizeof(data)}, &rxf));
 }
 
 static void testRxParseFrameUnknownHeaderVersion(void)
@@ -116,25 +116,24 @@ static void testRxParseFrameUnknownHeaderVersion(void)
     // >>> from pycyphal.transport.commons.crc import CRC16CCITT
     // >>> list(CRC16CCITT.new(bytes(
     //    [0, 2, 41, 9, 56, 21, 230, 29, 13, 240, 221, 224, 254, 15, 220, 186, 57, 48, 0, 0, 0, 0])).value_as_bytes)
-    const byte_t data[] = {0,   2,   41,  9,   56, 21, 230, 29, 13, 240, 221, 224,
-                           254, 15,  220, 186, 57, 48, 0,   0,  0,  0,   141, 228,  //
-                           'a', 'b', 'c'};
-    RxFrame      rxf    = {0};
-    TEST_ASSERT_FALSE(rxParseFrame((struct UdpardConstPayload){.data = data, .size = sizeof(data)}, &rxf));
+    byte_t  data[] = {0,   2,   41,  9,   56, 21, 230, 29, 13, 240, 221, 224,
+                      254, 15,  220, 186, 57, 48, 0,   0,  0,  0,   141, 228,  //
+                      'a', 'b', 'c'};
+    RxFrame rxf    = {0};
+    TEST_ASSERT_FALSE(rxParseFrame((struct UdpardMutablePayload){.data = data, .size = sizeof(data)}, &rxf));
 }
 
 static void testRxParseFrameHeaderWithoutPayload(void)
 {
-    const byte_t data[] = {1,   2,  41,  9,   255, 255, 230, 29, 13, 240, 221, 224,
-                           254, 15, 220, 186, 57,  48,  0,   0,  0,  0,   30,  179};
-    RxFrame      rxf    = {0};
-    TEST_ASSERT_FALSE(rxParseFrame((struct UdpardConstPayload){.data = data, .size = sizeof(data)}, &rxf));
+    byte_t data[] = {1, 2, 41, 9, 255, 255, 230, 29, 13, 240, 221, 224, 254, 15, 220, 186, 57, 48, 0, 0, 0, 0, 30, 179};
+    RxFrame rxf   = {0};
+    TEST_ASSERT_FALSE(rxParseFrame((struct UdpardMutablePayload){.data = data, .size = sizeof(data)}, &rxf));
 }
 
 static void testRxParseFrameEmpty(void)
 {
     RxFrame rxf = {0};
-    TEST_ASSERT_FALSE(rxParseFrame((struct UdpardConstPayload){.data = "", .size = 0}, &rxf));
+    TEST_ASSERT_FALSE(rxParseFrame((struct UdpardMutablePayload){.data = "", .size = 0}, &rxf));
 }
 
 void setUp(void) {}
