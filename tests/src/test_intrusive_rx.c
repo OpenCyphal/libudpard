@@ -16,7 +16,7 @@
 //  data_specifier=MessageDataSpecifier(7654), user_data=0)
 // >>> list(frame.compile_header_and_payload()[0])
 // [1, 2, 41, 9, 56, 21, 230, 29, 13, 240, 221, 224, 254, 15, 220, 186, 57, 48, 0, 0, 0, 0, 224, 60]
-static void testRxParseFrameValidMessage(void)
+static void testParseFrameValidMessage(void)
 {
     byte_t  data[] = {1,   2,   41,  9,   255, 255, 230, 29, 13, 240, 221, 224,
                       254, 15,  220, 186, 57,  48,  0,   0,  0,  0,   30,  179,  //
@@ -34,7 +34,7 @@ static void testRxParseFrameValidMessage(void)
     TEST_ASSERT_EQUAL_UINT8_ARRAY("abc", rxf.payload.data, 3);
 }
 
-static void testRxParseFrameValidRPCService(void)
+static void testParseFrameValidRPCService(void)
 {
     // frame = UDPFrame(priority=Priority.FAST, transfer_id=0xbadc0ffee0ddf00d, index=6654, end_of_transfer=False,
     // payload=memoryview(b''), source_node_id=2345, destination_node_id=4567,
@@ -57,7 +57,7 @@ static void testRxParseFrameValidRPCService(void)
     TEST_ASSERT_EQUAL_UINT8_ARRAY("abc", rxf.payload.data, 3);
 }
 
-static void testRxParseFrameValidMessageAnonymous(void)
+static void testParseFrameValidMessageAnonymous(void)
 {
     byte_t  data[] = {1,   2,   255, 255, 255, 255, 230, 29,  13, 240, 221, 224,
                       254, 15,  220, 186, 0,   0,   0,   128, 0,  0,   168, 92,  //
@@ -75,7 +75,7 @@ static void testRxParseFrameValidMessageAnonymous(void)
     TEST_ASSERT_EQUAL_UINT8_ARRAY("abc", rxf.payload.data, 3);
 }
 
-static void testRxParseFrameRPCServiceAnonymous(void)
+static void testParseFrameRPCServiceAnonymous(void)
 {
     byte_t  data[] = {1,   2,   255, 255, 215, 17, 123, 192, 13, 240, 221, 224,
                       254, 15,  220, 186, 254, 25, 0,   0,   0,  0,   75,  79,  //
@@ -84,7 +84,7 @@ static void testRxParseFrameRPCServiceAnonymous(void)
     TEST_ASSERT_FALSE(rxParseFrame((struct UdpardMutablePayload){.data = data, .size = sizeof(data)}, &rxf));
 }
 
-static void testRxParseFrameRPCServiceBroadcast(void)
+static void testParseFrameRPCServiceBroadcast(void)
 {
     byte_t  data[] = {1,   2,   41,  9,   255, 255, 123, 192, 13, 240, 221, 224,
                       254, 15,  220, 186, 254, 25,  0,   0,   0,  0,   248, 152,  //
@@ -93,7 +93,7 @@ static void testRxParseFrameRPCServiceBroadcast(void)
     TEST_ASSERT_FALSE(rxParseFrame((struct UdpardMutablePayload){.data = data, .size = sizeof(data)}, &rxf));
 }
 
-static void testRxParseFrameAnonymousNonSingleFrame(void)
+static void testParseFrameAnonymousNonSingleFrame(void)
 {  // Invalid anonymous message frame because EOT not set (multi-frame anonymous transfers are not allowed).
     byte_t  data[] = {1,   2,   255, 255, 255, 255, 230, 29, 13, 240, 221, 224,
                       254, 15,  220, 186, 0,   0,   0,   0,  0,  0,   147, 6,  //
@@ -102,7 +102,7 @@ static void testRxParseFrameAnonymousNonSingleFrame(void)
     TEST_ASSERT_FALSE(rxParseFrame((struct UdpardMutablePayload){.data = data, .size = sizeof(data)}, &rxf));
 }
 
-static void testRxParseFrameBadHeaderCRC(void)
+static void testParseFrameBadHeaderCRC(void)
 {  // Bad header CRC.
     byte_t  data[] = {1,   2,   41,  9,   255, 255, 230, 29, 13, 240, 221, 224,
                       254, 15,  220, 186, 57,  48,  0,   0,  0,  0,   30,  180,  //
@@ -111,7 +111,7 @@ static void testRxParseFrameBadHeaderCRC(void)
     TEST_ASSERT_FALSE(rxParseFrame((struct UdpardMutablePayload){.data = data, .size = sizeof(data)}, &rxf));
 }
 
-static void testRxParseFrameUnknownHeaderVersion(void)
+static void testParseFrameUnknownHeaderVersion(void)
 {
     // >>> from pycyphal.transport.commons.crc import CRC16CCITT
     // >>> list(CRC16CCITT.new(bytes(
@@ -123,17 +123,27 @@ static void testRxParseFrameUnknownHeaderVersion(void)
     TEST_ASSERT_FALSE(rxParseFrame((struct UdpardMutablePayload){.data = data, .size = sizeof(data)}, &rxf));
 }
 
-static void testRxParseFrameHeaderWithoutPayload(void)
+static void testParseFrameHeaderWithoutPayload(void)
 {
     byte_t data[] = {1, 2, 41, 9, 255, 255, 230, 29, 13, 240, 221, 224, 254, 15, 220, 186, 57, 48, 0, 0, 0, 0, 30, 179};
     RxFrame rxf   = {0};
     TEST_ASSERT_FALSE(rxParseFrame((struct UdpardMutablePayload){.data = data, .size = sizeof(data)}, &rxf));
 }
 
-static void testRxParseFrameEmpty(void)
+static void testParseFrameEmpty(void)
 {
     RxFrame rxf = {0};
     TEST_ASSERT_FALSE(rxParseFrame((struct UdpardMutablePayload){.data = "", .size = 0}, &rxf));
+}
+
+static void testSessionSlotRestartEmpty(void)
+{
+    // TODO
+}
+
+static void testSessionSlotRestartNonEmpty(void)
+{
+    // TODO
 }
 
 void setUp(void) {}
@@ -143,15 +153,17 @@ void tearDown(void) {}
 int main(void)
 {
     UNITY_BEGIN();
-    RUN_TEST(testRxParseFrameValidMessage);
-    RUN_TEST(testRxParseFrameValidRPCService);
-    RUN_TEST(testRxParseFrameValidMessageAnonymous);
-    RUN_TEST(testRxParseFrameRPCServiceAnonymous);
-    RUN_TEST(testRxParseFrameRPCServiceBroadcast);
-    RUN_TEST(testRxParseFrameAnonymousNonSingleFrame);
-    RUN_TEST(testRxParseFrameBadHeaderCRC);
-    RUN_TEST(testRxParseFrameUnknownHeaderVersion);
-    RUN_TEST(testRxParseFrameHeaderWithoutPayload);
-    RUN_TEST(testRxParseFrameEmpty);
+    RUN_TEST(testParseFrameValidMessage);
+    RUN_TEST(testParseFrameValidRPCService);
+    RUN_TEST(testParseFrameValidMessageAnonymous);
+    RUN_TEST(testParseFrameRPCServiceAnonymous);
+    RUN_TEST(testParseFrameRPCServiceBroadcast);
+    RUN_TEST(testParseFrameAnonymousNonSingleFrame);
+    RUN_TEST(testParseFrameBadHeaderCRC);
+    RUN_TEST(testParseFrameUnknownHeaderVersion);
+    RUN_TEST(testParseFrameHeaderWithoutPayload);
+    RUN_TEST(testParseFrameEmpty);
+    RUN_TEST(testSessionSlotRestartEmpty);
+    RUN_TEST(testSessionSlotRestartNonEmpty);
     return UNITY_END();
 }

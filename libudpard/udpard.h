@@ -732,6 +732,8 @@ struct UdpardRxTransfer
     /// this requires freeing both the handles and the payload buffers they point to.
     /// Beware that different memory resources may have been used to allocate the handles and the payload buffers;
     /// the application is responsible for freeing them using the correct memory resource.
+    ///
+    /// If the payload is empty, the corresponding buffer pointers may be NULL.
     size_t                             payload_size;
     struct UdpardPayloadFragmentHandle payload;
 };

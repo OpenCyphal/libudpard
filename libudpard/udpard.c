@@ -930,8 +930,7 @@ typedef struct
 /// - Truncate the payload according to the specified size limit.
 /// - Free the tree nodes and their payload buffers past the size limit.
 ///
-/// It is guaranteed that the output list is sorted by frame index and contains at least one fragment.
-/// The payload of the first fragment may be empty.
+/// It is guaranteed that the output list is sorted by frame index. It may be empty.
 /// After this function is invoked, the tree will be destroyed and cannot be used anymore;
 /// hence, in the event of invalid transfer being received (bad CRC), the fragments will have to be freed
 /// by traversing the linked list instead of the tree.
@@ -944,15 +943,14 @@ static inline void rxSessionSlotEject(RxFragment* const frag, RxSessionSlotEject
         rxSessionSlotEject(((RxFragmentTreeNode*) frag->tree.base.lr[0])->this, ctx);
     }
     const size_t fragment_size = frag->base.view.size;
-    const bool   first         = ctx->head == NULL;
     frag->base.next            = NULL;  // Default state; may be overwritten.
     ctx->crc                   = transferCRCAdd(ctx->crc, fragment_size, frag->base.view.data);
-    ctx->head                  = first ? &frag->base : ctx->head;
     // Truncate unnecessary payload past the specified limit. This enforces the extent and removes the transfer CRC.
-    const bool retain = (ctx->offset < ctx->retain_size) || first;
+    const bool retain = ctx->offset < ctx->retain_size;
     if (retain)
     {
         UDPARD_ASSERT(ctx->retain_size >= ctx->offset);
+        ctx->head            = (ctx->head == NULL) ? &frag->base : ctx->head;
         frag->base.view.size = smaller(frag->base.view.size, ctx->retain_size - ctx->offset);
         if (ctx->predecessor != NULL)
         {
@@ -969,17 +967,14 @@ static inline void rxSessionSlotEject(RxFragment* const frag, RxSessionSlotEject
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     (void) memset(&frag->tree.base, 0, sizeof(struct UdpardTreeNode));  // Avoid dangling pointers.
     // Drop the unneeded fragments and their handles after the sub-tree is fully traversed.
-    if ((!retain) || (frag->base.view.size == 0))
+    if (!retain)
     {
+        memFree(ctx->memory_payload_fragment_handle, sizeof(RxFragment), frag);
         memFreePayload(ctx->memory_payload, frag->base.origin);
         frag->base.origin.data = NULL;
         frag->base.origin.size = 0;
         frag->base.view.data   = NULL;
-        UDPARD_ASSERT((frag->base.view.size == 0) || (!retain));
-    }
-    if (!retain)
-    {
-        memFree(ctx->memory_payload_fragment_handle, sizeof(RxFragment), frag);
+        frag->base.view.size   = 0;
     }
 }
 
@@ -1060,7 +1055,6 @@ static inline int_fast8_t rxSessionSlotUpdate(RxSessionSlot* const              
             rxSessionSlotEject(self->fragments->this, &eject_ctx);
             self->fragments = NULL;  // Ejection invalidates the tree.
             UDPARD_ASSERT(eject_ctx.offset == self->payload_size);
-            UDPARD_ASSERT(eject_ctx.head != NULL);
             if (TRANSFER_CRC_RESIDUE_BEFORE_OUTPUT_XOR == eject_ctx.crc)
             {
                 result                      = 1;
@@ -1069,11 +1063,14 @@ static inline int_fast8_t rxSessionSlotUpdate(RxSessionSlot* const              
                 rx_transfer->source_node_id = frame.meta.src_node_id;
                 rx_transfer->transfer_id    = frame.meta.transfer_id;
                 rx_transfer->payload_size   = eject_ctx.retain_size;
-                rx_transfer->payload        = *eject_ctx.head;  // Slice. The derived type fields are not needed.
+                rx_transfer->payload =
+                    (eject_ctx.head != NULL)
+                        ? (*eject_ctx.head)  // Slice. The derived type fields are not needed.
+                        : (struct UdpardPayloadFragmentHandle){.next = NULL, .view = {0, NULL}, .origin = {0, NULL}};
                 // This is the single-frame transfer optimization suggested by Scott: we free the first fragment handle
                 // early by moving the contents into the rx_transfer structure by value.
                 // No need to free the payload buffer because it has been transferred to the transfer.
-                memFree(memory_payload_fragment_handle, sizeof(RxFragment), eject_ctx.head);
+                memFree(memory_payload_fragment_handle, sizeof(RxFragment), eject_ctx.head);  // May be empty.
             }
             else  // The transfer turned out to be invalid. We have to free the fragments. Can't use the tree anymore.
             {
