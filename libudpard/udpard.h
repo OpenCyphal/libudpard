@@ -302,7 +302,7 @@ struct UdpardPayloadFragmentHandle
     /// This entity points to the base buffer that contains this fragment.
     /// The application can use this pointer to free the outer buffer after the payload has been consumed.
     /// In the most simple case this field is identical to the "view" field above, but it is not always the case.
-    struct UdpardMutablePayload owner;
+    struct UdpardMutablePayload origin;
 };
 
 /// Cyphal/UDP uses only multicast traffic.
@@ -822,7 +822,8 @@ void udpardRxSubscriptionDestroy(struct UdpardRxSubscription* const self);
 ///
 /// The function takes ownership of the passed datagram payload buffer. The library will either store it as a
 /// fragment of the reassembled transfer payload or free it using the corresponding memory resource
-/// (see UdpardRxMemoryResources) if the datagram is not needed for reassembly.
+/// (see UdpardRxMemoryResources) if the datagram is not needed for reassembly. Because of the ownership transfer,
+/// the datagram payload buffer has to be mutable (non-const).
 ///
 /// The accepted datagram may either be invalid, carry a non-final part of a multi-frame transfer,
 /// carry a final part of a valid multi-frame transfer, or carry a valid single-frame transfer.
@@ -855,7 +856,7 @@ void udpardRxSubscriptionDestroy(struct UdpardRxSubscription* const self);
 /// UDPARD_ERROR_ARGUMENT is returned if any of the input arguments are invalid.
 int8_t udpardRxSubscriptionReceive(struct UdpardRxSubscription* const self,
                                    const UdpardMicrosecond            timestamp_usec,
-                                   const struct UdpardConstPayload    datagram_payload,
+                                   const struct UdpardMutablePayload  datagram_payload,
                                    const uint_fast8_t                 redundant_iface_index,
                                    struct UdpardRxTransfer* const     received_transfer);
 
@@ -991,7 +992,7 @@ int8_t udpardRxRPCDispatcherCancel(struct UdpardRxRPCDispatcher* const self,
 int8_t udpardRxRPCDispatcherReceive(struct UdpardRxRPCDispatcher* const self,
                                     struct UdpardRxRPC** const          service,
                                     const UdpardMicrosecond             timestamp_usec,
-                                    const struct UdpardConstPayload     datagram_payload,
+                                    const struct UdpardMutablePayload   datagram_payload,
                                     const uint_fast8_t                  redundant_iface_index,
                                     struct UdpardRxRPCTransfer* const   received_transfer);
 

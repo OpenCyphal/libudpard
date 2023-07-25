@@ -99,6 +99,11 @@ static inline size_t larger(const size_t a, const size_t b)
     return (a > b) ? a : b;
 }
 
+static inline uint32_t max32(const uint32_t a, const uint32_t b)
+{
+    return (a > b) ? a : b;
+}
+
 static inline bool isValidMemoryResource(const struct UdpardMemoryResource* const memory)
 {
     return (memory != NULL) && (memory->allocate != NULL) && (memory->free != NULL);
@@ -330,7 +335,7 @@ static inline byte_t* txSerializeHeader(byte_t* const          destination_buffe
     ptr         = txSerializeU64(ptr, meta.transfer_id);
     UDPARD_ASSERT((frame_index + 0UL) <= HEADER_FRAME_INDEX_MAX);  // +0UL is to avoid a compiler warning.
     ptr = txSerializeU32(ptr, frame_index | (end_of_transfer ? HEADER_FRAME_INDEX_EOT_MASK : 0U));
-    ptr = txSerializeU16(ptr, 0);  // opaque user data
+    ptr = txSerializeU16(ptr, 0);                                  // opaque user data
     // Header CRC in the big endian format. Optimization prospect: the header up to frame_index is constant in
     // multi-frame transfers, so we don't really need to recompute the CRC from scratch per frame.
     const uint16_t crc = headerCRCCompute(HEADER_SIZE_BYTES - HEADER_CRC_SIZE_BYTES, destination_buffer);
@@ -648,26 +653,12 @@ void udpardTxFree(struct UdpardMemoryResource* const memory, struct UdpardTxItem
 
 typedef struct
 {
-    TransferMetadata          meta;
-    uint32_t                  index;
-    bool                      end_of_transfer;
-    struct UdpardConstPayload payload;  ///< Also contains the transfer CRC (but not the header CRC).
+    TransferMetadata            meta;
+    uint32_t                    index;
+    bool                        end_of_transfer;
+    struct UdpardConstPayload   payload;  ///< Also contains the transfer CRC (but not the header CRC).
+    struct UdpardMutablePayload origin;   ///< The entirety of the free-able buffer passed from the application.
 } RxFrame;
-
-typedef struct
-{
-    struct UdpardTreeNode base;
-    struct RxFragment*    owner;  // This is needed only to avoid pointer arithmetic. Ugly but safe.
-} RxFragmentTreeNode;
-
-/// This is designed to be convertible to/from UdpardPayloadFragmentHandle, so that the application could be
-/// given a linked list of these objects represented as a list of UdpardPayloadFragmentHandle.
-typedef struct RxFragment
-{
-    struct UdpardPayloadFragmentHandle base;
-    RxFragmentTreeNode                 tree;
-    uint32_t                           frame_index;
-} RxFragment;
 
 /// The primitive deserialization functions are endian-agnostic.
 static inline const byte_t* txDeserializeU16(const byte_t* const source_buffer, uint16_t* const out_value)
@@ -708,10 +699,11 @@ static inline const byte_t* txDeserializeU64(const byte_t* const source_buffer, 
 }
 
 /// This is roughly the inverse of the txSerializeHeader function, but it also handles the frame payload.
-static inline bool rxParseFrame(const struct UdpardConstPayload datagram_payload, RxFrame* const out)
+static inline bool rxParseFrame(const struct UdpardMutablePayload datagram_payload, RxFrame* const out)
 {
     UDPARD_ASSERT((out != NULL) && (datagram_payload.data != NULL));
-    bool ok = false;
+    out->origin = datagram_payload;
+    bool ok     = false;
     if (datagram_payload.size > 0)  // HEADER_SIZE_BYTES may change in the future depending on the header version.
     {
         const byte_t*      ptr     = (const byte_t*) datagram_payload.data;
@@ -741,9 +733,9 @@ static inline bool rxParseFrame(const struct UdpardConstPayload datagram_payload
                               (out->payload.size > 0U));
             }
         }
+        // Parsers for other header versions may be added here later.
     }
-    // Parsers for other header versions may be added here later.
-    if (ok)  // Version-agnostic semantics check.
+    if (ok)                                    // Version-agnostic semantics check.
     {
         UDPARD_ASSERT(out->payload.size > 0);  // Follows from the prior checks.
         const bool anonymous    = out->meta.src_node_id == UDPARD_NODE_ID_UNSET;
@@ -753,6 +745,355 @@ static inline bool rxParseFrame(const struct UdpardConstPayload datagram_payload
         ok = service ? ((!broadcast) && (!anonymous)) : (broadcast && ((!anonymous) || single_frame));
     }
     return ok;
+}
+
+typedef struct
+{
+    struct UdpardTreeNode base;
+    struct RxFragment* this;  // This is needed to avoid pointer arithmetic with multiple inheritance.
+} RxFragmentTreeNode;
+
+/// This is designed to be convertible to/from UdpardPayloadFragmentHandle, so that the application could be
+/// given a linked list of these objects represented as a list of UdpardPayloadFragmentHandle.
+typedef struct RxFragment
+{
+    struct UdpardPayloadFragmentHandle base;
+    RxFragmentTreeNode                 tree;
+    uint32_t                           frame_index;
+} RxFragment;
+
+/// A slot keeps the state of a transfer in the process of being reassembled.
+/// We use two slots per iface which enables acceptance of frame-interleaved transfers.
+/// An RX port has UDPARD_NETWORK_INTERFACE_COUNT_MAX ifaces, each iface has 2 slots.
+/// Consider the following examples, where A and B denote distinct transfers of three frames each:
+///
+///     A0 A1 A2 B0 B1 B2  -- two transfers without OOO frames; both accepted.
+///     A2 A0 A1 B0 B2 B1  -- two transfers with OOO frames; both accepted.
+///     A0 A1 B0 A2 B1 B2  -- two transfers with interleaved frames; both accepted (this is why we need 2 buffers).
+///
+/// It is assumed that interleaved frames spanning more than two transfers are not possible.
+///
+/// In this implementation we postpone the implicit truncation until all fragments of a transfer are received.
+/// Early truncation, the way it is done in libcanard with contiguous payload reassembly buffers,
+/// is much more difficult to implement if out-of-order reassembly is a requirement.
+/// To implement early truncation with out-of-order reassembly, we need to deduce the MTU of the sender per transfer
+/// (which is easy as we only need to take note of the payload size of any non-last frame of the transfer),
+/// then, based on the MTU, determine the maximum frame index we should accept (higher indexes will be dropped);
+/// then, for each fragment (i.e., frame) we need to compute the CRC (including those that are discarded).
+/// At the end, when all frames have been observed, combine all CRCs to obtain the final transfer CRC
+/// (this is possible because all common CRC functions are linear).
+typedef struct
+{
+    UdpardMicrosecond   ts_usec;    ///< Timestamp of the earliest frame; UINT64_MAX initially.
+    UdpardTransferID    transfer_id;
+    uint32_t            max_index;  ///< Maximum observed frame index in this transfer (so far); zero initially.
+    uint32_t            eot_index;  ///< Frame index where the end-of-transfer flag was observed; UINT32_MAX initially.
+    uint32_t            accepted_frames;  ///< Number of frames accepted so far.
+    RxFragmentTreeNode* fragments;
+} RxSessionSlot;
+
+#define RX_SESSION_IFACE_SLOT_COUNT 2
+typedef struct
+{
+    UdpardMicrosecond ts_usec;  ///< The timestamp of the last transfer to arrive on this interface.
+    RxSessionSlot     slots[RX_SESSION_IFACE_SLOT_COUNT];
+} RxSessionIface;
+
+typedef struct UdpardInternalRxSession
+{
+    struct UdpardTreeNode base;
+    /// This shared state is used for redundant transfer deduplication.
+    /// Redundancies occur as a result of the use of multiple network interfaces, spurious frame duplication along
+    /// the network path, and trivial forward error correction through duplication (if used by the sender).
+    UdpardMicrosecond last_ts_usec;
+    UdpardTransferID  last_transfer_id;
+    /// Each redundant interface maintains its own session state independently.
+    /// The first interface to receive a transfer takes precedence, thus the redundant group always operates
+    /// at the speed of the fastest interface. Duplicate transfers delivered by the slower interfaces are discarded.
+    RxSessionIface ifaces[UDPARD_NETWORK_INTERFACE_COUNT_MAX];
+} UdpardInternalRxSession;
+
+// NOLINTNEXTLINE(misc-no-recursion)
+static inline void rxSessionSlotFree(RxFragment* const                  self,
+                                     struct UdpardMemoryResource* const memory_payload_fragment_handle,
+                                     struct UdpardMemoryResource* const memory_payload)
+{
+    UDPARD_ASSERT((self != NULL) && isValidMemoryResource(memory_payload_fragment_handle) &&
+                  (memory_payload->free != NULL));  // allocate() may be NULL in the payload mem resource.
+    memory_payload->free(memory_payload, self->base.origin.size, self->base.origin.data);
+    for (uint_fast8_t i = 0; i < 2; i++)
+    {
+        RxFragmentTreeNode* const child = (RxFragmentTreeNode*) self->tree.base.lr[i];
+        if (child != NULL)
+        {
+            rxSessionSlotFree(child->this, memory_payload_fragment_handle, memory_payload);
+        }
+    }
+    memory_payload_fragment_handle->free(memory_payload_fragment_handle, sizeof(RxFragment), self);  // self-destruct
+}
+
+static inline void rxSessionSlotRestart(RxSessionSlot* const               self,
+                                        const UdpardTransferID             transfer_id,
+                                        struct UdpardMemoryResource* const memory_payload_fragment_handle,
+                                        struct UdpardMemoryResource* const memory_payload)
+{
+    UDPARD_ASSERT((self != NULL) && (memory_payload_fragment_handle != NULL) && (memory_payload != NULL));
+    self->ts_usec         = UINT64_MAX;  // Will be assigned when the first frame of the transfer has arrived.
+    self->transfer_id     = transfer_id;
+    self->max_index       = 0;
+    self->eot_index       = UINT32_MAX;
+    self->accepted_frames = 0;
+    if (self->fragments != NULL)
+    {
+        rxSessionSlotFree(self->fragments->this, memory_payload_fragment_handle, memory_payload);
+        self->fragments = NULL;
+    }
+}
+
+typedef struct
+{
+    uint32_t                     frame_index;
+    bool                         accepted;
+    struct UdpardMemoryResource* memory_payload_fragment_handle;
+} RxSessionSlotUpdateContext;
+
+static inline int8_t rxSessionSlotFragmentSearch(void* const user_reference, const struct UdpardTreeNode* node)
+{
+    UDPARD_ASSERT((user_reference != NULL) && (node != NULL));
+    const RxSessionSlotUpdateContext* const ctx  = (RxSessionSlotUpdateContext*) user_reference;
+    RxFragment* const                       frag = ((RxFragmentTreeNode*) node)->this;
+    UDPARD_ASSERT((ctx != NULL) && (frag != NULL));
+    int8_t out = 0;
+    if (ctx->frame_index > frag->frame_index)
+    {
+        out = +1;
+    }
+    if (ctx->frame_index < frag->frame_index)
+    {
+        out = -1;
+    }
+    return out;
+}
+
+static inline struct UdpardTreeNode* rxSessionSlotFragmentFactory(void* const user_reference)
+{
+    RxSessionSlotUpdateContext* const ctx = (RxSessionSlotUpdateContext*) user_reference;
+    UDPARD_ASSERT((ctx != NULL) && isValidMemoryResource(ctx->memory_payload_fragment_handle));
+    struct UdpardTreeNode* out = NULL;
+    RxFragment* const      frag =
+        ctx->memory_payload_fragment_handle->allocate(ctx->memory_payload_fragment_handle, sizeof(RxFragment));
+    if (frag != NULL)
+    {
+        (void) memset(frag, 0, sizeof(RxFragment));
+        out               = &frag->tree.base;  // this is not an escape bug, we retain the pointer via "this"
+        frag->frame_index = ctx->frame_index;
+        frag->tree.this   = frag;              // <-- right here, see?
+        ctx->accepted     = true;
+    }
+    return out;  // OOM handled by the caller
+}
+
+/// States outliving each level of recursion while ejecting the transfer from the fragment tree.
+typedef struct
+{
+    struct UdpardPayloadFragmentHandle* head;  // Points to the first fragment in the list.
+    struct UdpardPayloadFragmentHandle* prev;
+    uint32_t                            crc;
+    size_t                              size;
+    size_t                              extent;
+    struct UdpardMemoryResource*        memory_payload_fragment_handle;
+    struct UdpardMemoryResource*        memory_payload;
+} RxSessionSlotEjectContext;
+
+/// NOLINTNEXTLINE(misc-no-recursion)
+static inline void rxSessionSlotEject(RxFragment* const frag, RxSessionSlotEjectContext* const ctx)
+{
+    UDPARD_ASSERT((frag != NULL) && (ctx != NULL));
+    if (frag->tree.base.lr[0] != NULL)
+    {
+        rxSessionSlotEject(((RxFragmentTreeNode*) frag->tree.base.lr[0])->this, ctx);
+    }
+    ctx->size += frag->base.view.size;
+    ctx->crc  = transferCRCAdd(ctx->crc, frag->base.view.size, frag->base.view.data);
+    ctx->head = (ctx->head == NULL) ? &frag->base : ctx->head;
+    // Transform the tree into a linked list.
+    if (ctx->prev != NULL)
+    {
+        ctx->prev->next = &frag->base;
+    }
+    ctx->prev = &frag->base;
+    // TODO truncate past the extent
+    // TODO drop CRC
+    // TODO free truncated fragments
+    if (frag->tree.base.lr[1] != NULL)
+    {
+        rxSessionSlotEject(((RxFragmentTreeNode*) frag->tree.base.lr[1])->this, ctx);
+    }
+}
+
+/// This function will either move the frame payload into the session, or free it if it cannot be made use of.
+/// Returns: 1 -- transfer available; 0 -- transfer not yet available; <0 -- error.
+static inline int_fast8_t rxSessionSlotUpdate(RxSessionSlot* const               self,
+                                              const RxFrame                      frame,
+                                              struct UdpardRxTransfer* const     rx_transfer,
+                                              const size_t                       extent,
+                                              struct UdpardMemoryResource* const memory_payload_fragment_handle,
+                                              struct UdpardMemoryResource* const memory_payload)
+{
+    UDPARD_ASSERT((self != NULL) && (self->transfer_id == frame.meta.transfer_id) && (frame.payload.size > 0) &&
+                  (rx_transfer != NULL) && isValidMemoryResource(memory_payload_fragment_handle) &&
+                  (memory_payload->free != NULL));
+    int_fast8_t result  = 0;
+    bool        restart = false;
+    bool        release = true;
+    // FIRST: Update the frame count discovery state in this transfer. Drop transfer if inconsistencies are detected.
+    self->max_index = max32(self->max_index, frame.index);
+    if (frame.end_of_transfer)
+    {
+        if ((self->eot_index != UINT32_MAX) && (self->eot_index != frame.index))
+        {
+            restart = true;  // Inconsistent EOT flag, could be a node-ID conflict.
+            goto finish;
+        }
+        self->eot_index = frame.index;
+    }
+    UDPARD_ASSERT(frame.index <= self->max_index);
+    if (self->max_index > self->eot_index)
+    {
+        restart = true;  // Frames past EOT, discard the entire transfer because we don't trust it.
+        goto finish;
+    }
+    // SECOND: Insert the fragment into the fragment tree. If it already exists, drop and free the duplicate.
+    UDPARD_ASSERT((self->max_index <= self->eot_index) && (self->accepted_frames < self->eot_index));
+    RxSessionSlotUpdateContext update_ctx = {.frame_index                    = frame.index,
+                                             .accepted                       = false,
+                                             .memory_payload_fragment_handle = memory_payload_fragment_handle};
+    RxFragmentTreeNode* const  frag       = (RxFragmentTreeNode*) cavlSearch((struct UdpardTreeNode**) &self->fragments,
+                                                                      &update_ctx,
+                                                                      &rxSessionSlotFragmentSearch,
+                                                                      &rxSessionSlotFragmentFactory);
+    UDPARD_ASSERT((self->max_index <= self->eot_index) && (self->accepted_frames <= self->eot_index));
+    if (frag == NULL)
+    {
+        UDPARD_ASSERT(!update_ctx.accepted);
+        UDPARD_ASSERT(release);
+        result = -UDPARD_ERROR_MEMORY;
+        goto finish;  // No reset because there is hope that there will be enough memory when we receive a duplicate.
+    }
+    if (update_ctx.accepted)
+    {
+        UDPARD_ASSERT(frag->this->frame_index == frame.index);
+        frag->this->base.view   = frame.payload;
+        frag->this->base.origin = frame.origin;
+        release                 = false;  // Ownership of the payload buffer has been transferred to the fragment tree.
+    }
+    // THIRD: Detect transfer completion. If complete, eject the payload from the fragment tree and check its CRC.
+    UDPARD_ASSERT(self->fragments != NULL);
+    if (self->accepted_frames == self->eot_index)
+    {
+        // This transfer is done but we don't know yet if it's valid. Either way, we need to prepare for the next one.
+        restart                             = true;
+        RxSessionSlotEjectContext eject_ctx = {.head                           = NULL,
+                                               .prev                           = NULL,
+                                               .crc                            = TRANSFER_CRC_INITIAL,
+                                               .size                           = 0,
+                                               .extent                         = extent,
+                                               .memory_payload_fragment_handle = memory_payload_fragment_handle,
+                                               .memory_payload                 = memory_payload};
+        rxSessionSlotEject(self->fragments->this, &eject_ctx);
+        UDPARD_ASSERT(eject_ctx.head != NULL);
+        if (TRANSFER_CRC_RESIDUE_BEFORE_OUTPUT_XOR == eject_ctx.crc)
+        {
+            result                      = 1;
+            rx_transfer->timestamp_usec = self->ts_usec;
+            rx_transfer->priority       = frame.meta.priority;
+            rx_transfer->source_node_id = frame.meta.src_node_id;
+            rx_transfer->transfer_id    = frame.meta.transfer_id;
+            rx_transfer->payload_size   = eject_ctx.size;
+            rx_transfer->payload        = *eject_ctx.head;
+            // This is the single-frame transfer optimization suggested by Scott: we free the first fragment handle
+            // early by moving the contents into the rx_transfer structure by value.
+            // No need to free the payload buffer because it has been transferred to the transfer.
+            memory_payload_fragment_handle->free(memory_payload_fragment_handle, sizeof(RxFragment), eject_ctx.head);
+            // The fragmented transfer payload with its handles (aside from the 1st) has been moved from the slot
+            // into the rx_transfer. Now we invalidate the pointer to the tree to prevent it from being freed
+            // when the slot is restarted.
+            self->fragments = NULL;
+        }
+    }
+finish:
+    if (restart)
+    {
+        rxSessionSlotRestart(self, frame.meta.transfer_id + 1, memory_payload_fragment_handle, memory_payload);
+    }
+    if (release)
+    {
+        memory_payload->free(memory_payload, frame.origin.size, frame.origin.data);
+    }
+    return result;
+}
+
+/// Returns: 1 -- transfer available; 0 -- transfer not yet available; <0 -- error.
+static inline int_fast8_t rxSessionIfaceUpdate(RxSessionIface* const                self,
+                                               const UdpardMicrosecond              ts_usec,
+                                               const RxFrame                        frame,
+                                               struct UdpardRxTransfer* const       received_transfer,
+                                               const size_t                         extent,
+                                               const UdpardMicrosecond              transfer_id_timeout_usec,
+                                               const struct UdpardRxMemoryResources memory)
+{
+    UDPARD_ASSERT((self != NULL) && (frame.payload.size > 0));  // Non-empty payload enforced during parsing.
+    RxSessionSlot* slot = NULL;
+    // First we should check if there is an existing slot for this transfer; if yes, this is the simplest case.
+    for (uint_fast8_t i = 0; i < RX_SESSION_IFACE_SLOT_COUNT; i++)
+    {
+        if (self->slots[i].transfer_id == frame.meta.transfer_id)
+        {
+            slot = &self->slots[i];
+            break;
+        }
+    }
+    // If there is no suitable slot, we should check if the transfer is a future one (high transfer-ID),
+    // or a transfer-ID timeout has occurred. In this case we sacrifice the oldest slot.
+    if (slot == NULL)
+    {
+        bool           is_future_tid = true;
+        RxSessionSlot* victim        = &self->slots[0];
+        // Check if the newly received transfer-ID is higher than any of the existing slots.
+        // While we're at it, find the oldest slot as a replacement candidate.
+        for (uint_fast8_t i = 0; i < RX_SESSION_IFACE_SLOT_COUNT; i++)
+        {
+            is_future_tid = is_future_tid && (frame.meta.transfer_id > self->slots[i].transfer_id);
+            if (self->slots[i].transfer_id < victim->transfer_id)
+            {
+                victim = &self->slots[i];
+            }
+        }
+        const bool is_tid_timeout = (ts_usec - self->ts_usec) > transfer_id_timeout_usec;
+        if (is_tid_timeout || is_future_tid)
+        {
+            rxSessionSlotRestart(victim, frame.meta.transfer_id, memory.payload_fragment_handle, memory.payload);
+            slot = victim;
+            UDPARD_ASSERT(slot != NULL);
+        }
+    }
+    // If there is neither a suitable slot nor a new one was created, the frame should be discarded.
+    bool result = false;
+    if (slot != NULL)
+    {
+        if (slot->ts_usec == UINT64_MAX)
+        {
+            slot->ts_usec = ts_usec;  // Transfer timestamp is the timestamp of the earliest frame.
+        }
+        // TODO RESET HANDLING
+        result = rxSessionSlotUpdate(slot,  //
+                                     frame,
+                                     received_transfer,
+                                     extent,
+                                     memory.payload_fragment_handle,
+                                     memory.payload);
+    }
+    return result;
 }
 
 int8_t udpardRxSubscriptionInit(struct UdpardRxSubscription* const   self,
