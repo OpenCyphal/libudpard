@@ -303,7 +303,7 @@ static void testSlotEjectValidLarge(void)
                                 "Where does the universe come from? ";
     // Build the fragment tree:
     //      2
-    //     / \
+    //     / `
     //    1   3
     //   /
     //  0
@@ -388,9 +388,9 @@ static void testSlotEjectValidSmall(void)
                                    "More like a puddle. The sea has gone dry.";
     // Build the fragment tree:
     //      1
-    //     / \
+    //     / `
     //    0   3
-    //       / \
+    //       / `
     //      2   4
     RxFragment* const root =                      //
         makeRxFragmentString(&mem_fragment.base,  //
@@ -471,7 +471,7 @@ static void testSlotEjectValidEmpty(void)
     instrumentedAllocatorNew(&mem_payload);
     // Build the fragment tree:
     //      1
-    //     / \
+    //     / `
     //    0   2
     RxFragment* const root = makeRxFragmentString(&mem_fragment.base, &mem_payload.base, 1, "BBB", NULL);
     root->tree.base.lr[0] =
@@ -518,7 +518,7 @@ static void testSlotEjectInvalid(void)
     instrumentedAllocatorNew(&mem_payload);
     // Build the fragment tree; no valid CRC here:
     //      1
-    //     / \
+    //     / `
     //    0   2
     RxFragment* const root = makeRxFragmentString(&mem_fragment.base, &mem_payload.base, 1, "BBB", NULL);
     root->tree.base.lr[0] =
@@ -547,6 +547,11 @@ static void testSlotEjectInvalid(void)
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_bytes);
 }
 
+static void testSlotUpdateA(void)
+{
+    //
+}
+
 void setUp(void) {}
 
 void tearDown(void) {}
@@ -570,6 +575,7 @@ int main(void)
     RUN_TEST(testSlotEjectValidSmall);
     RUN_TEST(testSlotEjectValidEmpty);
     RUN_TEST(testSlotEjectInvalid);
+    RUN_TEST(testSlotUpdateA);
     return UNITY_END();
 }
 
