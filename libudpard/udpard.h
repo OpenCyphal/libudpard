@@ -739,13 +739,16 @@ struct UdpardRxTransfer
 };
 
 /// This is, essentially, a helper that frees the memory allocated for the payload and its fragment headers
-/// using the correct memory resource. The application can do the same thing manually if it has access to the
+/// using the correct memory resources. The application can do the same thing manually if it has access to the
 /// required context to compute the size, or if the memory resource implementation does not require deallocation size.
 ///
+/// The head of the fragment list is passed by value so it is not freed. This is in line with the UdpardRxTransfer
+/// design, where the head is stored by value to reduce indirection in small transfers. We call it Scott's Head.
+///
 /// If any of the arguments are NULL, the function has no effect.
-void udpardRxTransferFree(struct UdpardRxTransfer* const     self,
-                          struct UdpardMemoryResource* const memory_fragment,
-                          struct UdpardMemoryResource* const memory_payload);
+void udpardFragmentFree(const struct UdpardFragment        head,
+                        struct UdpardMemoryResource* const memory_fragment,
+                        struct UdpardMemoryResource* const memory_payload);
 
 // ---------------------------------------------  SUBJECTS  ---------------------------------------------
 

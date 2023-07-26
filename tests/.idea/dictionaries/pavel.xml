@@ -8,6 +8,7 @@
       <w>dscp</w>
       <w>dudpard</w>
       <w>ghcr</w>
+      <w>iface</w>
       <w>ifaces</w>
       <w>intravehicular</w>
       <w>libcanard</w>
@@ -20,6 +21,7 @@
       <w>nosonar</w>
       <w>opencyphal</w>
       <w>profraw</w>
+      <w>pycyphal</w>
       <w>stringmakers</w>
       <w>udpard</w>
       <w>udpip</w>

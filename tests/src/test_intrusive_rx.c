@@ -179,6 +179,34 @@ static RxFragment* makeRxFragment(struct UdpardMemoryResource* const memory_frag
     return frag;
 }
 
+/// This is a simple helper wrapper that constructs a new fragment using a null-terminated string as a payload.
+static RxFragment* makeRxFragmentString(struct UdpardMemoryResource* const memory_fragment,
+                                        struct UdpardMemoryResource* const memory_payload,
+                                        const uint32_t                     frame_index,
+                                        const char* const                  payload,
+                                        RxFragmentTreeNode* const          parent)
+{
+    const size_t sz = strlen(payload);
+    return makeRxFragment(memory_fragment,
+                          memory_payload,
+                          frame_index,
+                          (struct UdpardPayload){.data = payload, .size = sz},
+                          (struct UdpardMutablePayload){.data = (void*) payload, .size = sz},
+                          parent);
+}
+
+static bool compareMemory(const size_t      expected_size,
+                          const void* const expected,
+                          const size_t      actual_size,
+                          const void* const actual)
+{
+    return (expected_size == actual_size) && (memcmp(expected, actual, expected_size) == 0);
+}
+static bool compareStringWithPayload(const char* const expected, const struct UdpardPayload payload)
+{
+    return compareMemory(strlen(expected), expected, payload.size, payload.data);
+}
+
 static void testSlotRestartEmpty(void)
 {
     RxSlot slot = {
@@ -260,9 +288,263 @@ static void testSlotRestartNonEmpty(void)
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_bytes);
 }
 
-static void testSlotEject(void)
+static void testSlotEjectValidLarge(void)
 {
-    // TODO
+    InstrumentedAllocator mem_fragment = {0};
+    InstrumentedAllocator mem_payload  = {0};
+    instrumentedAllocatorNew(&mem_fragment);
+    instrumentedAllocatorNew(&mem_payload);
+    //>>> from pycyphal.transport.commons.crc import CRC32C
+    //>>> data = ...
+    //>>> CRC32C.new(data).value_as_bytes
+    static const char DaShi[] = "Da Shi, have you ever... considered certain ultimate philosophical questions? "
+                                "For example, where does Man come from? "
+                                "Where does Man go? "
+                                "Where does the universe come from? ";
+    // Build the fragment tree:
+    //      2
+    //     / \
+    //    1   3
+    //   /
+    //  0
+    RxFragment* const root =                      //
+        makeRxFragmentString(&mem_fragment.base,  //
+                             &mem_payload.base,
+                             2,
+                             "Where does Man go? ",
+                             NULL);
+    root->tree.base.lr[0] =                        //
+        &makeRxFragmentString(&mem_fragment.base,  //
+                              &mem_payload.base,
+                              1,
+                              "For example, where does Man come from? ",
+                              &root->tree)
+             ->tree.base;
+    root->tree.base.lr[1] =                        //
+        &makeRxFragmentString(&mem_fragment.base,  //
+                              &mem_payload.base,
+                              3,
+                              "Where does the universe come from? xL\xAE\xCB",
+                              &root->tree)
+             ->tree.base;
+    root->tree.base.lr[0]->lr[0] =
+        &makeRxFragmentString(&mem_fragment.base,  //
+                              &mem_payload.base,
+                              0,
+                              "Da Shi, have you ever... considered certain ultimate philosophical questions? ",
+                              ((RxFragmentTreeNode*) root->tree.base.lr[0]))
+             ->tree.base;
+    // Initialization done, ensure the memory utilization is as we expect.
+    TEST_ASSERT_EQUAL(4, mem_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(sizeof(DaShi) - 1 + TRANSFER_CRC_SIZE_BYTES, mem_payload.allocated_bytes);
+    TEST_ASSERT_EQUAL(4, mem_fragment.allocated_fragments);
+    TEST_ASSERT_EQUAL(sizeof(RxFragment) * 4, mem_fragment.allocated_bytes);
+    // Eject and verify the payload.
+    size_t                payload_size = 0;
+    struct UdpardFragment payload      = {0};
+    TEST_ASSERT(rxSlotEject(&payload_size,
+                            &payload,
+                            &root->tree,
+                            mem_payload.allocated_bytes,
+                            1024,
+                            &mem_fragment.base,
+                            &mem_payload.base));
+    TEST_ASSERT_EQUAL(sizeof(DaShi) - 1, payload_size);  // CRC removed!
+    TEST_ASSERT(                                         //
+        compareStringWithPayload("Da Shi, have you ever... considered certain ultimate philosophical questions? ",
+                                 payload.view));
+    TEST_ASSERT(compareStringWithPayload("For example, where does Man come from? ", payload.next->view));
+    TEST_ASSERT(compareStringWithPayload("Where does Man go? ", payload.next->next->view));
+    TEST_ASSERT(compareStringWithPayload("Where does the universe come from? ", payload.next->next->next->view));
+    TEST_ASSERT_NULL(payload.next->next->next->next);
+    // Check the memory utilization. All payload fragments are still kept, but the first fragment is freed because of
+    // the Scott's short payload optimization.
+    TEST_ASSERT_EQUAL(4, mem_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(sizeof(DaShi) - 1 + TRANSFER_CRC_SIZE_BYTES, mem_payload.allocated_bytes);
+    TEST_ASSERT_EQUAL(3, mem_fragment.allocated_fragments);                   // One gone!!1
+    TEST_ASSERT_EQUAL(sizeof(RxFragment) * 3, mem_fragment.allocated_bytes);  // yes yes!
+    // Now, free the payload as the application would.
+    udpardFragmentFree(payload, &mem_fragment.base, &mem_payload.base);
+    // All memory shall be free now. As in "free beer".
+    TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, mem_payload.allocated_bytes);
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_bytes);
+}
+
+static void testSlotEjectValidSmall(void)
+{
+    InstrumentedAllocator mem_fragment = {0};
+    InstrumentedAllocator mem_payload  = {0};
+    instrumentedAllocatorNew(&mem_fragment);
+    instrumentedAllocatorNew(&mem_payload);
+    //>>> from pycyphal.transport.commons.crc import CRC32C
+    //>>> data = ...
+    //>>> CRC32C.new(data).value_as_bytes
+    static const char BuildSea[] = "Did you build this four-dimensional fragment?\n"
+                                   "You told me that you came from the sea. Did you build the sea?\n"
+                                   "Are you saying that for you, or at least for your creators, "
+                                   "this four-dimensional space is like the sea for us?\n"
+                                   "More like a puddle. The sea has gone dry.";
+    // Build the fragment tree:
+    //      1
+    //     / \
+    //    0   3
+    //       / \
+    //      2   4
+    RxFragment* const root =                      //
+        makeRxFragmentString(&mem_fragment.base,  //
+                             &mem_payload.base,
+                             1,
+                             "You told me that you came from the sea. Did you build the sea?\n",
+                             NULL);
+    root->tree.base.lr[0] =                        //
+        &makeRxFragmentString(&mem_fragment.base,  //
+                              &mem_payload.base,
+                              0,
+                              "Did you build this four-dimensional fragment?\n",
+                              &root->tree)
+             ->tree.base;
+    root->tree.base.lr[1] =                        //
+        &makeRxFragmentString(&mem_fragment.base,  //
+                              &mem_payload.base,
+                              3,
+                              "this four-dimensional space is like the sea for us?\n",
+                              &root->tree)
+             ->tree.base;
+    root->tree.base.lr[1]->lr[0] =                 //
+        &makeRxFragmentString(&mem_fragment.base,  //
+                              &mem_payload.base,
+                              2,
+                              "Are you saying that for you, or at least for your creators, ",
+                              ((RxFragmentTreeNode*) root->tree.base.lr[1]))
+             ->tree.base;
+    root->tree.base.lr[1]->lr[1] =                 //
+        &makeRxFragmentString(&mem_fragment.base,  //
+                              &mem_payload.base,
+                              4,
+                              "More like a puddle. The sea has gone dry.\xA2\x93-\xB2",
+                              ((RxFragmentTreeNode*) root->tree.base.lr[1]))
+             ->tree.base;
+    // Initialization done, ensure the memory utilization is as we expect.
+    TEST_ASSERT_EQUAL(5, mem_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(sizeof(BuildSea) - 1 + TRANSFER_CRC_SIZE_BYTES, mem_payload.allocated_bytes);
+    TEST_ASSERT_EQUAL(5, mem_fragment.allocated_fragments);
+    TEST_ASSERT_EQUAL(sizeof(RxFragment) * 5, mem_fragment.allocated_bytes);
+    // Eject and verify the payload. Use a small extent and ensure the excess is dropped.
+    size_t                payload_size = 0;
+    struct UdpardFragment payload      = {0};
+    TEST_ASSERT(rxSlotEject(&payload_size,
+                            &payload,
+                            &root->tree,
+                            mem_payload.allocated_bytes,
+                            136,  // <-- small extent, rest truncated
+                            &mem_fragment.base,
+                            &mem_payload.base));
+    TEST_ASSERT_EQUAL(136, payload_size);  // Equals the extent due to the truncation.
+    TEST_ASSERT(compareStringWithPayload("Did you build this four-dimensional fragment?\n", payload.view));
+    TEST_ASSERT(compareStringWithPayload("You told me that you came from the sea. Did you build the sea?\n",
+                                         payload.next->view));
+    TEST_ASSERT(compareStringWithPayload("Are you saying that for you", payload.next->next->view));
+    TEST_ASSERT_NULL(payload.next->next->next);
+    // Check the memory utilization.
+    // The first fragment is freed because of the Scott's short payload optimization;
+    // the two last fragments are freed because of the truncation.
+    TEST_ASSERT_EQUAL(3, mem_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(169, mem_payload.allocated_bytes);     // The last block is rounded up.
+    TEST_ASSERT_EQUAL(2, mem_fragment.allocated_fragments);  // One gone!!1
+    TEST_ASSERT_EQUAL(sizeof(RxFragment) * 2, mem_fragment.allocated_bytes);
+    // Now, free the payload as the application would.
+    udpardFragmentFree(payload, &mem_fragment.base, &mem_payload.base);
+    // All memory shall be free now. As in "free beer".
+    TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, mem_payload.allocated_bytes);
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_bytes);
+}
+
+static void testSlotEjectValidEmpty(void)
+{
+    InstrumentedAllocator mem_fragment = {0};
+    InstrumentedAllocator mem_payload  = {0};
+    instrumentedAllocatorNew(&mem_fragment);
+    instrumentedAllocatorNew(&mem_payload);
+    // Build the fragment tree:
+    //      1
+    //     / \
+    //    0   2
+    RxFragment* const root = makeRxFragmentString(&mem_fragment.base, &mem_payload.base, 1, "BBB", NULL);
+    root->tree.base.lr[0] =
+        &makeRxFragmentString(&mem_fragment.base, &mem_payload.base, 0, "AAA", &root->tree)->tree.base;
+    root->tree.base.lr[1] =
+        &makeRxFragmentString(&mem_fragment.base, &mem_payload.base, 2, "P\xF5\xA5?", &root->tree)->tree.base;
+    // Initialization done, ensure the memory utilization is as we expect.
+    TEST_ASSERT_EQUAL(3, mem_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(6 + TRANSFER_CRC_SIZE_BYTES, mem_payload.allocated_bytes);
+    TEST_ASSERT_EQUAL(3, mem_fragment.allocated_fragments);
+    TEST_ASSERT_EQUAL(sizeof(RxFragment) * 3, mem_fragment.allocated_bytes);
+    // Eject and verify the payload. The extent is zero, so all payload is removed.
+    size_t                payload_size = 0;
+    struct UdpardFragment payload      = {0};
+    TEST_ASSERT(rxSlotEject(&payload_size,
+                            &payload,
+                            &root->tree,
+                            mem_payload.allocated_bytes,
+                            0,
+                            &mem_fragment.base,
+                            &mem_payload.base));
+    TEST_ASSERT_EQUAL(0, payload_size);  // Equals the extent due to the truncation.
+    TEST_ASSERT_NULL(payload.next);
+    TEST_ASSERT_EQUAL(0, payload.view.size);
+    // Check the memory utilization. No memory should be in use by this point.
+    TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, mem_payload.allocated_bytes);
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_bytes);
+    // Now, free the payload as the application would.
+    udpardFragmentFree(payload, &mem_fragment.base, &mem_payload.base);
+    // No memory is in use anyway, so no change here.
+    TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, mem_payload.allocated_bytes);
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_bytes);
+}
+
+static void testSlotEjectInvalid(void)
+{
+    InstrumentedAllocator mem_fragment = {0};
+    InstrumentedAllocator mem_payload  = {0};
+    instrumentedAllocatorNew(&mem_fragment);
+    instrumentedAllocatorNew(&mem_payload);
+    // Build the fragment tree; no valid CRC here:
+    //      1
+    //     / \
+    //    0   2
+    RxFragment* const root = makeRxFragmentString(&mem_fragment.base, &mem_payload.base, 1, "BBB", NULL);
+    root->tree.base.lr[0] =
+        &makeRxFragmentString(&mem_fragment.base, &mem_payload.base, 0, "AAA", &root->tree)->tree.base;
+    root->tree.base.lr[1] =
+        &makeRxFragmentString(&mem_fragment.base, &mem_payload.base, 2, "CCC", &root->tree)->tree.base;
+    // Initialization done, ensure the memory utilization is as we expect.
+    TEST_ASSERT_EQUAL(3, mem_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(9, mem_payload.allocated_bytes);
+    TEST_ASSERT_EQUAL(3, mem_fragment.allocated_fragments);
+    TEST_ASSERT_EQUAL(sizeof(RxFragment) * 3, mem_fragment.allocated_bytes);
+    // Eject and verify the payload.
+    size_t                payload_size = 0;
+    struct UdpardFragment payload      = {0};
+    TEST_ASSERT_FALSE(rxSlotEject(&payload_size,
+                                  &payload,
+                                  &root->tree,
+                                  mem_payload.allocated_bytes,
+                                  1000,
+                                  &mem_fragment.base,
+                                  &mem_payload.base));
+    // The call was unsuccessful, so the memory was freed instead of being handed over to the application.
+    TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, mem_payload.allocated_bytes);
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_bytes);
 }
 
 void setUp(void) {}
@@ -284,7 +566,10 @@ int main(void)
     RUN_TEST(testParseFrameEmpty);
     RUN_TEST(testSlotRestartEmpty);
     RUN_TEST(testSlotRestartNonEmpty);
-    RUN_TEST(testSlotEject);
+    RUN_TEST(testSlotEjectValidLarge);
+    RUN_TEST(testSlotEjectValidSmall);
+    RUN_TEST(testSlotEjectValidEmpty);
+    RUN_TEST(testSlotEjectInvalid);
     return UNITY_END();
 }
 
