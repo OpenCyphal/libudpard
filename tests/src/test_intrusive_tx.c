@@ -26,7 +26,7 @@ static const size_t InterstellarWarSize   = sizeof(InterstellarWar) - 1;
 static const byte_t InterstellarWarCRC[4] = {102, 217, 109, 188};
 
 // These aliases cannot be defined in the public API section: https://github.com/OpenCyphal-Garage/libudpard/issues/36
-typedef struct UdpardConstPayload  UdpardConstPayload;
+typedef struct UdpardPayload       UdpardPayload;
 typedef struct UdpardUDPIPEndpoint UdpardUDPIPEndpoint;
 typedef struct UdpardTx            UdpardTx;
 typedef struct UdpardTxItem        UdpardTxItem;
@@ -108,7 +108,7 @@ static void testMakeChainEmpty(void)
                                       1234567890,
                                       meta,
                                       (UdpardUDPIPEndpoint){.ip_address = 0x0A0B0C0DU, .udp_port = 0x1234},
-                                      (UdpardConstPayload){.size = 0, .data = ""},
+                                      (UdpardPayload){.size = 0, .data = ""},
                                       &user_transfer_referent);
     TEST_ASSERT_EQUAL(1, alloc.allocated_fragments);
     TEST_ASSERT_EQUAL(sizeof(TxItem) + HEADER_SIZE_BYTES + 4, alloc.allocated_bytes);
@@ -151,7 +151,7 @@ static void testMakeChainSingleMaxMTU(void)
                                       1234567890,
                                       meta,
                                       (UdpardUDPIPEndpoint){.ip_address = 0x0A0B0C00U, .udp_port = 7474},
-                                      (UdpardConstPayload){.size = DetailOfTheCosmosSize, .data = DetailOfTheCosmos},
+                                      (UdpardPayload){.size = DetailOfTheCosmosSize, .data = DetailOfTheCosmos},
                                       &user_transfer_referent);
     TEST_ASSERT_EQUAL(1, alloc.allocated_fragments);
     TEST_ASSERT_EQUAL(sizeof(TxItem) + HEADER_SIZE_BYTES + DetailOfTheCosmosSize + TRANSFER_CRC_SIZE_BYTES,
@@ -191,19 +191,18 @@ static void testMakeChainSingleFrameDefaultMTU(void)
     instrumentedAllocatorNew(&alloc);
     const byte_t payload[UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME + 1] = {0};
     {  // Ensure UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME bytes fit in a single frame with the default MTU.
-        const TxChain chain =
-            txMakeChain(&alloc.base,
-                        (byte_t[]){11, 22, 33, 44, 55, 66, 77, 88},
-                        UDPARD_MTU_DEFAULT,
-                        1234567890,
-                        (TransferMetadata){.priority       = UdpardPrioritySlow,
-                                           .src_node_id    = 4321,
-                                           .dst_node_id    = 5432,
-                                           .data_specifier = 7766,
-                                           .transfer_id    = 0x0123456789ABCDEFULL},
-                        (UdpardUDPIPEndpoint){.ip_address = 0x0A0B0C00U, .udp_port = 7474},
-                        (UdpardConstPayload){.size = UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME, .data = payload},
-                        NULL);
+        const TxChain chain = txMakeChain(&alloc.base,
+                                          (byte_t[]){11, 22, 33, 44, 55, 66, 77, 88},
+                                          UDPARD_MTU_DEFAULT,
+                                          1234567890,
+                                          (TransferMetadata){.priority       = UdpardPrioritySlow,
+                                                             .src_node_id    = 4321,
+                                                             .dst_node_id    = 5432,
+                                                             .data_specifier = 7766,
+                                                             .transfer_id    = 0x0123456789ABCDEFULL},
+                                          (UdpardUDPIPEndpoint){.ip_address = 0x0A0B0C00U, .udp_port = 7474},
+                                          (UdpardPayload){.size = UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME, .data = payload},
+                                          NULL);
         TEST_ASSERT_EQUAL(1, alloc.allocated_fragments);
         TEST_ASSERT_EQUAL(sizeof(TxItem) + HEADER_SIZE_BYTES + UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME +
                               TRANSFER_CRC_SIZE_BYTES,
@@ -229,7 +228,7 @@ static void testMakeChainSingleFrameDefaultMTU(void)
                                            .data_specifier = 7766,
                                            .transfer_id    = 0x0123456789ABCDEFULL},
                         (UdpardUDPIPEndpoint){.ip_address = 0x0A0B0C00U, .udp_port = 7474},
-                        (UdpardConstPayload){.size = UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME + 1, .data = payload},
+                        (UdpardPayload){.size = UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME + 1, .data = payload},
                         NULL);
         TEST_ASSERT_EQUAL(2, alloc.allocated_fragments);
         TEST_ASSERT_EQUAL((sizeof(TxItem) + HEADER_SIZE_BYTES) * 2 + UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME + 1 +
@@ -264,7 +263,7 @@ static void testMakeChainThreeFrames(void)
                                       223574680,
                                       meta,
                                       (UdpardUDPIPEndpoint){.ip_address = 0xBABADEDAU, .udp_port = 0xD0ED},
-                                      (UdpardConstPayload){.size = EtherealStrengthSize, .data = EtherealStrength},
+                                      (UdpardPayload){.size = EtherealStrengthSize, .data = EtherealStrength},
                                       &user_transfer_referent);
     TEST_ASSERT_EQUAL(3, alloc.allocated_fragments);
     TEST_ASSERT_EQUAL(3 * (sizeof(TxItem) + HEADER_SIZE_BYTES) + EtherealStrengthSize + 4U, alloc.allocated_bytes);
@@ -345,7 +344,7 @@ static void testMakeChainCRCSpill1(void)
                                       223574680,
                                       meta,
                                       (UdpardUDPIPEndpoint){.ip_address = 0xBABADEDAU, .udp_port = 0xD0ED},
-                                      (UdpardConstPayload){.size = InterstellarWarSize, .data = InterstellarWar},
+                                      (UdpardPayload){.size = InterstellarWarSize, .data = InterstellarWar},
                                       &user_transfer_referent);
     TEST_ASSERT_EQUAL(2, alloc.allocated_fragments);
     TEST_ASSERT_EQUAL(2 * (sizeof(TxItem) + HEADER_SIZE_BYTES) + InterstellarWarSize + 4U, alloc.allocated_bytes);
@@ -416,7 +415,7 @@ static void testMakeChainCRCSpill2(void)
                                       223574680,
                                       meta,
                                       (UdpardUDPIPEndpoint){.ip_address = 0xBABADEDAU, .udp_port = 0xD0ED},
-                                      (UdpardConstPayload){.size = InterstellarWarSize, .data = InterstellarWar},
+                                      (UdpardPayload){.size = InterstellarWarSize, .data = InterstellarWar},
                                       &user_transfer_referent);
     TEST_ASSERT_EQUAL(2, alloc.allocated_fragments);
     TEST_ASSERT_EQUAL(2 * (sizeof(TxItem) + HEADER_SIZE_BYTES) + InterstellarWarSize + 4U, alloc.allocated_bytes);
@@ -487,7 +486,7 @@ static void testMakeChainCRCSpill3(void)
                                       223574680,
                                       meta,
                                       (UdpardUDPIPEndpoint){.ip_address = 0xBABADEDAU, .udp_port = 0xD0ED},
-                                      (UdpardConstPayload){.size = InterstellarWarSize, .data = InterstellarWar},
+                                      (UdpardPayload){.size = InterstellarWarSize, .data = InterstellarWar},
                                       &user_transfer_referent);
     TEST_ASSERT_EQUAL(2, alloc.allocated_fragments);
     TEST_ASSERT_EQUAL(2 * (sizeof(TxItem) + HEADER_SIZE_BYTES) + InterstellarWarSize + 4U, alloc.allocated_bytes);
@@ -558,7 +557,7 @@ static void testMakeChainCRCSpillFull(void)
                                       223574680,
                                       meta,
                                       (UdpardUDPIPEndpoint){.ip_address = 0xBABADEDAU, .udp_port = 0xD0ED},
-                                      (UdpardConstPayload){.size = InterstellarWarSize, .data = InterstellarWar},
+                                      (UdpardPayload){.size = InterstellarWarSize, .data = InterstellarWar},
                                       &user_transfer_referent);
     TEST_ASSERT_EQUAL(2, alloc.allocated_fragments);
     TEST_ASSERT_EQUAL(2 * (sizeof(TxItem) + HEADER_SIZE_BYTES) + InterstellarWarSize + 4U, alloc.allocated_bytes);
@@ -634,7 +633,7 @@ static void testPushPeekPopFree(void)
                              1234567890U,
                              meta,
                              (UdpardUDPIPEndpoint){.ip_address = 0xBABADEDAU, .udp_port = 0xD0ED},
-                             (UdpardConstPayload){.size = EtherealStrengthSize, .data = EtherealStrength},
+                             (UdpardPayload){.size = EtherealStrengthSize, .data = EtherealStrength},
                              &user_transfer_referent));
     TEST_ASSERT_EQUAL(3, alloc.allocated_fragments);
     TEST_ASSERT_EQUAL(3 * (sizeof(TxItem) + HEADER_SIZE_BYTES) + EtherealStrengthSize + 4U, alloc.allocated_bytes);
@@ -712,7 +711,7 @@ static void testPushPrioritization(void)
                              0,
                              meta_a,
                              (UdpardUDPIPEndpoint){.ip_address = 0xAAAAAAAA, .udp_port = 0xAAAA},
-                             (UdpardConstPayload){.size = EtherealStrengthSize, .data = EtherealStrength},
+                             (UdpardPayload){.size = EtherealStrengthSize, .data = EtherealStrength},
                              NULL));
     TEST_ASSERT_EQUAL(3, alloc.allocated_fragments);
     TEST_ASSERT_EQUAL(3, tx.queue_size);
@@ -732,7 +731,7 @@ static void testPushPrioritization(void)
                                  .transfer_id    = 100000,
                              },
                              (UdpardUDPIPEndpoint){.ip_address = 0xBBBBBBBB, .udp_port = 0xBBBB},
-                             (UdpardConstPayload){.size = DetailOfTheCosmosSize, .data = DetailOfTheCosmos},
+                             (UdpardPayload){.size = DetailOfTheCosmosSize, .data = DetailOfTheCosmos},
                              NULL));
     TEST_ASSERT_EQUAL(4, alloc.allocated_fragments);
     TEST_ASSERT_EQUAL(4, tx.queue_size);
@@ -752,7 +751,7 @@ static void testPushPrioritization(void)
                                  .transfer_id    = 10000,
                              },
                              (UdpardUDPIPEndpoint){.ip_address = 0xCCCCCCCC, .udp_port = 0xCCCC},
-                             (UdpardConstPayload){.size = InterstellarWarSize, .data = InterstellarWar},
+                             (UdpardPayload){.size = InterstellarWarSize, .data = InterstellarWar},
                              NULL));
     TEST_ASSERT_EQUAL(5, alloc.allocated_fragments);
     TEST_ASSERT_EQUAL(5, tx.queue_size);
@@ -772,7 +771,7 @@ static void testPushPrioritization(void)
                                  .transfer_id    = 10001,
                              },
                              (UdpardUDPIPEndpoint){.ip_address = 0xDDDDDDDD, .udp_port = 0xDDDD},
-                             (UdpardConstPayload){.size = InterstellarWarSize, .data = InterstellarWar},
+                             (UdpardPayload){.size = InterstellarWarSize, .data = InterstellarWar},
                              NULL));
     TEST_ASSERT_EQUAL(6, alloc.allocated_fragments);
     TEST_ASSERT_EQUAL(6, tx.queue_size);
@@ -792,7 +791,7 @@ static void testPushPrioritization(void)
                                  .transfer_id    = 1000,
                              },
                              (UdpardUDPIPEndpoint){.ip_address = 0xEEEEEEEE, .udp_port = 0xEEEE},
-                             (UdpardConstPayload){.size = InterstellarWarSize, .data = InterstellarWar},
+                             (UdpardPayload){.size = InterstellarWarSize, .data = InterstellarWar},
                              NULL));
     TEST_ASSERT_EQUAL(7, alloc.allocated_fragments);
     TEST_ASSERT_EQUAL(7, tx.queue_size);
@@ -881,7 +880,7 @@ static void testPushCapacityLimit(void)
                              1234567890U,
                              meta,
                              (UdpardUDPIPEndpoint){.ip_address = 0xBABADEDAU, .udp_port = 0xD0ED},
-                             (UdpardConstPayload){.size = EtherealStrengthSize, .data = EtherealStrength},
+                             (UdpardPayload){.size = EtherealStrengthSize, .data = EtherealStrength},
                              NULL));
     TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
     TEST_ASSERT_EQUAL(0, alloc.allocated_bytes);
@@ -916,7 +915,7 @@ static void testPushOOM(void)
                              1234567890U,
                              meta,
                              (UdpardUDPIPEndpoint){.ip_address = 0xBABADEDAU, .udp_port = 0xD0ED},
-                             (UdpardConstPayload){.size = EtherealStrengthSize, .data = EtherealStrength},
+                             (UdpardPayload){.size = EtherealStrengthSize, .data = EtherealStrength},
                              NULL));
     TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
     TEST_ASSERT_EQUAL(0, alloc.allocated_bytes);
@@ -950,7 +949,7 @@ static void testPushAnonymousMultiFrame(void)
                              1234567890U,
                              meta,
                              (UdpardUDPIPEndpoint){.ip_address = 0xBABADEDAU, .udp_port = 0xD0ED},
-                             (UdpardConstPayload){.size = EtherealStrengthSize, .data = EtherealStrength},
+                             (UdpardPayload){.size = EtherealStrengthSize, .data = EtherealStrength},
                              NULL));
     TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
     TEST_ASSERT_EQUAL(0, alloc.allocated_bytes);
@@ -984,7 +983,7 @@ static void testPushAnonymousService(void)
                              1234567890U,
                              meta,
                              (UdpardUDPIPEndpoint){.ip_address = 0xBABADEDAU, .udp_port = 0xD0ED},
-                             (UdpardConstPayload){.size = EtherealStrengthSize, .data = EtherealStrength},
+                             (UdpardPayload){.size = EtherealStrengthSize, .data = EtherealStrength},
                              NULL));
     TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
     TEST_ASSERT_EQUAL(0, alloc.allocated_bytes);

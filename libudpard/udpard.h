@@ -170,7 +170,7 @@
 ///
 ///     - (MTU+library overhead) blocks for the TX and RX pipelines (usually less than 2048 bytes);
 ///     - RX session object sized blocks for the RX pipeline (less than 512 bytes);
-///     - RX payload fragment handle sized blocks for the RX pipeline (less than 128 bytes).
+///     - RX fragment handle sized blocks for the RX pipeline (less than 128 bytes).
 ///
 /// The detailed information is given in the API documentation.
 ///
@@ -271,7 +271,7 @@ struct UdpardMutablePayload
     void*  data;
 };
 
-struct UdpardConstPayload
+struct UdpardPayload
 {
     size_t      size;
     const void* data;
@@ -282,22 +282,22 @@ struct UdpardConstPayload
 /// as well as the payload structure itself, assuming that it is also heap-allocated.
 /// The model is as follows:
 ///
-///     (payload header) ---> UdpardPayloadFragmentHandle:
-///                               next  ---> UdpardPayloadFragmentHandle...
+///     (payload header) ---> UdpardFragment:
+///                               next  ---> UdpardFragment...
 ///                               owner ---> (the free()able payload data buffer)
 ///                               view  ---> (somewhere inside the payload data buffer)
 ///
 /// Payloads of received transfers are represented using this type, where each fragment corresponds to a frame.
 /// The application can either consume them directly or to copy the data into a contiguous buffer beforehand
 /// at the expense of extra time and memory utilization.
-struct UdpardPayloadFragmentHandle
+struct UdpardFragment
 {
     /// Points to the next fragment in the fragmented buffer; NULL if this is the last fragment.
-    struct UdpardPayloadFragmentHandle* next;
+    struct UdpardFragment* next;
 
     /// Contains the actual data to be used by the application.
     /// The memory pointed to by this fragment shall not be freed by the application.
-    struct UdpardConstPayload view;
+    struct UdpardPayload view;
 
     /// This entity points to the base buffer that contains this fragment.
     /// The application can use this pointer to free the outer buffer after the payload has been consumed.
@@ -527,13 +527,13 @@ int8_t udpardTxInit(struct UdpardTx* const             self,
 ///
 /// The time complexity is O(p + log e), where p is the amount of payload in the transfer, and e is the number of
 /// frames already enqueued in the transmission queue.
-int32_t udpardTxPublish(struct UdpardTx* const          self,
-                        const UdpardMicrosecond         deadline_usec,
-                        const enum UdpardPriority       priority,
-                        const UdpardPortID              subject_id,
-                        UdpardTransferID* const         transfer_id,
-                        const struct UdpardConstPayload payload,
-                        void* const                     user_transfer_reference);
+int32_t udpardTxPublish(struct UdpardTx* const     self,
+                        const UdpardMicrosecond    deadline_usec,
+                        const enum UdpardPriority  priority,
+                        const UdpardPortID         subject_id,
+                        UdpardTransferID* const    transfer_id,
+                        const struct UdpardPayload payload,
+                        void* const                user_transfer_reference);
 
 /// This is similar to udpardTxPublish except that it is intended for service request transfers.
 /// It takes the node-ID of the server that is intended to receive the request.
@@ -550,27 +550,27 @@ int32_t udpardTxPublish(struct UdpardTx* const          self,
 ///     - UDPARD_ERROR_ANONYMOUS if the local node is anonymous (the local node-ID is unset).
 ///
 /// Other considerations are the same as for udpardTxPublish.
-int32_t udpardTxRequest(struct UdpardTx* const          self,
-                        const UdpardMicrosecond         deadline_usec,
-                        const enum UdpardPriority       priority,
-                        const UdpardPortID              service_id,
-                        const UdpardNodeID              server_node_id,
-                        UdpardTransferID* const         transfer_id,
-                        const struct UdpardConstPayload payload,
-                        void* const                     user_transfer_reference);
+int32_t udpardTxRequest(struct UdpardTx* const     self,
+                        const UdpardMicrosecond    deadline_usec,
+                        const enum UdpardPriority  priority,
+                        const UdpardPortID         service_id,
+                        const UdpardNodeID         server_node_id,
+                        UdpardTransferID* const    transfer_id,
+                        const struct UdpardPayload payload,
+                        void* const                user_transfer_reference);
 
 /// This is similar to udpardTxRequest except that it takes the node-ID of the client instead of server,
 /// and the transfer-ID is passed by value rather than by pointer.
 /// The transfer-ID is passed by value because when responding to an RPC-service request, the server must
 /// reuse the transfer-ID value of the request (this is to allow the client to match responses with their requests).
-int32_t udpardTxRespond(struct UdpardTx* const          self,
-                        const UdpardMicrosecond         deadline_usec,
-                        const enum UdpardPriority       priority,
-                        const UdpardPortID              service_id,
-                        const UdpardNodeID              client_node_id,
-                        const UdpardTransferID          transfer_id,
-                        const struct UdpardConstPayload payload,
-                        void* const                     user_transfer_reference);
+int32_t udpardTxRespond(struct UdpardTx* const     self,
+                        const UdpardMicrosecond    deadline_usec,
+                        const enum UdpardPriority  priority,
+                        const UdpardPortID         service_id,
+                        const UdpardNodeID         client_node_id,
+                        const UdpardTransferID     transfer_id,
+                        const struct UdpardPayload payload,
+                        void* const                user_transfer_reference);
 
 /// This function accesses the enqueued UDP datagram scheduled for transmission next. The queue itself is not modified
 /// (i.e., the accessed element is not removed). The application should invoke this function to collect the datagrams
@@ -654,7 +654,7 @@ struct UdpardRxPort
     /// Each session instance takes sizeof(UdpardInternalRxSession) bytes of dynamic memory for itself,
     /// which is at most 512 bytes on wide-word platforms (on small word size platforms it is usually much smaller).
     /// On top of that, each session instance holds memory for the transfer payload fragments and small fixed-size
-    /// metadata objects called "payload fragment handles" (at most 128 bytes large, usually much smaller,
+    /// metadata objects called "fragment handles" (at most 128 bytes large, usually much smaller,
     /// depending on the pointer width and the word size), one handle per fragment.
     ///
     /// The transfer payload memory is not allocated by the library but rather moved from the application
@@ -664,9 +664,9 @@ struct UdpardRxPort
     /// of the entire datagram payload (including all overheads such as the Cyphal/UDP frame header and possible
     /// data that spills over the configured extent value for this port).
     /// If the library does not need the datagram to reassemble the transfer, its payload buffer is freed immediately.
-    /// There is a 1-to-1 correspondence between the payload fragment handles and the payload fragments.
+    /// There is a 1-to-1 correspondence between the fragment handles and the payload fragments.
     /// Remote nodes that emit highly fragmented transfers cause a higher memory utilization in the local node
-    /// because of the increased number of payload fragment handles and per-datagram overheads.
+    /// because of the increased number of fragment handles and per-datagram overheads.
     ///
     /// In the worst case, the library may keep up to two full transfer payloads in memory at the same time
     /// (two transfer states are kept to allow acceptance of interleaved frames).
@@ -700,9 +700,9 @@ struct UdpardRxMemoryResources
     /// Each instance is fixed-size, so a trivial zero-fragmentation block allocator is sufficient.
     struct UdpardMemoryResource* session;
 
-    /// The payload fragment handles are allocated per payload fragment; each handle contains a pointer to its fragment.
+    /// The fragment handles are allocated per payload fragment; each handle contains a pointer to its fragment.
     /// Each instance is of a very small fixed size, so a trivial zero-fragmentation block allocator is sufficient.
-    struct UdpardMemoryResource* payload_fragment_handle;
+    struct UdpardMemoryResource* fragment;
 
     /// The library never allocates payload buffers itself, as they are handed over by the application via
     /// udpardRx*Receive. Once a buffer is handed over, the library may choose to keep it if it is deemed to be
@@ -734,8 +734,8 @@ struct UdpardRxTransfer
     /// the application is responsible for freeing them using the correct memory resource.
     ///
     /// If the payload is empty, the corresponding buffer pointers may be NULL.
-    size_t                             payload_size;
-    struct UdpardPayloadFragmentHandle payload;
+    size_t                payload_size;
+    struct UdpardFragment payload;
 };
 
 /// This is, essentially, a helper that frees the memory allocated for the payload and its fragment headers
@@ -744,7 +744,7 @@ struct UdpardRxTransfer
 ///
 /// If any of the arguments are NULL, the function has no effect.
 void udpardRxTransferFree(struct UdpardRxTransfer* const     self,
-                          struct UdpardMemoryResource* const memory_payload_fragment_handle,
+                          struct UdpardMemoryResource* const memory_fragment,
                           struct UdpardMemoryResource* const memory_payload);
 
 // ---------------------------------------------  SUBJECTS  ---------------------------------------------
@@ -844,7 +844,7 @@ void udpardRxSubscriptionDestroy(struct UdpardRxSubscription* const self);
 ///
 ///     1. A new session state instance is allocated when a new session is initiated.
 ///
-///     2. A new transfer payload fragment handle is allocated when a new transfer fragment is accepted.
+///     2. A new transfer fragment handle is allocated when a new transfer fragment is accepted.
 ///
 ///     3. Allocated objects may occasionally be deallocated at the discretion of the library.
 ///        This behavior does not increase the worst case execution time and does not improve the worst case memory
@@ -853,6 +853,7 @@ void udpardRxSubscriptionDestroy(struct UdpardRxSubscription* const self);
 ///
 /// The time complexity is O(log n) where n is the number of remote notes publishing on this subject (topic).
 /// No data copy takes place. Malformed frames are discarded in constant time.
+/// Linear time is spent on the CRC verification of the transfer payload when the transfer is complete.
 ///
 /// This function performs log(n) of recursive calls internally, where n is the number of frames in a transfer.
 ///
