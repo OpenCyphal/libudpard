@@ -30,12 +30,12 @@ static void testParseFrameValidMessage(void)
     TEST_ASSERT_EQUAL_UINT64(UDPARD_NODE_ID_UNSET, rxf.meta.dst_node_id);
     TEST_ASSERT_EQUAL_UINT64(7654, rxf.meta.data_specifier);
     TEST_ASSERT_EQUAL_UINT64(0xbadc0ffee0ddf00d, rxf.meta.transfer_id);
-    TEST_ASSERT_EQUAL_UINT64(12345, rxf.index);
-    TEST_ASSERT_FALSE(rxf.end_of_transfer);
-    TEST_ASSERT_EQUAL_UINT64(3, rxf.payload.size);
-    TEST_ASSERT_EQUAL_UINT8_ARRAY("abc", rxf.payload.data, 3);
-    TEST_ASSERT_EQUAL_UINT64(sizeof(data), rxf.origin.size);
-    TEST_ASSERT_EQUAL_UINT8_ARRAY(data, rxf.origin.data, sizeof(data));
+    TEST_ASSERT_EQUAL_UINT64(12345, rxf.base.index);
+    TEST_ASSERT_FALSE(rxf.base.end_of_transfer);
+    TEST_ASSERT_EQUAL_UINT64(3, rxf.base.payload.size);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY("abc", rxf.base.payload.data, 3);
+    TEST_ASSERT_EQUAL_UINT64(sizeof(data), rxf.base.origin.size);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(data, rxf.base.origin.data, sizeof(data));
 }
 
 static void testParseFrameValidRPCService(void)
@@ -55,12 +55,12 @@ static void testParseFrameValidRPCService(void)
                                  DATA_SPECIFIER_SERVICE_REQUEST_NOT_RESPONSE_MASK,
                              rxf.meta.data_specifier);
     TEST_ASSERT_EQUAL_UINT64(0xbadc0ffee0ddf00d, rxf.meta.transfer_id);
-    TEST_ASSERT_EQUAL_UINT64(6654, rxf.index);
-    TEST_ASSERT_FALSE(rxf.end_of_transfer);
-    TEST_ASSERT_EQUAL_UINT64(3, rxf.payload.size);
-    TEST_ASSERT_EQUAL_UINT8_ARRAY("abc", rxf.payload.data, 3);
-    TEST_ASSERT_EQUAL_UINT64(sizeof(data), rxf.origin.size);
-    TEST_ASSERT_EQUAL_UINT8_ARRAY(data, rxf.origin.data, sizeof(data));
+    TEST_ASSERT_EQUAL_UINT64(6654, rxf.base.index);
+    TEST_ASSERT_FALSE(rxf.base.end_of_transfer);
+    TEST_ASSERT_EQUAL_UINT64(3, rxf.base.payload.size);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY("abc", rxf.base.payload.data, 3);
+    TEST_ASSERT_EQUAL_UINT64(sizeof(data), rxf.base.origin.size);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(data, rxf.base.origin.data, sizeof(data));
 }
 
 static void testParseFrameValidMessageAnonymous(void)
@@ -75,12 +75,12 @@ static void testParseFrameValidMessageAnonymous(void)
     TEST_ASSERT_EQUAL_UINT64(UDPARD_NODE_ID_UNSET, rxf.meta.dst_node_id);
     TEST_ASSERT_EQUAL_UINT64(7654, rxf.meta.data_specifier);
     TEST_ASSERT_EQUAL_UINT64(0xbadc0ffee0ddf00d, rxf.meta.transfer_id);
-    TEST_ASSERT_EQUAL_UINT64(0, rxf.index);
-    TEST_ASSERT_TRUE(rxf.end_of_transfer);
-    TEST_ASSERT_EQUAL_UINT64(3, rxf.payload.size);
-    TEST_ASSERT_EQUAL_UINT8_ARRAY("abc", rxf.payload.data, 3);
-    TEST_ASSERT_EQUAL_UINT64(sizeof(data), rxf.origin.size);
-    TEST_ASSERT_EQUAL_UINT8_ARRAY(data, rxf.origin.data, sizeof(data));
+    TEST_ASSERT_EQUAL_UINT64(0, rxf.base.index);
+    TEST_ASSERT_TRUE(rxf.base.end_of_transfer);
+    TEST_ASSERT_EQUAL_UINT64(3, rxf.base.payload.size);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY("abc", rxf.base.payload.data, 3);
+    TEST_ASSERT_EQUAL_UINT64(sizeof(data), rxf.base.origin.size);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(data, rxf.base.origin.data, sizeof(data));
 }
 
 static void testParseFrameRPCServiceAnonymous(void)
@@ -295,12 +295,8 @@ static void testSlotEjectValidLarge(void)
     instrumentedAllocatorNew(&mem_fragment);
     instrumentedAllocatorNew(&mem_payload);
     //>>> from pycyphal.transport.commons.crc import CRC32C
-    //>>> data = ...
-    //>>> CRC32C.new(data).value_as_bytes
-    static const char DaShi[] = "Da Shi, have you ever... considered certain ultimate philosophical questions? "
-                                "For example, where does Man come from? "
-                                "Where does Man go? "
-                                "Where does the universe come from? ";
+    //>>> CRC32C.new(data_bytes).value_as_bytes
+    static const size_t PayloadSize = 171;
     // Build the fragment tree:
     //      2
     //     / `
@@ -336,7 +332,7 @@ static void testSlotEjectValidLarge(void)
              ->tree.base;
     // Initialization done, ensure the memory utilization is as we expect.
     TEST_ASSERT_EQUAL(4, mem_payload.allocated_fragments);
-    TEST_ASSERT_EQUAL(sizeof(DaShi) - 1 + TRANSFER_CRC_SIZE_BYTES, mem_payload.allocated_bytes);
+    TEST_ASSERT_EQUAL(PayloadSize + TRANSFER_CRC_SIZE_BYTES, mem_payload.allocated_bytes);
     TEST_ASSERT_EQUAL(4, mem_fragment.allocated_fragments);
     TEST_ASSERT_EQUAL(sizeof(RxFragment) * 4, mem_fragment.allocated_bytes);
     // Eject and verify the payload.
@@ -349,8 +345,8 @@ static void testSlotEjectValidLarge(void)
                             1024,
                             &mem_fragment.base,
                             &mem_payload.base));
-    TEST_ASSERT_EQUAL(sizeof(DaShi) - 1, payload_size);  // CRC removed!
-    TEST_ASSERT(                                         //
+    TEST_ASSERT_EQUAL(PayloadSize, payload_size);  // CRC removed!
+    TEST_ASSERT(                                   //
         compareStringWithPayload("Da Shi, have you ever... considered certain ultimate philosophical questions? ",
                                  payload.view));
     TEST_ASSERT(compareStringWithPayload("For example, where does Man come from? ", payload.next->view));
@@ -360,7 +356,7 @@ static void testSlotEjectValidLarge(void)
     // Check the memory utilization. All payload fragments are still kept, but the first fragment is freed because of
     // the Scott's short payload optimization.
     TEST_ASSERT_EQUAL(4, mem_payload.allocated_fragments);
-    TEST_ASSERT_EQUAL(sizeof(DaShi) - 1 + TRANSFER_CRC_SIZE_BYTES, mem_payload.allocated_bytes);
+    TEST_ASSERT_EQUAL(PayloadSize + TRANSFER_CRC_SIZE_BYTES, mem_payload.allocated_bytes);
     TEST_ASSERT_EQUAL(3, mem_fragment.allocated_fragments);                   // One gone!!1
     TEST_ASSERT_EQUAL(sizeof(RxFragment) * 3, mem_fragment.allocated_bytes);  // yes yes!
     // Now, free the payload as the application would.
@@ -379,13 +375,8 @@ static void testSlotEjectValidSmall(void)
     instrumentedAllocatorNew(&mem_fragment);
     instrumentedAllocatorNew(&mem_payload);
     //>>> from pycyphal.transport.commons.crc import CRC32C
-    //>>> data = ...
-    //>>> CRC32C.new(data).value_as_bytes
-    static const char BuildSea[] = "Did you build this four-dimensional fragment?\n"
-                                   "You told me that you came from the sea. Did you build the sea?\n"
-                                   "Are you saying that for you, or at least for your creators, "
-                                   "this four-dimensional space is like the sea for us?\n"
-                                   "More like a puddle. The sea has gone dry.";
+    //>>> CRC32C.new(data_bytes).value_as_bytes
+    static const size_t PayloadSize = 262;
     // Build the fragment tree:
     //      1
     //     / `
@@ -428,7 +419,7 @@ static void testSlotEjectValidSmall(void)
              ->tree.base;
     // Initialization done, ensure the memory utilization is as we expect.
     TEST_ASSERT_EQUAL(5, mem_payload.allocated_fragments);
-    TEST_ASSERT_EQUAL(sizeof(BuildSea) - 1 + TRANSFER_CRC_SIZE_BYTES, mem_payload.allocated_bytes);
+    TEST_ASSERT_EQUAL(PayloadSize + TRANSFER_CRC_SIZE_BYTES, mem_payload.allocated_bytes);
     TEST_ASSERT_EQUAL(5, mem_fragment.allocated_fragments);
     TEST_ASSERT_EQUAL(sizeof(RxFragment) * 5, mem_fragment.allocated_bytes);
     // Eject and verify the payload. Use a small extent and ensure the excess is dropped.
@@ -547,9 +538,16 @@ static void testSlotEjectInvalid(void)
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_bytes);
 }
 
-static void testSlotUpdateA(void)
+static void testSlotAcceptA(void)
 {
-    //
+    InstrumentedAllocator mem_fragment = {0};
+    InstrumentedAllocator mem_payload  = {0};
+    instrumentedAllocatorNew(&mem_fragment);
+    instrumentedAllocatorNew(&mem_payload);
+    size_t                payload_size = 0;
+    struct UdpardFragment payload      = {0};
+    (void) payload_size;
+    (void) payload;
 }
 
 void setUp(void) {}
@@ -575,7 +573,7 @@ int main(void)
     RUN_TEST(testSlotEjectValidSmall);
     RUN_TEST(testSlotEjectValidEmpty);
     RUN_TEST(testSlotEjectInvalid);
-    RUN_TEST(testSlotUpdateA);
+    RUN_TEST(testSlotAcceptA);
     return UNITY_END();
 }
 
