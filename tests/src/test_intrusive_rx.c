@@ -111,6 +111,16 @@ static RxFrameBase makeRxFrameBaseString(struct UdpardMemoryResource* const memo
                            (struct UdpardMutablePayload){.data = (void*) payload, .size = strlen(payload)});
 }
 
+static RxFrame makeRxFrameString(struct UdpardMemoryResource* const memory_payload,
+                                 const TransferMetadata             meta,
+                                 const uint32_t                     frame_index,
+                                 const bool                         end_of_transfer,
+                                 const char* const                  payload)
+{
+    return (RxFrame){.base = makeRxFrameBaseString(memory_payload, frame_index, end_of_transfer, payload),
+                     .meta = meta};
+}
+
 // --------------------------------------------------------------------------------------------------------------------
 
 // Generate reference data using PyCyphal:
@@ -1000,6 +1010,17 @@ static void testSlotAcceptA(void)
     TEST_ASSERT_NULL(slot.fragments);
 }
 
+static void testIfaceAcceptA(void)
+{
+    InstrumentedAllocator mem_fragment = {0};
+    InstrumentedAllocator mem_payload  = {0};
+    instrumentedAllocatorNew(&mem_fragment);
+    instrumentedAllocatorNew(&mem_payload);
+    RxIface iface;
+    rxIfaceInit(&iface, &mem_fragment.base, &mem_payload.base);
+    (void) makeRxFrameString;
+}
+
 void setUp(void) {}
 
 void tearDown(void) {}
@@ -1007,6 +1028,7 @@ void tearDown(void) {}
 int main(void)
 {
     UNITY_BEGIN();
+    // frame parser
     RUN_TEST(testParseFrameValidMessage);
     RUN_TEST(testParseFrameValidRPCService);
     RUN_TEST(testParseFrameValidMessageAnonymous);
@@ -1017,6 +1039,7 @@ int main(void)
     RUN_TEST(testParseFrameUnknownHeaderVersion);
     RUN_TEST(testParseFrameHeaderWithoutPayload);
     RUN_TEST(testParseFrameEmpty);
+    // slot
     RUN_TEST(testSlotRestartEmpty);
     RUN_TEST(testSlotRestartNonEmpty);
     RUN_TEST(testSlotEjectValidLarge);
@@ -1024,6 +1047,8 @@ int main(void)
     RUN_TEST(testSlotEjectValidEmpty);
     RUN_TEST(testSlotEjectInvalid);
     RUN_TEST(testSlotAcceptA);
+    // iface
+    RUN_TEST(testIfaceAcceptA);
     return UNITY_END();
 }
 

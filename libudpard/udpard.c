@@ -1152,14 +1152,17 @@ finish:
     return result;
 }
 
+/// This function is invoked when a new datagram pertaining to a certain session is received on an interface.
+/// This function will either move the frame payload into the session, or free it if it cannot be made use of.
 /// Returns: 1 -- transfer available; 0 -- transfer not yet available; <0 -- error.
-static inline int_fast8_t rxIfaceUpdate(RxIface* const                       self,
-                                        const UdpardMicrosecond              ts_usec,
-                                        const RxFrame                        frame,
-                                        struct UdpardRxTransfer* const       received_transfer,
-                                        const size_t                         extent,
-                                        const UdpardMicrosecond              transfer_id_timeout_usec,
-                                        const struct UdpardRxMemoryResources memory)
+static inline int_fast8_t rxIfaceAccept(RxIface* const                     self,
+                                        const UdpardMicrosecond            ts_usec,
+                                        const RxFrame                      frame,
+                                        struct UdpardRxTransfer* const     received_transfer,
+                                        const size_t                       extent,
+                                        const UdpardMicrosecond            transfer_id_timeout_usec,
+                                        struct UdpardMemoryResource* const memory_fragment,
+                                        struct UdpardMemoryResource* const memory_payload)
 {
     UDPARD_ASSERT((self != NULL) && (frame.base.payload.size > 0) && (received_transfer != NULL));
     RxSlot* slot = NULL;
@@ -1191,7 +1194,7 @@ static inline int_fast8_t rxIfaceUpdate(RxIface* const                       sel
         const bool is_tid_timeout = (ts_usec - self->ts_usec) > transfer_id_timeout_usec;
         if (is_tid_timeout || is_future_tid)
         {
-            rxSlotRestart(victim, frame.meta.transfer_id, memory.fragment, memory.payload);
+            rxSlotRestart(victim, frame.meta.transfer_id, memory_fragment, memory_payload);
             slot = victim;
             UDPARD_ASSERT(slot != NULL);
         }
@@ -1212,8 +1215,8 @@ static inline int_fast8_t rxIfaceUpdate(RxIface* const                       sel
                               &received_transfer->payload,
                               frame.base,
                               extent,
-                              memory.fragment,
-                              memory.payload);
+                              memory_fragment,
+                              memory_payload);
         if (result > 0)  // Transfer successfully received, populate the transfer descriptor for the client.
         {
             received_transfer->timestamp_usec = ts;
@@ -1224,9 +1227,24 @@ static inline int_fast8_t rxIfaceUpdate(RxIface* const                       sel
     }
     else
     {
-        memFreePayload(memory.payload, frame.base.origin);
+        memFreePayload(memory_payload, frame.base.origin);
     }
     return result;
+}
+
+static inline void rxIfaceInit(RxIface* const                     self,
+                               struct UdpardMemoryResource* const memory_fragment,
+                               struct UdpardMemoryResource* const memory_payload)
+{
+    UDPARD_ASSERT(self != NULL);
+    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
+    (void) memset(self, 0, sizeof(*self));
+    self->ts_usec = TIMESTAMP_UNSET;
+    for (uint_fast8_t i = 0; i < RX_SLOT_COUNT; i++)
+    {
+        self->slots[i].fragments = NULL;
+        rxSlotRestart(&self->slots[i], 0, memory_fragment, memory_payload);
+    }
 }
 
 void udpardFragmentFree(const struct UdpardFragment        head,
@@ -1247,6 +1265,7 @@ int8_t udpardRxSubscriptionInit(struct UdpardRxSubscription* const   self,
     (void) extent;
     (void) memory;
     (void) rxParseFrame;
-    (void) rxIfaceUpdate;
+    (void) rxIfaceInit;
+    (void) rxIfaceAccept;
     return 0;
 }
