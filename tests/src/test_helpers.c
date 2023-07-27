@@ -19,11 +19,17 @@ static void testInstrumentedAllocator(void)
     TEST_ASSERT_EQUAL_size_t(2, al.allocated_fragments);
     TEST_ASSERT_EQUAL_size_t(579, al.allocated_bytes);
 
-    al.limit_bytes = 600;
+    al.limit_bytes     = 600;
+    al.limit_fragments = 2;
 
     TEST_ASSERT_EQUAL_PTR(NULL, al.base.allocate(&al.base, 100));
     TEST_ASSERT_EQUAL_size_t(2, al.allocated_fragments);
     TEST_ASSERT_EQUAL_size_t(579, al.allocated_bytes);
+
+    TEST_ASSERT_EQUAL_PTR(NULL, al.base.allocate(&al.base, 21));
+    TEST_ASSERT_EQUAL_size_t(2, al.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(579, al.allocated_bytes);
+    al.limit_fragments = 4;
 
     void* c = al.base.allocate(&al.base, 21);
     TEST_ASSERT_EQUAL_size_t(3, al.allocated_fragments);

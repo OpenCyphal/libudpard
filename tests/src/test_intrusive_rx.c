@@ -9,6 +9,110 @@
 
 // NOLINTBEGIN(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
 
+/// Moves the payload from the origin into a new buffer and attaches is to the newly allocated fragment.
+/// This function performs two allocations. This function is infallible.
+static RxFragment* makeRxFragment(struct UdpardMemoryResource* const memory_fragment,
+                                  struct UdpardMemoryResource* const memory_payload,
+                                  const uint32_t                     frame_index,
+                                  const struct UdpardPayload         view,
+                                  const struct UdpardMutablePayload  origin,
+                                  RxFragmentTreeNode* const          parent)
+{
+    TEST_PANIC_UNLESS((view.data >= origin.data) && (view.size <= origin.size));
+    TEST_PANIC_UNLESS((((const byte_t*) view.data) + view.size) <= (((const byte_t*) origin.data) + origin.size));
+    byte_t* const     new_origin = (byte_t*) memAlloc(memory_payload, origin.size);
+    RxFragment* const frag       = (RxFragment*) memAlloc(memory_fragment, sizeof(RxFragment));
+    if ((new_origin != NULL) && (frag != NULL))
+    {
+        (void) memmove(new_origin, origin.data, origin.size);
+        (void) memset(frag, 0, sizeof(RxFragment));
+        frag->tree.base.lr[0]  = NULL;
+        frag->tree.base.lr[1]  = NULL;
+        frag->tree.base.up     = &parent->base;
+        frag->tree.this        = frag;
+        frag->frame_index      = frame_index;
+        frag->base.view        = view;
+        frag->base.origin.data = new_origin;
+        frag->base.origin.size = origin.size;
+        frag->base.view.data   = new_origin + (((const byte_t*) view.data) - ((byte_t*) origin.data));
+        frag->base.view.size   = view.size;
+    }
+    else
+    {
+        TEST_PANIC("Failed to allocate RxFragment");
+    }
+    return frag;
+}
+
+/// This is a simple helper wrapper that constructs a new fragment using a null-terminated string as a payload.
+static RxFragment* makeRxFragmentString(struct UdpardMemoryResource* const memory_fragment,
+                                        struct UdpardMemoryResource* const memory_payload,
+                                        const uint32_t                     frame_index,
+                                        const char* const                  payload,
+                                        RxFragmentTreeNode* const          parent)
+{
+    const size_t sz = strlen(payload);
+    return makeRxFragment(memory_fragment,
+                          memory_payload,
+                          frame_index,
+                          (struct UdpardPayload){.data = payload, .size = sz},
+                          (struct UdpardMutablePayload){.data = (void*) payload, .size = sz},
+                          parent);
+}
+
+static bool compareMemory(const size_t      expected_size,
+                          const void* const expected,
+                          const size_t      actual_size,
+                          const void* const actual)
+{
+    return (expected_size == actual_size) && (memcmp(expected, actual, expected_size) == 0);
+}
+static bool compareStringWithPayload(const char* const expected, const struct UdpardPayload payload)
+{
+    return compareMemory(strlen(expected), expected, payload.size, payload.data);
+}
+
+static RxFrameBase makeRxFrameBase(struct UdpardMemoryResource* const memory_payload,
+                                   const uint32_t                     frame_index,
+                                   const bool                         end_of_transfer,
+                                   const struct UdpardPayload         view,
+                                   const struct UdpardMutablePayload  origin)
+{
+    TEST_PANIC_UNLESS((view.data >= origin.data) && (view.size <= origin.size));
+    TEST_PANIC_UNLESS((((const byte_t*) view.data) + view.size) <= (((const byte_t*) origin.data) + origin.size));
+    RxFrameBase   out        = {0};
+    byte_t* const new_origin = (byte_t*) memAlloc(memory_payload, origin.size);
+    if (new_origin != NULL)
+    {
+        (void) memmove(new_origin, origin.data, origin.size);
+        out.index           = frame_index;
+        out.end_of_transfer = end_of_transfer;
+        out.origin.data     = new_origin;
+        out.origin.size     = origin.size;
+        out.payload.data    = new_origin + (((const byte_t*) view.data) - ((byte_t*) origin.data));
+        out.payload.size    = view.size;
+    }
+    else
+    {
+        TEST_PANIC("Failed to allocate payload buffer for RxFrameBase");
+    }
+    return out;
+}
+
+static RxFrameBase makeRxFrameBaseString(struct UdpardMemoryResource* const memory_payload,
+                                         const uint32_t                     frame_index,
+                                         const bool                         end_of_transfer,
+                                         const char* const                  payload)
+{
+    return makeRxFrameBase(memory_payload,
+                           frame_index,
+                           end_of_transfer,
+                           (struct UdpardPayload){.data = payload, .size = strlen(payload)},
+                           (struct UdpardMutablePayload){.data = (void*) payload, .size = strlen(payload)});
+}
+
+// --------------------------------------------------------------------------------------------------------------------
+
 // Generate reference data using PyCyphal:
 //
 // >>> from pycyphal.transport.udp import UDPFrame
@@ -142,69 +246,6 @@ static void testParseFrameEmpty(void)
 {
     RxFrame rxf = {0};
     TEST_ASSERT_FALSE(rxParseFrame((struct UdpardMutablePayload){.data = "", .size = 0}, &rxf));
-}
-
-/// Moves the payload from the origin into a new buffer and attaches is to the newly allocated fragment.
-/// This function performs two allocations. This function is infallible.
-static RxFragment* makeRxFragment(struct UdpardMemoryResource* const memory_fragment,
-                                  struct UdpardMemoryResource* const memory_payload,
-                                  const uint32_t                     frame_index,
-                                  const struct UdpardPayload         view,
-                                  const struct UdpardMutablePayload  origin,
-                                  RxFragmentTreeNode* const          parent)
-{
-    TEST_PANIC_UNLESS((view.data >= origin.data) && (view.size <= origin.size));
-    TEST_PANIC_UNLESS((((const byte_t*) view.data) + view.size) <= (((const byte_t*) origin.data) + origin.size));
-    byte_t* const     new_origin = (byte_t*) memAlloc(memory_payload, origin.size);
-    RxFragment* const frag       = (RxFragment*) memAlloc(memory_fragment, sizeof(RxFragment));
-    if ((new_origin != NULL) && (frag != NULL))
-    {
-        (void) memmove(new_origin, origin.data, origin.size);
-        (void) memset(frag, 0, sizeof(RxFragment));
-        frag->tree.base.lr[0]  = NULL;
-        frag->tree.base.lr[1]  = NULL;
-        frag->tree.base.up     = &parent->base;
-        frag->tree.this        = frag;
-        frag->frame_index      = frame_index;
-        frag->base.view        = view;
-        frag->base.origin.data = new_origin;
-        frag->base.origin.size = origin.size;
-        frag->base.view.data   = new_origin + (((const byte_t*) view.data) - ((byte_t*) origin.data));
-        frag->base.view.size   = view.size;
-    }
-    else
-    {
-        TEST_PANIC("Failed to allocate RxFragment");
-    }
-    return frag;
-}
-
-/// This is a simple helper wrapper that constructs a new fragment using a null-terminated string as a payload.
-static RxFragment* makeRxFragmentString(struct UdpardMemoryResource* const memory_fragment,
-                                        struct UdpardMemoryResource* const memory_payload,
-                                        const uint32_t                     frame_index,
-                                        const char* const                  payload,
-                                        RxFragmentTreeNode* const          parent)
-{
-    const size_t sz = strlen(payload);
-    return makeRxFragment(memory_fragment,
-                          memory_payload,
-                          frame_index,
-                          (struct UdpardPayload){.data = payload, .size = sz},
-                          (struct UdpardMutablePayload){.data = (void*) payload, .size = sz},
-                          parent);
-}
-
-static bool compareMemory(const size_t      expected_size,
-                          const void* const expected,
-                          const size_t      actual_size,
-                          const void* const actual)
-{
-    return (expected_size == actual_size) && (memcmp(expected, actual, expected_size) == 0);
-}
-static bool compareStringWithPayload(const char* const expected, const struct UdpardPayload payload)
-{
-    return compareMemory(strlen(expected), expected, payload.size, payload.data);
 }
 
 static void testSlotRestartEmpty(void)
@@ -544,10 +585,419 @@ static void testSlotAcceptA(void)
     InstrumentedAllocator mem_payload  = {0};
     instrumentedAllocatorNew(&mem_fragment);
     instrumentedAllocatorNew(&mem_payload);
+    // Set up the RX slot instance we're going to be working with.
+    RxSlot slot = {
+        .ts_usec         = 1234567890,
+        .transfer_id     = 0x1122334455667788,
+        .max_index       = 0,
+        .eot_index       = FRAME_INDEX_UNSET,
+        .accepted_frames = 0,
+        .payload_size    = 0,
+        .fragments       = NULL,
+    };
     size_t                payload_size = 0;
     struct UdpardFragment payload      = {0};
-    (void) payload_size;
-    (void) payload;
+
+    // === TRANSFER ===
+    // Accept a single-frame transfer. Ownership transferred to the payload object.
+    //>>> from pycyphal.transport.commons.crc import CRC32C
+    //>>> CRC32C.new(data_bytes).value_as_bytes
+    TEST_ASSERT_EQUAL(1,
+                      rxSlotAccept(&slot,
+                                   &payload_size,
+                                   &payload,
+                                   makeRxFrameBaseString(&mem_payload.base,
+                                                         0,
+                                                         true,
+                                                         "The fish responsible for drying the sea are not here."
+                                                         "\x04\x1F\x8C\x1F"),
+                                   1000,
+                                   &mem_fragment.base,
+                                   &mem_payload.base));
+    // Verify the memory utilization. Note that the small transfer optimization is in effect: head fragment moved.
+    TEST_ASSERT_EQUAL(1, mem_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(53 + TRANSFER_CRC_SIZE_BYTES, mem_payload.allocated_bytes);
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_bytes);
+    // Verify the payload and free it. Note the CRC is not part of the payload, obviously.
+    TEST_ASSERT_EQUAL(53, payload_size);
+    TEST_ASSERT(compareStringWithPayload("The fish responsible for drying the sea are not here.", payload.view));
+    TEST_ASSERT_NULL(payload.next);
+    udpardFragmentFree(payload, &mem_fragment.base, &mem_payload.base);
+    TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, mem_payload.allocated_bytes);
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_bytes);
+    // Ensure the slot has been restarted correctly.
+    TEST_ASSERT_EQUAL(TIMESTAMP_UNSET, slot.ts_usec);
+    TEST_ASSERT_EQUAL(0x1122334455667789, slot.transfer_id);  // INCREMENTED
+    TEST_ASSERT_EQUAL(0, slot.max_index);
+    TEST_ASSERT_EQUAL(FRAME_INDEX_UNSET, slot.eot_index);
+    TEST_ASSERT_EQUAL(0, slot.accepted_frames);
+    TEST_ASSERT_EQUAL(0, slot.payload_size);
+    TEST_ASSERT_NULL(slot.fragments);
+
+    // === TRANSFER ===
+    // Accept a multi-frame transfer. Here, frames arrive in order.
+    TEST_ASSERT_EQUAL(0,
+                      rxSlotAccept(&slot,
+                                   &payload_size,
+                                   &payload,
+                                   makeRxFrameBaseString(&mem_payload.base,
+                                                         0,
+                                                         false,
+                                                         "We're sorry. What you said is really hard to understand.\n"),
+                                   1000,
+                                   &mem_fragment.base,
+                                   &mem_payload.base));
+    TEST_ASSERT_EQUAL(0,
+                      rxSlotAccept(&slot,
+                                   &payload_size,
+                                   &payload,
+                                   makeRxFrameBaseString(&mem_payload.base,
+                                                         1,
+                                                         false,
+                                                         "The fish who dried the sea went onto land before they did "
+                                                         "this. "),
+                                   1000,
+                                   &mem_fragment.base,
+                                   &mem_payload.base));
+    TEST_ASSERT_EQUAL(1,
+                      rxSlotAccept(&slot,
+                                   &payload_size,
+                                   &payload,
+                                   makeRxFrameBaseString(&mem_payload.base,
+                                                         2,
+                                                         true,
+                                                         "They moved from one dark forest to another dark forest."
+                                                         "?\xAC(\xBE"),
+                                   1000,
+                                   &mem_fragment.base,
+                                   &mem_payload.base));
+    // Verify the memory utilization. Note that the small transfer optimization is in effect: head fragment moved.
+    TEST_ASSERT_EQUAL(3, mem_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(176 + TRANSFER_CRC_SIZE_BYTES, mem_payload.allocated_bytes);
+    TEST_ASSERT_EQUAL(2, mem_fragment.allocated_fragments);  // One freed.
+    TEST_ASSERT_EQUAL(sizeof(RxFragment) * 2, mem_fragment.allocated_bytes);
+    // Verify the payload and free it. Note the CRC is not part of the payload, obviously.
+    TEST_ASSERT_EQUAL(176, payload_size);
+    TEST_ASSERT(compareStringWithPayload("We're sorry. What you said is really hard to understand.\n", payload.view));
+    TEST_ASSERT_NOT_NULL(payload.next);
+    TEST_ASSERT(compareStringWithPayload("The fish who dried the sea went onto land before they did this. ",
+                                         payload.next->view));
+    TEST_ASSERT_NOT_NULL(payload.next->next);
+    TEST_ASSERT(compareStringWithPayload("They moved from one dark forest to another dark forest.",  //
+                                         payload.next->next->view));
+    TEST_ASSERT_NULL(payload.next->next->next);
+    udpardFragmentFree(payload, &mem_fragment.base, &mem_payload.base);
+    TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, mem_payload.allocated_bytes);
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_bytes);
+    // Ensure the slot has been restarted correctly.
+    TEST_ASSERT_EQUAL(TIMESTAMP_UNSET, slot.ts_usec);
+    TEST_ASSERT_EQUAL(0x112233445566778A, slot.transfer_id);  // INCREMENTED
+    TEST_ASSERT_EQUAL(0, slot.max_index);
+    TEST_ASSERT_EQUAL(FRAME_INDEX_UNSET, slot.eot_index);
+    TEST_ASSERT_EQUAL(0, slot.accepted_frames);
+    TEST_ASSERT_EQUAL(0, slot.payload_size);
+    TEST_ASSERT_NULL(slot.fragments);
+
+    // === TRANSFER ===
+    // Accept an out-of-order transfer with extent truncation. Frames arrive out-of-order with duplicates.
+    TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
+    TEST_ASSERT_EQUAL(0,
+                      rxSlotAccept(&slot,
+                                   &payload_size,
+                                   &payload,
+                                   makeRxFrameBaseString(&mem_payload.base,  //
+                                                         2,
+                                                         true,
+                                                         "Toss it over."
+                                                         "K(\xBB\xEE"),
+                                   45,
+                                   &mem_fragment.base,
+                                   &mem_payload.base));
+    TEST_ASSERT_EQUAL(1, mem_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(1, mem_fragment.allocated_fragments);
+    TEST_ASSERT_EQUAL(0,
+                      rxSlotAccept(&slot,
+                                   &payload_size,
+                                   &payload,
+                                   makeRxFrameBaseString(&mem_payload.base,  //
+                                                         1,
+                                                         false,
+                                                         "How do we give it to you?\n"),
+                                   45,
+                                   &mem_fragment.base,
+                                   &mem_payload.base));
+    TEST_ASSERT_EQUAL(2, mem_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(2, mem_fragment.allocated_fragments);
+    TEST_ASSERT_EQUAL(0,
+                      rxSlotAccept(&slot,
+                                   &payload_size,
+                                   &payload,
+                                   makeRxFrameBaseString(&mem_payload.base,  //
+                                                         1,
+                                                         false,
+                                                         "DUPLICATE #1"),
+                                   45,
+                                   &mem_fragment.base,
+                                   &mem_payload.base));
+    TEST_ASSERT_EQUAL(2, mem_payload.allocated_fragments);  // NO CHANGE, duplicate discarded.
+    TEST_ASSERT_EQUAL(2, mem_fragment.allocated_fragments);
+    TEST_ASSERT_EQUAL(0,
+                      rxSlotAccept(&slot,
+                                   &payload_size,
+                                   &payload,
+                                   makeRxFrameBaseString(&mem_payload.base,  //
+                                                         2,
+                                                         true,
+                                                         "DUPLICATE #2"),
+                                   45,
+                                   &mem_fragment.base,
+                                   &mem_payload.base));
+    TEST_ASSERT_EQUAL(2, mem_payload.allocated_fragments);  // NO CHANGE, duplicate discarded.
+    TEST_ASSERT_EQUAL(2, mem_fragment.allocated_fragments);
+    TEST_ASSERT_EQUAL(1,  // transfer completed
+                      rxSlotAccept(&slot,
+                                   &payload_size,
+                                   &payload,
+                                   makeRxFrameBaseString(&mem_payload.base,  //
+                                                         0,
+                                                         false,
+                                                         "I like fish. Can I have it?\n"),
+                                   45,
+                                   &mem_fragment.base,
+                                   &mem_payload.base));
+    // Verify the memory utilization. Note that the small transfer optimization is in effect: head fragment moved.
+    // Due to the implicit truncation (the extent is small), the last fragment is already freed.
+    TEST_ASSERT_EQUAL(2, mem_payload.allocated_fragments);  // One freed because of truncation.
+    TEST_ASSERT_EQUAL(28 + 26, mem_payload.allocated_bytes);
+    TEST_ASSERT_EQUAL(1, mem_fragment.allocated_fragments);  // One freed because truncation, one optimized away.
+    TEST_ASSERT_EQUAL(sizeof(RxFragment) * 1, mem_fragment.allocated_bytes);
+    // Verify the payload and free it. Note the CRC is not part of the payload, obviously.
+    TEST_ASSERT_EQUAL(45, payload_size);  // Equals the extent.
+    TEST_ASSERT(compareStringWithPayload("I like fish. Can I have it?\n", payload.view));
+    TEST_ASSERT_NOT_NULL(payload.next);
+    TEST_ASSERT(compareStringWithPayload("How do we give it", payload.next->view));  // TRUNCATED
+    TEST_ASSERT_NULL(payload.next->next);
+    udpardFragmentFree(payload, &mem_fragment.base, &mem_payload.base);
+    TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, mem_payload.allocated_bytes);
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_bytes);
+    // Ensure the slot has been restarted correctly.
+    TEST_ASSERT_EQUAL(TIMESTAMP_UNSET, slot.ts_usec);
+    TEST_ASSERT_EQUAL(0x112233445566778B, slot.transfer_id);  // INCREMENTED
+    TEST_ASSERT_EQUAL(0, slot.max_index);
+    TEST_ASSERT_EQUAL(FRAME_INDEX_UNSET, slot.eot_index);
+    TEST_ASSERT_EQUAL(0, slot.accepted_frames);
+    TEST_ASSERT_EQUAL(0, slot.payload_size);
+    TEST_ASSERT_NULL(slot.fragments);
+
+    // === TRANSFER ===
+    // Shorter than TRANSFER_CRC_SIZE_BYTES, discarded early.
+    TEST_ASSERT_EQUAL(0,
+                      rxSlotAccept(&slot,
+                                   &payload_size,
+                                   &payload,
+                                   makeRxFrameBaseString(&mem_payload.base, 0, true, ":D"),
+                                   1000,
+                                   &mem_fragment.base,
+                                   &mem_payload.base));
+    TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, mem_payload.allocated_bytes);
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_bytes);
+    // Ensure the slot has been restarted correctly.
+    TEST_ASSERT_EQUAL(TIMESTAMP_UNSET, slot.ts_usec);
+    TEST_ASSERT_EQUAL(0x112233445566778C, slot.transfer_id);  // INCREMENTED
+    TEST_ASSERT_EQUAL(0, slot.max_index);
+    TEST_ASSERT_EQUAL(FRAME_INDEX_UNSET, slot.eot_index);
+    TEST_ASSERT_EQUAL(0, slot.accepted_frames);
+    TEST_ASSERT_EQUAL(0, slot.payload_size);
+    TEST_ASSERT_NULL(slot.fragments);
+
+    // === TRANSFER ===
+    // OOM on reception. Note that the payload allocator does not require restrictions as the library does not
+    // allocate memory for the payload, only for the fragments.
+    mem_fragment.limit_fragments = 1;  // Can only store one fragment, but the transfer requires more.
+    TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
+    TEST_ASSERT_EQUAL(0,
+                      rxSlotAccept(&slot,
+                                   &payload_size,
+                                   &payload,
+                                   makeRxFrameBaseString(&mem_payload.base,  //
+                                                         2,
+                                                         true,
+                                                         "Toss it over."
+                                                         "K(\xBB\xEE"),
+                                   1000,
+                                   &mem_fragment.base,
+                                   &mem_payload.base));
+    TEST_ASSERT_EQUAL(1, mem_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(1, mem_fragment.allocated_fragments);  // Limit reached here. Cannot accept next fragment.
+    TEST_ASSERT_EQUAL(-UDPARD_ERROR_MEMORY,
+                      rxSlotAccept(&slot,
+                                   &payload_size,
+                                   &payload,
+                                   makeRxFrameBaseString(&mem_payload.base,  //
+                                                         1,
+                                                         false,
+                                                         "How do we give it to you?\n"),
+                                   1000,
+                                   &mem_fragment.base,
+                                   &mem_payload.base));
+    TEST_ASSERT_EQUAL(1, mem_payload.allocated_fragments);  // Payload not accepted, cannot alloc fragment.
+    TEST_ASSERT_EQUAL(1, mem_fragment.allocated_fragments);
+    mem_fragment.limit_fragments = 2;  // Lift the limit and repeat the same frame, this time it is accepted.
+    TEST_ASSERT_EQUAL(0,
+                      rxSlotAccept(&slot,
+                                   &payload_size,
+                                   &payload,
+                                   makeRxFrameBaseString(&mem_payload.base,  //
+                                                         0,
+                                                         false,
+                                                         "I like fish. Can I have it?\n"),
+                                   1000,
+                                   &mem_fragment.base,
+                                   &mem_payload.base));
+    TEST_ASSERT_EQUAL(2, mem_payload.allocated_fragments);  // Accepted!
+    TEST_ASSERT_EQUAL(2, mem_fragment.allocated_fragments);
+    TEST_ASSERT_EQUAL(-UDPARD_ERROR_MEMORY,  // Cannot alloc third fragment.
+                      rxSlotAccept(&slot,
+                                   &payload_size,
+                                   &payload,
+                                   makeRxFrameBaseString(&mem_payload.base,  //
+                                                         1,
+                                                         false,
+                                                         "How do we give it to you?\n"),
+                                   1000,
+                                   &mem_fragment.base,
+                                   &mem_payload.base));
+    TEST_ASSERT_EQUAL(2, mem_payload.allocated_fragments);  // Payload not accepted, cannot alloc fragment.
+    TEST_ASSERT_EQUAL(2, mem_fragment.allocated_fragments);
+    mem_fragment.limit_fragments = 3;  // Lift the limit and repeat the same frame, this time it is accepted.
+    TEST_ASSERT_EQUAL(1,               // transfer completed
+                      rxSlotAccept(&slot,
+                                   &payload_size,
+                                   &payload,
+                                   makeRxFrameBaseString(&mem_payload.base,  //
+                                                         1,
+                                                         false,
+                                                         "How do we give it to you?\n"),
+                                   1000,
+                                   &mem_fragment.base,
+                                   &mem_payload.base));
+    // Verify the memory utilization. Note that the small transfer optimization is in effect: head fragment moved.
+    TEST_ASSERT_EQUAL(3, mem_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(67 + TRANSFER_CRC_SIZE_BYTES, mem_payload.allocated_bytes);
+    TEST_ASSERT_EQUAL(2, mem_fragment.allocated_fragments);
+    TEST_ASSERT_EQUAL(sizeof(RxFragment) * 2, mem_fragment.allocated_bytes);
+    // Verify the payload and free it. Note the CRC is not part of the payload, obviously.
+    TEST_ASSERT_EQUAL(67, payload_size);  // Equals the extent.
+    TEST_ASSERT(compareStringWithPayload("I like fish. Can I have it?\n", payload.view));
+    TEST_ASSERT_NOT_NULL(payload.next);
+    TEST_ASSERT(compareStringWithPayload("How do we give it to you?\n", payload.next->view));
+    TEST_ASSERT_NOT_NULL(payload.next->next);
+    TEST_ASSERT(compareStringWithPayload("Toss it over.", payload.next->next->view));
+    TEST_ASSERT_NULL(payload.next->next->next);
+    udpardFragmentFree(payload, &mem_fragment.base, &mem_payload.base);
+    TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, mem_payload.allocated_bytes);
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_bytes);
+    // Ensure the slot has been restarted correctly.
+    TEST_ASSERT_EQUAL(TIMESTAMP_UNSET, slot.ts_usec);
+    TEST_ASSERT_EQUAL(0x112233445566778D, slot.transfer_id);  // INCREMENTED
+    TEST_ASSERT_EQUAL(0, slot.max_index);
+    TEST_ASSERT_EQUAL(FRAME_INDEX_UNSET, slot.eot_index);
+    TEST_ASSERT_EQUAL(0, slot.accepted_frames);
+    TEST_ASSERT_EQUAL(0, slot.payload_size);
+    TEST_ASSERT_NULL(slot.fragments);
+
+    // === TRANSFER ===
+    // Inconsistent EOT flag.
+    TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
+    TEST_ASSERT_EQUAL(0,  // Just an ordinary transfer passing by, what could go wrong?
+                      rxSlotAccept(&slot,
+                                   &payload_size,
+                                   &payload,
+                                   makeRxFrameBaseString(&mem_payload.base,  //
+                                                         2,
+                                                         true,
+                                                         "Toss it over."
+                                                         "K(\xBB\xEE"),
+                                   45,
+                                   &mem_fragment.base,
+                                   &mem_payload.base));
+    TEST_ASSERT_EQUAL(1, mem_payload.allocated_fragments);  // Okay, accepted, some data stored...
+    TEST_ASSERT_EQUAL(1, mem_fragment.allocated_fragments);
+    TEST_ASSERT_EQUAL(0,
+                      rxSlotAccept(&slot,
+                                   &payload_size,
+                                   &payload,
+                                   makeRxFrameBaseString(&mem_payload.base,  //
+                                                         1,                  //
+                                                         true,               // SURPRISE! EOT is set in distinct frames!
+                                                         "How do we give it to you?\n"),
+                                   45,
+                                   &mem_fragment.base,
+                                   &mem_payload.base));
+    TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);  // This is outrageous. Of course we have to drop everything.
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
+    // Ensure the slot has been restarted correctly.
+    TEST_ASSERT_EQUAL(TIMESTAMP_UNSET, slot.ts_usec);
+    TEST_ASSERT_EQUAL(0x112233445566778E, slot.transfer_id);  // INCREMENTED
+    TEST_ASSERT_EQUAL(0, slot.max_index);
+    TEST_ASSERT_EQUAL(FRAME_INDEX_UNSET, slot.eot_index);
+    TEST_ASSERT_EQUAL(0, slot.accepted_frames);
+    TEST_ASSERT_EQUAL(0, slot.payload_size);
+    TEST_ASSERT_NULL(slot.fragments);
+
+    // === TRANSFER ===
+    // More frames past the EOT; or, in other words, the frame index where EOT is set is not the maximum index.
+    TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
+    TEST_ASSERT_EQUAL(0,
+                      rxSlotAccept(&slot,
+                                   &payload_size,
+                                   &payload,
+                                   makeRxFrameBaseString(&mem_payload.base,  //
+                                                         2,
+                                                         true,
+                                                         "Toss it over."
+                                                         "K(\xBB\xEE"),
+                                   45,
+                                   &mem_fragment.base,
+                                   &mem_payload.base));
+    TEST_ASSERT_EQUAL(1, mem_payload.allocated_fragments);  // Okay, accepted, some data stored...
+    TEST_ASSERT_EQUAL(1, mem_fragment.allocated_fragments);
+    TEST_ASSERT_EQUAL(0,
+                      rxSlotAccept(&slot,
+                                   &payload_size,
+                                   &payload,
+                                   makeRxFrameBaseString(&mem_payload.base,  //
+                                                         3,                  // SURPRISE! Frame #3 while #2 was EOT!
+                                                         false,
+                                                         "How do we give it to you?\n"),
+                                   45,
+                                   &mem_fragment.base,
+                                   &mem_payload.base));
+    TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);  // This is outrageous. Of course we have to drop everything.
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
+    // Ensure the slot has been restarted correctly.
+    TEST_ASSERT_EQUAL(TIMESTAMP_UNSET, slot.ts_usec);
+    TEST_ASSERT_EQUAL(0x112233445566778F, slot.transfer_id);  // INCREMENTED
+    TEST_ASSERT_EQUAL(0, slot.max_index);
+    TEST_ASSERT_EQUAL(FRAME_INDEX_UNSET, slot.eot_index);
+    TEST_ASSERT_EQUAL(0, slot.accepted_frames);
+    TEST_ASSERT_EQUAL(0, slot.payload_size);
+    TEST_ASSERT_NULL(slot.fragments);
 }
 
 void setUp(void) {}

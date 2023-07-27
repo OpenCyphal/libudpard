@@ -61,6 +61,7 @@ typedef struct
     uint_least8_t               canary[INSTRUMENTED_ALLOCATOR_CANARY_SIZE];
     /// The limit can be changed at any moment to control the maximum amount of memory that can be allocated.
     /// It may be set to a value less than the currently allocated amount.
+    size_t limit_fragments;
     size_t limit_bytes;
     /// The current state of the allocator.
     size_t allocated_fragments;
@@ -72,7 +73,9 @@ static inline void* instrumentedAllocatorAllocate(struct UdpardMemoryResource* c
     InstrumentedAllocator* const self = (InstrumentedAllocator*) base;
     TEST_PANIC_UNLESS(self->base.allocate == &instrumentedAllocatorAllocate);
     void* result = NULL;
-    if ((size > 0U) && ((self->allocated_bytes + size) <= self->limit_bytes))
+    if ((size > 0U) &&                                            //
+        ((self->allocated_bytes + size) <= self->limit_bytes) &&  //
+        ((self->allocated_fragments + 1U) <= self->limit_fragments))
     {
         const size_t size_with_canaries = size + ((size_t) INSTRUMENTED_ALLOCATOR_CANARY_SIZE * 2U);
         void*        origin             = malloc(size_with_canaries);
@@ -142,6 +145,7 @@ static inline void instrumentedAllocatorNew(InstrumentedAllocator* const self)
     {
         self->canary[i] = (uint_least8_t) (rand() % (UINT_LEAST8_MAX + 1));
     }
+    self->limit_fragments     = SIZE_MAX;
     self->limit_bytes         = SIZE_MAX;
     self->allocated_fragments = 0U;
     self->allocated_bytes     = 0U;

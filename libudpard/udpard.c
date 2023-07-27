@@ -1116,6 +1116,7 @@ static inline int_fast8_t rxSlotAccept(RxSlot* const                      self,
         frag->this->base.view   = frame.payload;
         frag->this->base.origin = frame.origin;
         self->payload_size += frame.payload.size;
+        self->accepted_frames++;
         release = false;  // Ownership of the payload buffer has been transferred to the fragment tree.
     }
     // THIRD: Detect transfer completion. If complete, eject the payload from the fragment tree and check its CRC.
