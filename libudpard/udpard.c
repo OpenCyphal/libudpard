@@ -38,6 +38,7 @@ static const byte_t       ByteMask  = 0xFFU;
 #define RX_SLOT_COUNT 2
 #define TIMESTAMP_UNSET UINT64_MAX
 #define FRAME_INDEX_UNSET UINT32_MAX
+#define TRANSFER_ID_UNSET UINT64_MAX
 
 typedef struct
 {
@@ -834,10 +835,10 @@ static inline void rxFragmentFree(struct UdpardFragment* const       head,
 /// (this is possible because all common CRC functions are linear).
 typedef struct
 {
-    UdpardMicrosecond   ts_usec;  ///< Timestamp of the earliest frame; TIMESTAMP_UNSET initially.
-    UdpardTransferID    transfer_id;
-    uint32_t            max_index;        ///< Maximum observed frame index in this transfer (so far); zero initially.
-    uint32_t            eot_index;        ///< Frame index where the EOT flag was observed; FRAME_INDEX_UNSET initially.
+    UdpardMicrosecond   ts_usec;      ///< Timestamp of the earliest frame; TIMESTAMP_UNSET upon restart.
+    UdpardTransferID    transfer_id;  ///< When first constructed, this shall be set to UINT64_MAX (unreachable value).
+    uint32_t            max_index;    ///< Maximum observed frame index in this transfer (so far); zero upon restart.
+    uint32_t            eot_index;    ///< Frame index where the EOT flag was observed; FRAME_INDEX_UNSET upon restart.
     uint32_t            accepted_frames;  ///< Number of frames accepted so far.
     size_t              payload_size;
     RxFragmentTreeNode* fragments;
@@ -1143,6 +1144,7 @@ static inline int_fast8_t rxSlotAccept(RxSlot* const                      self,
 finish:
     if (restart)
     {
+        // Increment is necessary to weed out duplicate transfers.
         rxSlotRestart(self, self->transfer_id + 1U, memory_fragment, memory_payload);
     }
     if (release)
@@ -1185,13 +1187,21 @@ static inline int_fast8_t rxIfaceAccept(RxIface* const                     self,
         // While we're at it, find the oldest slot as a replacement candidate.
         for (uint_fast8_t i = 0; i < RX_SLOT_COUNT; i++)
         {
-            is_future_tid = is_future_tid && (frame.meta.transfer_id > self->slots[i].transfer_id);
-            if (self->slots[i].transfer_id < victim->transfer_id)
+            RxSlot* const it = &self->slots[i];
+            is_future_tid    = is_future_tid && ((it->transfer_id < frame.meta.transfer_id) ||  // Keep state if unused.
+                                              (it->transfer_id == TRANSFER_ID_UNSET));
+            // The timestamp is UNSET when the slot is waiting for the next transfer (or unused -- special case).
+            // Such slots are the best candidates for replacement because reusing them does not cause loss of
+            // transfers that are in the process of being reassembled. If there are no such slots, we must
+            // sacrifice the one whose first frame has arrived the longest time ago.
+            if ((it->ts_usec == TIMESTAMP_UNSET) ||
+                ((victim->ts_usec != TIMESTAMP_UNSET) && (it->ts_usec < victim->ts_usec)))
             {
-                victim = &self->slots[i];
+                victim = it;
             }
         }
-        const bool is_tid_timeout = (ts_usec - self->ts_usec) > transfer_id_timeout_usec;
+        const bool is_tid_timeout = (self->ts_usec == TIMESTAMP_UNSET) ||  //
+                                    ((ts_usec - self->ts_usec) > transfer_id_timeout_usec);
         if (is_tid_timeout || is_future_tid)
         {
             rxSlotRestart(victim, frame.meta.transfer_id, memory_fragment, memory_payload);
@@ -1219,6 +1229,7 @@ static inline int_fast8_t rxIfaceAccept(RxIface* const                     self,
                               memory_payload);
         if (result > 0)  // Transfer successfully received, populate the transfer descriptor for the client.
         {
+            self->ts_usec                     = ts;
             received_transfer->timestamp_usec = ts;
             received_transfer->priority       = frame.meta.priority;
             received_transfer->source_node_id = frame.meta.src_node_id;
@@ -1243,7 +1254,7 @@ static inline void rxIfaceInit(RxIface* const                     self,
     for (uint_fast8_t i = 0; i < RX_SLOT_COUNT; i++)
     {
         self->slots[i].fragments = NULL;
-        rxSlotRestart(&self->slots[i], 0, memory_fragment, memory_payload);
+        rxSlotRestart(&self->slots[i], TRANSFER_ID_UNSET, memory_fragment, memory_payload);
     }
 }
 
