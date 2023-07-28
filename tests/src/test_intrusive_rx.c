@@ -1107,6 +1107,11 @@ static void testIfaceCheckTransferIDTimeout(void)
     TEST_ASSERT_TRUE(rxIfaceCheckTransferIDTimeout(&iface, 3150, 100));   // Ooh yes.
 }
 
+static void testIfaceFindMatchingSlot(void)
+{
+    // TODO FIXME add tests
+}
+
 static void testIfaceAcceptA(void)
 {
     InstrumentedAllocator mem_fragment = {0};
@@ -1643,6 +1648,251 @@ static void testIfaceAcceptB(void)
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
 }
 
+static void testIfaceAcceptC(void)
+{
+    InstrumentedAllocator mem_fragment = {0};
+    InstrumentedAllocator mem_payload  = {0};
+    instrumentedAllocatorNew(&mem_fragment);
+    instrumentedAllocatorNew(&mem_payload);
+    RxIface iface;
+    rxIfaceInit(&iface, &mem_fragment.base, &mem_payload.base);
+    TEST_ASSERT_EQUAL(TIMESTAMP_UNSET, iface.ts_usec);
+    for (size_t i = 0; i < RX_SLOT_COUNT; i++)
+    {
+        TEST_ASSERT_EQUAL(TIMESTAMP_UNSET, iface.slots[i].ts_usec);
+        TEST_ASSERT_EQUAL(TRANSFER_ID_UNSET, iface.slots[i].transfer_id);
+        TEST_ASSERT_EQUAL(0, iface.slots[i].max_index);
+        TEST_ASSERT_EQUAL(FRAME_INDEX_UNSET, iface.slots[i].eot_index);
+        TEST_ASSERT_EQUAL(0, iface.slots[i].accepted_frames);
+        TEST_ASSERT_EQUAL(0, iface.slots[i].payload_size);
+        TEST_ASSERT_NULL(iface.slots[i].fragments);
+    }
+    struct UdpardRxTransfer transfer = {0};
+    // === TRANSFER ===
+    // Send interleaving multi-frame transfers such that in the end slots have the same transfer-ID value:
+    // (primes for duplicates):
+    //  A0 B0 A1 C0 B1 C1 B1'
+    // The purpose of this test is to ensure that the case of multiple RX slots having the same transfer-ID is
+    // handled correctly (including correct duplicate detection).
+    TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
+    // A0
+    TEST_ASSERT_EQUAL(0,
+                      rxIfaceAccept(&iface,
+                                    2000000010,
+                                    makeRxFrameString(&mem_payload.base,  //
+                                                      (TransferMetadata){.priority       = UdpardPriorityOptional,
+                                                                         .src_node_id    = 1111,
+                                                                         .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                                                                         .data_specifier = 0,
+                                                                         .transfer_id    = 0xA},
+                                                      0,
+                                                      false,
+                                                      "A0"),
+                                    &transfer,
+                                    1000,
+                                    UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC,
+                                    &mem_fragment.base,
+                                    &mem_payload.base));
+    TEST_ASSERT_EQUAL(TIMESTAMP_UNSET, iface.ts_usec);
+    TEST_ASSERT_EQUAL(TRANSFER_ID_UNSET, iface.slots[0].transfer_id);
+    TEST_ASSERT_EQUAL(0xA, iface.slots[1].transfer_id);
+    TEST_ASSERT_EQUAL(1, mem_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(1, mem_fragment.allocated_fragments);
+    // B0
+    TEST_ASSERT_EQUAL(0,
+                      rxIfaceAccept(&iface,
+                                    2000000020,
+                                    makeRxFrameString(&mem_payload.base,  //
+                                                      (TransferMetadata){.priority       = UdpardPriorityExceptional,
+                                                                         .src_node_id    = 2222,
+                                                                         .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                                                                         .data_specifier = 0,
+                                                                         .transfer_id    = 0xB},
+                                                      0,
+                                                      false,
+                                                      "B0"),
+                                    &transfer,
+                                    1000,
+                                    UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC,
+                                    &mem_fragment.base,
+                                    &mem_payload.base));
+    TEST_ASSERT_EQUAL(TIMESTAMP_UNSET, iface.ts_usec);
+    TEST_ASSERT_EQUAL(0xB, iface.slots[0].transfer_id);
+    TEST_ASSERT_EQUAL(0xA, iface.slots[1].transfer_id);
+    TEST_ASSERT_EQUAL(2, mem_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(2, mem_fragment.allocated_fragments);
+    // A1
+    TEST_ASSERT_EQUAL(1,
+                      rxIfaceAccept(&iface,
+                                    2000000030,
+                                    makeRxFrameString(&mem_payload.base,  //
+                                                      (TransferMetadata){.priority       = UdpardPriorityOptional,
+                                                                         .src_node_id    = 1111,
+                                                                         .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                                                                         .data_specifier = 0,
+                                                                         .transfer_id    = 0xA},
+                                                      1,
+                                                      true,
+                                                      "A1"
+                                                      "\xc7\xac_\x81"),
+                                    &transfer,
+                                    1000,
+                                    UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC,
+                                    &mem_fragment.base,
+                                    &mem_payload.base));
+    // Check the received transfer.
+    TEST_ASSERT_EQUAL(2000000010, iface.ts_usec);
+    TEST_ASSERT_EQUAL(0xB, iface.slots[0].transfer_id);
+    TEST_ASSERT_EQUAL(0xB, iface.slots[1].transfer_id);  // SAME VALUE!!1
+    TEST_ASSERT_EQUAL(3, mem_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(2, mem_fragment.allocated_fragments);  // Head optimization in effect.
+    TEST_ASSERT_EQUAL(UdpardPriorityOptional, transfer.priority);
+    TEST_ASSERT_EQUAL(4, transfer.payload_size);
+    TEST_ASSERT(compareStringWithPayload("A0", transfer.payload.view));
+    TEST_ASSERT_NOT_NULL(transfer.payload.next);
+    TEST_ASSERT(compareStringWithPayload("A1", transfer.payload.next->view));
+    TEST_ASSERT_NULL(transfer.payload.next->next);
+    udpardFragmentFree(transfer.payload, &mem_fragment.base, &mem_payload.base);
+    TEST_ASSERT_EQUAL(1, mem_payload.allocated_fragments);  // B0 still allocated.
+    TEST_ASSERT_EQUAL(1, mem_fragment.allocated_fragments);
+    // C0
+    TEST_ASSERT_EQUAL(0,
+                      rxIfaceAccept(&iface,
+                                    2000000040,
+                                    makeRxFrameString(&mem_payload.base,  //
+                                                      (TransferMetadata){.priority       = UdpardPriorityExceptional,
+                                                                         .src_node_id    = 3333,
+                                                                         .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                                                                         .data_specifier = 0,
+                                                                         .transfer_id    = 0xC},
+                                                      0,
+                                                      false,
+                                                      "C0"),
+                                    &transfer,
+                                    1000,
+                                    UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC,
+                                    &mem_fragment.base,
+                                    &mem_payload.base));
+    TEST_ASSERT_EQUAL(2000000010, iface.ts_usec);  // <- unchanged.
+    TEST_ASSERT_EQUAL(0xB, iface.slots[0].transfer_id);
+    TEST_ASSERT_EQUAL(0xC, iface.slots[1].transfer_id);     // <- reused for C.
+    TEST_ASSERT_EQUAL(2, mem_payload.allocated_fragments);  // Two transfers in transit again: B and C.
+    TEST_ASSERT_EQUAL(2, mem_fragment.allocated_fragments);
+    // B1
+    TEST_ASSERT_EQUAL(1,
+                      rxIfaceAccept(&iface,
+                                    2000000050,
+                                    makeRxFrameString(&mem_payload.base,  //
+                                                      (TransferMetadata){.priority       = UdpardPriorityExceptional,
+                                                                         .src_node_id    = 2222,
+                                                                         .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                                                                         .data_specifier = 0,
+                                                                         .transfer_id    = 0xB},
+                                                      1,
+                                                      true,
+                                                      "B1"
+                                                      "g\x8D\x9A\xD7"),
+                                    &transfer,
+                                    1000,
+                                    UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC,
+                                    &mem_fragment.base,
+                                    &mem_payload.base));
+    // Check the received transfer.
+    TEST_ASSERT_EQUAL(2000000020, iface.ts_usec);
+    TEST_ASSERT_EQUAL(0xC, iface.slots[0].transfer_id);  // <-- INCREMENTED, SO
+    TEST_ASSERT_EQUAL(0xC, iface.slots[1].transfer_id);  // WE HAVE TWO IDENTICAL VALUES AGAIN!
+    TEST_ASSERT_EQUAL(3, mem_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(2, mem_fragment.allocated_fragments);
+    TEST_ASSERT_EQUAL(UdpardPriorityExceptional, transfer.priority);
+    TEST_ASSERT_EQUAL(4, transfer.payload_size);
+    TEST_ASSERT(compareStringWithPayload("B0", transfer.payload.view));
+    TEST_ASSERT_NOT_NULL(transfer.payload.next);
+    TEST_ASSERT(compareStringWithPayload("B1", transfer.payload.next->view));
+    TEST_ASSERT_NULL(transfer.payload.next->next);
+    udpardFragmentFree(transfer.payload, &mem_fragment.base, &mem_payload.base);
+    TEST_ASSERT_EQUAL(1, mem_payload.allocated_fragments);  // C0 is still allocated.
+    TEST_ASSERT_EQUAL(1, mem_fragment.allocated_fragments);
+    // C1
+    // This is the DIFFICULT CASE because we have two RX slots with the same transfer-ID, but THE FIRST ONE IS NOT
+    // THE ONE THAT WE NEED! Watch what happens next.
+    TEST_ASSERT_EQUAL(1,
+                      rxIfaceAccept(&iface,
+                                    2000000060,
+                                    makeRxFrameString(&mem_payload.base,  //
+                                                      (TransferMetadata){.priority       = UdpardPriorityExceptional,
+                                                                         .src_node_id    = 3333,
+                                                                         .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                                                                         .data_specifier = 0,
+                                                                         .transfer_id    = 0xC},
+                                                      1,
+                                                      true,
+                                                      "C1"
+                                                      "\xA8\xBF}\x19"),
+                                    &transfer,
+                                    1000,
+                                    UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC,
+                                    &mem_fragment.base,
+                                    &mem_payload.base));
+    // Check the received transfer.
+    TEST_ASSERT_EQUAL(2000000040, iface.ts_usec);
+    TEST_ASSERT_EQUAL(0xC, iface.slots[0].transfer_id);  // Old, unused.
+    TEST_ASSERT_EQUAL(0xD, iface.slots[1].transfer_id);  // INCREMENTED!
+    TEST_ASSERT_EQUAL(2, mem_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(1, mem_fragment.allocated_fragments);
+    TEST_ASSERT_EQUAL(UdpardPriorityExceptional, transfer.priority);
+    TEST_ASSERT_EQUAL(3333, transfer.source_node_id);
+    TEST_ASSERT_EQUAL(4, transfer.payload_size);
+    TEST_ASSERT(compareStringWithPayload("C0", transfer.payload.view));
+    TEST_ASSERT_NOT_NULL(transfer.payload.next);
+    TEST_ASSERT(compareStringWithPayload("C1", transfer.payload.next->view));
+    TEST_ASSERT_NULL(transfer.payload.next->next);
+    udpardFragmentFree(transfer.payload, &mem_fragment.base, &mem_payload.base);
+    TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
+    // B0 duplicate multi-frame; shall be rejected.
+    TEST_ASSERT_EQUAL(0,
+                      rxIfaceAccept(&iface,
+                                    2000000070,
+                                    makeRxFrameString(&mem_payload.base,  //
+                                                      (TransferMetadata){.priority       = UdpardPriorityExceptional,
+                                                                         .src_node_id    = 2222,
+                                                                         .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                                                                         .data_specifier = 0,
+                                                                         .transfer_id    = 0xB},
+                                                      0,
+                                                      false,
+                                                      "B0"),
+                                    &transfer,
+                                    1000,
+                                    UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC,
+                                    &mem_fragment.base,
+                                    &mem_payload.base));
+    TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
+    // B0 duplicate single-frame; shall be rejected.
+    TEST_ASSERT_EQUAL(0,
+                      rxIfaceAccept(&iface,
+                                    2000000080,
+                                    makeRxFrameString(&mem_payload.base,  //
+                                                      (TransferMetadata){.priority       = UdpardPriorityExceptional,
+                                                                         .src_node_id    = 2222,
+                                                                         .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                                                                         .data_specifier = 0,
+                                                                         .transfer_id    = 0xB},
+                                                      0,
+                                                      true,
+                                                      "B0"
+                                                      "g\x8D\x9A\xD7"),
+                                    &transfer,
+                                    1000,
+                                    UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC,
+                                    &mem_fragment.base,
+                                    &mem_payload.base));
+    TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
+}
+
 void setUp(void) {}
 
 void tearDown(void) {}
@@ -1672,8 +1922,10 @@ int main(void)
     // iface
     RUN_TEST(testIfaceIsFutureTransferID);
     RUN_TEST(testIfaceCheckTransferIDTimeout);
+    RUN_TEST(testIfaceFindMatchingSlot);
     RUN_TEST(testIfaceAcceptA);
     RUN_TEST(testIfaceAcceptB);
+    RUN_TEST(testIfaceAcceptC);
     return UNITY_END();
 }
 

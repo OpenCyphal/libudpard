@@ -1190,6 +1190,35 @@ static inline bool rxIfaceCheckTransferIDTimeout(const RxIface* const    self,
            ((ts_usec >= most_recent_ts_usec) && ((ts_usec - most_recent_ts_usec) > transfer_id_timeout_usec));
 }
 
+/// Traverses the list of slot trying to find a slot with a matching transfer-ID that is already IN PROGRESS.
+/// If there is no such slot, tries again without the IN PROGRESS requirement.
+/// The purpose of this complicated dual check is to support the case where multiple slots have the same
+/// transfer-ID, which may occur with interleaved transfers.
+static inline RxSlot* rxIfaceFindMatchingSlot(RxIface* const self, const UdpardTransferID transfer_id)
+{
+    RxSlot* slot = NULL;
+    for (uint_fast8_t i = 0; i < RX_SLOT_COUNT; i++)
+    {
+        if ((self->slots[i].transfer_id == transfer_id) && (self->slots[i].ts_usec != TIMESTAMP_UNSET))
+        {
+            slot = &self->slots[i];
+            break;
+        }
+    }
+    if (slot == NULL)
+    {
+        for (uint_fast8_t i = 0; i < RX_SLOT_COUNT; i++)
+        {
+            if (self->slots[i].transfer_id == transfer_id)
+            {
+                slot = &self->slots[i];
+                break;
+            }
+        }
+    }
+    return slot;
+}
+
 /// This function is invoked when a new datagram pertaining to a certain session is received on an interface.
 /// This function will either move the frame payload into the session, or free it if it cannot be made use of.
 /// Returns: 1 -- transfer available; 0 -- transfer not yet available; <0 -- error.
@@ -1203,16 +1232,7 @@ static inline int_fast8_t rxIfaceAccept(RxIface* const                     self,
                                         struct UdpardMemoryResource* const memory_payload)
 {
     UDPARD_ASSERT((self != NULL) && (frame.base.payload.size > 0) && (received_transfer != NULL));
-    RxSlot* slot = NULL;
-    // First we should check if there is an existing slot for this transfer; if yes, this is the simplest case.
-    for (uint_fast8_t i = 0; i < RX_SLOT_COUNT; i++)
-    {
-        if (self->slots[i].transfer_id == frame.meta.transfer_id)
-        {
-            slot = &self->slots[i];
-            break;
-        }
-    }
+    RxSlot* slot = rxIfaceFindMatchingSlot(self, frame.meta.transfer_id);
     // If there is no suitable slot, we should check if the transfer is a future one (high transfer-ID),
     // or a transfer-ID timeout has occurred. In this case we sacrifice the oldest slot.
     if (slot == NULL)
