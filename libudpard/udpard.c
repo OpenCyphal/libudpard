@@ -846,7 +846,7 @@ typedef struct
 
 typedef struct
 {
-    UdpardMicrosecond ts_usec;  ///< The timestamp of the last transfer to arrive on this interface.
+    UdpardMicrosecond ts_usec;  ///< The timestamp of the last valid transfer to arrive on this interface.
     RxSlot            slots[RX_SLOT_COUNT];
 } RxIface;
 
@@ -1154,6 +1154,42 @@ finish:
     return result;
 }
 
+/// Whether the supplied transfer-ID is greater than all transfer-IDs in the RX slots.
+/// This indicates that the new transfer is not a duplicate and should be accepted.
+static inline bool rxIfaceIsFutureTransferID(const RxIface* const self, const UdpardTransferID transfer_id)
+{
+    bool is_future_tid = true;
+    for (uint_fast8_t i = 0; i < RX_SLOT_COUNT; i++)  // Expected to be unrolled by the compiler.
+    {
+        is_future_tid = is_future_tid && ((self->slots[i].transfer_id < transfer_id) ||
+                                          (self->slots[i].transfer_id == TRANSFER_ID_UNSET));
+    }
+    return is_future_tid;
+}
+
+/// Whether the time that has passed since the last accepted first frame of a transfer exceeds the TID timeout.
+/// This indicates that the transfer should be accepted even if its transfer-ID is not greater than all transfer-IDs
+/// in the RX slots.
+static inline bool rxIfaceCheckTransferIDTimeout(const RxIface* const    self,
+                                                 const UdpardMicrosecond ts_usec,
+                                                 const UdpardMicrosecond transfer_id_timeout_usec)
+{
+    // We use the RxIface state here because the RxSlot state is reset between transfers.
+    // If there is reassembly in progress, we want to use the timestamps from these in-progress transfers,
+    // as that eliminates the risk of a false-positive TID-timeout detection.
+    UdpardMicrosecond most_recent_ts_usec = self->ts_usec;
+    for (uint_fast8_t i = 0; i < RX_SLOT_COUNT; i++)  // Expected to be unrolled by the compiler.
+    {
+        if ((most_recent_ts_usec == TIMESTAMP_UNSET) ||
+            ((self->slots[i].ts_usec != TIMESTAMP_UNSET) && (self->slots[i].ts_usec > most_recent_ts_usec)))
+        {
+            most_recent_ts_usec = self->slots[i].ts_usec;
+        }
+    }
+    return (most_recent_ts_usec == TIMESTAMP_UNSET) ||
+           ((ts_usec >= most_recent_ts_usec) && ((ts_usec - most_recent_ts_usec) > transfer_id_timeout_usec));
+}
+
 /// This function is invoked when a new datagram pertaining to a certain session is received on an interface.
 /// This function will either move the frame payload into the session, or free it if it cannot be made use of.
 /// Returns: 1 -- transfer available; 0 -- transfer not yet available; <0 -- error.
@@ -1181,28 +1217,22 @@ static inline int_fast8_t rxIfaceAccept(RxIface* const                     self,
     // or a transfer-ID timeout has occurred. In this case we sacrifice the oldest slot.
     if (slot == NULL)
     {
-        bool    is_future_tid = true;
-        RxSlot* victim        = &self->slots[0];
-        // Check if the newly received transfer-ID is higher than any of the existing slots.
-        // While we're at it, find the oldest slot as a replacement candidate.
-        for (uint_fast8_t i = 0; i < RX_SLOT_COUNT; i++)
+        // The timestamp is UNSET when the slot is waiting for the next transfer.
+        // Such slots are the best candidates for replacement because reusing them does not cause loss of
+        // transfers that are in the process of being reassembled. If there are no such slots, we must
+        // sacrifice the one whose first frame has arrived the longest time ago.
+        RxSlot* victim = &self->slots[0];
+        for (uint_fast8_t i = 0; i < RX_SLOT_COUNT; i++)  // Expected to be unrolled by the compiler.
         {
-            RxSlot* const it = &self->slots[i];
-            is_future_tid    = is_future_tid && ((it->transfer_id < frame.meta.transfer_id) ||  // Keep state if unused.
-                                              (it->transfer_id == TRANSFER_ID_UNSET));
-            // The timestamp is UNSET when the slot is waiting for the next transfer (or unused -- special case).
-            // Such slots are the best candidates for replacement because reusing them does not cause loss of
-            // transfers that are in the process of being reassembled. If there are no such slots, we must
-            // sacrifice the one whose first frame has arrived the longest time ago.
-            if ((it->ts_usec == TIMESTAMP_UNSET) ||
-                ((victim->ts_usec != TIMESTAMP_UNSET) && (it->ts_usec < victim->ts_usec)))
+            if ((self->slots[i].ts_usec == TIMESTAMP_UNSET) ||
+                ((victim->ts_usec != TIMESTAMP_UNSET) && (self->slots[i].ts_usec < victim->ts_usec)))
             {
-                victim = it;
+                victim = &self->slots[i];
             }
         }
-        const bool is_tid_timeout = (self->ts_usec == TIMESTAMP_UNSET) ||  //
-                                    ((ts_usec - self->ts_usec) > transfer_id_timeout_usec);
-        if (is_tid_timeout || is_future_tid)
+        const bool is_future_tid  = rxIfaceIsFutureTransferID(self, frame.meta.transfer_id);
+        const bool is_tid_timeout = rxIfaceCheckTransferIDTimeout(self, ts_usec, transfer_id_timeout_usec);
+        if (is_future_tid || is_tid_timeout)
         {
             rxSlotRestart(victim, frame.meta.transfer_id, memory_fragment, memory_payload);
             slot = victim;
@@ -1229,7 +1259,7 @@ static inline int_fast8_t rxIfaceAccept(RxIface* const                     self,
                               memory_payload);
         if (result > 0)  // Transfer successfully received, populate the transfer descriptor for the client.
         {
-            self->ts_usec                     = ts;
+            self->ts_usec                     = ts;  // Update the last valid transfer timestamp on this iface.
             received_transfer->timestamp_usec = ts;
             received_transfer->priority       = frame.meta.priority;
             received_transfer->source_node_id = frame.meta.src_node_id;
