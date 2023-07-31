@@ -121,6 +121,11 @@ static RxFrame makeRxFrameString(struct UdpardMemoryResource* const memory_paylo
                      .meta = meta};
 }
 
+static RxMemory makeRxMemory(InstrumentedAllocator* const fragment, InstrumentedAllocator* const payload)
+{
+    return (RxMemory){.fragment = &fragment->base, .payload = &payload->base};
+}
+
 // --------------------------------------------------------------------------------------------------------------------
 
 // Generate reference data using PyCyphal:
@@ -270,7 +275,7 @@ static void testSlotRestartEmpty(void)
         .fragments       = NULL,
     };
     InstrumentedAllocator alloc = {0};
-    rxSlotRestart(&slot, 0x1122334455667788ULL, &alloc.base, &alloc.base);
+    rxSlotRestart(&slot, 0x1122334455667788ULL, makeRxMemory(&alloc, &alloc));
     TEST_ASSERT_EQUAL(TIMESTAMP_UNSET, slot.ts_usec);
     TEST_ASSERT_EQUAL(0x1122334455667788ULL, slot.transfer_id);
     TEST_ASSERT_EQUAL(0, slot.max_index);
@@ -324,7 +329,7 @@ static void testSlotRestartNonEmpty(void)
     TEST_ASSERT_EQUAL(3, mem_fragment.allocated_fragments);
     TEST_ASSERT_EQUAL(sizeof(RxFragment) * 3, mem_fragment.allocated_bytes);
     // Now we reset the slot, causing all memory to be freed correctly.
-    rxSlotRestart(&slot, 0x1122334455667788ULL, &mem_fragment.base, &mem_payload.base);
+    rxSlotRestart(&slot, 0x1122334455667788ULL, makeRxMemory(&mem_fragment, &mem_payload));
     TEST_ASSERT_EQUAL(TIMESTAMP_UNSET, slot.ts_usec);
     TEST_ASSERT_EQUAL(0x1122334455667788ULL, slot.transfer_id);
     TEST_ASSERT_EQUAL(0, slot.max_index);
@@ -394,8 +399,7 @@ static void testSlotEjectValidLarge(void)
                             &root->tree,
                             mem_payload.allocated_bytes,
                             1024,
-                            &mem_fragment.base,
-                            &mem_payload.base));
+                            makeRxMemory(&mem_fragment, &mem_payload)));
     TEST_ASSERT_EQUAL(PayloadSize, payload_size);  // CRC removed!
     TEST_ASSERT(                                   //
         compareStringWithPayload("Da Shi, have you ever... considered certain ultimate philosophical questions? ",
@@ -481,8 +485,7 @@ static void testSlotEjectValidSmall(void)
                             &root->tree,
                             mem_payload.allocated_bytes,
                             136,  // <-- small extent, rest truncated
-                            &mem_fragment.base,
-                            &mem_payload.base));
+                            makeRxMemory(&mem_fragment, &mem_payload)));
     TEST_ASSERT_EQUAL(136, payload_size);  // Equals the extent due to the truncation.
     TEST_ASSERT(compareStringWithPayload("Did you build this four-dimensional fragment?\n", payload.view));
     TEST_ASSERT(compareStringWithPayload("You told me that you came from the sea. Did you build the sea?\n",
@@ -533,8 +536,7 @@ static void testSlotEjectValidEmpty(void)
                             &root->tree,
                             mem_payload.allocated_bytes,
                             0,
-                            &mem_fragment.base,
-                            &mem_payload.base));
+                            makeRxMemory(&mem_fragment, &mem_payload)));
     TEST_ASSERT_EQUAL(0, payload_size);  // Equals the extent due to the truncation.
     TEST_ASSERT_NULL(payload.next);
     TEST_ASSERT_EQUAL(0, payload.view.size);
@@ -580,8 +582,7 @@ static void testSlotEjectInvalid(void)
                                   &root->tree,
                                   mem_payload.allocated_bytes,
                                   1000,
-                                  &mem_fragment.base,
-                                  &mem_payload.base));
+                                  makeRxMemory(&mem_fragment, &mem_payload)));
     // The call was unsuccessful, so the memory was freed instead of being handed over to the application.
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_bytes);
@@ -595,6 +596,7 @@ static void testSlotAcceptA(void)
     InstrumentedAllocator mem_payload  = {0};
     instrumentedAllocatorNew(&mem_fragment);
     instrumentedAllocatorNew(&mem_payload);
+    const RxMemory mem = makeRxMemory(&mem_fragment, &mem_payload);
     // Set up the RX slot instance we're going to be working with.
     RxSlot slot = {
         .ts_usec         = 1234567890,
@@ -622,8 +624,7 @@ static void testSlotAcceptA(void)
                                                          "The fish responsible for drying the sea are not here."
                                                          "\x04\x1F\x8C\x1F"),
                                    1000,
-                                   &mem_fragment.base,
-                                   &mem_payload.base));
+                                   mem));
     // Verify the memory utilization. Note that the small transfer optimization is in effect: head fragment moved.
     TEST_ASSERT_EQUAL(1, mem_payload.allocated_fragments);
     TEST_ASSERT_EQUAL(53 + TRANSFER_CRC_SIZE_BYTES, mem_payload.allocated_bytes);
@@ -658,8 +659,7 @@ static void testSlotAcceptA(void)
                                                          false,
                                                          "We're sorry. What you said is really hard to understand.\n"),
                                    1000,
-                                   &mem_fragment.base,
-                                   &mem_payload.base));
+                                   mem));
     TEST_ASSERT_EQUAL(0,
                       rxSlotAccept(&slot,
                                    &payload_size,
@@ -670,8 +670,7 @@ static void testSlotAcceptA(void)
                                                          "The fish who dried the sea went onto land before they did "
                                                          "this. "),
                                    1000,
-                                   &mem_fragment.base,
-                                   &mem_payload.base));
+                                   mem));
     TEST_ASSERT_EQUAL(1,
                       rxSlotAccept(&slot,
                                    &payload_size,
@@ -682,8 +681,7 @@ static void testSlotAcceptA(void)
                                                          "They moved from one dark forest to another dark forest."
                                                          "?\xAC(\xBE"),
                                    1000,
-                                   &mem_fragment.base,
-                                   &mem_payload.base));
+                                   mem));
     // Verify the memory utilization. Note that the small transfer optimization is in effect: head fragment moved.
     TEST_ASSERT_EQUAL(3, mem_payload.allocated_fragments);
     TEST_ASSERT_EQUAL(176 + TRANSFER_CRC_SIZE_BYTES, mem_payload.allocated_bytes);
@@ -727,8 +725,7 @@ static void testSlotAcceptA(void)
                                                          "Toss it over."
                                                          "K(\xBB\xEE"),
                                    45,
-                                   &mem_fragment.base,
-                                   &mem_payload.base));
+                                   mem));
     TEST_ASSERT_EQUAL(1, mem_payload.allocated_fragments);
     TEST_ASSERT_EQUAL(1, mem_fragment.allocated_fragments);
     TEST_ASSERT_EQUAL(0,
@@ -740,8 +737,7 @@ static void testSlotAcceptA(void)
                                                          false,
                                                          "How do we give it to you?\n"),
                                    45,
-                                   &mem_fragment.base,
-                                   &mem_payload.base));
+                                   mem));
     TEST_ASSERT_EQUAL(2, mem_payload.allocated_fragments);
     TEST_ASSERT_EQUAL(2, mem_fragment.allocated_fragments);
     TEST_ASSERT_EQUAL(0,
@@ -753,8 +749,7 @@ static void testSlotAcceptA(void)
                                                          false,
                                                          "DUPLICATE #1"),
                                    45,
-                                   &mem_fragment.base,
-                                   &mem_payload.base));
+                                   mem));
     TEST_ASSERT_EQUAL(2, mem_payload.allocated_fragments);  // NO CHANGE, duplicate discarded.
     TEST_ASSERT_EQUAL(2, mem_fragment.allocated_fragments);
     TEST_ASSERT_EQUAL(0,
@@ -766,8 +761,7 @@ static void testSlotAcceptA(void)
                                                          true,
                                                          "DUPLICATE #2"),
                                    45,
-                                   &mem_fragment.base,
-                                   &mem_payload.base));
+                                   mem));
     TEST_ASSERT_EQUAL(2, mem_payload.allocated_fragments);  // NO CHANGE, duplicate discarded.
     TEST_ASSERT_EQUAL(2, mem_fragment.allocated_fragments);
     TEST_ASSERT_EQUAL(1,  // transfer completed
@@ -779,8 +773,7 @@ static void testSlotAcceptA(void)
                                                          false,
                                                          "I like fish. Can I have it?\n"),
                                    45,
-                                   &mem_fragment.base,
-                                   &mem_payload.base));
+                                   mem));
     // Verify the memory utilization. Note that the small transfer optimization is in effect: head fragment moved.
     // Due to the implicit truncation (the extent is small), the last fragment is already freed.
     TEST_ASSERT_EQUAL(2, mem_payload.allocated_fragments);  // One freed because of truncation.
@@ -815,8 +808,7 @@ static void testSlotAcceptA(void)
                                    &payload,
                                    makeRxFrameBaseString(&mem_payload.base, 0, true, ":D"),
                                    1000,
-                                   &mem_fragment.base,
-                                   &mem_payload.base));
+                                   mem));
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_bytes);
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
@@ -846,8 +838,7 @@ static void testSlotAcceptA(void)
                                                          "Toss it over."
                                                          "K(\xBB\xEE"),
                                    1000,
-                                   &mem_fragment.base,
-                                   &mem_payload.base));
+                                   mem));
     TEST_ASSERT_EQUAL(1, mem_payload.allocated_fragments);
     TEST_ASSERT_EQUAL(1, mem_fragment.allocated_fragments);  // Limit reached here. Cannot accept next fragment.
     TEST_ASSERT_EQUAL(-UDPARD_ERROR_MEMORY,
@@ -859,8 +850,7 @@ static void testSlotAcceptA(void)
                                                          false,
                                                          "How do we give it to you?\n"),
                                    1000,
-                                   &mem_fragment.base,
-                                   &mem_payload.base));
+                                   mem));
     TEST_ASSERT_EQUAL(1, mem_payload.allocated_fragments);  // Payload not accepted, cannot alloc fragment.
     TEST_ASSERT_EQUAL(1, mem_fragment.allocated_fragments);
     mem_fragment.limit_fragments = 2;  // Lift the limit and repeat the same frame, this time it is accepted.
@@ -873,8 +863,7 @@ static void testSlotAcceptA(void)
                                                          false,
                                                          "I like fish. Can I have it?\n"),
                                    1000,
-                                   &mem_fragment.base,
-                                   &mem_payload.base));
+                                   mem));
     TEST_ASSERT_EQUAL(2, mem_payload.allocated_fragments);  // Accepted!
     TEST_ASSERT_EQUAL(2, mem_fragment.allocated_fragments);
     TEST_ASSERT_EQUAL(-UDPARD_ERROR_MEMORY,  // Cannot alloc third fragment.
@@ -886,8 +875,7 @@ static void testSlotAcceptA(void)
                                                          false,
                                                          "How do we give it to you?\n"),
                                    1000,
-                                   &mem_fragment.base,
-                                   &mem_payload.base));
+                                   mem));
     TEST_ASSERT_EQUAL(2, mem_payload.allocated_fragments);  // Payload not accepted, cannot alloc fragment.
     TEST_ASSERT_EQUAL(2, mem_fragment.allocated_fragments);
     mem_fragment.limit_fragments = 3;  // Lift the limit and repeat the same frame, this time it is accepted.
@@ -900,8 +888,7 @@ static void testSlotAcceptA(void)
                                                          false,
                                                          "How do we give it to you?\n"),
                                    1000,
-                                   &mem_fragment.base,
-                                   &mem_payload.base));
+                                   mem));
     // Verify the memory utilization. Note that the small transfer optimization is in effect: head fragment moved.
     TEST_ASSERT_EQUAL(3, mem_payload.allocated_fragments);
     TEST_ASSERT_EQUAL(67 + TRANSFER_CRC_SIZE_BYTES, mem_payload.allocated_bytes);
@@ -943,8 +930,7 @@ static void testSlotAcceptA(void)
                                                          "Toss it over."
                                                          "K(\xBB\xEE"),
                                    45,
-                                   &mem_fragment.base,
-                                   &mem_payload.base));
+                                   mem));
     TEST_ASSERT_EQUAL(1, mem_payload.allocated_fragments);  // Okay, accepted, some data stored...
     TEST_ASSERT_EQUAL(1, mem_fragment.allocated_fragments);
     TEST_ASSERT_EQUAL(0,
@@ -956,8 +942,7 @@ static void testSlotAcceptA(void)
                                                          true,               // SURPRISE! EOT is set in distinct frames!
                                                          "How do we give it to you?\n"),
                                    45,
-                                   &mem_fragment.base,
-                                   &mem_payload.base));
+                                   mem));
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);  // This is outrageous. Of course we have to drop everything.
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
     // Ensure the slot has been restarted correctly.
@@ -983,8 +968,7 @@ static void testSlotAcceptA(void)
                                                          "Toss it over."
                                                          "K(\xBB\xEE"),
                                    45,
-                                   &mem_fragment.base,
-                                   &mem_payload.base));
+                                   mem));
     TEST_ASSERT_EQUAL(1, mem_payload.allocated_fragments);  // Okay, accepted, some data stored...
     TEST_ASSERT_EQUAL(1, mem_fragment.allocated_fragments);
     TEST_ASSERT_EQUAL(0,
@@ -996,8 +980,7 @@ static void testSlotAcceptA(void)
                                                          false,
                                                          "How do we give it to you?\n"),
                                    45,
-                                   &mem_fragment.base,
-                                   &mem_payload.base));
+                                   mem));
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);  // This is outrageous. Of course we have to drop everything.
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
     // Ensure the slot has been restarted correctly.
@@ -1017,7 +1000,7 @@ static void testIfaceIsFutureTransferID(void)
     instrumentedAllocatorNew(&mem_fragment);
     instrumentedAllocatorNew(&mem_payload);
     RxIface iface;
-    rxIfaceInit(&iface, &mem_fragment.base, &mem_payload.base);
+    rxIfaceInit(&iface, makeRxMemory(&mem_fragment, &mem_payload));
     TEST_ASSERT_EQUAL(TIMESTAMP_UNSET, iface.ts_usec);
     for (size_t i = 0; i < RX_SLOT_COUNT; i++)
     {
@@ -1049,7 +1032,7 @@ static void testIfaceCheckTransferIDTimeout(void)
     instrumentedAllocatorNew(&mem_fragment);
     instrumentedAllocatorNew(&mem_payload);
     RxIface iface;
-    rxIfaceInit(&iface, &mem_fragment.base, &mem_payload.base);
+    rxIfaceInit(&iface, makeRxMemory(&mem_fragment, &mem_payload));
     TEST_ASSERT_EQUAL(TIMESTAMP_UNSET, iface.ts_usec);
     for (size_t i = 0; i < RX_SLOT_COUNT; i++)
     {
@@ -1114,8 +1097,8 @@ static void testIfaceFindMatchingSlot(void)
     instrumentedAllocatorNew(&mem_fragment);
     instrumentedAllocatorNew(&mem_payload);
     RxSlot slots[RX_SLOT_COUNT] = {0};
-    rxSlotRestart(&slots[0], 1000, &mem_fragment.base, &mem_payload.base);
-    rxSlotRestart(&slots[1], 1001, &mem_fragment.base, &mem_payload.base);
+    rxSlotRestart(&slots[0], 1000, makeRxMemory(&mem_fragment, &mem_payload));
+    rxSlotRestart(&slots[1], 1001, makeRxMemory(&mem_fragment, &mem_payload));
     // No matching slot.
     TEST_ASSERT_NULL(rxIfaceFindMatchingSlot(slots, 123));
     // Matching slots.
@@ -1151,8 +1134,9 @@ static void testIfaceAcceptA(void)
     InstrumentedAllocator mem_payload  = {0};
     instrumentedAllocatorNew(&mem_fragment);
     instrumentedAllocatorNew(&mem_payload);
-    RxIface iface;
-    rxIfaceInit(&iface, &mem_fragment.base, &mem_payload.base);
+    const RxMemory mem = makeRxMemory(&mem_fragment, &mem_payload);
+    RxIface        iface;
+    rxIfaceInit(&iface, mem);
     TEST_ASSERT_EQUAL(TIMESTAMP_UNSET, iface.ts_usec);
     for (size_t i = 0; i < RX_SLOT_COUNT; i++)
     {
@@ -1181,11 +1165,10 @@ static void testIfaceAcceptA(void)
                                                       true,
                                                       "I am a tomb."
                                                       "\x1F\\\xCDs"),
-                                    &transfer,
                                     1000,
                                     UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC,
-                                    &mem_fragment.base,
-                                    &mem_payload.base));
+                                    mem,
+                                    &transfer));
     TEST_ASSERT_EQUAL(1, mem_payload.allocated_fragments);
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);  // Head fragment is not heap-allocated.
     // Check the transfer we just accepted.
@@ -1218,11 +1201,10 @@ static void testIfaceAcceptA(void)
                                                       true,
                                                       "I am a tomb."
                                                       "\x1F\\\xCDs"),
-                                    &transfer,
                                     1000,
                                     UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC,
-                                    &mem_fragment.base,
-                                    &mem_payload.base));
+                                    mem,
+                                    &transfer));
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
     // Check the internal states of the iface.
@@ -1245,11 +1227,10 @@ static void testIfaceAcceptA(void)
                                                       true,
                                                       "I am a tomb."
                                                       "No CRC here."),
-                                    &transfer,
                                     1000,
                                     UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC,
-                                    &mem_fragment.base,
-                                    &mem_payload.base));
+                                    mem,
+                                    &transfer));
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
     // Check the internal states of the iface.
@@ -1273,11 +1254,10 @@ static void testIfaceAcceptA(void)
                                                       true,
                                                       "I am a tomb."
                                                       "No CRC here, #2."),
-                                    &transfer,
                                     1000,
                                     UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC,
-                                    &mem_fragment.base,
-                                    &mem_payload.base));
+                                    mem,
+                                    &transfer));
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
     // Check the internal states of the iface.
@@ -1304,11 +1284,10 @@ static void testIfaceAcceptA(void)
                                                       true,
                                                       "A2"
                                                       "v\x1E\xBD]"),
-                                    &transfer,
                                     1000,
                                     UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC,
-                                    &mem_fragment.base,
-                                    &mem_payload.base));
+                                    mem,
+                                    &transfer));
     TEST_ASSERT_EQUAL(1234567890, iface.ts_usec);                      // same old timestamp
     TEST_ASSERT_EQUAL(TRANSFER_ID_UNSET, iface.slots[0].transfer_id);  // Still unused.
     TEST_ASSERT_EQUAL(1000, iface.slots[1].transfer_id);               // Replaced the old one, it was unneeded.
@@ -1328,11 +1307,10 @@ static void testIfaceAcceptA(void)
                                                       true,
                                                       "B1"
                                                       "g\x8D\x9A\xD7"),
-                                    &transfer,
                                     1000,
                                     UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC,
-                                    &mem_fragment.base,
-                                    &mem_payload.base));
+                                    mem,
+                                    &transfer));
     TEST_ASSERT_EQUAL(1234567890, iface.ts_usec);         // same old timestamp
     TEST_ASSERT_EQUAL(1001, iface.slots[0].transfer_id);  // Used for B because the other one is taken.
     TEST_ASSERT_EQUAL(1000, iface.slots[1].transfer_id);  // Keeps A because it is in-progress, can't discard.
@@ -1351,11 +1329,10 @@ static void testIfaceAcceptA(void)
                                                       0,
                                                       false,
                                                       "A0"),
-                                    &transfer,
                                     1000,
                                     UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC,
-                                    &mem_fragment.base,
-                                    &mem_payload.base));
+                                    mem,
+                                    &transfer));
     TEST_ASSERT_EQUAL(1234567890, iface.ts_usec);  // same old timestamp
     TEST_ASSERT_EQUAL(1001, iface.slots[0].transfer_id);
     TEST_ASSERT_EQUAL(1000, iface.slots[1].transfer_id);
@@ -1374,11 +1351,10 @@ static void testIfaceAcceptA(void)
                                                       0,
                                                       false,
                                                       "B0"),
-                                    &transfer,
                                     1000,
                                     UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC,
-                                    &mem_fragment.base,
-                                    &mem_payload.base));
+                                    mem,
+                                    &transfer));
     // TRANSFER B RECEIVED, check it.
     TEST_ASSERT_EQUAL(2000000010, iface.ts_usec);
     TEST_ASSERT_EQUAL(1002, iface.slots[0].transfer_id);  // Incremented to meet the next transfer.
@@ -1411,11 +1387,10 @@ static void testIfaceAcceptA(void)
                                                       1,
                                                       false,
                                                       "A1"),
-                                    &transfer,
                                     1000,
                                     UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC,
-                                    &mem_fragment.base,
-                                    &mem_payload.base));
+                                    mem,
+                                    &transfer));
     // TRANSFER A RECEIVED, check it.
     TEST_ASSERT_EQUAL(2000000020, iface.ts_usec);  // same old timestamp
     TEST_ASSERT_EQUAL(1002, iface.slots[0].transfer_id);
@@ -1443,8 +1418,9 @@ static void testIfaceAcceptB(void)
     InstrumentedAllocator mem_payload  = {0};
     instrumentedAllocatorNew(&mem_fragment);
     instrumentedAllocatorNew(&mem_payload);
-    RxIface iface;
-    rxIfaceInit(&iface, &mem_fragment.base, &mem_payload.base);
+    const RxMemory mem = makeRxMemory(&mem_fragment, &mem_payload);
+    RxIface        iface;
+    rxIfaceInit(&iface, mem);
     TEST_ASSERT_EQUAL(TIMESTAMP_UNSET, iface.ts_usec);
     for (size_t i = 0; i < RX_SLOT_COUNT; i++)
     {
@@ -1478,11 +1454,10 @@ static void testIfaceAcceptB(void)
                                                       true,
                                                       "A2"
                                                       "v\x1E\xBD]"),
-                                    &transfer,
                                     1000,
                                     UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC,
-                                    &mem_fragment.base,
-                                    &mem_payload.base));
+                                    mem,
+                                    &transfer));
     TEST_ASSERT_EQUAL(TIMESTAMP_UNSET, iface.ts_usec);
     TEST_ASSERT_EQUAL(TRANSFER_ID_UNSET, iface.slots[0].transfer_id);
     TEST_ASSERT_EQUAL(1000, iface.slots[1].transfer_id);
@@ -1502,11 +1477,10 @@ static void testIfaceAcceptB(void)
                                                       true,
                                                       "B1"
                                                       "g\x8D\x9A\xD7"),
-                                    &transfer,
                                     1000,
                                     UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC,
-                                    &mem_fragment.base,
-                                    &mem_payload.base));
+                                    mem,
+                                    &transfer));
     TEST_ASSERT_EQUAL(TIMESTAMP_UNSET, iface.ts_usec);
     TEST_ASSERT_EQUAL(1001, iface.slots[0].transfer_id);
     TEST_ASSERT_EQUAL(1000, iface.slots[1].transfer_id);
@@ -1525,11 +1499,10 @@ static void testIfaceAcceptB(void)
                                                       0,
                                                       false,
                                                       "A0"),
-                                    &transfer,
                                     1000,
                                     UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC,
-                                    &mem_fragment.base,
-                                    &mem_payload.base));
+                                    mem,
+                                    &transfer));
     TEST_ASSERT_EQUAL(TIMESTAMP_UNSET, iface.ts_usec);
     TEST_ASSERT_EQUAL(1001, iface.slots[0].transfer_id);
     TEST_ASSERT_EQUAL(1000, iface.slots[1].transfer_id);
@@ -1548,11 +1521,10 @@ static void testIfaceAcceptB(void)
                                                       0,
                                                       false,
                                                       "C0"),
-                                    &transfer,
                                     1000,
                                     UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC,
-                                    &mem_fragment.base,
-                                    &mem_payload.base));
+                                    mem,
+                                    &transfer));
     TEST_ASSERT_EQUAL(TIMESTAMP_UNSET, iface.ts_usec);
     TEST_ASSERT_EQUAL(1002, iface.slots[0].transfer_id);  // B evicted by C.
     TEST_ASSERT_EQUAL(1000, iface.slots[1].transfer_id);
@@ -1571,11 +1543,10 @@ static void testIfaceAcceptB(void)
                                                       0,
                                                       false,
                                                       "B0"),
-                                    &transfer,
                                     1000,
                                     UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC,
-                                    &mem_fragment.base,
-                                    &mem_payload.base));
+                                    mem,
+                                    &transfer));
     TEST_ASSERT_EQUAL(TIMESTAMP_UNSET, iface.ts_usec);
     TEST_ASSERT_EQUAL(1002, iface.slots[0].transfer_id);
     TEST_ASSERT_EQUAL(1000, iface.slots[1].transfer_id);
@@ -1594,11 +1565,10 @@ static void testIfaceAcceptB(void)
                                                       1,
                                                       false,
                                                       "A1"),
-                                    &transfer,
                                     1000,
                                     UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC,
-                                    &mem_fragment.base,
-                                    &mem_payload.base));
+                                    mem,
+                                    &transfer));
     // TRANSFER A RECEIVED, check it.
     TEST_ASSERT_EQUAL(2000000020, iface.ts_usec);  // same old timestamp
     TEST_ASSERT_EQUAL(1002, iface.slots[0].transfer_id);
@@ -1631,11 +1601,10 @@ static void testIfaceAcceptB(void)
                                                       0,
                                                       false,
                                                       "C0 DUPLICATE"),
-                                    &transfer,
                                     1000,
                                     UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC,
-                                    &mem_fragment.base,
-                                    &mem_payload.base));
+                                    mem,
+                                    &transfer));
     TEST_ASSERT_EQUAL(2000000020, iface.ts_usec);  // Last transfer timestamp.
     TEST_ASSERT_EQUAL(1002, iface.slots[0].transfer_id);
     TEST_ASSERT_EQUAL(1001, iface.slots[1].transfer_id);
@@ -1655,11 +1624,10 @@ static void testIfaceAcceptB(void)
                                                       true,
                                                       "C1"
                                                       "\xA8\xBF}\x19"),
-                                    &transfer,
                                     1000,
                                     UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC,
-                                    &mem_fragment.base,
-                                    &mem_payload.base));
+                                    mem,
+                                    &transfer));
     // TRANSFER C RECEIVED, check it.
     TEST_ASSERT_EQUAL(2000000040, iface.ts_usec);
     TEST_ASSERT_EQUAL(1003, iface.slots[0].transfer_id);  // Incremented to meet the next transfer.
@@ -1687,8 +1655,9 @@ static void testIfaceAcceptC(void)
     InstrumentedAllocator mem_payload  = {0};
     instrumentedAllocatorNew(&mem_fragment);
     instrumentedAllocatorNew(&mem_payload);
-    RxIface iface;
-    rxIfaceInit(&iface, &mem_fragment.base, &mem_payload.base);
+    const RxMemory mem = makeRxMemory(&mem_fragment, &mem_payload);
+    RxIface        iface;
+    rxIfaceInit(&iface, mem);
     TEST_ASSERT_EQUAL(TIMESTAMP_UNSET, iface.ts_usec);
     for (size_t i = 0; i < RX_SLOT_COUNT; i++)
     {
@@ -1722,11 +1691,10 @@ static void testIfaceAcceptC(void)
                                                       0,
                                                       false,
                                                       "A0"),
-                                    &transfer,
                                     1000,
                                     UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC,
-                                    &mem_fragment.base,
-                                    &mem_payload.base));
+                                    mem,
+                                    &transfer));
     TEST_ASSERT_EQUAL(TIMESTAMP_UNSET, iface.ts_usec);
     TEST_ASSERT_EQUAL(TRANSFER_ID_UNSET, iface.slots[0].transfer_id);
     TEST_ASSERT_EQUAL(0xA, iface.slots[1].transfer_id);
@@ -1745,11 +1713,10 @@ static void testIfaceAcceptC(void)
                                                       0,
                                                       false,
                                                       "B0"),
-                                    &transfer,
                                     1000,
                                     UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC,
-                                    &mem_fragment.base,
-                                    &mem_payload.base));
+                                    mem,
+                                    &transfer));
     TEST_ASSERT_EQUAL(TIMESTAMP_UNSET, iface.ts_usec);
     TEST_ASSERT_EQUAL(0xB, iface.slots[0].transfer_id);
     TEST_ASSERT_EQUAL(0xA, iface.slots[1].transfer_id);
@@ -1769,11 +1736,10 @@ static void testIfaceAcceptC(void)
                                                       true,
                                                       "A1"
                                                       "\xc7\xac_\x81"),
-                                    &transfer,
                                     1000,
                                     UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC,
-                                    &mem_fragment.base,
-                                    &mem_payload.base));
+                                    mem,
+                                    &transfer));
     // Check the received transfer.
     TEST_ASSERT_EQUAL(2000000010, iface.ts_usec);
     TEST_ASSERT_EQUAL(0xB, iface.slots[0].transfer_id);
@@ -1802,11 +1768,10 @@ static void testIfaceAcceptC(void)
                                                       0,
                                                       false,
                                                       "C0"),
-                                    &transfer,
                                     1000,
                                     UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC,
-                                    &mem_fragment.base,
-                                    &mem_payload.base));
+                                    mem,
+                                    &transfer));
     TEST_ASSERT_EQUAL(2000000010, iface.ts_usec);  // <- unchanged.
     TEST_ASSERT_EQUAL(0xB, iface.slots[0].transfer_id);
     TEST_ASSERT_EQUAL(0xC, iface.slots[1].transfer_id);     // <- reused for C.
@@ -1826,11 +1791,10 @@ static void testIfaceAcceptC(void)
                                                       true,
                                                       "B1"
                                                       "g\x8D\x9A\xD7"),
-                                    &transfer,
                                     1000,
                                     UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC,
-                                    &mem_fragment.base,
-                                    &mem_payload.base));
+                                    mem,
+                                    &transfer));
     // Check the received transfer.
     TEST_ASSERT_EQUAL(2000000020, iface.ts_usec);
     TEST_ASSERT_EQUAL(0xC, iface.slots[0].transfer_id);  // <-- INCREMENTED, SO
@@ -1862,11 +1826,10 @@ static void testIfaceAcceptC(void)
                                                       true,
                                                       "C1"
                                                       "\xA8\xBF}\x19"),
-                                    &transfer,
                                     1000,
                                     UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC,
-                                    &mem_fragment.base,
-                                    &mem_payload.base));
+                                    mem,
+                                    &transfer));
     // Check the received transfer.
     TEST_ASSERT_EQUAL(2000000040, iface.ts_usec);
     TEST_ASSERT_EQUAL(0xC, iface.slots[0].transfer_id);  // Old, unused.
@@ -1896,11 +1859,10 @@ static void testIfaceAcceptC(void)
                                                       0,
                                                       false,
                                                       "B0"),
-                                    &transfer,
                                     1000,
                                     UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC,
-                                    &mem_fragment.base,
-                                    &mem_payload.base));
+                                    mem,
+                                    &transfer));
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
     // B0 duplicate single-frame; shall be rejected.
@@ -1917,13 +1879,26 @@ static void testIfaceAcceptC(void)
                                                       true,
                                                       "B0"
                                                       "g\x8D\x9A\xD7"),
-                                    &transfer,
                                     1000,
                                     UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC,
-                                    &mem_fragment.base,
-                                    &mem_payload.base));
+                                    mem,
+                                    &transfer));
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
+}
+
+static void testSessionAcceptA(void)
+{
+    InstrumentedAllocator mem_fragment = {0};
+    InstrumentedAllocator mem_payload  = {0};
+    instrumentedAllocatorNew(&mem_fragment);
+    instrumentedAllocatorNew(&mem_payload);
+    const RxMemory          mem     = makeRxMemory(&mem_fragment, &mem_payload);
+    UdpardInternalRxSession session = {0};
+    rxSessionInit(&session, mem);
+    TEST_ASSERT_EQUAL(TIMESTAMP_UNSET, session.last_ts_usec);
+    TEST_ASSERT_EQUAL(TRANSFER_ID_UNSET, session.last_transfer_id);
+    // TODO FIXME add tests
 }
 
 void setUp(void) {}
@@ -1959,6 +1934,8 @@ int main(void)
     RUN_TEST(testIfaceAcceptA);
     RUN_TEST(testIfaceAcceptB);
     RUN_TEST(testIfaceAcceptC);
+    // session
+    RUN_TEST(testSessionAcceptA);
     return UNITY_END();
 }
 

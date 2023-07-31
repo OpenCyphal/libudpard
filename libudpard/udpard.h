@@ -834,12 +834,13 @@ void udpardRxSubscriptionDestroy(struct UdpardRxSubscription* const self);
 /// carry a final part of a valid multi-frame transfer, or carry a valid single-frame transfer.
 /// The last two cases are said to complete a transfer.
 ///
-/// If the datagram completes a transfer, the received_transfer argument is filled with the transfer details
+/// If the datagram completes a transfer, the out_transfer argument is filled with the transfer details
 /// and the return value is one.
 /// The caller is assigned ownership of the transfer payload buffer memory; it has to be freed after use as described
 /// in the documentation for UdpardRxTransfer.
+/// The memory pointed to by out_transfer may be mutated arbitrarily if no transfer is completed.
 ///
-/// If the datagram does not complete a transfer or is malformed, the function returns zero and the received_transfer
+/// If the datagram does not complete a transfer or is malformed, the function returns zero and the out_transfer
 /// is not modified. Observe that malformed frames are not treated as errors, as the local application is not
 /// responsible for the behavior of external agents producing the datagrams.
 ///
@@ -866,7 +867,7 @@ int8_t udpardRxSubscriptionReceive(struct UdpardRxSubscription* const self,
                                    const UdpardMicrosecond            timestamp_usec,
                                    const struct UdpardMutablePayload  datagram_payload,
                                    const uint_fast8_t                 redundant_iface_index,
-                                   struct UdpardRxTransfer* const     received_transfer);
+                                   struct UdpardRxTransfer* const     out_transfer);
 
 // ---------------------------------------------  RPC-SERVICES  ---------------------------------------------
 
@@ -1002,7 +1003,7 @@ int8_t udpardRxRPCDispatcherReceive(struct UdpardRxRPCDispatcher* const self,
                                     const UdpardMicrosecond             timestamp_usec,
                                     const struct UdpardMutablePayload   datagram_payload,
                                     const uint_fast8_t                  redundant_iface_index,
-                                    struct UdpardRxRPCTransfer* const   received_transfer);
+                                    struct UdpardRxRPCTransfer* const   out_transfer);
 
 #ifdef __cplusplus
 }
