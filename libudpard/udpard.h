@@ -237,10 +237,10 @@ extern "C" {
 /// The library supports at most this many redundant network interfaces per Cyphal node.
 #define UDPARD_NETWORK_INTERFACE_COUNT_MAX 3U
 
-typedef uint64_t UdpardMicrosecond;
+typedef uint64_t UdpardMicrosecond;  ///< UINT64_MAX is not a valid timestamp value.
 typedef uint16_t UdpardPortID;
 typedef uint16_t UdpardNodeID;
-typedef uint64_t UdpardTransferID;
+typedef uint64_t UdpardTransferID;  ///< UINT64_MAX is not a valid transfer-ID value.
 
 /// Transfer priority level mnemonics per the recommendations given in the Cyphal Specification.
 /// For outgoing transfers they are mapped to DSCP values as configured per redundant interface (per UdpardTx instance).

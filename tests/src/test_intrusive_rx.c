@@ -11,17 +11,16 @@
 
 /// Moves the payload from the origin into a new buffer and attaches is to the newly allocated fragment.
 /// This function performs two allocations. This function is infallible.
-static RxFragment* makeRxFragment(struct UdpardMemoryResource* const memory_fragment,
-                                  struct UdpardMemoryResource* const memory_payload,
-                                  const uint32_t                     frame_index,
-                                  const struct UdpardPayload         view,
-                                  const struct UdpardMutablePayload  origin,
-                                  RxFragmentTreeNode* const          parent)
+static RxFragment* makeRxFragment(const RxMemory                    memory,
+                                  const uint32_t                    frame_index,
+                                  const struct UdpardPayload        view,
+                                  const struct UdpardMutablePayload origin,
+                                  RxFragmentTreeNode* const         parent)
 {
     TEST_PANIC_UNLESS((view.data >= origin.data) && (view.size <= origin.size));
     TEST_PANIC_UNLESS((((const byte_t*) view.data) + view.size) <= (((const byte_t*) origin.data) + origin.size));
-    byte_t* const     new_origin = (byte_t*) memAlloc(memory_payload, origin.size);
-    RxFragment* const frag       = (RxFragment*) memAlloc(memory_fragment, sizeof(RxFragment));
+    byte_t* const     new_origin = (byte_t*) memAlloc(memory.payload, origin.size);
+    RxFragment* const frag       = (RxFragment*) memAlloc(memory.fragment, sizeof(RxFragment));
     if ((new_origin != NULL) && (frag != NULL))
     {
         (void) memmove(new_origin, origin.data, origin.size);
@@ -31,7 +30,6 @@ static RxFragment* makeRxFragment(struct UdpardMemoryResource* const memory_frag
         frag->tree.base.up     = &parent->base;
         frag->tree.this        = frag;
         frag->frame_index      = frame_index;
-        frag->base.view        = view;
         frag->base.origin.data = new_origin;
         frag->base.origin.size = origin.size;
         frag->base.view.data   = new_origin + (((const byte_t*) view.data) - ((byte_t*) origin.data));
@@ -45,15 +43,13 @@ static RxFragment* makeRxFragment(struct UdpardMemoryResource* const memory_frag
 }
 
 /// This is a simple helper wrapper that constructs a new fragment using a null-terminated string as a payload.
-static RxFragment* makeRxFragmentString(struct UdpardMemoryResource* const memory_fragment,
-                                        struct UdpardMemoryResource* const memory_payload,
-                                        const uint32_t                     frame_index,
-                                        const char* const                  payload,
-                                        RxFragmentTreeNode* const          parent)
+static RxFragment* makeRxFragmentString(const RxMemory            memory,
+                                        const uint32_t            frame_index,
+                                        const char* const         payload,
+                                        RxFragmentTreeNode* const parent)
 {
     const size_t sz = strlen(payload);
-    return makeRxFragment(memory_fragment,
-                          memory_payload,
+    return makeRxFragment(memory,
                           frame_index,
                           (struct UdpardPayload){.data = payload, .size = sz},
                           (struct UdpardMutablePayload){.data = (void*) payload, .size = sz},
@@ -291,7 +287,8 @@ static void testSlotRestartNonEmpty(void)
     InstrumentedAllocator mem_payload  = {0};
     instrumentedAllocatorNew(&mem_fragment);
     instrumentedAllocatorNew(&mem_payload);
-    byte_t data[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
+    const RxMemory mem    = makeRxMemory(&mem_fragment, &mem_payload);
+    byte_t         data[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
     //
     RxSlot slot = {
         .ts_usec         = 1234567890,
@@ -301,23 +298,20 @@ static void testSlotRestartNonEmpty(void)
         .accepted_frames = 555,
         .payload_size    = 987,
         //
-        .fragments = &makeRxFragment(&mem_fragment.base,
-                                     &mem_payload.base,
+        .fragments = &makeRxFragment(mem,
                                      1,
                                      (struct UdpardPayload){.data = &data[2], .size = 2},
                                      (struct UdpardMutablePayload){.data = data, .size = sizeof(data)},
                                      NULL)
                           ->tree,
     };
-    slot.fragments->base.lr[0] = &makeRxFragment(&mem_fragment.base,
-                                                 &mem_payload.base,
+    slot.fragments->base.lr[0] = &makeRxFragment(mem,
                                                  0,
                                                  (struct UdpardPayload){.data = &data[1], .size = 1},
                                                  (struct UdpardMutablePayload){.data = data, .size = sizeof(data)},
                                                  slot.fragments)
                                       ->tree.base;
-    slot.fragments->base.lr[1] = &makeRxFragment(&mem_fragment.base,
-                                                 &mem_payload.base,
+    slot.fragments->base.lr[1] = &makeRxFragment(mem,
                                                  2,
                                                  (struct UdpardPayload){.data = &data[3], .size = 3},
                                                  (struct UdpardMutablePayload){.data = data, .size = sizeof(data)},
@@ -350,6 +344,7 @@ static void testSlotEjectValidLarge(void)
     InstrumentedAllocator mem_payload  = {0};
     instrumentedAllocatorNew(&mem_fragment);
     instrumentedAllocatorNew(&mem_payload);
+    const RxMemory mem = makeRxMemory(&mem_fragment, &mem_payload);
     //>>> from pycyphal.transport.commons.crc import CRC32C
     //>>> CRC32C.new(data_bytes).value_as_bytes
     static const size_t PayloadSize = 171;
@@ -359,29 +354,14 @@ static void testSlotEjectValidLarge(void)
     //    1   3
     //   /
     //  0
-    RxFragment* const root =                      //
-        makeRxFragmentString(&mem_fragment.base,  //
-                             &mem_payload.base,
-                             2,
-                             "Where does Man go? ",
-                             NULL);
-    root->tree.base.lr[0] =                        //
-        &makeRxFragmentString(&mem_fragment.base,  //
-                              &mem_payload.base,
-                              1,
-                              "For example, where does Man come from? ",
-                              &root->tree)
-             ->tree.base;
-    root->tree.base.lr[1] =                        //
-        &makeRxFragmentString(&mem_fragment.base,  //
-                              &mem_payload.base,
-                              3,
-                              "Where does the universe come from? xL\xAE\xCB",
-                              &root->tree)
-             ->tree.base;
+    RxFragment* const root =  //
+        makeRxFragmentString(mem, 2, "Where does Man go? ", NULL);
+    root->tree.base.lr[0] =  //
+        &makeRxFragmentString(mem, 1, "For example, where does Man come from? ", &root->tree)->tree.base;
+    root->tree.base.lr[1] =  //
+        &makeRxFragmentString(mem, 3, "Where does the universe come from? xL\xAE\xCB", &root->tree)->tree.base;
     root->tree.base.lr[0]->lr[0] =
-        &makeRxFragmentString(&mem_fragment.base,  //
-                              &mem_payload.base,
+        &makeRxFragmentString(mem,  //
                               0,
                               "Da Shi, have you ever... considered certain ultimate philosophical questions? ",
                               ((RxFragmentTreeNode*) root->tree.base.lr[0]))
@@ -429,6 +409,7 @@ static void testSlotEjectValidSmall(void)
     InstrumentedAllocator mem_payload  = {0};
     instrumentedAllocatorNew(&mem_fragment);
     instrumentedAllocatorNew(&mem_payload);
+    const RxMemory mem = makeRxMemory(&mem_fragment, &mem_payload);
     //>>> from pycyphal.transport.commons.crc import CRC32C
     //>>> CRC32C.new(data_bytes).value_as_bytes
     static const size_t PayloadSize = 262;
@@ -438,36 +419,20 @@ static void testSlotEjectValidSmall(void)
     //    0   3
     //       / `
     //      2   4
-    RxFragment* const root =                      //
-        makeRxFragmentString(&mem_fragment.base,  //
-                             &mem_payload.base,
-                             1,
-                             "You told me that you came from the sea. Did you build the sea?\n",
-                             NULL);
-    root->tree.base.lr[0] =                        //
-        &makeRxFragmentString(&mem_fragment.base,  //
-                              &mem_payload.base,
-                              0,
-                              "Did you build this four-dimensional fragment?\n",
-                              &root->tree)
-             ->tree.base;
-    root->tree.base.lr[1] =                        //
-        &makeRxFragmentString(&mem_fragment.base,  //
-                              &mem_payload.base,
-                              3,
-                              "this four-dimensional space is like the sea for us?\n",
-                              &root->tree)
-             ->tree.base;
-    root->tree.base.lr[1]->lr[0] =                 //
-        &makeRxFragmentString(&mem_fragment.base,  //
-                              &mem_payload.base,
+    RxFragment* const root =  //
+        makeRxFragmentString(mem, 1, "You told me that you came from the sea. Did you build the sea?\n", NULL);
+    root->tree.base.lr[0] =  //
+        &makeRxFragmentString(mem, 0, "Did you build this four-dimensional fragment?\n", &root->tree)->tree.base;
+    root->tree.base.lr[1] =  //
+        &makeRxFragmentString(mem, 3, "this four-dimensional space is like the sea for us?\n", &root->tree)->tree.base;
+    root->tree.base.lr[1]->lr[0] =  //
+        &makeRxFragmentString(mem,
                               2,
                               "Are you saying that for you, or at least for your creators, ",
                               ((RxFragmentTreeNode*) root->tree.base.lr[1]))
              ->tree.base;
-    root->tree.base.lr[1]->lr[1] =                 //
-        &makeRxFragmentString(&mem_fragment.base,  //
-                              &mem_payload.base,
+    root->tree.base.lr[1]->lr[1] =  //
+        &makeRxFragmentString(mem,
                               4,
                               "More like a puddle. The sea has gone dry.\xA2\x93-\xB2",
                               ((RxFragmentTreeNode*) root->tree.base.lr[1]))
@@ -514,15 +479,14 @@ static void testSlotEjectValidEmpty(void)
     InstrumentedAllocator mem_payload  = {0};
     instrumentedAllocatorNew(&mem_fragment);
     instrumentedAllocatorNew(&mem_payload);
+    const RxMemory mem = makeRxMemory(&mem_fragment, &mem_payload);
     // Build the fragment tree:
     //      1
     //     / `
     //    0   2
-    RxFragment* const root = makeRxFragmentString(&mem_fragment.base, &mem_payload.base, 1, "BBB", NULL);
-    root->tree.base.lr[0] =
-        &makeRxFragmentString(&mem_fragment.base, &mem_payload.base, 0, "AAA", &root->tree)->tree.base;
-    root->tree.base.lr[1] =
-        &makeRxFragmentString(&mem_fragment.base, &mem_payload.base, 2, "P\xF5\xA5?", &root->tree)->tree.base;
+    RxFragment* const root = makeRxFragmentString(mem, 1, "BBB", NULL);
+    root->tree.base.lr[0]  = &makeRxFragmentString(mem, 0, "AAA", &root->tree)->tree.base;
+    root->tree.base.lr[1]  = &makeRxFragmentString(mem, 2, "P\xF5\xA5?", &root->tree)->tree.base;
     // Initialization done, ensure the memory utilization is as we expect.
     TEST_ASSERT_EQUAL(3, mem_payload.allocated_fragments);
     TEST_ASSERT_EQUAL(6 + TRANSFER_CRC_SIZE_BYTES, mem_payload.allocated_bytes);
@@ -560,15 +524,14 @@ static void testSlotEjectInvalid(void)
     InstrumentedAllocator mem_payload  = {0};
     instrumentedAllocatorNew(&mem_fragment);
     instrumentedAllocatorNew(&mem_payload);
+    const RxMemory mem = makeRxMemory(&mem_fragment, &mem_payload);
     // Build the fragment tree; no valid CRC here:
     //      1
     //     / `
     //    0   2
-    RxFragment* const root = makeRxFragmentString(&mem_fragment.base, &mem_payload.base, 1, "BBB", NULL);
-    root->tree.base.lr[0] =
-        &makeRxFragmentString(&mem_fragment.base, &mem_payload.base, 0, "AAA", &root->tree)->tree.base;
-    root->tree.base.lr[1] =
-        &makeRxFragmentString(&mem_fragment.base, &mem_payload.base, 2, "CCC", &root->tree)->tree.base;
+    RxFragment* const root = makeRxFragmentString(mem, 1, "BBB", NULL);
+    root->tree.base.lr[0]  = &makeRxFragmentString(mem, 0, "AAA", &root->tree)->tree.base;
+    root->tree.base.lr[1]  = &makeRxFragmentString(mem, 2, "CCC", &root->tree)->tree.base;
     // Initialization done, ensure the memory utilization is as we expect.
     TEST_ASSERT_EQUAL(3, mem_payload.allocated_fragments);
     TEST_ASSERT_EQUAL(9, mem_payload.allocated_bytes);
@@ -1887,6 +1850,99 @@ static void testIfaceAcceptC(void)
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
 }
 
+static void testSessionDeduplicate(void)
+{
+    InstrumentedAllocator mem_fragment = {0};
+    InstrumentedAllocator mem_payload  = {0};
+    instrumentedAllocatorNew(&mem_fragment);
+    instrumentedAllocatorNew(&mem_payload);
+    const RxMemory          mem     = makeRxMemory(&mem_fragment, &mem_payload);
+    UdpardInternalRxSession session = {0};
+    rxSessionInit(&session, mem);
+    TEST_ASSERT_EQUAL(TIMESTAMP_UNSET, session.last_ts_usec);
+    TEST_ASSERT_EQUAL(TRANSFER_ID_UNSET, session.last_transfer_id);
+    {
+        struct UdpardFragment* const head = &makeRxFragmentString(mem, 0, "ABC", NULL)->base;
+        head->next                        = &makeRxFragmentString(mem, 1, "DEF", NULL)->base;
+        struct UdpardRxTransfer transfer  = {.timestamp_usec = 10000000,
+                                             .transfer_id    = 0x0DDC0FFEEBADF00D,
+                                             .payload_size   = 6,
+                                             .payload        = *head};
+        memFree(&mem_fragment.base, sizeof(RxFragment), head);  // Cloned, no longer needed.
+        TEST_ASSERT_EQUAL(2, mem_payload.allocated_fragments);
+        TEST_ASSERT_EQUAL(1, mem_fragment.allocated_fragments);
+        // The first transfer after initialization is always accepted.
+        TEST_ASSERT(rxSessionDeduplicate(&session, UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC, &transfer, mem));
+        // Check the final states.
+        TEST_ASSERT_EQUAL(6, transfer.payload_size);
+        TEST_ASSERT_EQUAL(2, mem_payload.allocated_fragments);  // The application shall free the payload.
+        TEST_ASSERT_EQUAL(1, mem_fragment.allocated_fragments);
+        TEST_ASSERT_EQUAL(10000000, session.last_ts_usec);
+        TEST_ASSERT_EQUAL(0x0DDC0FFEEBADF00D, session.last_transfer_id);
+        // Feed the same transfer again; now it is a duplicate and so it is rejected and freed.
+        transfer.timestamp_usec = 10000001;
+        TEST_ASSERT_FALSE(rxSessionDeduplicate(&session, UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC, &transfer, mem));
+        TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
+        TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
+        TEST_ASSERT_EQUAL(10000000, session.last_ts_usec);  // Timestamp is not updated.
+        TEST_ASSERT_EQUAL(0x0DDC0FFEEBADF00D, session.last_transfer_id);
+    }
+    {
+        // Emit a duplicate but after the transfer-ID timeout has occurred. Ensure it is accepted.
+        struct UdpardFragment* const head = &makeRxFragmentString(mem, 0, "ABC", NULL)->base;
+        head->next                        = &makeRxFragmentString(mem, 1, "DEF", NULL)->base;
+        struct UdpardRxTransfer transfer  = {.timestamp_usec = 12000000,            // TID timeout.
+                                             .transfer_id    = 0x0DDC0FFEEBADF000,  // transfer-ID reduced.
+                                             .payload_size   = 6,
+                                             .payload        = *head};
+        memFree(&mem_fragment.base, sizeof(RxFragment), head);  // Cloned, no longer needed.
+        TEST_ASSERT_EQUAL(2, mem_payload.allocated_fragments);
+        TEST_ASSERT_EQUAL(1, mem_fragment.allocated_fragments);
+        // Accepted due to the TID timeout.
+        TEST_ASSERT(rxSessionDeduplicate(&session, UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC, &transfer, mem));
+        // Check the final states.
+        TEST_ASSERT_EQUAL(6, transfer.payload_size);
+        TEST_ASSERT_EQUAL(2, mem_payload.allocated_fragments);  // The application shall free the payload.
+        TEST_ASSERT_EQUAL(1, mem_fragment.allocated_fragments);
+        TEST_ASSERT_EQUAL(12000000, session.last_ts_usec);
+        TEST_ASSERT_EQUAL(0x0DDC0FFEEBADF000, session.last_transfer_id);
+        // Feed the same transfer again; now it is a duplicate and so it is rejected and freed.
+        transfer.timestamp_usec = 12000001;
+        TEST_ASSERT_FALSE(rxSessionDeduplicate(&session, UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC, &transfer, mem));
+        TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
+        TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
+        TEST_ASSERT_EQUAL(12000000, session.last_ts_usec);  // Timestamp is not updated.
+        TEST_ASSERT_EQUAL(0x0DDC0FFEEBADF000, session.last_transfer_id);
+    }
+    {
+        // Ensure another transfer with a greater transfer-ID is accepted immediately.
+        struct UdpardFragment* const head = &makeRxFragmentString(mem, 0, "ABC", NULL)->base;
+        head->next                        = &makeRxFragmentString(mem, 1, "DEF", NULL)->base;
+        struct UdpardRxTransfer transfer  = {.timestamp_usec = 11000000,            // Simulate clock jitter.
+                                             .transfer_id    = 0x0DDC0FFEEBADF001,  // Incremented.
+                                             .payload_size   = 6,
+                                             .payload        = *head};
+        memFree(&mem_fragment.base, sizeof(RxFragment), head);  // Cloned, no longer needed.
+        TEST_ASSERT_EQUAL(2, mem_payload.allocated_fragments);
+        TEST_ASSERT_EQUAL(1, mem_fragment.allocated_fragments);
+        // Accepted because TID greater.
+        TEST_ASSERT(rxSessionDeduplicate(&session, UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC, &transfer, mem));
+        // Check the final states.
+        TEST_ASSERT_EQUAL(6, transfer.payload_size);
+        TEST_ASSERT_EQUAL(2, mem_payload.allocated_fragments);  // The application shall free the payload.
+        TEST_ASSERT_EQUAL(1, mem_fragment.allocated_fragments);
+        TEST_ASSERT_EQUAL(11000000, session.last_ts_usec);                // Updated.
+        TEST_ASSERT_EQUAL(0x0DDC0FFEEBADF001, session.last_transfer_id);  // Updated.
+        // Feed the same transfer again; now it is a duplicate and so it is rejected and freed.
+        transfer.timestamp_usec = 11000000;
+        TEST_ASSERT_FALSE(rxSessionDeduplicate(&session, UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC, &transfer, mem));
+        TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
+        TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
+        TEST_ASSERT_EQUAL(11000000, session.last_ts_usec);  // Timestamp is not updated.
+        TEST_ASSERT_EQUAL(0x0DDC0FFEEBADF001, session.last_transfer_id);
+    }
+}
+
 static void testSessionAcceptA(void)
 {
     InstrumentedAllocator mem_fragment = {0};
@@ -1935,6 +1991,7 @@ int main(void)
     RUN_TEST(testIfaceAcceptB);
     RUN_TEST(testIfaceAcceptC);
     // session
+    RUN_TEST(testSessionDeduplicate);
     RUN_TEST(testSessionAcceptA);
     return UNITY_END();
 }

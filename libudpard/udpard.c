@@ -1301,6 +1301,35 @@ static inline void rxIfaceInit(RxIface* const self, const RxMemory memory)
     }
 }
 
+/// Checks if the given transfer should be accepted. If not, the transfer is freed.
+/// Internal states are updated.
+static inline bool rxSessionDeduplicate(UdpardInternalRxSession* const self,
+                                        const UdpardMicrosecond        transfer_id_timeout_usec,
+                                        struct UdpardRxTransfer* const transfer,
+                                        const RxMemory                 memory)
+{
+    UDPARD_ASSERT((self != NULL) && (transfer != NULL));
+    const bool future_tid = (self->last_transfer_id == TRANSFER_ID_UNSET) ||  //
+                            (transfer->transfer_id > self->last_transfer_id);
+    const bool tid_timeout = (self->last_ts_usec == TIMESTAMP_UNSET) ||
+                             ((transfer->timestamp_usec >= self->last_ts_usec) &&
+                              ((transfer->timestamp_usec - self->last_ts_usec) >= transfer_id_timeout_usec));
+    const bool accept = future_tid || tid_timeout;
+    if (accept)
+    {
+        self->last_ts_usec     = transfer->timestamp_usec;
+        self->last_transfer_id = transfer->transfer_id;
+    }
+    else  // This is a duplicate: received from another interface, a FEC retransmission, or a network glitch.
+    {
+        memFreePayload(memory.payload, transfer->payload.origin);
+        rxFragmentFree(transfer->payload.next, memory);
+        transfer->payload_size = 0;
+        transfer->payload      = (struct UdpardFragment){.next = NULL, .view = {0}, .origin = {0}};
+    }
+    return accept;
+}
+
 static inline int_fast8_t rxSessionAccept(UdpardInternalRxSession* const self,
                                           const uint_fast8_t             redundant_iface_index,
                                           const UdpardMicrosecond        ts_usec,
@@ -1322,22 +1351,7 @@ static inline int_fast8_t rxSessionAccept(UdpardInternalRxSession* const self,
     UDPARD_ASSERT(result <= 1);
     if (result > 0)
     {
-        const bool future_tid = (self->last_transfer_id == TRANSFER_ID_UNSET) ||  //
-                                (out_transfer->transfer_id > self->last_transfer_id);
-        const bool tid_timeout = (self->last_ts_usec == TIMESTAMP_UNSET) ||
-                                 ((out_transfer->timestamp_usec >= self->last_ts_usec) &&
-                                  ((out_transfer->timestamp_usec - self->last_ts_usec) >= transfer_id_timeout_usec));
-        if (future_tid || tid_timeout)  // Notice that the deduplicator makes no distinction between the interfaces.
-        {
-            self->last_ts_usec     = out_transfer->timestamp_usec;
-            self->last_transfer_id = out_transfer->transfer_id;
-        }
-        else  // This is a duplicate: received from another interface, a FEC retransmission, or a network glitch.
-        {
-            result = 0;
-            memFreePayload(memory.payload, out_transfer->payload.origin);
-            rxFragmentFree(out_transfer->payload.next, memory);
-        }
+        result = rxSessionDeduplicate(self, transfer_id_timeout_usec, out_transfer, memory) ? 1 : 0;
     }
     return result;
 }
