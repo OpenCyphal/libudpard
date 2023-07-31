@@ -1954,7 +1954,72 @@ static void testSessionAcceptA(void)
     rxSessionInit(&session, mem);
     TEST_ASSERT_EQUAL(TIMESTAMP_UNSET, session.last_ts_usec);
     TEST_ASSERT_EQUAL(TRANSFER_ID_UNSET, session.last_transfer_id);
-    // TODO FIXME add tests
+    struct UdpardRxTransfer transfer = {0};
+    // Accept a simple transfer through iface #1.
+    TEST_ASSERT_EQUAL(1,
+                      rxSessionAccept(&session,
+                                      1,
+                                      10000000,
+                                      makeRxFrameString(&mem_payload.base,  //
+                                                        (TransferMetadata){.priority       = UdpardPriorityExceptional,
+                                                                           .src_node_id    = 2222,
+                                                                           .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                                                                           .data_specifier = 0,
+                                                                           .transfer_id    = 0xB},
+                                                        0,
+                                                        true,
+                                                        "Z\xBA\xA1\xBAh"),
+                                      1000,
+                                      UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC,
+                                      mem,
+                                      &transfer));
+    TEST_ASSERT_EQUAL(1, mem_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
+    // Free the payload.
+    udpardFragmentFree(transfer.payload, &mem_fragment.base, &mem_payload.base);
+    TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
+    // Send the same transfer again through a different iface; it is a duplicate and so it is rejected and freed.
+    TEST_ASSERT_EQUAL(0,
+                      rxSessionAccept(&session,
+                                      0,
+                                      10000010,
+                                      makeRxFrameString(&mem_payload.base,  //
+                                                        (TransferMetadata){.priority       = UdpardPriorityExceptional,
+                                                                           .src_node_id    = 2222,
+                                                                           .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                                                                           .data_specifier = 0,
+                                                                           .transfer_id    = 0xB},
+                                                        0,
+                                                        true,
+                                                        "Z\xBA\xA1\xBAh"),
+                                      1000,
+                                      UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC,
+                                      mem,
+                                      &transfer));
+    TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
+    // Send a valid transfer that should be accepted but we inject an OOM error.
+    mem_fragment.limit_fragments = 0;
+    TEST_ASSERT_EQUAL(-UDPARD_ERROR_MEMORY,
+                      rxSessionAccept(&session,
+                                      2,
+                                      12000020,
+                                      makeRxFrameString(&mem_payload.base,  //
+                                                        (TransferMetadata){.priority       = UdpardPriorityExceptional,
+                                                                           .src_node_id    = 2222,
+                                                                           .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                                                                           .data_specifier = 0,
+                                                                           .transfer_id    = 0xC},
+                                                        0,
+                                                        true,
+                                                        "Z\xBA\xA1\xBAh"),
+                                      1000,
+                                      UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC,
+                                      mem,
+                                      &transfer));
+    TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
 }
 
 void setUp(void) {}
