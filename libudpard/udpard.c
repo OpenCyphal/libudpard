@@ -822,6 +822,8 @@ static inline void rxFragmentFree(struct UdpardFragment* const head, const RxMem
 /// - Per interface, there are RX_SLOT_COUNT slots; a slot keeps the state of a transfer in the process of being
 ///   reassembled.
 ///
+/// Port -> Session -> Interface -> Slot.
+///
 /// Consider the following examples, where A and B denote distinct transfers of three frames each:
 ///
 ///     A0 A1 A2 B0 B1 B2  -- two transfers without OOO frames; both accepted.
@@ -872,6 +874,8 @@ typedef struct UdpardInternalRxSession
     /// at the speed of the fastest interface. Duplicate transfers delivered by the slower interfaces are discarded.
     RxIface ifaces[UDPARD_NETWORK_INTERFACE_COUNT_MAX];
 } UdpardInternalRxSession;
+
+// --------------------------------------------------  RX SLOT  --------------------------------------------------
 
 // NOLINTNEXTLINE(misc-no-recursion)
 static inline void rxSlotFree(RxFragment* const self, const RxMemory memory)
@@ -1152,6 +1156,8 @@ finish:
     return result;
 }
 
+// --------------------------------------------------  RX IFACE  --------------------------------------------------
+
 /// Whether the supplied transfer-ID is greater than all transfer-IDs in the RX slots.
 /// This indicates that the new transfer is not a duplicate and should be accepted.
 static inline bool rxIfaceIsFutureTransferID(const RxIface* const self, const UdpardTransferID transfer_id)
@@ -1301,6 +1307,8 @@ static inline void rxIfaceInit(RxIface* const self, const RxMemory memory)
     }
 }
 
+// --------------------------------------------------  RX SESSION  --------------------------------------------------
+
 /// Checks if the given transfer should be accepted. If not, the transfer is freed.
 /// Internal states are updated.
 static inline bool rxSessionDeduplicate(UdpardInternalRxSession* const self,
@@ -1368,6 +1376,12 @@ static inline void rxSessionInit(UdpardInternalRxSession* const self, const RxMe
         rxIfaceInit(&self->ifaces[i], memory);
     }
 }
+
+// --------------------------------------------------  RX PORT  --------------------------------------------------
+
+// TODO
+
+// --------------------------------------------------  RX API  --------------------------------------------------
 
 void udpardFragmentFree(const struct UdpardFragment        head,
                         struct UdpardMemoryResource* const memory_fragment,
