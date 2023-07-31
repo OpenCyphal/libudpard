@@ -1109,7 +1109,40 @@ static void testIfaceCheckTransferIDTimeout(void)
 
 static void testIfaceFindMatchingSlot(void)
 {
-    // TODO FIXME add tests
+    InstrumentedAllocator mem_fragment = {0};
+    InstrumentedAllocator mem_payload  = {0};
+    instrumentedAllocatorNew(&mem_fragment);
+    instrumentedAllocatorNew(&mem_payload);
+    RxSlot slots[RX_SLOT_COUNT] = {0};
+    rxSlotRestart(&slots[0], 1000, &mem_fragment.base, &mem_payload.base);
+    rxSlotRestart(&slots[1], 1001, &mem_fragment.base, &mem_payload.base);
+    // No matching slot.
+    TEST_ASSERT_NULL(rxIfaceFindMatchingSlot(slots, 123));
+    // Matching slots.
+    TEST_ASSERT_EQUAL_PTR(&slots[0], rxIfaceFindMatchingSlot(slots, 1000));
+    TEST_ASSERT_EQUAL_PTR(&slots[1], rxIfaceFindMatchingSlot(slots, 1001));
+    // Identical slots, neither in progress.
+    slots[0].ts_usec     = TIMESTAMP_UNSET;
+    slots[1].ts_usec     = TIMESTAMP_UNSET;
+    slots[0].transfer_id = 1000;
+    slots[1].transfer_id = 1000;
+    TEST_ASSERT_EQUAL_PTR(&slots[0], rxIfaceFindMatchingSlot(slots, 1000));  // First match.
+    TEST_ASSERT_EQUAL_PTR(NULL, rxIfaceFindMatchingSlot(slots, 1001));
+    // Identical slots, one of them in progress.
+    slots[0].ts_usec = TIMESTAMP_UNSET;
+    slots[1].ts_usec = 1234567890;
+    TEST_ASSERT_EQUAL_PTR(&slots[1], rxIfaceFindMatchingSlot(slots, 1000));
+    TEST_ASSERT_EQUAL_PTR(NULL, rxIfaceFindMatchingSlot(slots, 1001));
+    // The other is in progress now.
+    slots[0].ts_usec = 1234567890;
+    slots[1].ts_usec = TIMESTAMP_UNSET;
+    TEST_ASSERT_EQUAL_PTR(&slots[0], rxIfaceFindMatchingSlot(slots, 1000));
+    TEST_ASSERT_EQUAL_PTR(NULL, rxIfaceFindMatchingSlot(slots, 1001));
+    // Both in progress, pick first.
+    slots[0].ts_usec = 1234567890;
+    slots[1].ts_usec = 2345678901;
+    TEST_ASSERT_EQUAL_PTR(&slots[0], rxIfaceFindMatchingSlot(slots, 1000));
+    TEST_ASSERT_EQUAL_PTR(NULL, rxIfaceFindMatchingSlot(slots, 1001));
 }
 
 static void testIfaceAcceptA(void)
@@ -1669,7 +1702,7 @@ static void testIfaceAcceptC(void)
     }
     struct UdpardRxTransfer transfer = {0};
     // === TRANSFER ===
-    // Send interleaving multi-frame transfers such that in the end slots have the same transfer-ID value:
+    // Send interleaving multi-frame transfers such that in the end slots have the same transfer-ID value
     // (primes for duplicates):
     //  A0 B0 A1 C0 B1 C1 B1'
     // The purpose of this test is to ensure that the case of multiple RX slots having the same transfer-ID is
