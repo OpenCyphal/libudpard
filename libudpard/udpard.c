@@ -191,6 +191,7 @@ static inline uint16_t headerCRCCompute(const size_t size, const void* const dat
 #define TRANSFER_CRC_INITIAL 0xFFFFFFFFUL
 #define TRANSFER_CRC_OUTPUT_XOR 0xFFFFFFFFUL
 #define TRANSFER_CRC_RESIDUE_BEFORE_OUTPUT_XOR 0xB798B438UL
+#define TRANSFER_CRC_RESIDUE_AFTER_OUTPUT_XOR (TRANSFER_CRC_RESIDUE_BEFORE_OUTPUT_XOR ^ TRANSFER_CRC_OUTPUT_XOR)
 #define TRANSFER_CRC_SIZE_BYTES 4U
 
 static inline uint32_t transferCRCAddByte(const uint32_t crc, const byte_t byte)
@@ -1343,6 +1344,7 @@ static inline bool rxSessionDeduplicate(UdpardInternalRxSession* const self,
     return accept;
 }
 
+/// Takes ownership of the frame payload buffer.
 static inline int_fast8_t rxSessionAccept(UdpardInternalRxSession* const self,
                                           const uint_fast8_t             redundant_iface_index,
                                           const UdpardMicrosecond        ts_usec,
@@ -1425,6 +1427,7 @@ static inline struct UdpardTreeNode* rxPortSessionFactory(void* const user_refer
 }
 
 /// Accepts a frame into a port, possibly creating a new session along the way.
+/// Takes ownership of the frame payload buffer.
 static inline int_fast8_t rxPortAccept(struct UdpardRxPort* const           self,
                                        const uint_fast8_t                   redundant_iface_index,
                                        const UdpardMicrosecond              ts_usec,
@@ -1434,9 +1437,10 @@ static inline int_fast8_t rxPortAccept(struct UdpardRxPort* const           self
 {
     UDPARD_ASSERT((self != NULL) && (redundant_iface_index < UDPARD_NETWORK_INTERFACE_COUNT_MAX) &&
                   (out_transfer != NULL));
-    int_fast8_t result  = 0;
-    bool        release = true;
-    if (frame.meta.src_node_id <= UDPARD_NODE_ID_MAX)
+    int_fast8_t result    = 0;
+    bool        release   = true;
+    const bool  anonymous = frame.meta.src_node_id == UDPARD_NODE_ID_UNSET;
+    if (!anonymous)
     {
         struct UdpardInternalRxSession* const session = (struct UdpardInternalRxSession*)
             cavlSearch((struct UdpardTreeNode**) &self->sessions,
@@ -1461,22 +1465,27 @@ static inline int_fast8_t rxPortAccept(struct UdpardRxPort* const           self
             result = -UDPARD_ERROR_MEMORY;
         }
     }
-    else  // Anonymous transfers are always accepted unconditionally unless invalid.
+    else  // Valid anonymous transfers are always accepted unconditionally.
     {
-        if (transferCRCCompute(frame.base.payload.size, frame.base.payload.data) ==
-            TRANSFER_CRC_RESIDUE_BEFORE_OUTPUT_XOR)
+        const bool size_ok = frame.base.payload.size >= TRANSFER_CRC_SIZE_BYTES;
+        const bool crc_ok  = transferCRCCompute(frame.base.payload.size, frame.base.payload.data) ==
+                            TRANSFER_CRC_RESIDUE_AFTER_OUTPUT_XOR;
+        if (size_ok && crc_ok)
         {
             result  = 1;
             release = false;
             memZero(sizeof(*out_transfer), out_transfer);
+            // Copy relevant metadata from the frame. Remember that anonymous transfers are always single-frame.
             out_transfer->timestamp_usec = ts_usec;
             out_transfer->priority       = frame.meta.priority;
             out_transfer->source_node_id = frame.meta.src_node_id;
             out_transfer->transfer_id    = frame.meta.transfer_id;
-            out_transfer->payload_size   = frame.base.payload.size;
-            out_transfer->payload.next   = NULL;
-            out_transfer->payload.view   = frame.base.payload;
-            out_transfer->payload.origin = frame.base.origin;
+            // Manually set up the transfer payload to point to the relevant slice inside the frame payload.
+            out_transfer->payload.next      = NULL;
+            out_transfer->payload.view.size = frame.base.payload.size - TRANSFER_CRC_SIZE_BYTES;
+            out_transfer->payload.view.data = frame.base.payload.data;
+            out_transfer->payload.origin    = frame.base.origin;
+            out_transfer->payload_size      = out_transfer->payload.view.size;
         }
     }
     if (release)
@@ -1487,6 +1496,7 @@ static inline int_fast8_t rxPortAccept(struct UdpardRxPort* const           self
 }
 
 /// Accepts a raw frame and, if valid, passes it on to rxPortAccept() for further processing.
+/// Takes ownership of the frame payload buffer.
 static inline int_fast8_t rxPortAcceptFrame(struct UdpardRxPort* const           self,
                                             const uint_fast8_t                   redundant_iface_index,
                                             const UdpardMicrosecond              ts_usec,
@@ -1541,8 +1551,7 @@ int8_t udpardRxSubscriptionInit(struct UdpardRxSubscription* const   self,
     (void) subject_id;
     (void) extent;
     (void) memory;
-    (void) rxParseFrame;
-    (void) rxPortAccept;
+    (void) rxPortAcceptFrame;
     (void) rxPortInit;
     return 0;
 }

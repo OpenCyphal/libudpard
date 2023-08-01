@@ -809,7 +809,7 @@ int8_t udpardRxSubscriptionInit(struct UdpardRxSubscription* const   self,
 /// Frees all memory held by the subscription instance.
 /// After invoking this function, the instance is no longer usable.
 /// Do not forget to close the sockets that were opened for this subscription.
-void udpardRxSubscriptionDestroy(struct UdpardRxSubscription* const self);
+void udpardRxSubscriptionFree(struct UdpardRxSubscription* const self);
 
 /// Datagrams received from the sockets of this subscription are fed into this function.
 ///
@@ -951,7 +951,7 @@ int8_t udpardRxRPCDispatcherInit(struct UdpardRxRPCDispatcher* const  self,
 /// Frees all memory held by the RPC-service dispatcher instance.
 /// After invoking this function, the instance is no longer usable.
 /// Do not forget to close the sockets that were opened for this instance.
-void udpardRxRPCDispatcherDestroy(struct UdpardRxRPCDispatcher* const self);
+void udpardRxRPCDispatcherFree(struct UdpardRxRPCDispatcher* const self);
 
 /// This function lets the application register its interest in a particular service-ID and kind (request/response)
 /// by creating an RPC-service RX port. The service pointer shall retain validity until its unregistration or until

@@ -122,6 +122,51 @@ static RxMemory makeRxMemory(InstrumentedAllocator* const fragment, Instrumented
     return (RxMemory){.fragment = &fragment->base, .payload = &payload->base};
 }
 
+static struct UdpardMutablePayload makeDatagramPayload(struct UdpardMemoryResource* const memory,
+                                                       const TransferMetadata             meta,
+                                                       const uint32_t                     frame_index,
+                                                       const bool                         end_of_transfer,
+                                                       const struct UdpardPayload         payload)
+{
+    struct UdpardMutablePayload pld = {.size = payload.size + HEADER_SIZE_BYTES};
+    pld.data                        = memAlloc(memory, pld.size);
+    if (pld.data != NULL)
+    {
+        (void) memcpy(txSerializeHeader(pld.data, meta, frame_index, end_of_transfer), payload.data, payload.size);
+    }
+    else
+    {
+        TEST_PANIC("Failed to allocate datagram payload");
+    }
+    return pld;
+}
+
+static struct UdpardMutablePayload makeDatagramPayloadSingleFrame(struct UdpardMemoryResource* const memory,
+                                                                  const TransferMetadata             meta,
+                                                                  const struct UdpardPayload         payload)
+{
+    struct UdpardMutablePayload pld =
+        makeDatagramPayload(memory,
+                            meta,
+                            0,
+                            true,
+                            (struct UdpardPayload){.data = payload.data,
+                                                   .size = payload.size + TRANSFER_CRC_SIZE_BYTES});
+    TEST_PANIC_UNLESS(pld.size == (payload.size + HEADER_SIZE_BYTES + TRANSFER_CRC_SIZE_BYTES));
+    txSerializeU32(((byte_t*) pld.data) + HEADER_SIZE_BYTES + payload.size,
+                   transferCRCCompute(payload.size, payload.data));
+    return pld;
+}
+
+static struct UdpardMutablePayload makeDatagramPayloadSingleFrameString(struct UdpardMemoryResource* const memory,
+                                                                        const TransferMetadata             meta,
+                                                                        const char* const                  payload)
+{
+    return makeDatagramPayloadSingleFrame(memory,
+                                          meta,
+                                          (struct UdpardPayload){.data = payload, .size = strlen(payload)});
+}
+
 // --------------------------------------------------  FRAME PARSE  --------------------------------------------------
 
 // Generate reference data using PyCyphal:
@@ -2032,7 +2077,194 @@ static void testSessionAcceptA(void)
 
 static inline void testPortAcceptFrameA(void)
 {
-    //
+    InstrumentedAllocator mem_session  = {0};
+    InstrumentedAllocator mem_fragment = {0};
+    InstrumentedAllocator mem_payload  = {0};
+    instrumentedAllocatorNew(&mem_session);
+    instrumentedAllocatorNew(&mem_fragment);
+    instrumentedAllocatorNew(&mem_payload);
+    const struct UdpardRxMemoryResources mem      = {.session  = &mem_session.base,
+                                                     .fragment = &mem_fragment.base,
+                                                     .payload  = &mem_payload.base};
+    struct UdpardRxTransfer              transfer = {0};
+    // Initialize the port.
+    struct UdpardRxPort port;
+    rxPortInit(&port);
+    TEST_ASSERT_EQUAL(SIZE_MAX, port.extent);
+    TEST_ASSERT_EQUAL(UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC, port.transfer_id_timeout_usec);
+    TEST_ASSERT_NULL(port.sessions);
+
+    // Accept valid non-anonymous transfer.
+    TEST_ASSERT_EQUAL(
+        1,
+        rxPortAcceptFrame(&port,
+                          1,
+                          10000000,
+                          makeDatagramPayloadSingleFrameString(&mem_payload.base,  //
+                                                               (TransferMetadata){.priority = UdpardPriorityImmediate,
+                                                                                  .src_node_id = 2222,
+                                                                                  .dst_node_id = UDPARD_NODE_ID_UNSET,
+                                                                                  .data_specifier = 0,
+                                                                                  .transfer_id    = 0xB},
+                                                               "When will the collapse of space in the vicinity of the "
+                                                               "Solar System into two dimensions cease?"),
+                          mem,
+                          &transfer));
+    TEST_ASSERT_EQUAL(1, mem_session.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);  // Head optimization in effect.
+    TEST_ASSERT_EQUAL(1, mem_payload.allocated_fragments);
+    // Check the received transfer.
+    TEST_ASSERT_EQUAL(10000000, transfer.timestamp_usec);
+    TEST_ASSERT_EQUAL(UdpardPriorityImmediate, transfer.priority);
+    TEST_ASSERT_EQUAL(2222, transfer.source_node_id);
+    TEST_ASSERT_EQUAL(0xB, transfer.transfer_id);
+    TEST_ASSERT_EQUAL(94, transfer.payload_size);
+    TEST_ASSERT(compareStringWithPayload("When will the collapse of space in the vicinity of the "
+                                         "Solar System into two dimensions cease?",
+                                         transfer.payload.view));
+    // Free the memory.
+    udpardFragmentFree(transfer.payload, &mem_fragment.base, &mem_payload.base);
+    TEST_ASSERT_EQUAL(1, mem_session.allocated_fragments);  // The session remains.
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
+
+    // Send another transfer from another node and see the session count increase.
+    TEST_ASSERT_EQUAL(
+        1,
+        rxPortAcceptFrame(&port,
+                          0,
+                          10000010,
+                          makeDatagramPayloadSingleFrameString(&mem_payload.base,  //
+                                                               (TransferMetadata){.priority = UdpardPriorityImmediate,
+                                                                                  .src_node_id = 3333,
+                                                                                  .dst_node_id = UDPARD_NODE_ID_UNSET,
+                                                                                  .data_specifier = 0,
+                                                                                  .transfer_id    = 0xC},
+                                                               "It will never cease."),
+                          mem,
+                          &transfer));
+    TEST_ASSERT_EQUAL(2, mem_session.allocated_fragments);   // New session created.
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);  // Head optimization in effect.
+    TEST_ASSERT_EQUAL(1, mem_payload.allocated_fragments);
+    // Check the received transfer.
+    TEST_ASSERT_EQUAL(10000010, transfer.timestamp_usec);
+    TEST_ASSERT_EQUAL(UdpardPriorityImmediate, transfer.priority);
+    TEST_ASSERT_EQUAL(3333, transfer.source_node_id);
+    TEST_ASSERT_EQUAL(0xC, transfer.transfer_id);
+    TEST_ASSERT_EQUAL(20, transfer.payload_size);
+    TEST_ASSERT(compareStringWithPayload("It will never cease.", transfer.payload.view));
+    // Free the memory.
+    udpardFragmentFree(transfer.payload, &mem_fragment.base, &mem_payload.base);
+    TEST_ASSERT_EQUAL(2, mem_session.allocated_fragments);  // The sessions remain.
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
+
+    // Try sending another frame with no memory left and see it fail during session allocation.
+    mem_session.limit_fragments = 0;
+    TEST_ASSERT_EQUAL(
+        -UDPARD_ERROR_MEMORY,
+        rxPortAcceptFrame(&port,
+                          2,
+                          10000020,
+                          makeDatagramPayloadSingleFrameString(&mem_payload.base,  //
+                                                               (TransferMetadata){.priority = UdpardPriorityImmediate,
+                                                                                  .src_node_id = 4444,
+                                                                                  .dst_node_id = UDPARD_NODE_ID_UNSET,
+                                                                                  .data_specifier = 0,
+                                                                                  .transfer_id    = 0xD},
+                                                               "Cheng Xin shuddered."),
+                          mem,
+                          &transfer));
+    TEST_ASSERT_EQUAL(2, mem_session.allocated_fragments);   // Not increased.
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);  // Not accepted.
+    TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);   // Buffer freed.
+
+    // Anonymous transfers are stateless and do not require session allocation.
+    mem_session.limit_fragments = 0;
+    TEST_ASSERT_EQUAL(
+        1,
+        rxPortAcceptFrame(&port,
+                          2,
+                          10000030,
+                          makeDatagramPayloadSingleFrameString(&mem_payload.base,  //
+                                                               (TransferMetadata){.priority = UdpardPriorityImmediate,
+                                                                                  .src_node_id = UDPARD_NODE_ID_UNSET,
+                                                                                  .dst_node_id = UDPARD_NODE_ID_UNSET,
+                                                                                  .data_specifier = 0,
+                                                                                  .transfer_id    = 0xD},
+                                                               "Cheng Xin shuddered."),
+                          mem,
+                          &transfer));
+    TEST_ASSERT_EQUAL(2, mem_session.allocated_fragments);   // Not increased.
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);  // Head optimization in effect.
+    TEST_ASSERT_EQUAL(1, mem_payload.allocated_fragments);   // Frame passed to the application.
+    // Check the received transfer.
+    TEST_ASSERT_EQUAL(10000030, transfer.timestamp_usec);
+    TEST_ASSERT_EQUAL(UdpardPriorityImmediate, transfer.priority);
+    TEST_ASSERT_EQUAL(UDPARD_NODE_ID_UNSET, transfer.source_node_id);
+    TEST_ASSERT_EQUAL(0xD, transfer.transfer_id);
+    TEST_ASSERT_EQUAL(20, transfer.payload_size);
+    TEST_ASSERT(compareStringWithPayload("Cheng Xin shuddered.", transfer.payload.view));
+    // Free the memory.
+    udpardFragmentFree(transfer.payload, &mem_fragment.base, &mem_payload.base);
+    TEST_ASSERT_EQUAL(2, mem_session.allocated_fragments);  // The sessions remain.
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
+
+    // Send invalid anonymous transfers and see them fail.
+    {  // Bad CRC.
+        struct UdpardMutablePayload datagram =
+            makeDatagramPayloadSingleFrameString(&mem_payload.base,  //
+                                                 (TransferMetadata){.priority       = UdpardPriorityImmediate,
+                                                                    .src_node_id    = UDPARD_NODE_ID_UNSET,
+                                                                    .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                                                                    .data_specifier = 0,
+                                                                    .transfer_id    = 0xE},
+                                                 "You are scared? Do you think that in this galaxy, in this universe, "
+                                                 "only the Solar System is collapsing into two dimensions? Haha...");
+        *(((byte_t*) datagram.data) + HEADER_SIZE_BYTES) = 0x00;  // Corrupt the payload, CRC invalid.
+        TEST_ASSERT_EQUAL(0, rxPortAcceptFrame(&port, 0, 10000040, datagram, mem, &transfer));
+        TEST_ASSERT_EQUAL(2, mem_session.allocated_fragments);
+        TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
+        TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
+    }
+    {  // No payload (transfer CRC is always required).
+        byte_t* const payload = memAlloc(&mem_payload.base, HEADER_SIZE_BYTES);
+        (void) txSerializeHeader(payload,
+                                 (TransferMetadata){.priority       = UdpardPriorityImmediate,
+                                                    .src_node_id    = UDPARD_NODE_ID_UNSET,
+                                                    .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                                                    .data_specifier = 0,
+                                                    .transfer_id    = 0xE},
+                                 0,
+                                 true);
+        TEST_ASSERT_EQUAL(0,
+                          rxPortAcceptFrame(&port,
+                                            0,
+                                            10000050,
+                                            (struct UdpardMutablePayload){.size = HEADER_SIZE_BYTES, .data = payload},
+                                            mem,
+                                            &transfer));
+        TEST_ASSERT_EQUAL(2, mem_session.allocated_fragments);
+        TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
+        TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
+    }
+
+    // Send an invalid frame and make sure the memory is freed.
+    TEST_ASSERT_EQUAL(0,
+                      rxPortAcceptFrame(&port,
+                                        0,
+                                        10000060,
+                                        (struct UdpardMutablePayload){.size = HEADER_SIZE_BYTES,
+                                                                      .data = memAlloc(&mem_payload.base,
+                                                                                       HEADER_SIZE_BYTES)},
+                                        mem,
+                                        &transfer));
+    TEST_ASSERT_EQUAL(2, mem_session.allocated_fragments);   // Not increased.
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);  // Not accepted.
+    TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);   // Buffer freed.
+
+    // TODO: FREE THE PORT INSTANCE -- DEALLOCATE THE SESSIONS.
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
