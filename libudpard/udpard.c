@@ -131,6 +131,12 @@ static inline void memFreePayload(struct UdpardMemoryResource* const memory, con
     memFree(memory, payload.size, payload.data);
 }
 
+static inline void memZero(const size_t size, void* const data)
+{
+    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
+    (void) memset(data, 0, size);
+}
+
 // --------------------------------------------- HEADER CRC ---------------------------------------------
 
 #define HEADER_CRC_INITIAL 0xFFFFU
@@ -515,8 +521,7 @@ int8_t udpardTxInit(struct UdpardTx* const             self,
     if ((NULL != self) && (NULL != local_node_id) && memIsValid(memory))
     {
         ret = 0;
-        // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-        (void) memset(self, 0, sizeof(*self));
+        memZero(sizeof(*self), self);
         self->local_node_id  = local_node_id;
         self->queue_capacity = queue_capacity;
         self->mtu            = UDPARD_MTU_DEFAULT;
@@ -864,6 +869,8 @@ typedef struct
 typedef struct UdpardInternalRxSession
 {
     struct UdpardTreeNode base;
+    /// The remote node-ID is needed here as this is the ordering/search key.
+    UdpardNodeID remote_node_id;
     /// This shared state is used for redundant transfer deduplication.
     /// Redundancies occur as a result of the use of multiple network interfaces, spurious frame duplication along
     /// the network path, and trivial forward error correction through duplication (if used by the sender).
@@ -943,8 +950,7 @@ static inline struct UdpardTreeNode* rxSlotFragmentFactory(void* const user_refe
     RxFragment* const      frag = memAlloc(ctx->memory_fragment, sizeof(RxFragment));
     if (frag != NULL)
     {
-        // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-        (void) memset(frag, 0, sizeof(RxFragment));
+        memZero(sizeof(RxFragment), frag);
         out               = &frag->tree.base;  // this is not an escape bug, we retain the pointer via "this"
         frag->frame_index = ctx->frame_index;
         frag->tree.this   = frag;  // <-- right here, see?
@@ -1297,8 +1303,7 @@ static inline int_fast8_t rxIfaceAccept(RxIface* const                 self,
 static inline void rxIfaceInit(RxIface* const self, const RxMemory memory)
 {
     UDPARD_ASSERT(self != NULL);
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-    (void) memset(self, 0, sizeof(*self));
+    memZero(sizeof(*self), self);
     self->ts_usec = TIMESTAMP_UNSET;
     for (uint_fast8_t i = 0; i < RX_SLOT_COUNT; i++)
     {
@@ -1367,8 +1372,8 @@ static inline int_fast8_t rxSessionAccept(UdpardInternalRxSession* const self,
 static inline void rxSessionInit(UdpardInternalRxSession* const self, const RxMemory memory)
 {
     UDPARD_ASSERT(self != NULL);
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-    (void) memset(self, 0, sizeof(*self));
+    memZero(sizeof(*self), self);
+    self->remote_node_id   = UDPARD_NODE_ID_UNSET;
     self->last_ts_usec     = TIMESTAMP_UNSET;
     self->last_transfer_id = TRANSFER_ID_UNSET;
     for (uint_fast8_t i = 0; i < UDPARD_NETWORK_INTERFACE_COUNT_MAX; i++)
@@ -1379,7 +1384,136 @@ static inline void rxSessionInit(UdpardInternalRxSession* const self, const RxMe
 
 // --------------------------------------------------  RX PORT  --------------------------------------------------
 
-// TODO
+typedef struct
+{
+    UdpardNodeID                   remote_node_id;
+    struct UdpardRxMemoryResources memory;
+} RxPortSessionSearchContext;
+
+static inline int8_t rxPortSessionSearch(void* const user_reference, const struct UdpardTreeNode* node)
+{
+    UDPARD_ASSERT((user_reference != NULL) && (node != NULL));
+    const RxPortSessionSearchContext* const ctx     = (const RxPortSessionSearchContext*) user_reference;
+    struct UdpardInternalRxSession* const   session = (struct UdpardInternalRxSession*) node;
+    UDPARD_ASSERT((ctx != NULL) && (session != NULL));
+    int8_t out = 0;
+    if (ctx->remote_node_id > session->remote_node_id)
+    {
+        out = +1;
+    }
+    if (ctx->remote_node_id < session->remote_node_id)
+    {
+        out = -1;
+    }
+    return out;
+}
+
+static inline struct UdpardTreeNode* rxPortSessionFactory(void* const user_reference)
+{
+    const RxPortSessionSearchContext* const ctx = (const RxPortSessionSearchContext*) user_reference;
+    UDPARD_ASSERT((ctx != NULL) && (ctx->remote_node_id <= UDPARD_NODE_ID_MAX));
+    struct UdpardTreeNode*                out = NULL;
+    struct UdpardInternalRxSession* const session =
+        memAlloc(ctx->memory.session, sizeof(struct UdpardInternalRxSession));
+    if (session != NULL)
+    {
+        rxSessionInit(session, (RxMemory){.payload = ctx->memory.payload, .fragment = ctx->memory.fragment});
+        session->remote_node_id = ctx->remote_node_id;
+        out                     = &session->base;
+    }
+    return out;  // OOM handled by the caller
+}
+
+/// Accepts a frame into a port, possibly creating a new session along the way.
+static inline int_fast8_t rxPortAccept(struct UdpardRxPort* const           self,
+                                       const uint_fast8_t                   redundant_iface_index,
+                                       const UdpardMicrosecond              ts_usec,
+                                       const RxFrame                        frame,
+                                       const struct UdpardRxMemoryResources memory,
+                                       struct UdpardRxTransfer* const       out_transfer)
+{
+    UDPARD_ASSERT((self != NULL) && (redundant_iface_index < UDPARD_NETWORK_INTERFACE_COUNT_MAX) &&
+                  (out_transfer != NULL));
+    int_fast8_t result  = 0;
+    bool        release = true;
+    if (frame.meta.src_node_id <= UDPARD_NODE_ID_MAX)
+    {
+        struct UdpardInternalRxSession* const session = (struct UdpardInternalRxSession*)
+            cavlSearch((struct UdpardTreeNode**) &self->sessions,
+                       &(RxPortSessionSearchContext){.remote_node_id = frame.meta.src_node_id, .memory = memory},
+                       &rxPortSessionSearch,
+                       &rxPortSessionFactory);
+        if (session != NULL)
+        {
+            UDPARD_ASSERT(session->remote_node_id == frame.meta.src_node_id);
+            release = false;  // The callee takes ownership of the memory.
+            result  = rxSessionAccept(session,
+                                     redundant_iface_index,
+                                     ts_usec,
+                                     frame,
+                                     self->extent,
+                                     self->transfer_id_timeout_usec,
+                                     (RxMemory){.payload = memory.payload, .fragment = memory.fragment},
+                                     out_transfer);
+        }
+        else  // Failed to allocate a new session.
+        {
+            result = -UDPARD_ERROR_MEMORY;
+        }
+    }
+    else  // Anonymous transfers are always accepted unconditionally unless invalid.
+    {
+        if (transferCRCCompute(frame.base.payload.size, frame.base.payload.data) ==
+            TRANSFER_CRC_RESIDUE_BEFORE_OUTPUT_XOR)
+        {
+            result  = 1;
+            release = false;
+            memZero(sizeof(*out_transfer), out_transfer);
+            out_transfer->timestamp_usec = ts_usec;
+            out_transfer->priority       = frame.meta.priority;
+            out_transfer->source_node_id = frame.meta.src_node_id;
+            out_transfer->transfer_id    = frame.meta.transfer_id;
+            out_transfer->payload_size   = frame.base.payload.size;
+            out_transfer->payload.next   = NULL;
+            out_transfer->payload.view   = frame.base.payload;
+            out_transfer->payload.origin = frame.base.origin;
+        }
+    }
+    if (release)
+    {
+        memFreePayload(memory.payload, frame.base.origin);
+    }
+    return result;
+}
+
+/// Accepts a raw frame and, if valid, passes it on to rxPortAccept() for further processing.
+static inline int_fast8_t rxPortAcceptFrame(struct UdpardRxPort* const           self,
+                                            const uint_fast8_t                   redundant_iface_index,
+                                            const UdpardMicrosecond              ts_usec,
+                                            const struct UdpardMutablePayload    datagram_payload,
+                                            const struct UdpardRxMemoryResources memory,
+                                            struct UdpardRxTransfer* const       out_transfer)
+{
+    int_fast8_t result = 0;
+    RxFrame     frame  = {0};
+    if (rxParseFrame(datagram_payload, &frame))
+    {
+        result = rxPortAccept(self, redundant_iface_index, ts_usec, frame, memory, out_transfer);
+    }
+    else
+    {
+        memFreePayload(memory.payload, datagram_payload);
+    }
+    return result;
+}
+
+static inline void rxPortInit(struct UdpardRxPort* const self)
+{
+    memZero(sizeof(*self), self);
+    self->extent                   = SIZE_MAX;  // Unlimited extent by default.
+    self->transfer_id_timeout_usec = UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC;
+    self->sessions                 = NULL;
+}
 
 // --------------------------------------------------  RX API  --------------------------------------------------
 
@@ -1408,7 +1542,7 @@ int8_t udpardRxSubscriptionInit(struct UdpardRxSubscription* const   self,
     (void) extent;
     (void) memory;
     (void) rxParseFrame;
-    (void) rxSessionInit;
-    (void) rxSessionAccept;
+    (void) rxPortAccept;
+    (void) rxPortInit;
     return 0;
 }

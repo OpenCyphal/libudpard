@@ -2,6 +2,7 @@
   <dictionary name="pavel">
     <words>
       <w>baremetal</w>
+      <w>cavl</w>
       <w>cfamily</w>
       <w>deallocation</w>
       <w>deduplicator</w>

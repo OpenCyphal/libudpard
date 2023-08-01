@@ -122,7 +122,7 @@ static RxMemory makeRxMemory(InstrumentedAllocator* const fragment, Instrumented
     return (RxMemory){.fragment = &fragment->base, .payload = &payload->base};
 }
 
-// --------------------------------------------------------------------------------------------------------------------
+// --------------------------------------------------  FRAME PARSE  --------------------------------------------------
 
 // Generate reference data using PyCyphal:
 //
@@ -258,6 +258,8 @@ static void testParseFrameEmpty(void)
     RxFrame rxf = {0};
     TEST_ASSERT_FALSE(rxParseFrame((struct UdpardMutablePayload){.data = "", .size = 0}, &rxf));
 }
+
+// --------------------------------------------------  SLOT  --------------------------------------------------
 
 static void testSlotRestartEmpty(void)
 {
@@ -955,6 +957,8 @@ static void testSlotAcceptA(void)
     TEST_ASSERT_EQUAL(0, slot.payload_size);
     TEST_ASSERT_NULL(slot.fragments);
 }
+
+// --------------------------------------------------  IFACE  --------------------------------------------------
 
 static void testIfaceIsFutureTransferID(void)
 {
@@ -1850,6 +1854,8 @@ static void testIfaceAcceptC(void)
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
 }
 
+// --------------------------------------------------  SESSION  --------------------------------------------------
+
 static void testSessionDeduplicate(void)
 {
     InstrumentedAllocator mem_fragment = {0};
@@ -2022,6 +2028,15 @@ static void testSessionAcceptA(void)
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
 }
 
+// --------------------------------------------------  PORT  --------------------------------------------------
+
+static inline void testPortAcceptFrameA(void)
+{
+    //
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+
 void setUp(void) {}
 
 void tearDown(void) {}
@@ -2058,6 +2073,8 @@ int main(void)
     // session
     RUN_TEST(testSessionDeduplicate);
     RUN_TEST(testSessionAcceptA);
+    // port
+    RUN_TEST(testPortAcceptFrameA);
     return UNITY_END();
 }
 

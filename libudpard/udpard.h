@@ -626,10 +626,6 @@ void udpardTxFree(struct UdpardMemoryResource* const memory, struct UdpardTxItem
 /// redundant network interfaces.
 struct UdpardRxPort
 {
-    /// For subject ports this is the subject-ID. For RPC-service ports this is the service-ID.
-    /// READ-ONLY
-    UdpardPortID port_id;
-
     /// The maximum payload size that can be accepted at this port.
     /// The rest will be truncated away following the implicit truncation rule defined in the Cyphal specification.
     /// READ-ONLY
@@ -877,6 +873,9 @@ struct UdpardRxRPC
 {
     /// READ-ONLY
     struct UdpardTreeNode base;
+
+    /// READ-ONLY
+    UdpardPortID service_id;
 
     /// See UdpardRxPort.
     /// Use this to change the transfer-ID timeout value for this RPC-service port.
