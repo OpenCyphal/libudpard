@@ -886,7 +886,7 @@ static inline void rxFragmentDestroyTree(RxFragment* const self, const RxMemory 
         if (child != NULL)
         {
             UDPARD_ASSERT(child->base.up == &self->tree.base);
-            rxFragmentDestroyTree(child->this, memory);
+            rxFragmentDestroyTree(child->this, memory);  // NOSONAR recursion
         }
     }
     memFree(memory.fragment, sizeof(RxFragment), self);  // self-destruct
@@ -943,7 +943,7 @@ static inline int8_t rxSlotFragmentSearch(void* const user_reference, const stru
 {
     UDPARD_ASSERT((user_reference != NULL) && (node != NULL));
     const RxSlotUpdateContext* const ctx  = (RxSlotUpdateContext*) user_reference;
-    RxFragment* const                frag = ((RxFragmentTreeNode*) node)->this;
+    const RxFragment* const          frag = ((const RxFragmentTreeNode*) node)->this;
     UDPARD_ASSERT((ctx != NULL) && (frag != NULL));
     int8_t out = 0;
     if (ctx->frame_index > frag->frame_index)
@@ -995,7 +995,7 @@ static inline void rxSlotEjectFragment(RxFragment* const frag, RxSlotEjectContex
         RxFragment* const child = ((RxFragmentTreeNode*) frag->tree.base.lr[0])->this;
         UDPARD_ASSERT(child->frame_index < frag->frame_index);
         UDPARD_ASSERT(child->tree.base.up == &frag->tree.base);
-        rxSlotEjectFragment(child, ctx);
+        rxSlotEjectFragment(child, ctx);  // NOSONAR recursion
     }
     const size_t fragment_size = frag->base.view.size;
     frag->base.next            = NULL;  // Default state; may be overwritten.
@@ -1020,7 +1020,7 @@ static inline void rxSlotEjectFragment(RxFragment* const frag, RxSlotEjectContex
         RxFragment* const child = ((RxFragmentTreeNode*) frag->tree.base.lr[1])->this;
         UDPARD_ASSERT(child->frame_index > frag->frame_index);
         UDPARD_ASSERT(child->tree.base.up == &frag->tree.base);
-        rxSlotEjectFragment(child, ctx);
+        rxSlotEjectFragment(child, ctx);  // NOSONAR recursion
     }
     // Drop the unneeded fragments and their handles after the sub-tree is fully traversed.
     if (!retain)
@@ -1107,7 +1107,7 @@ static inline int_fast8_t rxSlotAccept(RxSlot* const                self,
         if ((self->eot_index != FRAME_INDEX_UNSET) && (self->eot_index != frame.index))
         {
             restart = true;  // Inconsistent EOT flag, could be a node-ID conflict.
-            goto finish;
+            goto finish;     // NOSONAR goto simplifies the control flow and is not prohibited by MISRA C:2012.
         }
         self->eot_index = frame.index;
     }
@@ -1115,7 +1115,7 @@ static inline int_fast8_t rxSlotAccept(RxSlot* const                self,
     if (self->max_index > self->eot_index)
     {
         restart = true;  // Frames past EOT found, discard the entire transfer because we don't trust it anymore.
-        goto finish;
+        goto finish;     // NOSONAR goto simplifies the control flow and is not prohibited by MISRA C:2012.
     }
     // SECOND: Insert the fragment into the fragment tree. If it already exists, drop and free the duplicate.
     UDPARD_ASSERT((self->max_index <= self->eot_index) && (self->accepted_frames <= self->eot_index));
@@ -1132,7 +1132,7 @@ static inline int_fast8_t rxSlotAccept(RxSlot* const                self,
         UDPARD_ASSERT(release);
         result = -UDPARD_ERROR_MEMORY;
         // No restart because there is hope that there will be enough memory when we receive a duplicate.
-        goto finish;
+        goto finish;  // NOSONAR goto simplifies the control flow and is not prohibited by MISRA C:2012.
     }
     UDPARD_ASSERT(self->max_index <= self->eot_index);
     if (update_ctx.accepted)
@@ -1363,7 +1363,9 @@ static inline bool rxSessionDeduplicate(UdpardInternalRxSession* const self,
         memFreePayload(memory.payload, transfer->payload.origin);
         rxFragmentDestroyList(transfer->payload.next, memory);
         transfer->payload_size = 0;
-        transfer->payload      = (struct UdpardFragment){.next = NULL, .view = {0}, .origin = {0}};
+        transfer->payload      = (struct UdpardFragment){.next   = NULL,
+                                                         .view   = {.size = 0, .data = NULL},
+                                                         .origin = {.size = 0, .data = NULL}};
     }
     return accept;
 }
@@ -1423,7 +1425,7 @@ static inline void rxSessionDestroyTree(UdpardInternalRxSession* const       sel
         if (child != NULL)
         {
             UDPARD_ASSERT(child->base.up == &self->base);
-            rxSessionDestroyTree(child, memory);
+            rxSessionDestroyTree(child, memory);  // NOSONAR recursion
         }
     }
     memFree(memory.session, sizeof(UdpardInternalRxSession), self);
@@ -1437,11 +1439,12 @@ typedef struct
     struct UdpardRxMemoryResources memory;
 } RxPortSessionSearchContext;
 
-static inline int8_t rxPortSessionSearch(void* const user_reference, const struct UdpardTreeNode* node)
+static inline int8_t rxPortSessionSearch(void* const                  user_reference,  // NOSONAR non-const API
+                                         const struct UdpardTreeNode* node)
 {
     UDPARD_ASSERT((user_reference != NULL) && (node != NULL));
-    const RxPortSessionSearchContext* const ctx     = (const RxPortSessionSearchContext*) user_reference;
-    struct UdpardInternalRxSession* const   session = (struct UdpardInternalRxSession*) node;
+    const RxPortSessionSearchContext* const     ctx     = (const RxPortSessionSearchContext*) user_reference;
+    const struct UdpardInternalRxSession* const session = (const struct UdpardInternalRxSession*) (const void*) node;
     UDPARD_ASSERT((ctx != NULL) && (session != NULL));
     int8_t out = 0;
     if (ctx->remote_node_id > session->remote_node_id)
@@ -1455,7 +1458,7 @@ static inline int8_t rxPortSessionSearch(void* const user_reference, const struc
     return out;
 }
 
-static inline struct UdpardTreeNode* rxPortSessionFactory(void* const user_reference)
+static inline struct UdpardTreeNode* rxPortSessionFactory(void* const user_reference)  // NOSONAR non-const API
 {
     const RxPortSessionSearchContext* const ctx = (const RxPortSessionSearchContext*) user_reference;
     UDPARD_ASSERT((ctx != NULL) && (ctx->remote_node_id <= UDPARD_NODE_ID_MAX));
@@ -1487,7 +1490,7 @@ static inline int_fast8_t rxPortAccept(struct UdpardRxPort* const           self
     const bool  anonymous = frame.meta.src_node_id == UDPARD_NODE_ID_UNSET;
     if (!anonymous)
     {
-        struct UdpardInternalRxSession* const session = (struct UdpardInternalRxSession*)
+        struct UdpardInternalRxSession* const session = (struct UdpardInternalRxSession*) (void*)
             cavlSearch((struct UdpardTreeNode**) &self->sessions,
                        &(RxPortSessionSearchContext){.remote_node_id = frame.meta.src_node_id, .memory = memory},
                        &rxPortSessionSearch,
@@ -1597,8 +1600,8 @@ int8_t udpardRxSubscriptionInit(struct UdpardRxSubscription* const   self,
     (void) subject_id;
     (void) extent;
     (void) memory;
-    (void) rxPortAcceptFrame;
-    (void) rxPortInit;
-    (void) rxPortFree;
+    (void) &rxPortAcceptFrame;
+    (void) &rxPortInit;
+    (void) &rxPortFree;
     return 0;
 }
