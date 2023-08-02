@@ -747,10 +747,10 @@ static inline bool rxParseFrame(const struct UdpardMutablePayload datagram_paylo
         if ((datagram_payload.size > HEADER_SIZE_BYTES) && (version == HEADER_VERSION) &&
             (headerCRCCompute(HEADER_SIZE_BYTES, datagram_payload.data) == HEADER_CRC_RESIDUE))
         {
-            const uint_fast8_t prio = *ptr++;
-            if (prio <= UDPARD_PRIORITY_MAX)
+            const uint_fast8_t priority = *ptr++;
+            if (priority <= UDPARD_PRIORITY_MAX)
             {
-                out->meta.priority        = (enum UdpardPriority) prio;
+                out->meta.priority        = (enum UdpardPriority) priority;
                 ptr                       = txDeserializeU16(ptr, &out->meta.src_node_id);
                 ptr                       = txDeserializeU16(ptr, &out->meta.dst_node_id);
                 ptr                       = txDeserializeU16(ptr, &out->meta.data_specifier);
