@@ -954,7 +954,8 @@ typedef struct
     struct UdpardMemoryResource* memory_fragment;
 } RxSlotUpdateContext;
 
-static inline int_fast8_t rxSlotFragmentSearch(void* const user_reference, const struct UdpardTreeNode* node)
+static inline int_fast8_t rxSlotFragmentSearch(void* const user_reference,  // NOSONAR Cavl API requires non-const.
+                                               const struct UdpardTreeNode* node)
 {
     UDPARD_ASSERT((user_reference != NULL) && (node != NULL));
     return compare32(((const RxSlotUpdateContext*) user_reference)->frame_index,
