@@ -47,7 +47,7 @@ typedef struct UdpardTreeNode Cavl;
 
 /// Returns POSITIVE if the search target is GREATER than the provided node, negative if smaller, zero on match (found).
 /// Values other than {-1, 0, +1} are not recommended to avoid overflow during the narrowing conversion of the result.
-typedef int8_t (*CavlPredicate)(void* user_reference, const Cavl* node);
+typedef int_fast8_t (*CavlPredicate)(void* user_reference, const Cavl* node);
 
 /// If provided, the factory will be invoked when the sought node does not exist in the tree.
 /// It is expected to return a new node that will be inserted immediately (without the need to traverse the tree again).
@@ -117,13 +117,13 @@ static inline void cavlPrivateRotate(Cavl* const x, const bool r)
 static inline Cavl* cavlPrivateAdjustBalance(Cavl* const x, const bool increment)
 {
     CAVL_ASSERT((x != NULL) && ((x->bf >= -1) && (x->bf <= +1)));
-    Cavl*        out    = x;
-    const int8_t new_bf = (int8_t) (x->bf + (increment ? +1 : -1));
+    Cavl*             out    = x;
+    const int_fast8_t new_bf = (int_fast8_t) (x->bf + (increment ? +1 : -1));
     if ((new_bf < -1) || (new_bf > 1))
     {
-        const bool   r    = new_bf < 0;   // bf<0 if left-heavy --> right rotation is needed.
-        const int8_t sign = r ? +1 : -1;  // Positive if we are rotating right.
-        Cavl* const  z    = x->lr[!r];
+        const bool        r    = new_bf < 0;   // bf<0 if left-heavy --> right rotation is needed.
+        const int_fast8_t sign = r ? +1 : -1;  // Positive if we are rotating right.
+        Cavl* const       z    = x->lr[!r];
         CAVL_ASSERT(z != NULL);  // Heavy side cannot be empty.
         // NOLINTNEXTLINE(clang-analyzer-core.NullDereference)
         if ((z->bf * sign) <= 0)  // Parent and child are heavy on the same side or the child is balanced.
@@ -132,8 +132,8 @@ static inline Cavl* cavlPrivateAdjustBalance(Cavl* const x, const bool increment
             cavlPrivateRotate(x, r);
             if (0 == z->bf)
             {
-                x->bf = (int8_t) (-sign);
-                z->bf = (int8_t) (+sign);
+                x->bf = (int_fast8_t) (-sign);
+                z->bf = (int_fast8_t) (+sign);
             }
             else
             {
@@ -150,7 +150,7 @@ static inline Cavl* cavlPrivateAdjustBalance(Cavl* const x, const bool increment
             cavlPrivateRotate(x, r);
             if ((y->bf * sign) < 0)
             {
-                x->bf = (int8_t) (+sign);
+                x->bf = (int_fast8_t) (+sign);
                 y->bf = 0;
                 z->bf = 0;
             }
@@ -158,7 +158,7 @@ static inline Cavl* cavlPrivateAdjustBalance(Cavl* const x, const bool increment
             {
                 x->bf = 0;
                 y->bf = 0;
-                z->bf = (int8_t) (-sign);
+                z->bf = (int_fast8_t) (-sign);
             }
             else
             {
@@ -209,7 +209,7 @@ static inline Cavl* cavlSearch(Cavl** const        root,
         Cavl** n  = root;
         while (*n != NULL)
         {
-            const int8_t cmp = predicate(user_reference, *n);
+            const int_fast8_t cmp = predicate(user_reference, *n);
             if (0 == cmp)
             {
                 out = *n;

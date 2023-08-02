@@ -11,14 +11,16 @@
 
 namespace hexdump
 {
-template <std::uint8_t BytesPerRow = 16, typename InputIterator>
+using Byte = std::uint_least8_t;
+
+template <Byte BytesPerRow = 16, typename InputIterator>
 [[nodiscard]] std::string hexdump(InputIterator begin, const InputIterator end)
 {
     static_assert(BytesPerRow > 0);
-    static constexpr std::pair<std::uint8_t, std::uint8_t> PrintableASCIIRange{32, 126};
-    std::uint32_t                                          offset = 0;
-    std::ostringstream                                     output;
-    bool                                                   first = true;
+    static constexpr std::pair<Byte, Byte> PrintableASCIIRange{32, 126};
+    std::uint32_t                          offset = 0;
+    std::ostringstream                     output;
+    bool                                   first = true;
     output << std::hex << std::setfill('0');
     do
     {
@@ -33,7 +35,7 @@ template <std::uint8_t BytesPerRow = 16, typename InputIterator>
         output << std::setw(8) << offset << "  ";
         offset += BytesPerRow;
         auto it = begin;
-        for (std::uint8_t i = 0; i < BytesPerRow; ++i)
+        for (Byte i = 0; i < BytesPerRow; ++i)
         {
             if (i == 8)
             {
@@ -50,7 +52,7 @@ template <std::uint8_t BytesPerRow = 16, typename InputIterator>
             }
         }
         output << " ";
-        for (std::uint8_t i = 0; i < BytesPerRow; ++i)
+        for (Byte i = 0; i < BytesPerRow; ++i)
         {
             if (begin != end)
             {
@@ -76,6 +78,6 @@ template <std::uint8_t BytesPerRow = 16, typename InputIterator>
 
 [[nodiscard]] inline auto hexdump(const void* const data, const std::size_t size)
 {
-    return hexdump(static_cast<const std::uint8_t*>(data), static_cast<const std::uint8_t*>(data) + size);
+    return hexdump(static_cast<const Byte*>(data), static_cast<const Byte*>(data) + size);
 }
 }  // namespace hexdump

@@ -31,10 +31,10 @@ struct Node final : Cavl
 
     T value{};
 
-    auto checkLinkageUpLeftRightBF(const Cavl* const check_up,
-                                   const Cavl* const check_le,
-                                   const Cavl* const check_ri,
-                                   const std::int8_t check_bf) const -> bool
+    auto checkLinkageUpLeftRightBF(const Cavl* const      check_up,
+                                   const Cavl* const      check_le,
+                                   const Cavl* const      check_ri,
+                                   const std::int_fast8_t check_bf) const -> bool
     {
         return (up == check_up) &&                                                                   //
                (lr[0] == check_le) && (lr[1] == check_ri) &&                                         //
@@ -64,7 +64,7 @@ auto search(Node<T>** const root, const Predicate& predicate, const Factory& fac
         Predicate predicate;
         Factory   factory;
 
-        static auto callPredicate(void* const user_reference, const Cavl* const node) -> std::int8_t
+        static auto callPredicate(void* const user_reference, const Cavl* const node) -> std::int_fast8_t
         {
             const auto ret = static_cast<Refs*>(user_reference)->predicate(static_cast<const Node<T>&>(*node));
             if (ret > 0)
@@ -101,20 +101,20 @@ void remove(Node<T>** const root, const Node<T>* const n)
 }
 
 template <typename T>
-auto getHeight(const Node<T>* const n) -> std::uint8_t  // NOLINT recursion
+auto getHeight(const Node<T>* const n) -> std::uint_fast8_t  // NOLINT recursion
 {
-    return (n != nullptr) ? static_cast<std::uint8_t>(1U + std::max(getHeight(static_cast<Node<T>*>(n->lr[0])),
-                                                                    getHeight(static_cast<Node<T>*>(n->lr[1]))))
+    return (n != nullptr) ? static_cast<std::uint_fast8_t>(1U + std::max(getHeight(static_cast<Node<T>*>(n->lr[0])),
+                                                                         getHeight(static_cast<Node<T>*>(n->lr[1]))))
                           : 0;
 }
 
 template <typename T>
-void print(const Node<T>* const nd, const std::uint8_t depth = 0, const char marker = 'T')  // NOLINT recursion
+void print(const Node<T>* const nd, const std::uint_fast8_t depth = 0, const char marker = 'T')  // NOLINT recursion
 {
     TEST_ASSERT(10 > getHeight(nd));  // Fail early for malformed cyclic trees, do not overwhelm stdout.
     if (nd != nullptr)
     {
-        print<T>(static_cast<const Node<T>*>(nd->lr[0]), static_cast<std::uint8_t>(depth + 1U), 'L');
+        print<T>(static_cast<const Node<T>*>(nd->lr[0]), static_cast<std::uint_fast8_t>(depth + 1U), 'L');
         for (std::uint16_t i = 1U; i < depth; i++)
         {
             std::cout << "              ";
@@ -133,7 +133,7 @@ void print(const Node<T>* const nd, const std::uint8_t depth = 0, const char mar
         }
         std::cout << marker << "=" << static_cast<std::int64_t>(nd->value)  //
                   << " [" << static_cast<std::int16_t>(nd->bf) << "]" << std::endl;
-        print<T>(static_cast<const Node<T>*>(nd->lr[1]), static_cast<std::uint8_t>(depth + 1U), 'R');
+        print<T>(static_cast<const Node<T>*>(nd->lr[1]), static_cast<std::uint_fast8_t>(depth + 1U), 'R');
     }
 }
 
@@ -211,7 +211,7 @@ auto findBrokenBalanceFactor(const Node<T>* const n) -> const Cavl*  // NOLINT r
 
 void testCheckAscension()
 {
-    using N = Node<std::uint8_t>;
+    using N = Node<std::uint_fast8_t>;
     N t{2};
     N l{1};
     N r{3};
@@ -238,7 +238,7 @@ void testCheckAscension()
 
 void testRotation()
 {
-    using N = Node<std::uint8_t>;
+    using N = Node<std::uint_fast8_t>;
     // Original state:
     //      x.left  = a
     //      x.right = z
@@ -284,7 +284,7 @@ void testRotation()
 
 void testBalancingA()
 {
-    using N = Node<std::uint8_t>;
+    using N = Node<std::uint_fast8_t>;
     // Double left-right rotation.
     //     X             X           Y
     //    / `           / `        /   `
@@ -334,7 +334,7 @@ void testBalancingA()
 
 void testBalancingB()
 {
-    using N = Node<std::uint8_t>;
+    using N = Node<std::uint_fast8_t>;
     // Without F the handling of Z and Y is more complex; Z flips the sign of its balance factor:
     //     X             X           Y
     //    / `           / `        /   `
@@ -383,7 +383,7 @@ void testBalancingB()
 
 void testBalancingC()
 {
-    using N = Node<std::uint8_t>;
+    using N = Node<std::uint_fast8_t>;
     // Both X and Z are heavy on the same side.
     //       X              Z
     //      / `           /   `
@@ -434,9 +434,9 @@ void testBalancingC()
 
 void testRetracingOnGrowth()
 {
-    using N = Node<std::uint8_t>;
+    using N = Node<std::uint_fast8_t>;
     std::array<N, 100> t{};
-    for (std::uint8_t i = 0; i < 100; i++)
+    for (std::uint_fast8_t i = 0; i < 100; i++)
     {
         t[i].value = i;
     }
@@ -640,7 +640,7 @@ void testRetracingOnGrowth()
 
 void testSearchTrivial()
 {
-    using N = Node<std::uint8_t>;
+    using N = Node<std::uint_fast8_t>;
     //      A
     //    B   C
     //   D E F G
@@ -684,7 +684,7 @@ void testSearchTrivial()
 
 void testRemovalA()
 {
-    using N = Node<std::uint8_t>;
+    using N = Node<std::uint_fast8_t>;
     //        4
     //      /   `
     //    2       6
@@ -693,7 +693,7 @@ void testRemovalA()
     //             / `
     //            7   9
     std::array<N, 10> t{};
-    for (std::uint8_t i = 0; i < 10; i++)
+    for (std::uint_fast8_t i = 0; i < 10; i++)
     {
         t[i].value = i;
     }
@@ -1005,7 +1005,7 @@ void testRemovalA()
 
 void testMutationManual()
 {
-    using N = Node<std::uint8_t>;
+    using N = Node<std::uint_fast8_t>;
     // Build a tree with 31 elements from 1 to 31 inclusive by adding new elements successively:
     //                               16
     //                       /               `
@@ -1017,13 +1017,13 @@ void testMutationManual()
     //  / `     / `     / `     / `     / `     / `     / `     / `
     // 1   3   5   7   9  11  13  15  17  19  21  23  25  27  29  31
     std::array<N, 32> t{};
-    for (std::uint8_t i = 0; i < 32; i++)
+    for (std::uint_fast8_t i = 0; i < 32; i++)
     {
         t[i].value = i;
     }
     // Build the actual tree.
     N* root = nullptr;
-    for (std::uint8_t i = 1; i < 32; i++)
+    for (std::uint_fast8_t i = 1; i < 32; i++)
     {
         const auto pred = [&](const N& v) { return t.at(i).value - v.value; };
         TEST_ASSERT(nullptr == search(&root, pred));
@@ -1276,16 +1276,16 @@ void testMutationManual()
 
 auto getRandomByte()
 {
-    return static_cast<std::uint8_t>((0xFFLL * std::rand()) / RAND_MAX);
+    return static_cast<std::uint_fast8_t>((0xFFLL * std::rand()) / RAND_MAX);
 }
 
 void testMutationRandomized()
 {
-    using N = Node<std::uint8_t>;
+    using N = Node<std::uint_fast8_t>;
     std::array<N, 256> t{};
     for (auto i = 0U; i < 256U; i++)
     {
-        t.at(i).value = static_cast<std::uint8_t>(i);
+        t.at(i).value = static_cast<std::uint_fast8_t>(i);
     }
     std::array<bool, 256> mask{};
     std::size_t           size = 0;
@@ -1307,7 +1307,7 @@ void testMutationRandomized()
     };
     validate();
 
-    const auto add = [&](const std::uint8_t x) {
+    const auto add = [&](const std::uint_fast8_t x) {
         const auto predicate = [&](const N& v) { return x - v.value; };
         if (N* const existing = search(&root, predicate))
         {
@@ -1332,7 +1332,7 @@ void testMutationRandomized()
         }
     };
 
-    const auto drop = [&](const std::uint8_t x) {
+    const auto drop = [&](const std::uint_fast8_t x) {
         const auto predicate = [&](const N& v) { return x - v.value; };
         if (N* const existing = search(&root, predicate))
         {

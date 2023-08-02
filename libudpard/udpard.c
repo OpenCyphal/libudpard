@@ -327,8 +327,8 @@ static inline TxItem* txNewItem(struct UdpardMemoryResource* const memory,
 
 /// Frames with identical weight are processed in the FIFO order.
 /// Frames with higher weight compare smaller (i.e., put on the left side of the tree).
-static inline int8_t txAVLPredicate(void* const user_reference,  // NOSONAR Cavl API requires pointer to non-const.
-                                    const struct UdpardTreeNode* const node)
+static inline int_fast8_t txAVLPredicate(void* const user_reference,  // NOSONAR Cavl API requires pointer to non-const.
+                                         const struct UdpardTreeNode* const node)
 {
     const TxItem* const target = (const TxItem*) user_reference;
     const TxItem* const other  = (const TxItem*) (const void*) node;
@@ -528,12 +528,12 @@ static inline int32_t txPush(struct UdpardTx* const           tx,
     return out;
 }
 
-int8_t udpardTxInit(struct UdpardTx* const             self,
-                    const UdpardNodeID* const          local_node_id,
-                    const size_t                       queue_capacity,
-                    struct UdpardMemoryResource* const memory)
+int_fast8_t udpardTxInit(struct UdpardTx* const             self,
+                         const UdpardNodeID* const          local_node_id,
+                         const size_t                       queue_capacity,
+                         struct UdpardMemoryResource* const memory)
 {
-    int8_t ret = -UDPARD_ERROR_ARGUMENT;
+    int_fast8_t ret = -UDPARD_ERROR_ARGUMENT;
     if ((NULL != self) && (NULL != local_node_id) && memIsValid(memory))
     {
         ret = 0;
@@ -954,7 +954,7 @@ typedef struct
     struct UdpardMemoryResource* memory_fragment;
 } RxSlotUpdateContext;
 
-static inline int8_t rxSlotFragmentSearch(void* const user_reference, const struct UdpardTreeNode* node)
+static inline int_fast8_t rxSlotFragmentSearch(void* const user_reference, const struct UdpardTreeNode* node)
 {
     UDPARD_ASSERT((user_reference != NULL) && (node != NULL));
     return compare32(((const RxSlotUpdateContext*) user_reference)->frame_index,
@@ -1443,8 +1443,8 @@ typedef struct
     struct UdpardRxMemoryResources memory;
 } RxPortSessionSearchContext;
 
-static inline int8_t rxPortSessionSearch(void* const                  user_reference,  // NOSONAR non-const API
-                                         const struct UdpardTreeNode* node)
+static inline int_fast8_t rxPortSessionSearch(void* const                  user_reference,  // NOSONAR non-const API
+                                              const struct UdpardTreeNode* node)
 {
     UDPARD_ASSERT((user_reference != NULL) && (node != NULL));
     return compare32(((const RxPortSessionSearchContext*) user_reference)->remote_node_id,
@@ -1584,10 +1584,10 @@ void udpardFragmentFree(const struct UdpardFragment        head,
     }
 }
 
-int8_t udpardRxSubscriptionInit(struct UdpardRxSubscription* const   self,
-                                const UdpardPortID                   subject_id,
-                                const size_t                         extent,
-                                const struct UdpardRxMemoryResources memory)
+int_fast8_t udpardRxSubscriptionInit(struct UdpardRxSubscription* const   self,
+                                     const UdpardPortID                   subject_id,
+                                     const size_t                         extent,
+                                     const struct UdpardRxMemoryResources memory)
 {
     (void) self;
     (void) subject_id;

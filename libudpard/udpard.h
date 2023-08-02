@@ -265,7 +265,7 @@ struct UdpardTreeNode
 {
     struct UdpardTreeNode* up;     ///< Do not access this field.
     struct UdpardTreeNode* lr[2];  ///< Left and right children of this node may be accessed for tree traversal.
-    int8_t                 bf;     ///< Do not access this field.
+    int_fast8_t            bf;     ///< Do not access this field.
 };
 
 struct UdpardMutablePayload
@@ -474,10 +474,10 @@ struct UdpardTxItem
 /// To safely discard it, simply pop all enqueued frames from it.
 ///
 /// The time complexity is constant. This function does not invoke the dynamic memory manager.
-int8_t udpardTxInit(struct UdpardTx* const             self,
-                    const UdpardNodeID* const          local_node_id,
-                    const size_t                       queue_capacity,
-                    struct UdpardMemoryResource* const memory);
+int_fast8_t udpardTxInit(struct UdpardTx* const             self,
+                         const UdpardNodeID* const          local_node_id,
+                         const size_t                       queue_capacity,
+                         struct UdpardMemoryResource* const memory);
 
 /// This function serializes a message transfer into a sequence of UDP datagrams and inserts them into the prioritized
 /// transmission queue at the appropriate position. Afterwards, the application is supposed to take the enqueued frames
@@ -804,10 +804,10 @@ struct UdpardRxSubscription
 /// The return value is a negated UDPARD_ERROR_ARGUMENT if any of the input arguments are invalid.
 ///
 /// The time complexity is constant. This function does not invoke the dynamic memory manager.
-int8_t udpardRxSubscriptionInit(struct UdpardRxSubscription* const   self,
-                                const UdpardPortID                   subject_id,
-                                const size_t                         extent,
-                                const struct UdpardRxMemoryResources memory);
+int_fast8_t udpardRxSubscriptionInit(struct UdpardRxSubscription* const   self,
+                                     const UdpardPortID                   subject_id,
+                                     const size_t                         extent,
+                                     const struct UdpardRxMemoryResources memory);
 
 /// Frees all memory held by the subscription instance.
 /// After invoking this function, the instance is no longer usable.
@@ -862,11 +862,11 @@ void udpardRxSubscriptionFree(struct UdpardRxSubscription* const self);
 ///
 /// UDPARD_ERROR_MEMORY is returned if the function fails to allocate memory.
 /// UDPARD_ERROR_ARGUMENT is returned if any of the input arguments are invalid.
-int8_t udpardRxSubscriptionReceive(struct UdpardRxSubscription* const self,
-                                   const UdpardMicrosecond            timestamp_usec,
-                                   const struct UdpardMutablePayload  datagram_payload,
-                                   const uint_fast8_t                 redundant_iface_index,
-                                   struct UdpardRxTransfer* const     out_transfer);
+int_fast8_t udpardRxSubscriptionReceive(struct UdpardRxSubscription* const self,
+                                        const UdpardMicrosecond            timestamp_usec,
+                                        const struct UdpardMutablePayload  datagram_payload,
+                                        const uint_fast8_t                 redundant_iface_index,
+                                        struct UdpardRxTransfer* const     out_transfer);
 
 // ---------------------------------------------  RPC-SERVICES  ---------------------------------------------
 
@@ -947,9 +947,9 @@ struct UdpardRxRPCTransfer
 /// The return value is a negated UDPARD_ERROR_ARGUMENT if any of the input arguments are invalid.
 ///
 /// The time complexity is constant. This function does not invoke the dynamic memory manager.
-int8_t udpardRxRPCDispatcherInit(struct UdpardRxRPCDispatcher* const  self,
-                                 const UdpardNodeID                   local_node_id,
-                                 const struct UdpardRxMemoryResources memory);
+int_fast8_t udpardRxRPCDispatcherInit(struct UdpardRxRPCDispatcher* const  self,
+                                      const UdpardNodeID                   local_node_id,
+                                      const struct UdpardRxMemoryResources memory);
 
 /// Frees all memory held by the RPC-service dispatcher instance.
 /// After invoking this function, the instance is no longer usable.
@@ -977,11 +977,11 @@ void udpardRxRPCDispatcherFree(struct UdpardRxRPCDispatcher* const self);
 /// (request or response).
 /// This function does not allocate new memory. The function may deallocate memory if such registration already
 /// existed; the deallocation behavior is specified in the documentation for udpardRxRPCDispatcherCancel.
-int8_t udpardRxRPCDispatcherListen(struct UdpardRxRPCDispatcher* const self,
-                                   struct UdpardRxRPC* const           service,
-                                   const UdpardPortID                  service_id,
-                                   const bool                          is_request,
-                                   const size_t                        extent);
+int_fast8_t udpardRxRPCDispatcherListen(struct UdpardRxRPCDispatcher* const self,
+                                        struct UdpardRxRPC* const           service,
+                                        const UdpardPortID                  service_id,
+                                        const bool                          is_request,
+                                        const size_t                        extent);
 
 /// This function reverses the effect of udpardRxRPCDispatcherListen.
 /// If the registration is found, all its memory is de-allocated (session states and payload buffers).
@@ -993,19 +993,19 @@ int8_t udpardRxRPCDispatcherListen(struct UdpardRxRPCDispatcher* const self,
 ///
 /// The time complexity is logarithmic from the number of current registration under the specified transfer kind.
 /// This function does not allocate new memory.
-int8_t udpardRxRPCDispatcherCancel(struct UdpardRxRPCDispatcher* const self,
-                                   const UdpardPortID                  service_id,
-                                   const bool                          is_request);
+int_fast8_t udpardRxRPCDispatcherCancel(struct UdpardRxRPCDispatcher* const self,
+                                        const UdpardPortID                  service_id,
+                                        const bool                          is_request);
 
 /// Datagrams received from the sockets of this service dispatcher are fed into this function.
 /// It is the analog of udpardRxSubscriptionReceive for RPC-service transfers.
 /// Please refer to the documentation of udpardRxSubscriptionReceive for the usage information.
-int8_t udpardRxRPCDispatcherReceive(struct UdpardRxRPCDispatcher* const self,
-                                    struct UdpardRxRPC** const          service,
-                                    const UdpardMicrosecond             timestamp_usec,
-                                    const struct UdpardMutablePayload   datagram_payload,
-                                    const uint_fast8_t                  redundant_iface_index,
-                                    struct UdpardRxRPCTransfer* const   out_transfer);
+int_fast8_t udpardRxRPCDispatcherReceive(struct UdpardRxRPCDispatcher* const self,
+                                         struct UdpardRxRPC** const          service,
+                                         const UdpardMicrosecond             timestamp_usec,
+                                         const struct UdpardMutablePayload   datagram_payload,
+                                         const uint_fast8_t                  redundant_iface_index,
+                                         struct UdpardRxRPCTransfer* const   out_transfer);
 
 #ifdef __cplusplus
 }
