@@ -1419,7 +1419,7 @@ static inline void rxSessionDestroyTree(UdpardInternalRxSession* const       sel
     }
     for (uint_fast8_t i = 0; i < 2; i++)
     {
-        UdpardInternalRxSession* const child = (UdpardInternalRxSession*) self->base.lr[i];
+        UdpardInternalRxSession* const child = (UdpardInternalRxSession*) (void*) self->base.lr[i];
         if (child != NULL)
         {
             UDPARD_ASSERT(child->base.up == &self->base);
