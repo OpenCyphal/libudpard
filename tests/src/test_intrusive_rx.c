@@ -141,6 +141,19 @@ static struct UdpardMutablePayload makeDatagramPayload(struct UdpardMemoryResour
     return pld;
 }
 
+static struct UdpardMutablePayload makeDatagramPayloadString(struct UdpardMemoryResource* const memory,
+                                                             const TransferMetadata             meta,
+                                                             const uint32_t                     frame_index,
+                                                             const bool                         end_of_transfer,
+                                                             const char* const                  string)
+{
+    return makeDatagramPayload(memory,
+                               meta,
+                               frame_index,
+                               end_of_transfer,
+                               (struct UdpardPayload){.data = string, .size = strlen(string)});
+}
+
 static struct UdpardMutablePayload makeDatagramPayloadSingleFrame(struct UdpardMemoryResource* const memory,
                                                                   const TransferMetadata             meta,
                                                                   const struct UdpardPayload         payload)
@@ -167,7 +180,7 @@ static struct UdpardMutablePayload makeDatagramPayloadSingleFrameString(struct U
                                           (struct UdpardPayload){.data = payload, .size = strlen(payload)});
 }
 
-// --------------------------------------------------  FRAME PARSE  --------------------------------------------------
+// --------------------------------------------------  FRAME PARSING  --------------------------------------------------
 
 // Generate reference data using PyCyphal:
 //
@@ -2264,7 +2277,82 @@ static inline void testPortAcceptFrameA(void)
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);  // Not accepted.
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);   // Buffer freed.
 
-    // TODO: FREE THE PORT INSTANCE -- DEALLOCATE THE SESSIONS.
+    // Send incomplete transfers to see them cleaned up upon destruction.
+    mem_session.limit_fragments = SIZE_MAX;
+    TEST_ASSERT_EQUAL(0,
+                      rxPortAcceptFrame(&port,
+                                        0,
+                                        10000070,
+                                        makeDatagramPayloadString(&mem_payload.base,  //
+                                                                  (TransferMetadata){
+                                                                      .priority       = UdpardPriorityImmediate,
+                                                                      .src_node_id    = 10000,
+                                                                      .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                                                                      .data_specifier = 0,
+                                                                      .transfer_id    = 0xD,
+                                                                  },
+                                                                  100,
+                                                                  false,
+                                                                  "What you're saying makes no sense. "
+                                                                  "At least, it doesn't make sense to lower spatial "
+                                                                  "dimensions as a weapon. "),
+                                        mem,
+                                        &transfer));
+    TEST_ASSERT_EQUAL(3, mem_session.allocated_fragments);
+    TEST_ASSERT_EQUAL(1, mem_fragment.allocated_fragments);
+    TEST_ASSERT_EQUAL(1, mem_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(0,
+                      rxPortAcceptFrame(&port,
+                                        0,
+                                        10000080,
+                                        makeDatagramPayloadString(&mem_payload.base,  //
+                                                                  (TransferMetadata){
+                                                                      .priority       = UdpardPriorityImmediate,
+                                                                      .src_node_id    = 10000,
+                                                                      .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                                                                      .data_specifier = 0,
+                                                                      .transfer_id    = 0xD,
+                                                                  },
+                                                                  101,
+                                                                  false,
+                                                                  "In the long run, that's the sort of attack that "
+                                                                  "would kill the attacker as well as the target. "
+                                                                  "Eventually, the side that initiated attack would "
+                                                                  "also see their own space fall into the "
+                                                                  "two-dimensional abyss they created."),
+                                        mem,
+                                        &transfer));
+    TEST_ASSERT_EQUAL(3, mem_session.allocated_fragments);  // Same session because it comes from the same source.
+    TEST_ASSERT_EQUAL(2, mem_fragment.allocated_fragments);
+    TEST_ASSERT_EQUAL(2, mem_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(0,
+                      rxPortAcceptFrame(&port,
+                                        2,
+                                        10000090,
+                                        makeDatagramPayloadString(&mem_payload.base,  //
+                                                                  (TransferMetadata){
+                                                                      .priority       = UdpardPriorityImmediate,
+                                                                      .src_node_id    = 10001,
+                                                                      .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                                                                      .data_specifier = 0,
+                                                                      .transfer_id    = 0xD,
+                                                                  },
+                                                                  10,
+                                                                  true,
+                                                                  "You're too... kind-hearted."),
+                                        mem,
+                                        &transfer));
+    TEST_ASSERT_EQUAL(4, mem_session.allocated_fragments);  // New source.
+    TEST_ASSERT_EQUAL(3, mem_fragment.allocated_fragments);
+    TEST_ASSERT_EQUAL(3, mem_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(4 * sizeof(UdpardInternalRxSession), mem_session.allocated_bytes);
+    TEST_ASSERT_EQUAL(3 * sizeof(RxFragment), mem_fragment.allocated_bytes);
+
+    // Free the port instance and ensure all ifaces and sessions are cleaned up.
+    rxPortFree(&port, mem);
+    TEST_ASSERT_EQUAL(0, mem_session.allocated_fragments);  // All gone.
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
 }
 
 // ---------------------------------------------------------------------------------------------------------------------

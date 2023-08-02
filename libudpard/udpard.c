@@ -805,18 +805,6 @@ typedef struct RxFragment
     uint32_t              frame_index;
 } RxFragment;
 
-static inline void rxFragmentFree(struct UdpardFragment* const head, const RxMemory memory)
-{
-    struct UdpardFragment* handle = head;
-    while (handle != NULL)
-    {
-        struct UdpardFragment* const next = handle->next;
-        memFreePayload(memory.payload, handle->origin);  // May be NULL, is okay.
-        memFree(memory.fragment, sizeof(RxFragment), handle);
-        handle = next;
-    }
-}
-
 /// Internally, the RX pipeline is arranged as follows:
 ///
 /// - There is one port per subscription or an RPC-service listener. Within the port, there are N sessions,
@@ -826,9 +814,9 @@ static inline void rxFragmentFree(struct UdpardFragment* const head, const RxMem
 /// - Per session, there are UDPARD_NETWORK_INTERFACE_COUNT_MAX interface states to support interface redundancy.
 ///
 /// - Per interface, there are RX_SLOT_COUNT slots; a slot keeps the state of a transfer in the process of being
-///   reassembled.
+///   reassembled which includes its payload fragments.
 ///
-/// Port -> Session -> Interface -> Slot.
+/// Port -> Session -> Interface -> Slot -> Fragments.
 ///
 /// Consider the following examples, where A and B denote distinct transfers of three frames each:
 ///
@@ -883,10 +871,12 @@ typedef struct UdpardInternalRxSession
     RxIface ifaces[UDPARD_NETWORK_INTERFACE_COUNT_MAX];
 } UdpardInternalRxSession;
 
-// --------------------------------------------------  RX SLOT  --------------------------------------------------
+// --------------------------------------------------  RX FRAGMENT  --------------------------------------------------
 
+/// Frees all fragments in the tree and their payload buffers. Destroys the passed fragment.
+/// This is meant to be invoked on the root of the tree.
 // NOLINTNEXTLINE(misc-no-recursion)
-static inline void rxSlotFree(RxFragment* const self, const RxMemory memory)
+static inline void rxFragmentDestroyTree(RxFragment* const self, const RxMemory memory)
 {
     UDPARD_ASSERT(self != NULL);
     memFreePayload(memory.payload, self->base.origin);
@@ -896,26 +886,50 @@ static inline void rxSlotFree(RxFragment* const self, const RxMemory memory)
         if (child != NULL)
         {
             UDPARD_ASSERT(child->base.up == &self->tree.base);
-            rxSlotFree(child->this, memory);
+            rxFragmentDestroyTree(child->this, memory);
         }
     }
     memFree(memory.fragment, sizeof(RxFragment), self);  // self-destruct
 }
 
+/// Frees all fragments in the list and their payload buffers. Destroys the passed fragment.
+/// This is meant to be invoked on the head of the list.
+/// This function is needed because when a fragment tree is transformed into a list, the tree structure itself
+/// is invalidated and cannot be used to free the fragments anymore.
+static inline void rxFragmentDestroyList(struct UdpardFragment* const head, const RxMemory memory)
+{
+    struct UdpardFragment* handle = head;
+    while (handle != NULL)
+    {
+        struct UdpardFragment* const next = handle->next;
+        memFreePayload(memory.payload, handle->origin);  // May be NULL, is okay.
+        memFree(memory.fragment, sizeof(RxFragment), handle);
+        handle = next;
+    }
+}
+
+// --------------------------------------------------  RX SLOT  --------------------------------------------------
+
+static inline void rxSlotFree(RxSlot* const self, const RxMemory memory)
+{
+    UDPARD_ASSERT(self != NULL);
+    if (self->fragments != NULL)
+    {
+        rxFragmentDestroyTree(self->fragments->this, memory);
+        self->fragments = NULL;
+    }
+}
+
 static inline void rxSlotRestart(RxSlot* const self, const UdpardTransferID transfer_id, const RxMemory memory)
 {
     UDPARD_ASSERT(self != NULL);
+    rxSlotFree(self, memory);
     self->ts_usec         = TIMESTAMP_UNSET;  // Will be assigned when the first frame of the transfer has arrived.
     self->transfer_id     = transfer_id;
     self->max_index       = 0;
     self->eot_index       = FRAME_INDEX_UNSET;
     self->accepted_frames = 0;
     self->payload_size    = 0;
-    if (self->fragments != NULL)
-    {
-        rxSlotFree(self->fragments->this, memory);
-        self->fragments = NULL;
-    }
 }
 
 typedef struct
@@ -1066,7 +1080,7 @@ static inline bool rxSlotEject(size_t* const                out_payload_size,
     }
     else  // The transfer turned out to be invalid. We have to free the fragments. Can't use the tree anymore.
     {
-        rxFragmentFree(eject_ctx.head, memory);
+        rxFragmentDestroyList(eject_ctx.head, memory);
     }
     return result;
 }
@@ -1313,6 +1327,16 @@ static inline void rxIfaceInit(RxIface* const self, const RxMemory memory)
     }
 }
 
+/// Frees the iface and all slots in it. The iface instance itself is not freed.
+static inline void rxIfaceFree(RxIface* const self, const RxMemory memory)
+{
+    UDPARD_ASSERT(self != NULL);
+    for (uint_fast8_t i = 0; i < RX_SLOT_COUNT; i++)
+    {
+        rxSlotFree(&self->slots[i], memory);
+    }
+}
+
 // --------------------------------------------------  RX SESSION  --------------------------------------------------
 
 /// Checks if the given transfer should be accepted. If not, the transfer is freed.
@@ -1337,7 +1361,7 @@ static inline bool rxSessionDeduplicate(UdpardInternalRxSession* const self,
     else  // This is a duplicate: received from another interface, a FEC retransmission, or a network glitch.
     {
         memFreePayload(memory.payload, transfer->payload.origin);
-        rxFragmentFree(transfer->payload.next, memory);
+        rxFragmentDestroyList(transfer->payload.next, memory);
         transfer->payload_size = 0;
         transfer->payload      = (struct UdpardFragment){.next = NULL, .view = {0}, .origin = {0}};
     }
@@ -1382,6 +1406,27 @@ static inline void rxSessionInit(UdpardInternalRxSession* const self, const RxMe
     {
         rxIfaceInit(&self->ifaces[i], memory);
     }
+}
+
+/// Frees all ifaces in the session, all children in the session tree recursively, and destroys the session itself.
+// NOLINTNEXTLINE(*-no-recursion)
+static inline void rxSessionDestroyTree(UdpardInternalRxSession* const       self,
+                                        const struct UdpardRxMemoryResources memory)
+{
+    for (uint_fast8_t i = 0; i < UDPARD_NETWORK_INTERFACE_COUNT_MAX; i++)
+    {
+        rxIfaceFree(&self->ifaces[i], (RxMemory){.fragment = memory.fragment, .payload = memory.payload});
+    }
+    for (uint_fast8_t i = 0; i < 2; i++)
+    {
+        UdpardInternalRxSession* const child = (UdpardInternalRxSession*) self->base.lr[i];
+        if (child != NULL)
+        {
+            UDPARD_ASSERT(child->base.up == &self->base);
+            rxSessionDestroyTree(child, memory);
+        }
+    }
+    memFree(memory.session, sizeof(UdpardInternalRxSession), self);
 }
 
 // --------------------------------------------------  RX PORT  --------------------------------------------------
@@ -1525,20 +1570,21 @@ static inline void rxPortInit(struct UdpardRxPort* const self)
     self->sessions                 = NULL;
 }
 
+static inline void rxPortFree(struct UdpardRxPort* const self, const struct UdpardRxMemoryResources memory)
+{
+    rxSessionDestroyTree(self->sessions, memory);
+}
+
 // --------------------------------------------------  RX API  --------------------------------------------------
 
 void udpardFragmentFree(const struct UdpardFragment        head,
                         struct UdpardMemoryResource* const memory_fragment,
                         struct UdpardMemoryResource* const memory_payload)
 {
-    if ((memory_fragment != NULL) && (memory_payload != NULL))
+    if ((memory_fragment != NULL) && (memory_payload != NULL))  // The head is not heap-allocated so not freed.
     {
         memFreePayload(memory_payload, head.origin);  // May be NULL, is okay.
-        rxFragmentFree(head.next,                     // The head is not heap-allocated so not freed.
-                       (RxMemory){
-                           .fragment = memory_fragment,
-                           .payload  = memory_payload,
-                       });
+        rxFragmentDestroyList(head.next, (RxMemory){.fragment = memory_fragment, .payload = memory_payload});
     }
 }
 
@@ -1553,5 +1599,6 @@ int8_t udpardRxSubscriptionInit(struct UdpardRxSubscription* const   self,
     (void) memory;
     (void) rxPortAcceptFrame;
     (void) rxPortInit;
+    (void) rxPortFree;
     return 0;
 }

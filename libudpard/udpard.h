@@ -71,6 +71,9 @@
 /// As will be shown below, a typical application with R redundant network interfaces and S topic subscriptions needs
 /// R*(S+2) sockets (or equivalent abstractions provided by the underlying UDP/IP stack).
 ///
+/// As a matter of convention, resource disposal functions are named "free" if the memory of the resource itself is
+/// not deallocated, and "destroy" if the memory is deallocated.
+///
 ///
 ///     Transmission pipeline
 ///
