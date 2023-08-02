@@ -180,6 +180,21 @@ static struct UdpardMutablePayload makeDatagramPayloadSingleFrameString(struct U
                                           (struct UdpardPayload){.data = payload, .size = strlen(payload)});
 }
 
+// --------------------------------------------------  MISC  --------------------------------------------------
+
+static void testCompare32(void)
+{
+    TEST_ASSERT_EQUAL(0, compare32(0, 0));
+    TEST_ASSERT_EQUAL(0, compare32(1, 1));
+    TEST_ASSERT_EQUAL(0, compare32(0xdeadbeef, 0xdeadbeef));
+    TEST_ASSERT_EQUAL(0, compare32(0x0badc0de, 0x0badc0de));
+    TEST_ASSERT_EQUAL(0, compare32(0xffffffff, 0xffffffff));
+    TEST_ASSERT_EQUAL(+1, compare32(1, 0));
+    TEST_ASSERT_EQUAL(+1, compare32(0xffffffff, 0xfffffffe));
+    TEST_ASSERT_EQUAL(-1, compare32(0, 1));
+    TEST_ASSERT_EQUAL(-1, compare32(0xfffffffe, 0xffffffff));
+}
+
 // --------------------------------------------------  FRAME PARSING  --------------------------------------------------
 
 // Generate reference data using PyCyphal:
@@ -2364,6 +2379,8 @@ void tearDown(void) {}
 int main(void)
 {
     UNITY_BEGIN();
+    // misc
+    RUN_TEST(testCompare32);
     // frame parser
     RUN_TEST(testParseFrameValidMessage);
     RUN_TEST(testParseFrameValidRPCService);

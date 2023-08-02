@@ -109,6 +109,21 @@ static inline uint32_t max32(const uint32_t a, const uint32_t b)
     return (a > b) ? a : b;
 }
 
+/// Returns the sign of the subtraction of the operands; zero if equal. This is useful for AVL search.
+static inline int_fast8_t compare32(const uint32_t a, const uint32_t b)
+{
+    int_fast8_t result = 0;
+    if (a > b)
+    {
+        result = +1;
+    }
+    if (a < b)
+    {
+        result = -1;
+    }
+    return result;
+}
+
 static inline bool memIsValid(const struct UdpardMemoryResource* const memory)
 {
     return (memory != NULL) && (memory->allocate != NULL) && (memory->free != NULL);
@@ -942,19 +957,8 @@ typedef struct
 static inline int8_t rxSlotFragmentSearch(void* const user_reference, const struct UdpardTreeNode* node)
 {
     UDPARD_ASSERT((user_reference != NULL) && (node != NULL));
-    const RxSlotUpdateContext* const ctx  = (RxSlotUpdateContext*) user_reference;
-    const RxFragment* const          frag = ((const RxFragmentTreeNode*) node)->this;
-    UDPARD_ASSERT((ctx != NULL) && (frag != NULL));
-    int8_t out = 0;
-    if (ctx->frame_index > frag->frame_index)
-    {
-        out = +1;
-    }
-    if (ctx->frame_index < frag->frame_index)
-    {
-        out = -1;
-    }
-    return out;
+    return compare32(((const RxSlotUpdateContext*) user_reference)->frame_index,
+                     ((const RxFragmentTreeNode*) node)->this->frame_index);
 }
 
 static inline struct UdpardTreeNode* rxSlotFragmentFactory(void* const user_reference)
@@ -1443,19 +1447,8 @@ static inline int8_t rxPortSessionSearch(void* const                  user_refer
                                          const struct UdpardTreeNode* node)
 {
     UDPARD_ASSERT((user_reference != NULL) && (node != NULL));
-    const RxPortSessionSearchContext* const     ctx     = (const RxPortSessionSearchContext*) user_reference;
-    const struct UdpardInternalRxSession* const session = (const struct UdpardInternalRxSession*) (const void*) node;
-    UDPARD_ASSERT((ctx != NULL) && (session != NULL));
-    int8_t out = 0;
-    if (ctx->remote_node_id > session->remote_node_id)
-    {
-        out = +1;
-    }
-    if (ctx->remote_node_id < session->remote_node_id)
-    {
-        out = -1;
-    }
-    return out;
+    return compare32(((const RxPortSessionSearchContext*) user_reference)->remote_node_id,
+                     ((const struct UdpardInternalRxSession*) (const void*) node)->remote_node_id);
 }
 
 static inline struct UdpardTreeNode* rxPortSessionFactory(void* const user_reference)  // NOSONAR non-const API
