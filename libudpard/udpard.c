@@ -1651,3 +1651,27 @@ int_fast8_t udpardRxSubscriptionInit(struct UdpardRxSubscription* const   self,
     (void) &rxPortFree;
     return 0;
 }
+
+// =====================================================================================================================
+// ====================================================    MISC    =====================================================
+// =====================================================================================================================
+
+size_t udpardGather(const struct UdpardFragment head, const size_t destination_size, void* const destination)
+{
+    size_t offset = 0;
+    if (NULL != destination)
+    {
+        const struct UdpardFragment* frag = &head;
+        while ((frag != NULL) && (offset < destination_size))
+        {
+            UDPARD_ASSERT(frag->view.data != NULL);
+            const size_t frag_size = smaller(frag->view.size, destination_size - offset);
+            // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
+            (void) memmove(((byte_t*) destination) + offset, frag->view.data, frag_size);
+            offset += frag_size;
+            UDPARD_ASSERT(offset <= destination_size);
+            frag = frag->next;
+        }
+    }
+    return offset;
+}
