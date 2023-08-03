@@ -470,7 +470,7 @@ static void testSlotEjectValidLarge(void)
     TEST_ASSERT_EQUAL(3, mem_fragment.allocated_fragments);                   // One gone!!1
     TEST_ASSERT_EQUAL(sizeof(RxFragment) * 3, mem_fragment.allocated_bytes);  // yes yes!
     // Now, free the payload as the application would.
-    udpardFragmentFree(payload, &mem_fragment.base, &mem_payload.base);
+    udpardRxFragmentFree(payload, &mem_fragment.base, &mem_payload.base);
     // All memory shall be free now. As in "free beer".
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_bytes);
@@ -540,7 +540,7 @@ static void testSlotEjectValidSmall(void)
     TEST_ASSERT_EQUAL(2, mem_fragment.allocated_fragments);  // One gone!!1
     TEST_ASSERT_EQUAL(sizeof(RxFragment) * 2, mem_fragment.allocated_bytes);
     // Now, free the payload as the application would.
-    udpardFragmentFree(payload, &mem_fragment.base, &mem_payload.base);
+    udpardRxFragmentFree(payload, &mem_fragment.base, &mem_payload.base);
     // All memory shall be free now. As in "free beer".
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_bytes);
@@ -585,7 +585,7 @@ static void testSlotEjectValidEmpty(void)
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_bytes);
     // Now, free the payload as the application would.
-    udpardFragmentFree(payload, &mem_fragment.base, &mem_payload.base);
+    udpardRxFragmentFree(payload, &mem_fragment.base, &mem_payload.base);
     // No memory is in use anyway, so no change here.
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_bytes);
@@ -672,7 +672,7 @@ static void testSlotAcceptA(void)
     TEST_ASSERT_EQUAL(53, payload_size);
     TEST_ASSERT(compareStringWithPayload("The fish responsible for drying the sea are not here.", payload.view));
     TEST_ASSERT_NULL(payload.next);
-    udpardFragmentFree(payload, &mem_fragment.base, &mem_payload.base);
+    udpardRxFragmentFree(payload, &mem_fragment.base, &mem_payload.base);
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_bytes);
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
@@ -735,7 +735,7 @@ static void testSlotAcceptA(void)
     TEST_ASSERT(compareStringWithPayload("They moved from one dark forest to another dark forest.",  //
                                          payload.next->next->view));
     TEST_ASSERT_NULL(payload.next->next->next);
-    udpardFragmentFree(payload, &mem_fragment.base, &mem_payload.base);
+    udpardRxFragmentFree(payload, &mem_fragment.base, &mem_payload.base);
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_bytes);
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
@@ -824,7 +824,7 @@ static void testSlotAcceptA(void)
     TEST_ASSERT_NOT_NULL(payload.next);
     TEST_ASSERT(compareStringWithPayload("How do we give it", payload.next->view));  // TRUNCATED
     TEST_ASSERT_NULL(payload.next->next);
-    udpardFragmentFree(payload, &mem_fragment.base, &mem_payload.base);
+    udpardRxFragmentFree(payload, &mem_fragment.base, &mem_payload.base);
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_bytes);
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
@@ -940,7 +940,7 @@ static void testSlotAcceptA(void)
     TEST_ASSERT_NOT_NULL(payload.next->next);
     TEST_ASSERT(compareStringWithPayload("Toss it over.", payload.next->next->view));
     TEST_ASSERT_NULL(payload.next->next->next);
-    udpardFragmentFree(payload, &mem_fragment.base, &mem_payload.base);
+    udpardRxFragmentFree(payload, &mem_fragment.base, &mem_payload.base);
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_bytes);
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
@@ -1218,7 +1218,7 @@ static void testIfaceAcceptA(void)
     TEST_ASSERT_EQUAL(0x1122334455667788U, transfer.transfer_id);
     TEST_ASSERT_EQUAL(12, transfer.payload_size);
     TEST_ASSERT(compareStringWithPayload("I am a tomb.", transfer.payload.view));
-    udpardFragmentFree(transfer.payload, &mem_fragment.base, &mem_payload.base);
+    udpardRxFragmentFree(transfer.payload, &mem_fragment.base, &mem_payload.base);
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
     // Check the internal states of the iface.
@@ -1411,7 +1411,7 @@ static void testIfaceAcceptA(void)
     TEST_ASSERT_NOT_NULL(transfer.payload.next);
     TEST_ASSERT(compareStringWithPayload("B1", transfer.payload.next->view));
     TEST_ASSERT_NULL(transfer.payload.next->next);
-    udpardFragmentFree(transfer.payload, &mem_fragment.base, &mem_payload.base);
+    udpardRxFragmentFree(transfer.payload, &mem_fragment.base, &mem_payload.base);
     TEST_ASSERT_EQUAL(2, mem_payload.allocated_fragments);  // Only the remaining A0 A2 are left.
     TEST_ASSERT_EQUAL(2, mem_fragment.allocated_fragments);
     // A1
@@ -1447,7 +1447,7 @@ static void testIfaceAcceptA(void)
     TEST_ASSERT_NOT_NULL(transfer.payload.next->next);
     TEST_ASSERT(compareStringWithPayload("A2", transfer.payload.next->next->view));
     TEST_ASSERT_NULL(transfer.payload.next->next->next);
-    udpardFragmentFree(transfer.payload, &mem_fragment.base, &mem_payload.base);
+    udpardRxFragmentFree(transfer.payload, &mem_fragment.base, &mem_payload.base);
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
 }
@@ -1625,7 +1625,7 @@ static void testIfaceAcceptB(void)
     TEST_ASSERT_NOT_NULL(transfer.payload.next->next);
     TEST_ASSERT(compareStringWithPayload("A2", transfer.payload.next->next->view));
     TEST_ASSERT_NULL(transfer.payload.next->next->next);
-    udpardFragmentFree(transfer.payload, &mem_fragment.base, &mem_payload.base);
+    udpardRxFragmentFree(transfer.payload, &mem_fragment.base, &mem_payload.base);
     TEST_ASSERT_EQUAL(1, mem_payload.allocated_fragments);  // Some memory is retained for the C0 payload.
     TEST_ASSERT_EQUAL(1, mem_fragment.allocated_fragments);
     // C0 DUPLICATE
@@ -1684,7 +1684,7 @@ static void testIfaceAcceptB(void)
     TEST_ASSERT_NOT_NULL(transfer.payload.next);
     TEST_ASSERT(compareStringWithPayload("C1", transfer.payload.next->view));
     TEST_ASSERT_NULL(transfer.payload.next->next);
-    udpardFragmentFree(transfer.payload, &mem_fragment.base, &mem_payload.base);
+    udpardRxFragmentFree(transfer.payload, &mem_fragment.base, &mem_payload.base);
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);  // Some memory is retained for the C0 payload.
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
 }
@@ -1792,7 +1792,7 @@ static void testIfaceAcceptC(void)
     TEST_ASSERT_NOT_NULL(transfer.payload.next);
     TEST_ASSERT(compareStringWithPayload("A1", transfer.payload.next->view));
     TEST_ASSERT_NULL(transfer.payload.next->next);
-    udpardFragmentFree(transfer.payload, &mem_fragment.base, &mem_payload.base);
+    udpardRxFragmentFree(transfer.payload, &mem_fragment.base, &mem_payload.base);
     TEST_ASSERT_EQUAL(1, mem_payload.allocated_fragments);  // B0 still allocated.
     TEST_ASSERT_EQUAL(1, mem_fragment.allocated_fragments);
     // C0
@@ -1847,7 +1847,7 @@ static void testIfaceAcceptC(void)
     TEST_ASSERT_NOT_NULL(transfer.payload.next);
     TEST_ASSERT(compareStringWithPayload("B1", transfer.payload.next->view));
     TEST_ASSERT_NULL(transfer.payload.next->next);
-    udpardFragmentFree(transfer.payload, &mem_fragment.base, &mem_payload.base);
+    udpardRxFragmentFree(transfer.payload, &mem_fragment.base, &mem_payload.base);
     TEST_ASSERT_EQUAL(1, mem_payload.allocated_fragments);  // C0 is still allocated.
     TEST_ASSERT_EQUAL(1, mem_fragment.allocated_fragments);
     // C1
@@ -1883,7 +1883,7 @@ static void testIfaceAcceptC(void)
     TEST_ASSERT_NOT_NULL(transfer.payload.next);
     TEST_ASSERT(compareStringWithPayload("C1", transfer.payload.next->view));
     TEST_ASSERT_NULL(transfer.payload.next->next);
-    udpardFragmentFree(transfer.payload, &mem_fragment.base, &mem_payload.base);
+    udpardRxFragmentFree(transfer.payload, &mem_fragment.base, &mem_payload.base);
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
     // B0 duplicate multi-frame; shall be rejected.
@@ -2055,7 +2055,7 @@ static void testSessionAcceptA(void)
     TEST_ASSERT_EQUAL(1, mem_payload.allocated_fragments);
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
     // Free the payload.
-    udpardFragmentFree(transfer.payload, &mem_fragment.base, &mem_payload.base);
+    udpardRxFragmentFree(transfer.payload, &mem_fragment.base, &mem_payload.base);
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
     // Send the same transfer again through a different iface; it is a duplicate and so it is rejected and freed.
@@ -2151,7 +2151,7 @@ static inline void testPortAcceptFrameA(void)
                                          "Solar System into two dimensions cease?",
                                          transfer.payload.view));
     // Free the memory.
-    udpardFragmentFree(transfer.payload, &mem_fragment.base, &mem_payload.base);
+    udpardRxFragmentFree(transfer.payload, &mem_fragment.base, &mem_payload.base);
     TEST_ASSERT_EQUAL(1, mem_session.allocated_fragments);  // The session remains.
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
@@ -2182,7 +2182,7 @@ static inline void testPortAcceptFrameA(void)
     TEST_ASSERT_EQUAL(20, transfer.payload_size);
     TEST_ASSERT(compareStringWithPayload("It will never cease.", transfer.payload.view));
     // Free the memory.
-    udpardFragmentFree(transfer.payload, &mem_fragment.base, &mem_payload.base);
+    udpardRxFragmentFree(transfer.payload, &mem_fragment.base, &mem_payload.base);
     TEST_ASSERT_EQUAL(2, mem_session.allocated_fragments);  // The sessions remain.
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
@@ -2234,7 +2234,7 @@ static inline void testPortAcceptFrameA(void)
     TEST_ASSERT_EQUAL(20, transfer.payload_size);
     TEST_ASSERT(compareStringWithPayload("Cheng Xin shuddered.", transfer.payload.view));
     // Free the memory.
-    udpardFragmentFree(transfer.payload, &mem_fragment.base, &mem_payload.base);
+    udpardRxFragmentFree(transfer.payload, &mem_fragment.base, &mem_payload.base);
     TEST_ASSERT_EQUAL(2, mem_session.allocated_fragments);  // The sessions remain.
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);

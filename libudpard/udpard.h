@@ -286,9 +286,9 @@ struct UdpardPayload
 /// The model is as follows:
 ///
 ///     (payload header) ---> UdpardFragment:
-///                               next  ---> UdpardFragment...
-///                               owner ---> (the free()able payload data buffer)
-///                               view  ---> (somewhere inside the payload data buffer)
+///                               next   ---> UdpardFragment...
+///                               origin ---> (the free()able payload data buffer)
+///                               view   ---> (somewhere inside the payload data buffer)
 ///
 /// Payloads of received transfers are represented using this type, where each fragment corresponds to a frame.
 /// The application can either consume them directly or to copy the data into a contiguous buffer beforehand
@@ -745,9 +745,9 @@ struct UdpardRxTransfer
 /// design, where the head is stored by value to reduce indirection in small transfers. We call it Scott's Head.
 ///
 /// If any of the arguments are NULL, the function has no effect.
-void udpardFragmentFree(const struct UdpardFragment        head,
-                        struct UdpardMemoryResource* const memory_fragment,
-                        struct UdpardMemoryResource* const memory_payload);
+void udpardRxFragmentFree(const struct UdpardFragment        head,
+                          struct UdpardMemoryResource* const memory_fragment,
+                          struct UdpardMemoryResource* const memory_payload);
 
 // ---------------------------------------------  SUBJECTS  ---------------------------------------------
 

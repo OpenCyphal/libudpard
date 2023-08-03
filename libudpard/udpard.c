@@ -1574,9 +1574,9 @@ static inline void rxPortFree(struct UdpardRxPort* const self, const struct Udpa
 
 // --------------------------------------------------  RX API  --------------------------------------------------
 
-void udpardFragmentFree(const struct UdpardFragment        head,
-                        struct UdpardMemoryResource* const memory_fragment,
-                        struct UdpardMemoryResource* const memory_payload)
+void udpardRxFragmentFree(const struct UdpardFragment        head,
+                          struct UdpardMemoryResource* const memory_fragment,
+                          struct UdpardMemoryResource* const memory_payload)
 {
     if ((memory_fragment != NULL) && (memory_payload != NULL))  // The head is not heap-allocated so not freed.
     {
