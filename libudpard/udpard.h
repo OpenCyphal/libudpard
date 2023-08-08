@@ -346,14 +346,14 @@ typedef void* (*UdpardMemoryAllocate)(void* const user_reference, const size_t s
 ///     - The execution time should be constant (O(1)).
 ///
 /// The value of the user reference is taken from the corresponding field of the memory resource structure.
-typedef void (*UdpardMemoryFree)(void* const user_reference, const size_t size, void* const pointer);
+typedef void (*UdpardMemoryDeallocate)(void* const user_reference, const size_t size, void* const pointer);
 
 /// A kind of memory resource that can only be used to free memory previously allocated by the user.
 /// Instances are mostly intended to be passed by value.
 struct UdpardMemoryDeleter
 {
-    void*            user_reference;  ///< Passed as the first argument.
-    UdpardMemoryFree free;            ///< Shall be a valid pointer.
+    void*                  user_reference;  ///< Passed as the first argument.
+    UdpardMemoryDeallocate deallocate;      ///< Shall be a valid pointer.
 };
 
 /// A memory resource encapsulates the dynamic memory allocation and deallocation facilities.
@@ -362,9 +362,9 @@ struct UdpardMemoryDeleter
 /// Instances are mostly intended to be passed by value.
 struct UdpardMemoryResource
 {
-    void*                user_reference;  ///< Passed as the first argument.
-    UdpardMemoryFree     free;            ///< Shall be a valid pointer.
-    UdpardMemoryAllocate allocate;        ///< Shall be a valid pointer.
+    void*                  user_reference;  ///< Passed as the first argument.
+    UdpardMemoryDeallocate deallocate;      ///< Shall be a valid pointer.
+    UdpardMemoryAllocate   allocate;        ///< Shall be a valid pointer.
 };
 
 // =====================================================================================================================

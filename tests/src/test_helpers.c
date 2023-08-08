@@ -37,7 +37,7 @@ static void testInstrumentedAllocator(void)
     TEST_ASSERT_EQUAL_size_t(3, al.allocated_fragments);
     TEST_ASSERT_EQUAL_size_t(600, al.allocated_bytes);
 
-    resource.free(resource.user_reference, 123, a);
+    resource.deallocate(resource.user_reference, 123, a);
     TEST_ASSERT_EQUAL_size_t(2, al.allocated_fragments);
     TEST_ASSERT_EQUAL_size_t(477, al.allocated_bytes);
 
@@ -45,15 +45,15 @@ static void testInstrumentedAllocator(void)
     TEST_ASSERT_EQUAL_size_t(3, al.allocated_fragments);
     TEST_ASSERT_EQUAL_size_t(577, al.allocated_bytes);
 
-    resource.free(resource.user_reference, 21, c);
+    resource.deallocate(resource.user_reference, 21, c);
     TEST_ASSERT_EQUAL_size_t(2, al.allocated_fragments);
     TEST_ASSERT_EQUAL_size_t(556, al.allocated_bytes);
 
-    resource.free(resource.user_reference, 100, d);
+    resource.deallocate(resource.user_reference, 100, d);
     TEST_ASSERT_EQUAL_size_t(1, al.allocated_fragments);
     TEST_ASSERT_EQUAL_size_t(456, al.allocated_bytes);
 
-    resource.free(resource.user_reference, 456, b);
+    resource.deallocate(resource.user_reference, 456, b);
     TEST_ASSERT_EQUAL_size_t(0, al.allocated_fragments);
     TEST_ASSERT_EQUAL_size_t(0, al.allocated_bytes);
 }

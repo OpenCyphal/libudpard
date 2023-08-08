@@ -45,7 +45,7 @@ static inline void* dummyAllocatorAllocate(void* const user_reference, const siz
     return NULL;
 }
 
-static inline void dummyAllocatorFree(void* const user_reference, const size_t size, void* const pointer)
+static inline void dummyAllocatorDeallocate(void* const user_reference, const size_t size, void* const pointer)
 {
     (void) user_reference;
     (void) size;
@@ -99,7 +99,7 @@ static inline void* instrumentedAllocatorAllocate(void* const user_reference, co
     return result;
 }
 
-static inline void instrumentedAllocatorFree(void* const user_reference, const size_t size, void* const pointer)
+static inline void instrumentedAllocatorDeallocate(void* const user_reference, const size_t size, void* const pointer)
 {
     InstrumentedAllocator* const self = (InstrumentedAllocator*) user_reference;
     if (pointer != NULL)
@@ -146,14 +146,15 @@ static inline struct UdpardMemoryResource instrumentedAllocatorMakeMemoryResourc
     const InstrumentedAllocator* const self)
 {
     const struct UdpardMemoryResource out = {.user_reference = (void*) self,
-                                             .free           = &instrumentedAllocatorFree,
+                                             .deallocate     = &instrumentedAllocatorDeallocate,
                                              .allocate       = &instrumentedAllocatorAllocate};
     return out;
 }
 
 static inline struct UdpardMemoryDeleter instrumentedAllocatorMakeMemoryDeleter(const InstrumentedAllocator* const self)
 {
-    const struct UdpardMemoryDeleter out = {.user_reference = (void*) self, .free = &instrumentedAllocatorFree};
+    const struct UdpardMemoryDeleter out = {.user_reference = (void*) self,
+                                            .deallocate     = &instrumentedAllocatorDeallocate};
     return out;
 }
 

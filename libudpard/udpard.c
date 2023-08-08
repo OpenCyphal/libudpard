@@ -132,14 +132,14 @@ static inline void* memAlloc(const struct UdpardMemoryResource memory, const siz
 
 static inline void memFree(const struct UdpardMemoryResource memory, const size_t size, void* const data)
 {
-    UDPARD_ASSERT(memory.free != NULL);
-    memory.free(memory.user_reference, size, data);
+    UDPARD_ASSERT(memory.deallocate != NULL);
+    memory.deallocate(memory.user_reference, size, data);
 }
 
 static inline void memFreePayload(const struct UdpardMemoryDeleter memory, const struct UdpardMutablePayload payload)
 {
-    UDPARD_ASSERT(memory.free != NULL);
-    memory.free(memory.user_reference, payload.size, payload.data);
+    UDPARD_ASSERT(memory.deallocate != NULL);
+    memory.deallocate(memory.user_reference, payload.size, payload.data);
 }
 
 static inline void memZero(const size_t size, void* const data)
@@ -528,7 +528,7 @@ int_fast8_t udpardTxInit(struct UdpardTx* const            self,
                          const struct UdpardMemoryResource memory)
 {
     int_fast8_t ret = -UDPARD_ERROR_ARGUMENT;
-    if ((NULL != self) && (NULL != local_node_id) && (memory.allocate != NULL) && (memory.free != NULL))
+    if ((NULL != self) && (NULL != local_node_id) && (memory.allocate != NULL) && (memory.deallocate != NULL))
     {
         ret = 0;
         memZero(sizeof(*self), self);
@@ -961,7 +961,8 @@ static inline int_fast8_t rxSlotFragmentSearch(void* const user_reference,  // N
 static inline struct UdpardTreeNode* rxSlotFragmentFactory(void* const user_reference)
 {
     RxSlotUpdateContext* const ctx = (RxSlotUpdateContext*) user_reference;
-    UDPARD_ASSERT((ctx != NULL) && (ctx->memory_fragment.allocate != NULL) && (ctx->memory_fragment.free != NULL));
+    UDPARD_ASSERT((ctx != NULL) && (ctx->memory_fragment.allocate != NULL) &&
+                  (ctx->memory_fragment.deallocate != NULL));
     struct UdpardTreeNode* out  = NULL;
     RxFragment* const      frag = memAlloc(ctx->memory_fragment, sizeof(RxFragment));
     if (frag != NULL)

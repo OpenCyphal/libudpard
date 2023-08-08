@@ -1936,8 +1936,8 @@ static void testSessionDeduplicate(void)
     InstrumentedAllocator mem_payload  = {0};
     instrumentedAllocatorNew(&mem_fragment);
     instrumentedAllocatorNew(&mem_payload);
-    const RxMemory          mem     = makeRxMemory(&mem_fragment, &mem_payload);
-    UdpardInternalRxSession session = {0};
+    const RxMemory                 mem     = makeRxMemory(&mem_fragment, &mem_payload);
+    struct UdpardInternalRxSession session = {0};
     rxSessionInit(&session, mem);
     TEST_ASSERT_EQUAL(TIMESTAMP_UNSET, session.last_ts_usec);
     TEST_ASSERT_EQUAL(TRANSFER_ID_UNSET, session.last_transfer_id);
@@ -2029,8 +2029,8 @@ static void testSessionAcceptA(void)
     InstrumentedAllocator mem_payload  = {0};
     instrumentedAllocatorNew(&mem_fragment);
     instrumentedAllocatorNew(&mem_payload);
-    const RxMemory          mem     = makeRxMemory(&mem_fragment, &mem_payload);
-    UdpardInternalRxSession session = {0};
+    const RxMemory                 mem     = makeRxMemory(&mem_fragment, &mem_payload);
+    struct UdpardInternalRxSession session = {0};
     rxSessionInit(&session, mem);
     TEST_ASSERT_EQUAL(TIMESTAMP_UNSET, session.last_ts_usec);
     TEST_ASSERT_EQUAL(TRANSFER_ID_UNSET, session.last_transfer_id);
@@ -2363,7 +2363,7 @@ static inline void testPortAcceptFrameA(void)
     TEST_ASSERT_EQUAL(4, mem_session.allocated_fragments);  // New source.
     TEST_ASSERT_EQUAL(3, mem_fragment.allocated_fragments);
     TEST_ASSERT_EQUAL(3, mem_payload.allocated_fragments);
-    TEST_ASSERT_EQUAL(4 * sizeof(UdpardInternalRxSession), mem_session.allocated_bytes);
+    TEST_ASSERT_EQUAL(4 * sizeof(struct UdpardInternalRxSession), mem_session.allocated_bytes);
     TEST_ASSERT_EQUAL(3 * sizeof(RxFragment), mem_fragment.allocated_bytes);
 
     // Free the port instance and ensure all ifaces and sessions are cleaned up.

@@ -31,7 +31,7 @@ void testInit()
     {
         const UdpardMemoryResource memory{
             .user_reference = &user_referent,
-            .free           = &dummyAllocatorFree,
+            .deallocate     = &dummyAllocatorDeallocate,
             .allocate       = &dummyAllocatorAllocate,
         };
         TEST_ASSERT_EQUAL(-UDPARD_ERROR_ARGUMENT, udpardTxInit(nullptr, &node_id, 0, memory));
@@ -40,7 +40,7 @@ void testInit()
         UdpardTx                   tx{};
         const UdpardMemoryResource memory{
             .user_reference = &user_referent,
-            .free           = &dummyAllocatorFree,
+            .deallocate     = &dummyAllocatorDeallocate,
             .allocate       = &dummyAllocatorAllocate,
         };
         TEST_ASSERT_EQUAL(-UDPARD_ERROR_ARGUMENT, udpardTxInit(&tx, nullptr, 0, memory));
@@ -49,7 +49,7 @@ void testInit()
         UdpardTx                   tx{};
         const UdpardMemoryResource memory{
             .user_reference = &user_referent,
-            .free           = &dummyAllocatorFree,
+            .deallocate     = &dummyAllocatorDeallocate,
             .allocate       = nullptr,
         };
         TEST_ASSERT_EQUAL(-UDPARD_ERROR_ARGUMENT, udpardTxInit(&tx, &node_id, 0, memory));
@@ -58,7 +58,7 @@ void testInit()
         UdpardTx                   tx{};
         const UdpardMemoryResource memory{
             .user_reference = &user_referent,
-            .free           = nullptr,
+            .deallocate     = nullptr,
             .allocate       = &dummyAllocatorAllocate,
         };
         TEST_ASSERT_EQUAL(-UDPARD_ERROR_ARGUMENT, udpardTxInit(&tx, &node_id, 0, memory));
@@ -67,7 +67,7 @@ void testInit()
         UdpardTx                   tx{};
         const UdpardMemoryResource memory{
             .user_reference = &user_referent,
-            .free           = &dummyAllocatorFree,
+            .deallocate     = &dummyAllocatorDeallocate,
             .allocate       = &dummyAllocatorAllocate,
         };
         TEST_ASSERT_EQUAL(0, udpardTxInit(&tx, &node_id, 0, memory));
