@@ -113,7 +113,9 @@
 /// Said pipelines are entirely independent from each other and can be operated from different threads,
 /// as they share no resources.
 ///
-/// The reception pipeline is able to accept datagrams with arbitrary MTU.
+/// The reception pipeline is able to accept datagrams with arbitrary MTU, frames delivered out-of-order (OOO) with
+/// arbitrary duplication, including duplication of non-adjacent frames, and/or frames interleaved between adjacent
+/// transfers. The support for OOO reassembly is particularly interesting when simple repetition coding FEC is used.
 ///
 /// The application should instantiate one subscription instance per subject it needs to receive messages from,
 /// irrespective of the number of redundant interfaces. There needs to be one socket (or a similar abstraction
@@ -758,8 +760,8 @@ struct UdpardRxTransfer
 ///
 /// If any of the arguments are NULL, the function has no effect.
 void udpardRxFragmentFree(const struct UdpardFragment       head,
-                          struct UdpardMemoryResource const memory_fragment,
-                          struct UdpardMemoryDeleter const  memory_payload);
+                          const struct UdpardMemoryResource memory_fragment,
+                          const struct UdpardMemoryDeleter  memory_payload);
 
 // ---------------------------------------------  SUBJECTS  ---------------------------------------------
 
