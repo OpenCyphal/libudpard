@@ -866,7 +866,7 @@ typedef struct
 /// This type is forward-declared externally, hence why it has such a long name with the "udpard" prefix.
 /// Keep in mind that we have a dedicated session object per remote node per port; this means that the states
 /// kept here -- the timestamp and the transfer-ID -- are specific per remote node, as it should be.
-typedef struct UdpardInternalRxSession
+struct UdpardInternalRxSession
 {
     struct UdpardTreeNode base;
     /// The remote node-ID is needed here as this is the ordering/search key.
@@ -880,7 +880,7 @@ typedef struct UdpardInternalRxSession
     /// The first interface to receive a transfer takes precedence, thus the redundant group always operates
     /// at the speed of the fastest interface. Duplicate transfers delivered by the slower interfaces are discarded.
     RxIface ifaces[UDPARD_NETWORK_INTERFACE_COUNT_MAX];
-} UdpardInternalRxSession;
+};
 
 // --------------------------------------------------  RX FRAGMENT  --------------------------------------------------
 
@@ -1342,10 +1342,10 @@ static inline void rxIfaceFree(RxIface* const self, const RxMemory memory)
 
 /// Checks if the given transfer should be accepted. If not, the transfer is freed.
 /// Internal states are updated.
-static inline bool rxSessionDeduplicate(UdpardInternalRxSession* const self,
-                                        const UdpardMicrosecond        transfer_id_timeout_usec,
-                                        struct UdpardRxTransfer* const transfer,
-                                        const RxMemory                 memory)
+static inline bool rxSessionDeduplicate(struct UdpardInternalRxSession* const self,
+                                        const UdpardMicrosecond               transfer_id_timeout_usec,
+                                        struct UdpardRxTransfer* const        transfer,
+                                        const RxMemory                        memory)
 {
     UDPARD_ASSERT((self != NULL) && (transfer != NULL));
     const bool future_tid = (self->last_transfer_id == TRANSFER_ID_UNSET) ||  //
@@ -1372,14 +1372,14 @@ static inline bool rxSessionDeduplicate(UdpardInternalRxSession* const self,
 }
 
 /// Takes ownership of the frame payload buffer.
-static inline int_fast8_t rxSessionAccept(UdpardInternalRxSession* const self,
-                                          const uint_fast8_t             redundant_iface_index,
-                                          const UdpardMicrosecond        ts_usec,
-                                          const RxFrame                  frame,
-                                          const size_t                   extent,
-                                          const UdpardMicrosecond        transfer_id_timeout_usec,
-                                          const RxMemory                 memory,
-                                          struct UdpardRxTransfer* const out_transfer)
+static inline int_fast8_t rxSessionAccept(struct UdpardInternalRxSession* const self,
+                                          const uint_fast8_t                    redundant_iface_index,
+                                          const UdpardMicrosecond               ts_usec,
+                                          const RxFrame                         frame,
+                                          const size_t                          extent,
+                                          const UdpardMicrosecond               transfer_id_timeout_usec,
+                                          const RxMemory                        memory,
+                                          struct UdpardRxTransfer* const        out_transfer)
 {
     UDPARD_ASSERT((self != NULL) && (redundant_iface_index < UDPARD_NETWORK_INTERFACE_COUNT_MAX) &&
                   (out_transfer != NULL));
@@ -1398,7 +1398,7 @@ static inline int_fast8_t rxSessionAccept(UdpardInternalRxSession* const self,
     return result;
 }
 
-static inline void rxSessionInit(UdpardInternalRxSession* const self, const RxMemory memory)
+static inline void rxSessionInit(struct UdpardInternalRxSession* const self, const RxMemory memory)
 {
     UDPARD_ASSERT(self != NULL);
     memZero(sizeof(*self), self);
@@ -1413,8 +1413,8 @@ static inline void rxSessionInit(UdpardInternalRxSession* const self, const RxMe
 
 /// Frees all ifaces in the session, all children in the session tree recursively, and destroys the session itself.
 // NOLINTNEXTLINE(*-no-recursion)
-static inline void rxSessionDestroyTree(UdpardInternalRxSession* const       self,
-                                        const struct UdpardRxMemoryResources memory)
+static inline void rxSessionDestroyTree(struct UdpardInternalRxSession* const self,
+                                        const struct UdpardRxMemoryResources  memory)
 {
     for (uint_fast8_t i = 0; i < UDPARD_NETWORK_INTERFACE_COUNT_MAX; i++)
     {
@@ -1422,14 +1422,14 @@ static inline void rxSessionDestroyTree(UdpardInternalRxSession* const       sel
     }
     for (uint_fast8_t i = 0; i < 2; i++)
     {
-        UdpardInternalRxSession* const child = (UdpardInternalRxSession*) (void*) self->base.lr[i];
+        struct UdpardInternalRxSession* const child = (struct UdpardInternalRxSession*) (void*) self->base.lr[i];
         if (child != NULL)
         {
             UDPARD_ASSERT(child->base.up == &self->base);
             rxSessionDestroyTree(child, memory);  // NOSONAR recursion
         }
     }
-    memFree(memory.session, sizeof(UdpardInternalRxSession), self);
+    memFree(memory.session, sizeof(struct UdpardInternalRxSession), self);
 }
 
 // --------------------------------------------------  RX PORT  --------------------------------------------------
