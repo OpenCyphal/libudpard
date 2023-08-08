@@ -818,7 +818,8 @@ typedef struct RxFragment
 ///
 /// - There is one port per subscription or an RPC-service listener. Within the port, there are N sessions,
 ///   one session per remote node emitting transfers on this port (i.e., on this subject, or sending
-///   request/response of this service). Sessions are constructed dynamically ad-hoc and stored in the heap.
+///   request/response of this service). Sessions are constructed dynamically in memory provided by
+///   UdpardMemoryResource.
 ///
 /// - Per session, there are UDPARD_NETWORK_INTERFACE_COUNT_MAX interface states to support interface redundancy.
 ///
@@ -827,17 +828,18 @@ typedef struct RxFragment
 ///
 /// Port -> Session -> Interface -> Slot -> Fragments.
 ///
-/// Consider the following examples, where A and B denote distinct transfers of three frames each:
+/// Consider the following examples, where A,B,C denote distinct multi-frame transfers:
 ///
-///     A0 A1 A2 B0 B1 B2  -- two transfers without OOO frames; both accepted.
-///     A2 A0 A1 B0 B2 B1  -- two transfers with OOO frames; both accepted.
-///     A0 A1 B0 A2 B1 B2  -- two transfers with interleaved frames; both accepted (this is why we need 2 buffers).
-///
-/// It is assumed that interleaved frames spanning more than two transfers are not possible.
+///     A0 A1 A2 B0 B1 B2    -- two transfers without OOO frames; both accepted
+///     A2 A0 A1 B0 B2 B1    -- two transfers with OOO frames; both accepted
+///     A0 A1 B0 A2 B1 B2    -- two transfers with interleaved frames; both accepted (this is why we need 2 slots)
+///     B1 A2 A0 C0 B0 A1 C1 -- B evicted by C; A and C accepted, B dropped (to accept B we would need 3 slots)
+///     B0 A0 A1 C0 B1 A2 C1 -- ditto
+///     A0 A1 C0 B0 A2 C1 B1 -- A evicted by B; B and C accepted, A dropped
 ///
 /// In this implementation we postpone the implicit truncation until all fragments of a transfer are received.
-/// Early truncation, the way it is done in libcanard with contiguous payload reassembly buffers,
-/// is much more difficult to implement if out-of-order reassembly is a requirement.
+/// Early truncation such that excess payload is not stored in memory at all is difficult to implement if
+/// out-of-order reassembly is a requirement.
 /// To implement early truncation with out-of-order reassembly, we need to deduce the MTU of the sender per transfer
 /// (which is easy as we only need to take note of the payload size of any non-last frame of the transfer),
 /// then, based on the MTU, determine the maximum frame index we should accept (higher indexes will be dropped);
@@ -1084,7 +1086,7 @@ static inline bool rxSlotEject(size_t* const                out_payload_size,
     return result;
 }
 
-/// This function will either move the frame payload into the session, or free it if it cannot be made use of.
+/// This function will either move the frame payload into the session, or free it if it can't be used.
 /// Upon return, certain state variables may be overwritten, so the caller should not rely on them.
 /// Returns: 1 -- transfer available, payload written; 0 -- transfer not yet available; <0 -- error.
 static inline int_fast8_t rxSlotAccept(RxSlot* const                self,

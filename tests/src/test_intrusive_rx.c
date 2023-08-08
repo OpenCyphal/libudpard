@@ -1476,6 +1476,7 @@ static void testIfaceAcceptB(void)
     // === TRANSFER === (x3)
     // Send three interleaving multi-frame out-of-order transfers (primes for duplicates):
     //  A2 B1 A0 C0 B0 A1 C0' C1
+    // A2 arrives before B1 but its timestamp is higher.
     // Transfer B will be evicted by C because by the time C0 arrives, transfer B is the oldest one,
     // since its timestamp is inherited from B0.
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
@@ -1506,7 +1507,7 @@ static void testIfaceAcceptB(void)
     // B1
     TEST_ASSERT_EQUAL(0,
                       rxIfaceAccept(&iface,
-                                    2000000010,                      // Transfer-ID timeout.
+                                    2000000010,                      // TIME REORDERING -- lower than previous.
                                     makeRxFrameString(&mem_payload,  //
                                                       (TransferMetadata){.priority       = UdpardPrioritySlow,
                                                                          .src_node_id    = 2222,

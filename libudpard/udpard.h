@@ -331,14 +331,15 @@ struct UdpardUDPIPEndpoint
 /// consider using O1Heap: https://github.com/pavel-kirienko/o1heap. Alternatively, some applications may prefer to
 /// use a set of fixed-size block pool allocators (see the high-level overview for details).
 ///
-/// The time complexity models given in the API documentation are made on the assumption that the memory management
-/// functions have constant complexity O(1).
+/// The API documentation is written on the assumption that the memory management functions have constant
+/// complexity and are non-blocking.
 ///
 /// The value of the user reference is taken from the corresponding field of the memory resource structure.
 typedef void* (*UdpardMemoryAllocate)(void* const user_reference, const size_t size);
 
 /// The counterpart of the above -- this function is invoked to return previously allocated memory to the allocator.
-/// The size argument contains the amount of memory that was originally requested via the allocation function.
+/// The size argument contains the amount of memory that was originally requested via the allocation function;
+/// its value is undefined if the pointer is NULL.
 /// The semantics are similar to free():
 ///     - The pointer was previously returned by the allocation function.
 ///     - The pointer may be NULL, in which case the function shall have no effect.
