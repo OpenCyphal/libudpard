@@ -886,7 +886,7 @@ struct UdpardInternalRxSession
 
 /// Frees all fragments in the tree and their payload buffers. Destroys the passed fragment.
 /// This is meant to be invoked on the root of the tree.
-// NOLINTNEXTLINE(misc-no-recursion)
+// NOLINTNEXTLINE(misc-no-recursion) MISRA C:2012 rule 17.2
 static inline void rxFragmentDestroyTree(RxFragment* const self, const RxMemory memory)
 {
     UDPARD_ASSERT(self != NULL);
@@ -988,7 +988,7 @@ typedef struct
 } RxSlotEjectContext;
 
 /// See rxSlotEject() for details.
-/// NOLINTNEXTLINE(misc-no-recursion)
+/// NOLINTNEXTLINE(misc-no-recursion) MISRA C:2012 rule 17.2
 static inline void rxSlotEjectFragment(RxFragment* const frag, RxSlotEjectContext* const ctx)
 {
     UDPARD_ASSERT((frag != NULL) && (ctx != NULL));
@@ -1048,6 +1048,7 @@ static inline void rxSlotEjectFragment(RxFragment* const frag, RxSlotEjectContex
 /// There shall be at least one fragment (because a Cyphal transfer contains at least one frame).
 ///
 /// The return value indicates whether the transfer is valid (CRC is correct).
+/// This function performs ~log(n) of recursive calls internally, where n is the number of fragments.
 static inline bool rxSlotEject(size_t* const                out_payload_size,
                                struct UdpardFragment* const out_payload_head,
                                RxFragmentTreeNode* const    fragment_tree,
@@ -1413,7 +1414,7 @@ static inline void rxSessionInit(struct UdpardInternalRxSession* const self, con
 }
 
 /// Frees all ifaces in the session, all children in the session tree recursively, and destroys the session itself.
-// NOLINTNEXTLINE(*-no-recursion)
+// NOLINTNEXTLINE(*-no-recursion) MISRA C:2012 rule 17.2
 static inline void rxSessionDestroyTree(struct UdpardInternalRxSession* const self,
                                         const struct UdpardRxMemoryResources  memory)
 {
