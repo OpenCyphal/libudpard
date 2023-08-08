@@ -320,17 +320,22 @@ struct UdpardUDPIPEndpoint
 // =================================================  MEMORY RESOURCE  =================================================
 // =====================================================================================================================
 
-struct UdpardMemoryResource;
-
 /// A pointer to the memory allocation function. The semantics are similar to malloc():
 ///     - The returned pointer shall point to an uninitialized block of memory that is at least "size" bytes large.
 ///     - If there is not enough memory, the returned pointer shall be NULL.
 ///     - The memory shall be aligned at least at max_align_t.
 ///     - The execution time should be constant (O(1)).
 ///     - The worst-case memory consumption (worst fragmentation) should be understood by the developer.
+///
 /// If the standard dynamic memory manager of the target platform does not satisfy the above requirements,
-/// consider using O1Heap: https://github.com/pavel-kirienko/o1heap.
-typedef void* (*UdpardMemoryAllocate)(struct UdpardMemoryResource* const self, const size_t size);
+/// consider using O1Heap: https://github.com/pavel-kirienko/o1heap. Alternatively, some applications may prefer to
+/// use a set of fixed-size block pool allocators (see the high-level overview for details).
+///
+/// The time complexity models given in the API documentation are made on the assumption that the memory management
+/// functions have constant complexity O(1).
+///
+/// The value of the user reference is taken from the corresponding field of the memory resource structure.
+typedef void* (*UdpardMemoryAllocate)(void* const user_reference, const size_t size);
 
 /// The counterpart of the above -- this function is invoked to return previously allocated memory to the allocator.
 /// The size argument contains the amount of memory that was originally requested via the allocation function.
@@ -338,20 +343,27 @@ typedef void* (*UdpardMemoryAllocate)(struct UdpardMemoryResource* const self, c
 ///     - The pointer was previously returned by the allocation function.
 ///     - The pointer may be NULL, in which case the function shall have no effect.
 ///     - The execution time should be constant (O(1)).
-typedef void (*UdpardMemoryFree)(struct UdpardMemoryResource* const self, const size_t size, void* const pointer);
+///
+/// The value of the user reference is taken from the corresponding field of the memory resource structure.
+typedef void (*UdpardMemoryFree)(void* const user_reference, const size_t size, void* const pointer);
+
+/// A kind of memory resource that can only be used to free memory previously allocated by the user.
+/// Instances are mostly intended to be passed by value.
+struct UdpardMemoryDeleter
+{
+    void*            user_reference;  ///< Passed as the first argument.
+    UdpardMemoryFree free;            ///< Shall be a valid pointer.
+};
 
 /// A memory resource encapsulates the dynamic memory allocation and deallocation facilities.
-/// The time complexity models given in the API documentation are made on the assumption that the memory management
-/// functions have constant complexity O(1).
 /// Note that the library allocates a large amount of small fixed-size objects for bookkeeping purposes;
-/// allocators for them can be implemented using fixed-size block pools to eliminate memory fragmentation.
+/// allocators for them can be implemented using fixed-size block pools to eliminate extrinsic memory fragmentation.
+/// Instances are mostly intended to be passed by value.
 struct UdpardMemoryResource
 {
-    /// The function pointers shall be valid at all times.
-    UdpardMemoryAllocate allocate;
-    UdpardMemoryFree     free;
-    /// This is an opaque pointer that can be freely utilized by the user for arbitrary needs.
-    void* user_reference;
+    void*                user_reference;  ///< Passed as the first argument.
+    UdpardMemoryFree     free;            ///< Shall be a valid pointer.
+    UdpardMemoryAllocate allocate;        ///< Shall be a valid pointer.
 };
 
 // =====================================================================================================================
@@ -413,8 +425,8 @@ struct UdpardTx
     /// There is exactly one allocation per enqueued item, each allocation contains both the UdpardTxItem
     /// and its payload, hence the size is variable.
     /// In a simple application there would be just one memory resource shared by all parts of the library.
-    /// If the application knows its MTU, it can use block allocation to avoid fragmentation.
-    struct UdpardMemoryResource* memory;
+    /// If the application knows its MTU, it can use block allocation to avoid extrinsic fragmentation.
+    struct UdpardMemoryResource memory;
 
     /// The number of frames that are currently contained in the queue, initially zero.
     /// READ-ONLY
@@ -474,10 +486,10 @@ struct UdpardTxItem
 /// To safely discard it, simply pop all enqueued frames from it.
 ///
 /// The time complexity is constant. This function does not invoke the dynamic memory manager.
-int_fast8_t udpardTxInit(struct UdpardTx* const             self,
-                         const UdpardNodeID* const          local_node_id,
-                         const size_t                       queue_capacity,
-                         struct UdpardMemoryResource* const memory);
+int_fast8_t udpardTxInit(struct UdpardTx* const            self,
+                         const UdpardNodeID* const         local_node_id,
+                         const size_t                      queue_capacity,
+                         const struct UdpardMemoryResource memory);
 
 /// This function serializes a message transfer into a sequence of UDP datagrams and inserts them into the prioritized
 /// transmission queue at the appropriate position. Afterwards, the application is supposed to take the enqueued frames
@@ -615,8 +627,8 @@ struct UdpardTxItem* udpardTxPop(struct UdpardTx* const self, const struct Udpar
 /// This is a simple helper that frees the memory allocated for the item with the correct size.
 /// It is needed because the application does not have access to the required context to compute the size.
 /// If the chosen allocator does not leverage the size information, the deallocation function can be invoked directly.
-/// If any of the arguments are NULL, the function has no effect. The time complexity is constant.
-void udpardTxFree(struct UdpardMemoryResource* const memory, struct UdpardTxItem* const item);
+/// If the item argument is NULL, the function has no effect. The time complexity is constant.
+void udpardTxFree(const struct UdpardMemoryResource memory, struct UdpardTxItem* const item);
 
 // =====================================================================================================================
 // =================================================    RX PIPELINE    =================================================
@@ -697,18 +709,17 @@ struct UdpardRxMemoryResources
 {
     /// The session memory resource is used to provide memory for the session instances described above.
     /// Each instance is fixed-size, so a trivial zero-fragmentation block allocator is sufficient.
-    struct UdpardMemoryResource* session;
+    struct UdpardMemoryResource session;
 
     /// The fragment handles are allocated per payload fragment; each handle contains a pointer to its fragment.
     /// Each instance is of a very small fixed size, so a trivial zero-fragmentation block allocator is sufficient.
-    struct UdpardMemoryResource* fragment;
+    struct UdpardMemoryResource fragment;
 
     /// The library never allocates payload buffers itself, as they are handed over by the application via
     /// udpardRx*Receive. Once a buffer is handed over, the library may choose to keep it if it is deemed to be
     /// necessary to complete a transfer reassembly, or to discard it if it is deemed to be unnecessary.
-    /// Discarded payload buffers are freed using this memory resource.
-    /// As this resource is never used to allocate memory, the "allocate" pointer can be NULL.
-    struct UdpardMemoryResource* payload;
+    /// Discarded payload buffers are freed using this object.
+    struct UdpardMemoryDeleter payload;
 };
 
 /// Represents a received Cyphal transfer.
@@ -745,9 +756,9 @@ struct UdpardRxTransfer
 /// design, where the head is stored by value to reduce indirection in small transfers. We call it Scott's Head.
 ///
 /// If any of the arguments are NULL, the function has no effect.
-void udpardRxFragmentFree(const struct UdpardFragment        head,
-                          struct UdpardMemoryResource* const memory_fragment,
-                          struct UdpardMemoryResource* const memory_payload);
+void udpardRxFragmentFree(const struct UdpardFragment       head,
+                          struct UdpardMemoryResource const memory_fragment,
+                          struct UdpardMemoryDeleter const  memory_payload);
 
 // ---------------------------------------------  SUBJECTS  ---------------------------------------------
 

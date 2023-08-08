@@ -94,15 +94,16 @@ static void testMakeChainEmpty(void)
 {
     InstrumentedAllocator alloc;
     instrumentedAllocatorNew(&alloc);
-    char                   user_transfer_referent = '\0';
-    const TransferMetadata meta                   = {
-                          .priority       = UdpardPriorityFast,
-                          .src_node_id    = 1234,
-                          .dst_node_id    = 2345,
-                          .data_specifier = 5432,
-                          .transfer_id    = 0xBADC0FFEE0DDF00DULL,
+    struct UdpardMemoryResource mem                    = instrumentedAllocatorMakeMemoryResource(&alloc);
+    char                        user_transfer_referent = '\0';
+    const TransferMetadata      meta                   = {
+                               .priority       = UdpardPriorityFast,
+                               .src_node_id    = 1234,
+                               .dst_node_id    = 2345,
+                               .data_specifier = 5432,
+                               .transfer_id    = 0xBADC0FFEE0DDF00DULL,
     };
-    const TxChain chain = txMakeChain(&alloc.base,
+    const TxChain chain = txMakeChain(mem,
                                       (byte_t[]){11, 22, 33, 44, 55, 66, 77, 88},
                                       30,
                                       1234567890,
@@ -129,7 +130,7 @@ static void testMakeChainEmpty(void)
                              (byte_t*) (chain.head->base.datagram_payload.data) + HEADER_SIZE_BYTES,
                              4));
     TEST_ASSERT_EQUAL(&user_transfer_referent, chain.head->base.user_transfer_reference);
-    alloc.base.free(&alloc.base, sizeof(TxItem) + HEADER_SIZE_BYTES + 4, chain.head);
+    memFree(mem, sizeof(TxItem) + HEADER_SIZE_BYTES + 4, chain.head);
     TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
 }
 
@@ -137,15 +138,16 @@ static void testMakeChainSingleMaxMTU(void)
 {
     InstrumentedAllocator alloc;
     instrumentedAllocatorNew(&alloc);
-    char                   user_transfer_referent = '\0';
-    const TransferMetadata meta                   = {
-                          .priority       = UdpardPrioritySlow,
-                          .src_node_id    = 4321,
-                          .dst_node_id    = 5432,
-                          .data_specifier = 7766,
-                          .transfer_id    = 0x0123456789ABCDEFULL,
+    struct UdpardMemoryResource mem                    = instrumentedAllocatorMakeMemoryResource(&alloc);
+    char                        user_transfer_referent = '\0';
+    const TransferMetadata      meta                   = {
+                               .priority       = UdpardPrioritySlow,
+                               .src_node_id    = 4321,
+                               .dst_node_id    = 5432,
+                               .data_specifier = 7766,
+                               .transfer_id    = 0x0123456789ABCDEFULL,
     };
-    const TxChain chain = txMakeChain(&alloc.base,
+    const TxChain chain = txMakeChain(mem,
                                       (byte_t[]){11, 22, 33, 44, 55, 66, 77, 88},
                                       DetailOfTheCosmosSize + TRANSFER_CRC_SIZE_BYTES,
                                       1234567890,
@@ -179,9 +181,7 @@ static void testMakeChainSingleMaxMTU(void)
                                  DetailOfTheCosmosSize,
                              TRANSFER_CRC_SIZE_BYTES));
     TEST_ASSERT_EQUAL(&user_transfer_referent, chain.head->base.user_transfer_reference);
-    alloc.base.free(&alloc.base,
-                    sizeof(TxItem) + HEADER_SIZE_BYTES + DetailOfTheCosmosSize + TRANSFER_CRC_SIZE_BYTES,
-                    chain.head);
+    memFree(mem, sizeof(TxItem) + HEADER_SIZE_BYTES + DetailOfTheCosmosSize + TRANSFER_CRC_SIZE_BYTES, chain.head);
     TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
 }
 
@@ -189,9 +189,10 @@ static void testMakeChainSingleFrameDefaultMTU(void)
 {
     InstrumentedAllocator alloc;
     instrumentedAllocatorNew(&alloc);
-    const byte_t payload[UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME + 1] = {0};
+    struct UdpardMemoryResource mem = instrumentedAllocatorMakeMemoryResource(&alloc);
+    const byte_t                payload[UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME + 1] = {0};
     {  // Ensure UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME bytes fit in a single frame with the default MTU.
-        const TxChain chain = txMakeChain(&alloc.base,
+        const TxChain chain = txMakeChain(mem,
                                           (byte_t[]){11, 22, 33, 44, 55, 66, 77, 88},
                                           UDPARD_MTU_DEFAULT,
                                           1234567890,
@@ -210,15 +211,14 @@ static void testMakeChainSingleFrameDefaultMTU(void)
         TEST_ASSERT_EQUAL(1, chain.count);
         TEST_ASSERT_EQUAL(chain.head, chain.tail);
         TEST_ASSERT_EQUAL(NULL, chain.head->base.next_in_transfer);
-        alloc.base.free(&alloc.base,
-                        sizeof(TxItem) + HEADER_SIZE_BYTES + UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME +
-                            TRANSFER_CRC_SIZE_BYTES,
-                        chain.head);
+        memFree(mem,
+                sizeof(TxItem) + HEADER_SIZE_BYTES + UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME + TRANSFER_CRC_SIZE_BYTES,
+                chain.head);
         TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
     }
     {  // Increase the payload by 1 byte and ensure it spills over.
         const TxChain chain =
-            txMakeChain(&alloc.base,
+            txMakeChain(mem,
                         (byte_t[]){11, 22, 33, 44, 55, 66, 77, 88},
                         UDPARD_MTU_DEFAULT,
                         1234567890,
@@ -238,8 +238,8 @@ static void testMakeChainSingleFrameDefaultMTU(void)
         TEST_ASSERT_NOT_EQUAL(chain.head, chain.tail);
         TEST_ASSERT_EQUAL((UdpardTxItem*) chain.tail, chain.head->base.next_in_transfer);
         TEST_ASSERT_EQUAL(NULL, chain.tail->base.next_in_transfer);
-        alloc.base.free(&alloc.base, sizeof(TxItem) + HEADER_SIZE_BYTES + UDPARD_MTU_DEFAULT, chain.head);
-        alloc.base.free(&alloc.base, alloc.allocated_bytes, chain.tail);
+        memFree(mem, sizeof(TxItem) + HEADER_SIZE_BYTES + UDPARD_MTU_DEFAULT, chain.head);
+        memFree(mem, alloc.allocated_bytes, chain.tail);
         TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
     }
 }
@@ -248,16 +248,17 @@ static void testMakeChainThreeFrames(void)
 {
     InstrumentedAllocator alloc;
     instrumentedAllocatorNew(&alloc);
-    char                   user_transfer_referent = '\0';
-    const TransferMetadata meta                   = {
-                          .priority       = UdpardPriorityNominal,
-                          .src_node_id    = 4321,
-                          .dst_node_id    = 5432,
-                          .data_specifier = 7766,
-                          .transfer_id    = 0x0123456789ABCDEFULL,
+    struct UdpardMemoryResource mem                    = instrumentedAllocatorMakeMemoryResource(&alloc);
+    char                        user_transfer_referent = '\0';
+    const TransferMetadata      meta                   = {
+                               .priority       = UdpardPriorityNominal,
+                               .src_node_id    = 4321,
+                               .dst_node_id    = 5432,
+                               .data_specifier = 7766,
+                               .transfer_id    = 0x0123456789ABCDEFULL,
     };
     const size_t  mtu   = (EtherealStrengthSize + 4U + 3U) / 3U;  // Force payload split into three frames.
-    const TxChain chain = txMakeChain(&alloc.base,
+    const TxChain chain = txMakeChain(mem,
                                       (byte_t[]){11, 22, 33, 44, 55, 66, 77, 88},
                                       mtu,
                                       223574680,
@@ -319,9 +320,9 @@ static void testMakeChainThreeFrames(void)
     TEST_ASSERT_EQUAL(&user_transfer_referent, third->user_transfer_reference);
 
     // Clean up.
-    alloc.base.free(&alloc.base, sizeof(TxItem) + HEADER_SIZE_BYTES + mtu, (void*) first);
-    alloc.base.free(&alloc.base, sizeof(TxItem) + HEADER_SIZE_BYTES + mtu, (void*) second);
-    alloc.base.free(&alloc.base, alloc.allocated_bytes, (void*) third);
+    memFree(mem, sizeof(TxItem) + HEADER_SIZE_BYTES + mtu, (void*) first);
+    memFree(mem, sizeof(TxItem) + HEADER_SIZE_BYTES + mtu, (void*) second);
+    memFree(mem, alloc.allocated_bytes, (void*) third);
     TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
 }
 
@@ -329,16 +330,17 @@ static void testMakeChainCRCSpill1(void)
 {
     InstrumentedAllocator alloc;
     instrumentedAllocatorNew(&alloc);
-    char                   user_transfer_referent = '\0';
-    const TransferMetadata meta                   = {
-                          .priority       = UdpardPriorityNominal,
-                          .src_node_id    = 4321,
-                          .dst_node_id    = 5432,
-                          .data_specifier = 7766,
-                          .transfer_id    = 0x0123456789ABCDEFULL,
+    struct UdpardMemoryResource mem                    = instrumentedAllocatorMakeMemoryResource(&alloc);
+    char                        user_transfer_referent = '\0';
+    const TransferMetadata      meta                   = {
+                               .priority       = UdpardPriorityNominal,
+                               .src_node_id    = 4321,
+                               .dst_node_id    = 5432,
+                               .data_specifier = 7766,
+                               .transfer_id    = 0x0123456789ABCDEFULL,
     };
     const size_t  mtu   = InterstellarWarSize + 3U;
-    const TxChain chain = txMakeChain(&alloc.base,
+    const TxChain chain = txMakeChain(mem,
                                       (byte_t[]){11, 22, 33, 44, 55, 66, 77, 88},
                                       mtu,
                                       223574680,
@@ -391,8 +393,8 @@ static void testMakeChainCRCSpill1(void)
     TEST_ASSERT_EQUAL(&user_transfer_referent, chain.tail->base.user_transfer_reference);
 
     // Clean up.
-    alloc.base.free(&alloc.base, sizeof(TxItem) + HEADER_SIZE_BYTES + mtu, chain.head);
-    alloc.base.free(&alloc.base, alloc.allocated_bytes, chain.tail);
+    memFree(mem, sizeof(TxItem) + HEADER_SIZE_BYTES + mtu, chain.head);
+    memFree(mem, alloc.allocated_bytes, chain.tail);
     TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
 }
 
@@ -400,16 +402,17 @@ static void testMakeChainCRCSpill2(void)
 {
     InstrumentedAllocator alloc;
     instrumentedAllocatorNew(&alloc);
-    char                   user_transfer_referent = '\0';
-    const TransferMetadata meta                   = {
-                          .priority       = UdpardPriorityNominal,
-                          .src_node_id    = 4321,
-                          .dst_node_id    = 5432,
-                          .data_specifier = 7766,
-                          .transfer_id    = 0x0123456789ABCDEFULL,
+    struct UdpardMemoryResource mem                    = instrumentedAllocatorMakeMemoryResource(&alloc);
+    char                        user_transfer_referent = '\0';
+    const TransferMetadata      meta                   = {
+                               .priority       = UdpardPriorityNominal,
+                               .src_node_id    = 4321,
+                               .dst_node_id    = 5432,
+                               .data_specifier = 7766,
+                               .transfer_id    = 0x0123456789ABCDEFULL,
     };
     const size_t  mtu   = InterstellarWarSize + 2U;
-    const TxChain chain = txMakeChain(&alloc.base,
+    const TxChain chain = txMakeChain(mem,
                                       (byte_t[]){11, 22, 33, 44, 55, 66, 77, 88},
                                       mtu,
                                       223574680,
@@ -462,8 +465,8 @@ static void testMakeChainCRCSpill2(void)
     TEST_ASSERT_EQUAL(&user_transfer_referent, chain.tail->base.user_transfer_reference);
 
     // Clean up.
-    alloc.base.free(&alloc.base, sizeof(TxItem) + HEADER_SIZE_BYTES + mtu, chain.head);
-    alloc.base.free(&alloc.base, alloc.allocated_bytes, chain.tail);
+    memFree(mem, sizeof(TxItem) + HEADER_SIZE_BYTES + mtu, chain.head);
+    memFree(mem, alloc.allocated_bytes, chain.tail);
     TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
 }
 
@@ -471,16 +474,17 @@ static void testMakeChainCRCSpill3(void)
 {
     InstrumentedAllocator alloc;
     instrumentedAllocatorNew(&alloc);
-    char                   user_transfer_referent = '\0';
-    const TransferMetadata meta                   = {
-                          .priority       = UdpardPriorityNominal,
-                          .src_node_id    = 4321,
-                          .dst_node_id    = 5432,
-                          .data_specifier = 7766,
-                          .transfer_id    = 0x0123456789ABCDEFULL,
+    struct UdpardMemoryResource mem                    = instrumentedAllocatorMakeMemoryResource(&alloc);
+    char                        user_transfer_referent = '\0';
+    const TransferMetadata      meta                   = {
+                               .priority       = UdpardPriorityNominal,
+                               .src_node_id    = 4321,
+                               .dst_node_id    = 5432,
+                               .data_specifier = 7766,
+                               .transfer_id    = 0x0123456789ABCDEFULL,
     };
     const size_t  mtu   = InterstellarWarSize + 1U;
-    const TxChain chain = txMakeChain(&alloc.base,
+    const TxChain chain = txMakeChain(mem,
                                       (byte_t[]){11, 22, 33, 44, 55, 66, 77, 88},
                                       mtu,
                                       223574680,
@@ -533,8 +537,8 @@ static void testMakeChainCRCSpill3(void)
     TEST_ASSERT_EQUAL(&user_transfer_referent, chain.tail->base.user_transfer_reference);
 
     // Clean up.
-    alloc.base.free(&alloc.base, sizeof(TxItem) + HEADER_SIZE_BYTES + mtu, chain.head);
-    alloc.base.free(&alloc.base, alloc.allocated_bytes, chain.tail);
+    memFree(mem, sizeof(TxItem) + HEADER_SIZE_BYTES + mtu, chain.head);
+    memFree(mem, alloc.allocated_bytes, chain.tail);
     TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
 }
 
@@ -542,16 +546,17 @@ static void testMakeChainCRCSpillFull(void)
 {
     InstrumentedAllocator alloc;
     instrumentedAllocatorNew(&alloc);
-    char                   user_transfer_referent = '\0';
-    const TransferMetadata meta                   = {
-                          .priority       = UdpardPriorityNominal,
-                          .src_node_id    = 4321,
-                          .dst_node_id    = 5432,
-                          .data_specifier = 7766,
-                          .transfer_id    = 0x0123456789ABCDEFULL,
+    struct UdpardMemoryResource mem                    = instrumentedAllocatorMakeMemoryResource(&alloc);
+    char                        user_transfer_referent = '\0';
+    const TransferMetadata      meta                   = {
+                               .priority       = UdpardPriorityNominal,
+                               .src_node_id    = 4321,
+                               .dst_node_id    = 5432,
+                               .data_specifier = 7766,
+                               .transfer_id    = 0x0123456789ABCDEFULL,
     };
     const size_t  mtu   = InterstellarWarSize;
-    const TxChain chain = txMakeChain(&alloc.base,
+    const TxChain chain = txMakeChain(mem,
                                       (byte_t[]){11, 22, 33, 44, 55, 66, 77, 88},
                                       mtu,
                                       223574680,
@@ -600,8 +605,8 @@ static void testMakeChainCRCSpillFull(void)
     TEST_ASSERT_EQUAL(&user_transfer_referent, chain.tail->base.user_transfer_reference);
 
     // Clean up.
-    alloc.base.free(&alloc.base, sizeof(TxItem) + HEADER_SIZE_BYTES + mtu, chain.head);
-    alloc.base.free(&alloc.base, alloc.allocated_bytes, chain.tail);
+    memFree(mem, sizeof(TxItem) + HEADER_SIZE_BYTES + mtu, chain.head);
+    memFree(mem, alloc.allocated_bytes, chain.tail);
     TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
 }
 
@@ -609,14 +614,15 @@ static void testPushPeekPopFree(void)
 {
     InstrumentedAllocator alloc;
     instrumentedAllocatorNew(&alloc);
-    const UdpardNodeID node_id = 1234;
+    struct UdpardMemoryResource mem     = instrumentedAllocatorMakeMemoryResource(&alloc);
+    const UdpardNodeID          node_id = 1234;
     //
     UdpardTx tx = {
         .local_node_id           = &node_id,
         .queue_capacity          = 3,
         .mtu                     = (EtherealStrengthSize + 4U + 3U) / 3U,
         .dscp_value_per_priority = {0, 1, 2, 3, 4, 5, 6, 7},
-        .memory                  = &alloc.base,
+        .memory                  = mem,
         .queue_size              = 0,
         .root                    = NULL,
     };
@@ -687,14 +693,15 @@ static void testPushPrioritization(void)
 {
     InstrumentedAllocator alloc;
     instrumentedAllocatorNew(&alloc);
-    const UdpardNodeID node_id = 1234;
+    struct UdpardMemoryResource mem     = instrumentedAllocatorMakeMemoryResource(&alloc);
+    const UdpardNodeID          node_id = 1234;
     //
     UdpardTx tx = {
         .local_node_id           = &node_id,
         .queue_capacity          = 7,
         .mtu                     = 140,  // This is chosen to match the test data.
         .dscp_value_per_priority = {0, 1, 2, 3, 4, 5, 6, 7},
-        .memory                  = &alloc.base,
+        .memory                  = mem,
         .queue_size              = 0,
         .root                    = NULL,
     };
@@ -857,14 +864,15 @@ static void testPushCapacityLimit(void)
 {
     InstrumentedAllocator alloc;
     instrumentedAllocatorNew(&alloc);
-    const UdpardNodeID node_id = 1234;
+    struct UdpardMemoryResource mem     = instrumentedAllocatorMakeMemoryResource(&alloc);
+    const UdpardNodeID          node_id = 1234;
     //
     UdpardTx tx = {
         .local_node_id           = &node_id,
         .queue_capacity          = 2,
         .mtu                     = 10U,
         .dscp_value_per_priority = {0, 1, 2, 3, 4, 5, 6, 7},
-        .memory                  = &alloc.base,
+        .memory                  = mem,
         .queue_size              = 0,
         .root                    = NULL,
     };
@@ -891,14 +899,15 @@ static void testPushOOM(void)
 {
     InstrumentedAllocator alloc;
     instrumentedAllocatorNew(&alloc);
-    const UdpardNodeID node_id = 1234;
+    struct UdpardMemoryResource mem     = instrumentedAllocatorMakeMemoryResource(&alloc);
+    const UdpardNodeID          node_id = 1234;
     //
     UdpardTx tx = {
         .local_node_id           = &node_id,
         .queue_capacity          = 10000U,
         .mtu                     = (EtherealStrengthSize + 4U + 3U) / 3U,
         .dscp_value_per_priority = {0, 1, 2, 3, 4, 5, 6, 7},
-        .memory                  = &alloc.base,
+        .memory                  = mem,
         .queue_size              = 0,
         .root                    = NULL,
     };
@@ -926,14 +935,15 @@ static void testPushAnonymousMultiFrame(void)
 {
     InstrumentedAllocator alloc;
     instrumentedAllocatorNew(&alloc);
-    const UdpardNodeID node_id = 0xFFFFU;
+    struct UdpardMemoryResource mem     = instrumentedAllocatorMakeMemoryResource(&alloc);
+    const UdpardNodeID          node_id = 0xFFFFU;
     //
     UdpardTx tx = {
         .local_node_id           = &node_id,
         .queue_capacity          = 10000U,
         .mtu                     = (EtherealStrengthSize + 4U + 3U) / 3U,
         .dscp_value_per_priority = {0, 1, 2, 3, 4, 5, 6, 7},
-        .memory                  = &alloc.base,
+        .memory                  = mem,
         .queue_size              = 0,
         .root                    = NULL,
     };
@@ -960,14 +970,15 @@ static void testPushAnonymousService(void)
 {
     InstrumentedAllocator alloc;
     instrumentedAllocatorNew(&alloc);
-    const UdpardNodeID node_id = 0xFFFFU;
+    struct UdpardMemoryResource mem     = instrumentedAllocatorMakeMemoryResource(&alloc);
+    const UdpardNodeID          node_id = 0xFFFFU;
     //
     UdpardTx tx = {
         .local_node_id           = &node_id,
         .queue_capacity          = 10000,
         .mtu                     = 1500,
         .dscp_value_per_priority = {0, 1, 2, 3, 4, 5, 6, 7},
-        .memory                  = &alloc.base,
+        .memory                  = mem,
         .queue_size              = 0,
         .root                    = NULL,
     };

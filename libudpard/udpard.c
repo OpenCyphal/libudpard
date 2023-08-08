@@ -124,26 +124,22 @@ static inline int_fast8_t compare32(const uint32_t a, const uint32_t b)
     return result;
 }
 
-static inline bool memIsValid(const struct UdpardMemoryResource* const memory)
+static inline void* memAlloc(const struct UdpardMemoryResource memory, const size_t size)
 {
-    return (memory != NULL) && (memory->allocate != NULL) && (memory->free != NULL);
+    UDPARD_ASSERT(memory.allocate != NULL);
+    return memory.allocate(memory.user_reference, size);
 }
 
-static inline void* memAlloc(struct UdpardMemoryResource* const memory, const size_t size)
+static inline void memFree(const struct UdpardMemoryResource memory, const size_t size, void* const data)
 {
-    UDPARD_ASSERT((memory != NULL) && (memory->allocate != NULL));
-    return memory->allocate(memory, size);
+    UDPARD_ASSERT(memory.free != NULL);
+    memory.free(memory.user_reference, size, data);
 }
 
-/// Free as in freedom.
-static inline void memFree(struct UdpardMemoryResource* const memory, const size_t size, void* const data)
+static inline void memFreePayload(const struct UdpardMemoryDeleter memory, const struct UdpardMutablePayload payload)
 {
-    UDPARD_ASSERT((memory != NULL) && (memory->free != NULL));  // allocate() may be NULL in the payload mem resource.
-    memory->free(memory, size, data);
-}
-static inline void memFreePayload(struct UdpardMemoryResource* const memory, const struct UdpardMutablePayload payload)
-{
-    memFree(memory, payload.size, payload.data);
+    UDPARD_ASSERT(memory.free != NULL);
+    memory.free(memory.user_reference, payload.size, payload.data);
 }
 
 static inline void memZero(const size_t size, void* const data)
@@ -293,15 +289,14 @@ typedef struct
     size_t  count;
 } TxChain;
 
-static inline TxItem* txNewItem(struct UdpardMemoryResource* const memory,
-                                const uint_least8_t                dscp_value_per_priority[UDPARD_PRIORITY_MAX + 1U],
-                                const UdpardMicrosecond            deadline_usec,
-                                const enum UdpardPriority          priority,
-                                const struct UdpardUDPIPEndpoint   endpoint,
-                                const size_t                       datagram_payload_size,
-                                void* const                        user_transfer_reference)
+static inline TxItem* txNewItem(const struct UdpardMemoryResource memory,
+                                const uint_least8_t               dscp_value_per_priority[UDPARD_PRIORITY_MAX + 1U],
+                                const UdpardMicrosecond           deadline_usec,
+                                const enum UdpardPriority         priority,
+                                const struct UdpardUDPIPEndpoint  endpoint,
+                                const size_t                      datagram_payload_size,
+                                void* const                       user_transfer_reference)
 {
-    UDPARD_ASSERT(memory != NULL);
     TxItem* const out = (TxItem*) memAlloc(memory, sizeof(TxItem) + datagram_payload_size);
     if (out != NULL)
     {
@@ -391,16 +386,15 @@ static inline byte_t* txSerializeHeader(byte_t* const          destination_buffe
 
 /// Produces a chain of Tx queue items for later insertion into the Tx queue. The tail is NULL if OOM.
 /// The caller is responsible for freeing the memory allocated for the chain.
-static inline TxChain txMakeChain(struct UdpardMemoryResource* const memory,
-                                  const uint_least8_t                dscp_value_per_priority[UDPARD_PRIORITY_MAX + 1U],
-                                  const size_t                       mtu,
-                                  const UdpardMicrosecond            deadline_usec,
-                                  const TransferMetadata             meta,
-                                  const struct UdpardUDPIPEndpoint   endpoint,
-                                  const struct UdpardPayload         payload,
-                                  void* const                        user_transfer_reference)
+static inline TxChain txMakeChain(const struct UdpardMemoryResource memory,
+                                  const uint_least8_t               dscp_value_per_priority[UDPARD_PRIORITY_MAX + 1U],
+                                  const size_t                      mtu,
+                                  const UdpardMicrosecond           deadline_usec,
+                                  const TransferMetadata            meta,
+                                  const struct UdpardUDPIPEndpoint  endpoint,
+                                  const struct UdpardPayload        payload,
+                                  void* const                       user_transfer_reference)
 {
-    UDPARD_ASSERT(memory != NULL);
     UDPARD_ASSERT(mtu > 0);
     UDPARD_ASSERT((payload.data != NULL) || (payload.size == 0U));
     const size_t payload_size_with_crc = payload.size + TRANSFER_CRC_SIZE_BYTES;
@@ -528,13 +522,13 @@ static inline int32_t txPush(struct UdpardTx* const           tx,
     return out;
 }
 
-int_fast8_t udpardTxInit(struct UdpardTx* const             self,
-                         const UdpardNodeID* const          local_node_id,
-                         const size_t                       queue_capacity,
-                         struct UdpardMemoryResource* const memory)
+int_fast8_t udpardTxInit(struct UdpardTx* const            self,
+                         const UdpardNodeID* const         local_node_id,
+                         const size_t                      queue_capacity,
+                         const struct UdpardMemoryResource memory)
 {
     int_fast8_t ret = -UDPARD_ERROR_ARGUMENT;
-    if ((NULL != self) && (NULL != local_node_id) && memIsValid(memory))
+    if ((NULL != self) && (NULL != local_node_id) && (memory.allocate != NULL) && (memory.free != NULL))
     {
         ret = 0;
         memZero(sizeof(*self), self);
@@ -682,9 +676,9 @@ struct UdpardTxItem* udpardTxPop(struct UdpardTx* const self, const struct Udpar
     return out;
 }
 
-void udpardTxFree(struct UdpardMemoryResource* const memory, struct UdpardTxItem* const item)
+void udpardTxFree(const struct UdpardMemoryResource memory, struct UdpardTxItem* const item)
 {
-    if ((memory != NULL) && (item != NULL))
+    if (item != NULL)
     {
         memFree(memory, sizeof(TxItem) + item->datagram_payload.size, item);
     }
@@ -801,8 +795,8 @@ static inline bool rxParseFrame(const struct UdpardMutablePayload datagram_paylo
 /// as they almost always go side by side.
 typedef struct
 {
-    struct UdpardMemoryResource* fragment;
-    struct UdpardMemoryResource* payload;
+    struct UdpardMemoryResource fragment;
+    struct UdpardMemoryDeleter  payload;
 } RxMemory;
 
 typedef struct
@@ -949,9 +943,9 @@ static inline void rxSlotRestart(RxSlot* const self, const UdpardTransferID tran
 
 typedef struct
 {
-    uint32_t                     frame_index;
-    bool                         accepted;
-    struct UdpardMemoryResource* memory_fragment;
+    uint32_t                    frame_index;
+    bool                        accepted;
+    struct UdpardMemoryResource memory_fragment;
 } RxSlotUpdateContext;
 
 static inline int_fast8_t rxSlotFragmentSearch(void* const user_reference,  // NOSONAR Cavl API requires non-const.
@@ -965,7 +959,7 @@ static inline int_fast8_t rxSlotFragmentSearch(void* const user_reference,  // N
 static inline struct UdpardTreeNode* rxSlotFragmentFactory(void* const user_reference)
 {
     RxSlotUpdateContext* const ctx = (RxSlotUpdateContext*) user_reference;
-    UDPARD_ASSERT((ctx != NULL) && memIsValid(ctx->memory_fragment));
+    UDPARD_ASSERT((ctx != NULL) && (ctx->memory_fragment.allocate != NULL) && (ctx->memory_fragment.free != NULL));
     struct UdpardTreeNode* out  = NULL;
     RxFragment* const      frag = memAlloc(ctx->memory_fragment, sizeof(RxFragment));
     if (frag != NULL)
@@ -1574,15 +1568,13 @@ static inline void rxPortFree(struct UdpardRxPort* const self, const struct Udpa
 
 // --------------------------------------------------  RX API  --------------------------------------------------
 
-void udpardRxFragmentFree(const struct UdpardFragment        head,
-                          struct UdpardMemoryResource* const memory_fragment,
-                          struct UdpardMemoryResource* const memory_payload)
+void udpardRxFragmentFree(const struct UdpardFragment       head,
+                          const struct UdpardMemoryResource memory_fragment,
+                          const struct UdpardMemoryDeleter  memory_payload)
 {
-    if ((memory_fragment != NULL) && (memory_payload != NULL))  // The head is not heap-allocated so not freed.
-    {
-        memFreePayload(memory_payload, head.origin);  // May be NULL, is okay.
-        rxFragmentDestroyList(head.next, (RxMemory){.fragment = memory_fragment, .payload = memory_payload});
-    }
+    // The head is not heap-allocated so not freed.
+    memFreePayload(memory_payload, head.origin);  // May be NULL, is okay.
+    rxFragmentDestroyList(head.next, (RxMemory){.fragment = memory_fragment, .payload = memory_payload});
 }
 
 int_fast8_t udpardRxSubscriptionInit(struct UdpardRxSubscription* const   self,

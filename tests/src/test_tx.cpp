@@ -29,49 +29,49 @@ void testInit()
     std::monostate     user_referent;
     const UdpardNodeID node_id = 0;
     {
-        UdpardMemoryResource memory{
-            .allocate       = &dummyAllocatorAllocate,
-            .free           = &dummyAllocatorFree,
+        const UdpardMemoryResource memory{
             .user_reference = &user_referent,
+            .free           = &dummyAllocatorFree,
+            .allocate       = &dummyAllocatorAllocate,
         };
-        TEST_ASSERT_EQUAL(-UDPARD_ERROR_ARGUMENT, udpardTxInit(nullptr, &node_id, 0, &memory));
+        TEST_ASSERT_EQUAL(-UDPARD_ERROR_ARGUMENT, udpardTxInit(nullptr, &node_id, 0, memory));
     }
     {
-        UdpardTx             tx{};
-        UdpardMemoryResource memory{
-            .allocate       = &dummyAllocatorAllocate,
-            .free           = &dummyAllocatorFree,
+        UdpardTx                   tx{};
+        const UdpardMemoryResource memory{
             .user_reference = &user_referent,
+            .free           = &dummyAllocatorFree,
+            .allocate       = &dummyAllocatorAllocate,
         };
-        TEST_ASSERT_EQUAL(-UDPARD_ERROR_ARGUMENT, udpardTxInit(&tx, nullptr, 0, &memory));
+        TEST_ASSERT_EQUAL(-UDPARD_ERROR_ARGUMENT, udpardTxInit(&tx, nullptr, 0, memory));
     }
     {
-        UdpardTx             tx{};
-        UdpardMemoryResource memory{
+        UdpardTx                   tx{};
+        const UdpardMemoryResource memory{
+            .user_reference = &user_referent,
+            .free           = &dummyAllocatorFree,
             .allocate       = nullptr,
-            .free           = &dummyAllocatorFree,
-            .user_reference = &user_referent,
         };
-        TEST_ASSERT_EQUAL(-UDPARD_ERROR_ARGUMENT, udpardTxInit(&tx, &node_id, 0, &memory));
+        TEST_ASSERT_EQUAL(-UDPARD_ERROR_ARGUMENT, udpardTxInit(&tx, &node_id, 0, memory));
     }
     {
-        UdpardTx             tx{};
-        UdpardMemoryResource memory{
-            .allocate       = &dummyAllocatorAllocate,
+        UdpardTx                   tx{};
+        const UdpardMemoryResource memory{
+            .user_reference = &user_referent,
             .free           = nullptr,
-            .user_reference = &user_referent,
+            .allocate       = &dummyAllocatorAllocate,
         };
-        TEST_ASSERT_EQUAL(-UDPARD_ERROR_ARGUMENT, udpardTxInit(&tx, &node_id, 0, &memory));
+        TEST_ASSERT_EQUAL(-UDPARD_ERROR_ARGUMENT, udpardTxInit(&tx, &node_id, 0, memory));
     }
     {
-        UdpardTx             tx{};
-        UdpardMemoryResource memory{
-            .allocate       = &dummyAllocatorAllocate,
-            .free           = &dummyAllocatorFree,
+        UdpardTx                   tx{};
+        const UdpardMemoryResource memory{
             .user_reference = &user_referent,
+            .free           = &dummyAllocatorFree,
+            .allocate       = &dummyAllocatorAllocate,
         };
-        TEST_ASSERT_EQUAL(0, udpardTxInit(&tx, &node_id, 0, &memory));
-        TEST_ASSERT_EQUAL(&user_referent, tx.memory->user_reference);
+        TEST_ASSERT_EQUAL(0, udpardTxInit(&tx, &node_id, 0, memory));
+        TEST_ASSERT_EQUAL(&user_referent, tx.memory.user_reference);
         TEST_ASSERT_EQUAL(UDPARD_MTU_DEFAULT, tx.mtu);
     }
 }
@@ -80,14 +80,15 @@ void testPublish()
 {
     InstrumentedAllocator alloc;
     instrumentedAllocatorNew(&alloc);
-    const UdpardNodeID node_id = 1234;
+    const struct UdpardMemoryResource mem     = instrumentedAllocatorMakeMemoryResource(&alloc);
+    const UdpardNodeID                node_id = 1234;
     //
     UdpardTx tx{
         .local_node_id           = &node_id,
         .queue_capacity          = 1U,
         .mtu                     = UDPARD_MTU_DEFAULT,
         .dscp_value_per_priority = {0, 1, 2, 3, 4, 5, 6, 7},
-        .memory                  = &alloc.base,
+        .memory                  = mem,
         .queue_size              = 0,
         .root                    = nullptr,
     };
@@ -227,14 +228,15 @@ void testRequest()
 {
     InstrumentedAllocator alloc;
     instrumentedAllocatorNew(&alloc);
-    const UdpardNodeID node_id = 1234;
+    const UdpardMemoryResource mem     = instrumentedAllocatorMakeMemoryResource(&alloc);
+    const UdpardNodeID         node_id = 1234;
     //
     UdpardTx tx{
         .local_node_id           = &node_id,
         .queue_capacity          = 1U,
         .mtu                     = UDPARD_MTU_DEFAULT,
         .dscp_value_per_priority = {0, 1, 2, 3, 4, 5, 6, 7},
-        .memory                  = &alloc.base,
+        .memory                  = mem,
         .queue_size              = 0,
         .root                    = nullptr,
     };
@@ -394,14 +396,15 @@ void testRespond()
 {
     InstrumentedAllocator alloc;
     instrumentedAllocatorNew(&alloc);
-    const UdpardNodeID node_id = 1234;
+    const UdpardMemoryResource mem     = instrumentedAllocatorMakeMemoryResource(&alloc);
+    const UdpardNodeID         node_id = 1234;
     //
     UdpardTx tx{
         .local_node_id           = &node_id,
         .queue_capacity          = 1U,
         .mtu                     = UDPARD_MTU_DEFAULT,
         .dscp_value_per_priority = {0, 1, 2, 3, 4, 5, 6, 7},
-        .memory                  = &alloc.base,
+        .memory                  = mem,
         .queue_size              = 0,
         .root                    = nullptr,
     };
@@ -541,7 +544,7 @@ void testPeekPopFreeNULL()  // Just make sure we don't crash.
 {
     TEST_ASSERT_EQUAL(nullptr, udpardTxPeek(nullptr));
     TEST_ASSERT_EQUAL(nullptr, udpardTxPop(nullptr, nullptr));
-    udpardTxFree(nullptr, nullptr);
+    udpardTxFree({}, nullptr);
 }
 
 }  // namespace

@@ -19,7 +19,7 @@ static RxFragment* makeRxFragment(const RxMemory                    memory,
 {
     TEST_PANIC_UNLESS((view.data >= origin.data) && (view.size <= origin.size));
     TEST_PANIC_UNLESS((((const byte_t*) view.data) + view.size) <= (((const byte_t*) origin.data) + origin.size));
-    byte_t* const     new_origin = (byte_t*) memAlloc(memory.payload, origin.size);
+    byte_t* const     new_origin = (byte_t*) instrumentedAllocatorAllocate(memory.payload.user_reference, origin.size);
     RxFragment* const frag       = (RxFragment*) memAlloc(memory.fragment, sizeof(RxFragment));
     if ((new_origin != NULL) && (frag != NULL))
     {
@@ -68,16 +68,16 @@ static bool compareStringWithPayload(const char* const expected, const struct Ud
     return compareMemory(strlen(expected), expected, payload.size, payload.data);
 }
 
-static RxFrameBase makeRxFrameBase(struct UdpardMemoryResource* const memory_payload,
-                                   const uint32_t                     frame_index,
-                                   const bool                         end_of_transfer,
-                                   const struct UdpardPayload         view,
-                                   const struct UdpardMutablePayload  origin)
+static RxFrameBase makeRxFrameBase(InstrumentedAllocator* const      memory_payload,
+                                   const uint32_t                    frame_index,
+                                   const bool                        end_of_transfer,
+                                   const struct UdpardPayload        view,
+                                   const struct UdpardMutablePayload origin)
 {
     TEST_PANIC_UNLESS((view.data >= origin.data) && (view.size <= origin.size));
     TEST_PANIC_UNLESS((((const byte_t*) view.data) + view.size) <= (((const byte_t*) origin.data) + origin.size));
     RxFrameBase   out        = {0};
-    byte_t* const new_origin = (byte_t*) memAlloc(memory_payload, origin.size);
+    byte_t* const new_origin = (byte_t*) instrumentedAllocatorAllocate(memory_payload, origin.size);
     if (new_origin != NULL)
     {
         (void) memmove(new_origin, origin.data, origin.size);
@@ -95,41 +95,41 @@ static RxFrameBase makeRxFrameBase(struct UdpardMemoryResource* const memory_pay
     return out;
 }
 
-static RxFrameBase makeRxFrameBaseString(struct UdpardMemoryResource* const memory_payload,
-                                         const uint32_t                     frame_index,
-                                         const bool                         end_of_transfer,
-                                         const char* const                  payload)
+static RxFrameBase makeRxFrameBaseString(InstrumentedAllocator* const memory,
+                                         const uint32_t               frame_index,
+                                         const bool                   end_of_transfer,
+                                         const char* const            payload)
 {
-    return makeRxFrameBase(memory_payload,
+    return makeRxFrameBase(memory,
                            frame_index,
                            end_of_transfer,
                            (struct UdpardPayload){.data = payload, .size = strlen(payload)},
                            (struct UdpardMutablePayload){.data = (void*) payload, .size = strlen(payload)});
 }
 
-static RxFrame makeRxFrameString(struct UdpardMemoryResource* const memory_payload,
-                                 const TransferMetadata             meta,
-                                 const uint32_t                     frame_index,
-                                 const bool                         end_of_transfer,
-                                 const char* const                  payload)
+static RxFrame makeRxFrameString(InstrumentedAllocator* const memory,
+                                 const TransferMetadata       meta,
+                                 const uint32_t               frame_index,
+                                 const bool                   end_of_transfer,
+                                 const char* const            payload)
 {
-    return (RxFrame){.base = makeRxFrameBaseString(memory_payload, frame_index, end_of_transfer, payload),
-                     .meta = meta};
+    return (RxFrame){.base = makeRxFrameBaseString(memory, frame_index, end_of_transfer, payload), .meta = meta};
 }
 
 static RxMemory makeRxMemory(InstrumentedAllocator* const fragment, InstrumentedAllocator* const payload)
 {
-    return (RxMemory){.fragment = &fragment->base, .payload = &payload->base};
+    return (RxMemory){.fragment = instrumentedAllocatorMakeMemoryResource(fragment),
+                      .payload  = instrumentedAllocatorMakeMemoryDeleter(payload)};
 }
 
-static struct UdpardMutablePayload makeDatagramPayload(struct UdpardMemoryResource* const memory,
-                                                       const TransferMetadata             meta,
-                                                       const uint32_t                     frame_index,
-                                                       const bool                         end_of_transfer,
-                                                       const struct UdpardPayload         payload)
+static struct UdpardMutablePayload makeDatagramPayload(InstrumentedAllocator* const memory,
+                                                       const TransferMetadata       meta,
+                                                       const uint32_t               frame_index,
+                                                       const bool                   end_of_transfer,
+                                                       const struct UdpardPayload   payload)
 {
     struct UdpardMutablePayload pld = {.size = payload.size + HEADER_SIZE_BYTES};
-    pld.data                        = memAlloc(memory, pld.size);
+    pld.data                        = instrumentedAllocatorAllocate(memory, pld.size);
     if (pld.data != NULL)
     {
         (void) memcpy(txSerializeHeader(pld.data, meta, frame_index, end_of_transfer), payload.data, payload.size);
@@ -141,11 +141,11 @@ static struct UdpardMutablePayload makeDatagramPayload(struct UdpardMemoryResour
     return pld;
 }
 
-static struct UdpardMutablePayload makeDatagramPayloadString(struct UdpardMemoryResource* const memory,
-                                                             const TransferMetadata             meta,
-                                                             const uint32_t                     frame_index,
-                                                             const bool                         end_of_transfer,
-                                                             const char* const                  string)
+static struct UdpardMutablePayload makeDatagramPayloadString(InstrumentedAllocator* const memory,
+                                                             const TransferMetadata       meta,
+                                                             const uint32_t               frame_index,
+                                                             const bool                   end_of_transfer,
+                                                             const char* const            string)
 {
     return makeDatagramPayload(memory,
                                meta,
@@ -154,9 +154,9 @@ static struct UdpardMutablePayload makeDatagramPayloadString(struct UdpardMemory
                                (struct UdpardPayload){.data = string, .size = strlen(string)});
 }
 
-static struct UdpardMutablePayload makeDatagramPayloadSingleFrame(struct UdpardMemoryResource* const memory,
-                                                                  const TransferMetadata             meta,
-                                                                  const struct UdpardPayload         payload)
+static struct UdpardMutablePayload makeDatagramPayloadSingleFrame(InstrumentedAllocator* const memory,
+                                                                  const TransferMetadata       meta,
+                                                                  const struct UdpardPayload   payload)
 {
     struct UdpardMutablePayload pld =
         makeDatagramPayload(memory,
@@ -171,9 +171,9 @@ static struct UdpardMutablePayload makeDatagramPayloadSingleFrame(struct UdpardM
     return pld;
 }
 
-static struct UdpardMutablePayload makeDatagramPayloadSingleFrameString(struct UdpardMemoryResource* const memory,
-                                                                        const TransferMetadata             meta,
-                                                                        const char* const                  payload)
+static struct UdpardMutablePayload makeDatagramPayloadSingleFrameString(InstrumentedAllocator* const memory,
+                                                                        const TransferMetadata       meta,
+                                                                        const char* const            payload)
 {
     return makeDatagramPayloadSingleFrame(memory,
                                           meta,
@@ -470,7 +470,7 @@ static void testSlotEjectValidLarge(void)
     TEST_ASSERT_EQUAL(3, mem_fragment.allocated_fragments);                   // One gone!!1
     TEST_ASSERT_EQUAL(sizeof(RxFragment) * 3, mem_fragment.allocated_bytes);  // yes yes!
     // Now, free the payload as the application would.
-    udpardRxFragmentFree(payload, &mem_fragment.base, &mem_payload.base);
+    udpardRxFragmentFree(payload, mem.fragment, mem.payload);
     // All memory shall be free now. As in "free beer".
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_bytes);
@@ -540,7 +540,7 @@ static void testSlotEjectValidSmall(void)
     TEST_ASSERT_EQUAL(2, mem_fragment.allocated_fragments);  // One gone!!1
     TEST_ASSERT_EQUAL(sizeof(RxFragment) * 2, mem_fragment.allocated_bytes);
     // Now, free the payload as the application would.
-    udpardRxFragmentFree(payload, &mem_fragment.base, &mem_payload.base);
+    udpardRxFragmentFree(payload, mem.fragment, mem.payload);
     // All memory shall be free now. As in "free beer".
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_bytes);
@@ -585,7 +585,7 @@ static void testSlotEjectValidEmpty(void)
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_bytes);
     // Now, free the payload as the application would.
-    udpardRxFragmentFree(payload, &mem_fragment.base, &mem_payload.base);
+    udpardRxFragmentFree(payload, mem.fragment, mem.payload);
     // No memory is in use anyway, so no change here.
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_bytes);
@@ -656,7 +656,7 @@ static void testSlotAcceptA(void)
                       rxSlotAccept(&slot,
                                    &payload_size,
                                    &payload,
-                                   makeRxFrameBaseString(&mem_payload.base,
+                                   makeRxFrameBaseString(&mem_payload,
                                                          0,
                                                          true,
                                                          "The fish responsible for drying the sea are not here."
@@ -672,7 +672,7 @@ static void testSlotAcceptA(void)
     TEST_ASSERT_EQUAL(53, payload_size);
     TEST_ASSERT(compareStringWithPayload("The fish responsible for drying the sea are not here.", payload.view));
     TEST_ASSERT_NULL(payload.next);
-    udpardRxFragmentFree(payload, &mem_fragment.base, &mem_payload.base);
+    udpardRxFragmentFree(payload, mem.fragment, mem.payload);
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_bytes);
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
@@ -692,7 +692,7 @@ static void testSlotAcceptA(void)
                       rxSlotAccept(&slot,
                                    &payload_size,
                                    &payload,
-                                   makeRxFrameBaseString(&mem_payload.base,
+                                   makeRxFrameBaseString(&mem_payload,
                                                          0,
                                                          false,
                                                          "We're sorry. What you said is really hard to understand.\n"),
@@ -702,7 +702,7 @@ static void testSlotAcceptA(void)
                       rxSlotAccept(&slot,
                                    &payload_size,
                                    &payload,
-                                   makeRxFrameBaseString(&mem_payload.base,
+                                   makeRxFrameBaseString(&mem_payload,
                                                          1,
                                                          false,
                                                          "The fish who dried the sea went onto land before they did "
@@ -713,7 +713,7 @@ static void testSlotAcceptA(void)
                       rxSlotAccept(&slot,
                                    &payload_size,
                                    &payload,
-                                   makeRxFrameBaseString(&mem_payload.base,
+                                   makeRxFrameBaseString(&mem_payload,
                                                          2,
                                                          true,
                                                          "They moved from one dark forest to another dark forest."
@@ -735,7 +735,7 @@ static void testSlotAcceptA(void)
     TEST_ASSERT(compareStringWithPayload("They moved from one dark forest to another dark forest.",  //
                                          payload.next->next->view));
     TEST_ASSERT_NULL(payload.next->next->next);
-    udpardRxFragmentFree(payload, &mem_fragment.base, &mem_payload.base);
+    udpardRxFragmentFree(payload, mem.fragment, mem.payload);
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_bytes);
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
@@ -757,7 +757,7 @@ static void testSlotAcceptA(void)
                       rxSlotAccept(&slot,
                                    &payload_size,
                                    &payload,
-                                   makeRxFrameBaseString(&mem_payload.base,  //
+                                   makeRxFrameBaseString(&mem_payload,  //
                                                          2,
                                                          true,
                                                          "Toss it over."
@@ -770,7 +770,7 @@ static void testSlotAcceptA(void)
                       rxSlotAccept(&slot,
                                    &payload_size,
                                    &payload,
-                                   makeRxFrameBaseString(&mem_payload.base,  //
+                                   makeRxFrameBaseString(&mem_payload,  //
                                                          1,
                                                          false,
                                                          "How do we give it to you?\n"),
@@ -782,7 +782,7 @@ static void testSlotAcceptA(void)
                       rxSlotAccept(&slot,
                                    &payload_size,
                                    &payload,
-                                   makeRxFrameBaseString(&mem_payload.base,  //
+                                   makeRxFrameBaseString(&mem_payload,  //
                                                          1,
                                                          false,
                                                          "DUPLICATE #1"),
@@ -794,7 +794,7 @@ static void testSlotAcceptA(void)
                       rxSlotAccept(&slot,
                                    &payload_size,
                                    &payload,
-                                   makeRxFrameBaseString(&mem_payload.base,  //
+                                   makeRxFrameBaseString(&mem_payload,  //
                                                          2,
                                                          true,
                                                          "DUPLICATE #2"),
@@ -806,7 +806,7 @@ static void testSlotAcceptA(void)
                       rxSlotAccept(&slot,
                                    &payload_size,
                                    &payload,
-                                   makeRxFrameBaseString(&mem_payload.base,  //
+                                   makeRxFrameBaseString(&mem_payload,  //
                                                          0,
                                                          false,
                                                          "I like fish. Can I have it?\n"),
@@ -824,7 +824,7 @@ static void testSlotAcceptA(void)
     TEST_ASSERT_NOT_NULL(payload.next);
     TEST_ASSERT(compareStringWithPayload("How do we give it", payload.next->view));  // TRUNCATED
     TEST_ASSERT_NULL(payload.next->next);
-    udpardRxFragmentFree(payload, &mem_fragment.base, &mem_payload.base);
+    udpardRxFragmentFree(payload, mem.fragment, mem.payload);
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_bytes);
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
@@ -844,7 +844,7 @@ static void testSlotAcceptA(void)
                       rxSlotAccept(&slot,
                                    &payload_size,
                                    &payload,
-                                   makeRxFrameBaseString(&mem_payload.base, 0, true, ":D"),
+                                   makeRxFrameBaseString(&mem_payload, 0, true, ":D"),
                                    1000,
                                    mem));
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
@@ -870,7 +870,7 @@ static void testSlotAcceptA(void)
                       rxSlotAccept(&slot,
                                    &payload_size,
                                    &payload,
-                                   makeRxFrameBaseString(&mem_payload.base,  //
+                                   makeRxFrameBaseString(&mem_payload,  //
                                                          2,
                                                          true,
                                                          "Toss it over."
@@ -883,7 +883,7 @@ static void testSlotAcceptA(void)
                       rxSlotAccept(&slot,
                                    &payload_size,
                                    &payload,
-                                   makeRxFrameBaseString(&mem_payload.base,  //
+                                   makeRxFrameBaseString(&mem_payload,  //
                                                          1,
                                                          false,
                                                          "How do we give it to you?\n"),
@@ -896,7 +896,7 @@ static void testSlotAcceptA(void)
                       rxSlotAccept(&slot,
                                    &payload_size,
                                    &payload,
-                                   makeRxFrameBaseString(&mem_payload.base,  //
+                                   makeRxFrameBaseString(&mem_payload,  //
                                                          0,
                                                          false,
                                                          "I like fish. Can I have it?\n"),
@@ -908,7 +908,7 @@ static void testSlotAcceptA(void)
                       rxSlotAccept(&slot,
                                    &payload_size,
                                    &payload,
-                                   makeRxFrameBaseString(&mem_payload.base,  //
+                                   makeRxFrameBaseString(&mem_payload,  //
                                                          1,
                                                          false,
                                                          "How do we give it to you?\n"),
@@ -921,7 +921,7 @@ static void testSlotAcceptA(void)
                       rxSlotAccept(&slot,
                                    &payload_size,
                                    &payload,
-                                   makeRxFrameBaseString(&mem_payload.base,  //
+                                   makeRxFrameBaseString(&mem_payload,  //
                                                          1,
                                                          false,
                                                          "How do we give it to you?\n"),
@@ -940,7 +940,7 @@ static void testSlotAcceptA(void)
     TEST_ASSERT_NOT_NULL(payload.next->next);
     TEST_ASSERT(compareStringWithPayload("Toss it over.", payload.next->next->view));
     TEST_ASSERT_NULL(payload.next->next->next);
-    udpardRxFragmentFree(payload, &mem_fragment.base, &mem_payload.base);
+    udpardRxFragmentFree(payload, mem.fragment, mem.payload);
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_bytes);
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
@@ -962,7 +962,7 @@ static void testSlotAcceptA(void)
                       rxSlotAccept(&slot,
                                    &payload_size,
                                    &payload,
-                                   makeRxFrameBaseString(&mem_payload.base,  //
+                                   makeRxFrameBaseString(&mem_payload,  //
                                                          2,
                                                          true,
                                                          "Toss it over."
@@ -975,9 +975,9 @@ static void testSlotAcceptA(void)
                       rxSlotAccept(&slot,
                                    &payload_size,
                                    &payload,
-                                   makeRxFrameBaseString(&mem_payload.base,  //
-                                                         1,                  //
-                                                         true,               // SURPRISE! EOT is set in distinct frames!
+                                   makeRxFrameBaseString(&mem_payload,  //
+                                                         1,             //
+                                                         true,          // SURPRISE! EOT is set in distinct frames!
                                                          "How do we give it to you?\n"),
                                    45,
                                    mem));
@@ -1000,7 +1000,7 @@ static void testSlotAcceptA(void)
                       rxSlotAccept(&slot,
                                    &payload_size,
                                    &payload,
-                                   makeRxFrameBaseString(&mem_payload.base,  //
+                                   makeRxFrameBaseString(&mem_payload,  //
                                                          2,
                                                          true,
                                                          "Toss it over."
@@ -1013,8 +1013,8 @@ static void testSlotAcceptA(void)
                       rxSlotAccept(&slot,
                                    &payload_size,
                                    &payload,
-                                   makeRxFrameBaseString(&mem_payload.base,  //
-                                                         3,                  // SURPRISE! Frame #3 while #2 was EOT!
+                                   makeRxFrameBaseString(&mem_payload,  //
+                                                         3,             // SURPRISE! Frame #3 while #2 was EOT!
                                                          false,
                                                          "How do we give it to you?\n"),
                                    45,
@@ -1195,7 +1195,7 @@ static void testIfaceAcceptA(void)
     TEST_ASSERT_EQUAL(1,
                       rxIfaceAccept(&iface,
                                     1234567890,
-                                    makeRxFrameString(&mem_payload.base,  //
+                                    makeRxFrameString(&mem_payload,  //
                                                       (TransferMetadata){.priority       = UdpardPriorityHigh,
                                                                          .src_node_id    = 1234,
                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
@@ -1218,7 +1218,7 @@ static void testIfaceAcceptA(void)
     TEST_ASSERT_EQUAL(0x1122334455667788U, transfer.transfer_id);
     TEST_ASSERT_EQUAL(12, transfer.payload_size);
     TEST_ASSERT(compareStringWithPayload("I am a tomb.", transfer.payload.view));
-    udpardRxFragmentFree(transfer.payload, &mem_fragment.base, &mem_payload.base);
+    udpardRxFragmentFree(transfer.payload, mem.fragment, mem.payload);
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
     // Check the internal states of the iface.
@@ -1230,8 +1230,8 @@ static void testIfaceAcceptA(void)
     // Send a duplicate and ensure it is rejected.
     TEST_ASSERT_EQUAL(0,  // No transfer accepted.
                       rxIfaceAccept(&iface,
-                                    1234567891,                           // different timestamp but ignored anyway
-                                    makeRxFrameString(&mem_payload.base,  //
+                                    1234567891,                      // different timestamp but ignored anyway
+                                    makeRxFrameString(&mem_payload,  //
                                                       (TransferMetadata){.priority       = UdpardPriorityHigh,
                                                                          .src_node_id    = 1234,
                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
@@ -1256,8 +1256,8 @@ static void testIfaceAcceptA(void)
     // Send a non-duplicate transfer with an invalid CRC using an in-sequence (matching) transfer-ID.
     TEST_ASSERT_EQUAL(0,  // No transfer accepted.
                       rxIfaceAccept(&iface,
-                                    1234567892,                           // different timestamp but ignored anyway
-                                    makeRxFrameString(&mem_payload.base,  //
+                                    1234567892,                      // different timestamp but ignored anyway
+                                    makeRxFrameString(&mem_payload,  //
                                                       (TransferMetadata){.priority       = UdpardPriorityHigh,
                                                                          .src_node_id    = 1234,
                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
@@ -1283,8 +1283,8 @@ static void testIfaceAcceptA(void)
     // Transfer-ID jumps forward, no existing slot; will use the second one.
     TEST_ASSERT_EQUAL(0,  // No transfer accepted.
                       rxIfaceAccept(&iface,
-                                    1234567893,                           // different timestamp but ignored anyway
-                                    makeRxFrameString(&mem_payload.base,  //
+                                    1234567893,                      // different timestamp but ignored anyway
+                                    makeRxFrameString(&mem_payload,  //
                                                       (TransferMetadata){.priority       = UdpardPriorityHigh,
                                                                          .src_node_id    = 1234,
                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
@@ -1314,7 +1314,7 @@ static void testIfaceAcceptA(void)
     TEST_ASSERT_EQUAL(0,
                       rxIfaceAccept(&iface,
                                     2000000020,
-                                    makeRxFrameString(&mem_payload.base,  //
+                                    makeRxFrameString(&mem_payload,  //
                                                       (TransferMetadata){.priority       = UdpardPriorityHigh,
                                                                          .src_node_id    = 1111,
                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
@@ -1336,8 +1336,8 @@ static void testIfaceAcceptA(void)
     // B1
     TEST_ASSERT_EQUAL(0,
                       rxIfaceAccept(&iface,
-                                    2000000010,                           // Transfer-ID timeout.
-                                    makeRxFrameString(&mem_payload.base,  //
+                                    2000000010,                      // Transfer-ID timeout.
+                                    makeRxFrameString(&mem_payload,  //
                                                       (TransferMetadata){.priority       = UdpardPrioritySlow,
                                                                          .src_node_id    = 2222,
                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
@@ -1360,7 +1360,7 @@ static void testIfaceAcceptA(void)
     TEST_ASSERT_EQUAL(0,
                       rxIfaceAccept(&iface,
                                     2000000030,
-                                    makeRxFrameString(&mem_payload.base,  //
+                                    makeRxFrameString(&mem_payload,  //
                                                       (TransferMetadata){.priority       = UdpardPriorityHigh,
                                                                          .src_node_id    = 1111,
                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
@@ -1382,7 +1382,7 @@ static void testIfaceAcceptA(void)
     TEST_ASSERT_EQUAL(1,
                       rxIfaceAccept(&iface,
                                     2000000040,
-                                    makeRxFrameString(&mem_payload.base,  //
+                                    makeRxFrameString(&mem_payload,  //
                                                       (TransferMetadata){.priority       = UdpardPrioritySlow,
                                                                          .src_node_id    = 2222,
                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
@@ -1411,14 +1411,14 @@ static void testIfaceAcceptA(void)
     TEST_ASSERT_NOT_NULL(transfer.payload.next);
     TEST_ASSERT(compareStringWithPayload("B1", transfer.payload.next->view));
     TEST_ASSERT_NULL(transfer.payload.next->next);
-    udpardRxFragmentFree(transfer.payload, &mem_fragment.base, &mem_payload.base);
+    udpardRxFragmentFree(transfer.payload, mem.fragment, mem.payload);
     TEST_ASSERT_EQUAL(2, mem_payload.allocated_fragments);  // Only the remaining A0 A2 are left.
     TEST_ASSERT_EQUAL(2, mem_fragment.allocated_fragments);
     // A1
     TEST_ASSERT_EQUAL(1,
                       rxIfaceAccept(&iface,
                                     2000000050,
-                                    makeRxFrameString(&mem_payload.base,  //
+                                    makeRxFrameString(&mem_payload,  //
                                                       (TransferMetadata){.priority       = UdpardPriorityHigh,
                                                                          .src_node_id    = 1111,
                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
@@ -1447,7 +1447,7 @@ static void testIfaceAcceptA(void)
     TEST_ASSERT_NOT_NULL(transfer.payload.next->next);
     TEST_ASSERT(compareStringWithPayload("A2", transfer.payload.next->next->view));
     TEST_ASSERT_NULL(transfer.payload.next->next->next);
-    udpardRxFragmentFree(transfer.payload, &mem_fragment.base, &mem_payload.base);
+    udpardRxFragmentFree(transfer.payload, mem.fragment, mem.payload);
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
 }
@@ -1484,7 +1484,7 @@ static void testIfaceAcceptB(void)
     TEST_ASSERT_EQUAL(0,
                       rxIfaceAccept(&iface,
                                     2000000020,
-                                    makeRxFrameString(&mem_payload.base,  //
+                                    makeRxFrameString(&mem_payload,  //
                                                       (TransferMetadata){.priority       = UdpardPriorityHigh,
                                                                          .src_node_id    = 1111,
                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
@@ -1506,8 +1506,8 @@ static void testIfaceAcceptB(void)
     // B1
     TEST_ASSERT_EQUAL(0,
                       rxIfaceAccept(&iface,
-                                    2000000010,                           // Transfer-ID timeout.
-                                    makeRxFrameString(&mem_payload.base,  //
+                                    2000000010,                      // Transfer-ID timeout.
+                                    makeRxFrameString(&mem_payload,  //
                                                       (TransferMetadata){.priority       = UdpardPrioritySlow,
                                                                          .src_node_id    = 2222,
                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
@@ -1530,7 +1530,7 @@ static void testIfaceAcceptB(void)
     TEST_ASSERT_EQUAL(0,
                       rxIfaceAccept(&iface,
                                     2000000030,
-                                    makeRxFrameString(&mem_payload.base,  //
+                                    makeRxFrameString(&mem_payload,  //
                                                       (TransferMetadata){.priority       = UdpardPriorityHigh,
                                                                          .src_node_id    = 1111,
                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
@@ -1552,7 +1552,7 @@ static void testIfaceAcceptB(void)
     TEST_ASSERT_EQUAL(0,
                       rxIfaceAccept(&iface,
                                     2000000040,
-                                    makeRxFrameString(&mem_payload.base,  //
+                                    makeRxFrameString(&mem_payload,  //
                                                       (TransferMetadata){.priority       = UdpardPriorityHigh,
                                                                          .src_node_id    = 3333,
                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
@@ -1574,7 +1574,7 @@ static void testIfaceAcceptB(void)
     TEST_ASSERT_EQUAL(0,  // Cannot be accepted because its slot is taken over by C.
                       rxIfaceAccept(&iface,
                                     2000000050,
-                                    makeRxFrameString(&mem_payload.base,  //
+                                    makeRxFrameString(&mem_payload,  //
                                                       (TransferMetadata){.priority       = UdpardPrioritySlow,
                                                                          .src_node_id    = 2222,
                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
@@ -1596,7 +1596,7 @@ static void testIfaceAcceptB(void)
     TEST_ASSERT_EQUAL(1,
                       rxIfaceAccept(&iface,
                                     2000000050,
-                                    makeRxFrameString(&mem_payload.base,  //
+                                    makeRxFrameString(&mem_payload,  //
                                                       (TransferMetadata){.priority       = UdpardPriorityHigh,
                                                                          .src_node_id    = 1111,
                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
@@ -1625,14 +1625,14 @@ static void testIfaceAcceptB(void)
     TEST_ASSERT_NOT_NULL(transfer.payload.next->next);
     TEST_ASSERT(compareStringWithPayload("A2", transfer.payload.next->next->view));
     TEST_ASSERT_NULL(transfer.payload.next->next->next);
-    udpardRxFragmentFree(transfer.payload, &mem_fragment.base, &mem_payload.base);
+    udpardRxFragmentFree(transfer.payload, mem.fragment, mem.payload);
     TEST_ASSERT_EQUAL(1, mem_payload.allocated_fragments);  // Some memory is retained for the C0 payload.
     TEST_ASSERT_EQUAL(1, mem_fragment.allocated_fragments);
     // C0 DUPLICATE
     TEST_ASSERT_EQUAL(0,
                       rxIfaceAccept(&iface,
                                     2000000060,
-                                    makeRxFrameString(&mem_payload.base,  //
+                                    makeRxFrameString(&mem_payload,  //
                                                       (TransferMetadata){.priority       = UdpardPriorityHigh,
                                                                          .src_node_id    = 3333,
                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
@@ -1654,7 +1654,7 @@ static void testIfaceAcceptB(void)
     TEST_ASSERT_EQUAL(1,
                       rxIfaceAccept(&iface,
                                     2000000070,
-                                    makeRxFrameString(&mem_payload.base,  //
+                                    makeRxFrameString(&mem_payload,  //
                                                       (TransferMetadata){.priority       = UdpardPriorityHigh,
                                                                          .src_node_id    = 3333,
                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
@@ -1684,7 +1684,7 @@ static void testIfaceAcceptB(void)
     TEST_ASSERT_NOT_NULL(transfer.payload.next);
     TEST_ASSERT(compareStringWithPayload("C1", transfer.payload.next->view));
     TEST_ASSERT_NULL(transfer.payload.next->next);
-    udpardRxFragmentFree(transfer.payload, &mem_fragment.base, &mem_payload.base);
+    udpardRxFragmentFree(transfer.payload, mem.fragment, mem.payload);
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);  // Some memory is retained for the C0 payload.
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
 }
@@ -1722,7 +1722,7 @@ static void testIfaceAcceptC(void)
     TEST_ASSERT_EQUAL(0,
                       rxIfaceAccept(&iface,
                                     2000000010,
-                                    makeRxFrameString(&mem_payload.base,  //
+                                    makeRxFrameString(&mem_payload,  //
                                                       (TransferMetadata){.priority       = UdpardPriorityOptional,
                                                                          .src_node_id    = 1111,
                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
@@ -1744,7 +1744,7 @@ static void testIfaceAcceptC(void)
     TEST_ASSERT_EQUAL(0,
                       rxIfaceAccept(&iface,
                                     2000000020,
-                                    makeRxFrameString(&mem_payload.base,  //
+                                    makeRxFrameString(&mem_payload,  //
                                                       (TransferMetadata){.priority       = UdpardPriorityExceptional,
                                                                          .src_node_id    = 2222,
                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
@@ -1766,7 +1766,7 @@ static void testIfaceAcceptC(void)
     TEST_ASSERT_EQUAL(1,
                       rxIfaceAccept(&iface,
                                     2000000030,
-                                    makeRxFrameString(&mem_payload.base,  //
+                                    makeRxFrameString(&mem_payload,  //
                                                       (TransferMetadata){.priority       = UdpardPriorityOptional,
                                                                          .src_node_id    = 1111,
                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
@@ -1792,14 +1792,14 @@ static void testIfaceAcceptC(void)
     TEST_ASSERT_NOT_NULL(transfer.payload.next);
     TEST_ASSERT(compareStringWithPayload("A1", transfer.payload.next->view));
     TEST_ASSERT_NULL(transfer.payload.next->next);
-    udpardRxFragmentFree(transfer.payload, &mem_fragment.base, &mem_payload.base);
+    udpardRxFragmentFree(transfer.payload, mem.fragment, mem.payload);
     TEST_ASSERT_EQUAL(1, mem_payload.allocated_fragments);  // B0 still allocated.
     TEST_ASSERT_EQUAL(1, mem_fragment.allocated_fragments);
     // C0
     TEST_ASSERT_EQUAL(0,
                       rxIfaceAccept(&iface,
                                     2000000040,
-                                    makeRxFrameString(&mem_payload.base,  //
+                                    makeRxFrameString(&mem_payload,  //
                                                       (TransferMetadata){.priority       = UdpardPriorityExceptional,
                                                                          .src_node_id    = 3333,
                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
@@ -1821,7 +1821,7 @@ static void testIfaceAcceptC(void)
     TEST_ASSERT_EQUAL(1,
                       rxIfaceAccept(&iface,
                                     2000000050,
-                                    makeRxFrameString(&mem_payload.base,  //
+                                    makeRxFrameString(&mem_payload,  //
                                                       (TransferMetadata){.priority       = UdpardPriorityExceptional,
                                                                          .src_node_id    = 2222,
                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
@@ -1847,7 +1847,7 @@ static void testIfaceAcceptC(void)
     TEST_ASSERT_NOT_NULL(transfer.payload.next);
     TEST_ASSERT(compareStringWithPayload("B1", transfer.payload.next->view));
     TEST_ASSERT_NULL(transfer.payload.next->next);
-    udpardRxFragmentFree(transfer.payload, &mem_fragment.base, &mem_payload.base);
+    udpardRxFragmentFree(transfer.payload, mem.fragment, mem.payload);
     TEST_ASSERT_EQUAL(1, mem_payload.allocated_fragments);  // C0 is still allocated.
     TEST_ASSERT_EQUAL(1, mem_fragment.allocated_fragments);
     // C1
@@ -1856,7 +1856,7 @@ static void testIfaceAcceptC(void)
     TEST_ASSERT_EQUAL(1,
                       rxIfaceAccept(&iface,
                                     2000000060,
-                                    makeRxFrameString(&mem_payload.base,  //
+                                    makeRxFrameString(&mem_payload,  //
                                                       (TransferMetadata){.priority       = UdpardPriorityExceptional,
                                                                          .src_node_id    = 3333,
                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
@@ -1883,14 +1883,14 @@ static void testIfaceAcceptC(void)
     TEST_ASSERT_NOT_NULL(transfer.payload.next);
     TEST_ASSERT(compareStringWithPayload("C1", transfer.payload.next->view));
     TEST_ASSERT_NULL(transfer.payload.next->next);
-    udpardRxFragmentFree(transfer.payload, &mem_fragment.base, &mem_payload.base);
+    udpardRxFragmentFree(transfer.payload, mem.fragment, mem.payload);
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
     // B0 duplicate multi-frame; shall be rejected.
     TEST_ASSERT_EQUAL(0,
                       rxIfaceAccept(&iface,
                                     2000000070,
-                                    makeRxFrameString(&mem_payload.base,  //
+                                    makeRxFrameString(&mem_payload,  //
                                                       (TransferMetadata){.priority       = UdpardPriorityExceptional,
                                                                          .src_node_id    = 2222,
                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
@@ -1909,7 +1909,7 @@ static void testIfaceAcceptC(void)
     TEST_ASSERT_EQUAL(0,
                       rxIfaceAccept(&iface,
                                     2000000080,
-                                    makeRxFrameString(&mem_payload.base,  //
+                                    makeRxFrameString(&mem_payload,  //
                                                       (TransferMetadata){.priority       = UdpardPriorityExceptional,
                                                                          .src_node_id    = 2222,
                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
@@ -1947,7 +1947,7 @@ static void testSessionDeduplicate(void)
                                              .transfer_id    = 0x0DDC0FFEEBADF00D,
                                              .payload_size   = 6,
                                              .payload        = *head};
-        memFree(&mem_fragment.base, sizeof(RxFragment), head);  // Cloned, no longer needed.
+        memFree(mem.fragment, sizeof(RxFragment), head);  // Cloned, no longer needed.
         TEST_ASSERT_EQUAL(2, mem_payload.allocated_fragments);
         TEST_ASSERT_EQUAL(1, mem_fragment.allocated_fragments);
         // The first transfer after initialization is always accepted.
@@ -1974,7 +1974,7 @@ static void testSessionDeduplicate(void)
                                              .transfer_id    = 0x0DDC0FFEEBADF000,  // transfer-ID reduced.
                                              .payload_size   = 6,
                                              .payload        = *head};
-        memFree(&mem_fragment.base, sizeof(RxFragment), head);  // Cloned, no longer needed.
+        memFree(mem.fragment, sizeof(RxFragment), head);  // Cloned, no longer needed.
         TEST_ASSERT_EQUAL(2, mem_payload.allocated_fragments);
         TEST_ASSERT_EQUAL(1, mem_fragment.allocated_fragments);
         // Accepted due to the TID timeout.
@@ -2001,7 +2001,7 @@ static void testSessionDeduplicate(void)
                                              .transfer_id    = 0x0DDC0FFEEBADF001,  // Incremented.
                                              .payload_size   = 6,
                                              .payload        = *head};
-        memFree(&mem_fragment.base, sizeof(RxFragment), head);  // Cloned, no longer needed.
+        memFree(mem.fragment, sizeof(RxFragment), head);  // Cloned, no longer needed.
         TEST_ASSERT_EQUAL(2, mem_payload.allocated_fragments);
         TEST_ASSERT_EQUAL(1, mem_fragment.allocated_fragments);
         // Accepted because TID greater.
@@ -2039,7 +2039,7 @@ static void testSessionAcceptA(void)
                       rxSessionAccept(&session,
                                       1,
                                       10000000,
-                                      makeRxFrameString(&mem_payload.base,  //
+                                      makeRxFrameString(&mem_payload,  //
                                                         (TransferMetadata){.priority       = UdpardPriorityExceptional,
                                                                            .src_node_id    = 2222,
                                                                            .dst_node_id    = UDPARD_NODE_ID_UNSET,
@@ -2055,7 +2055,7 @@ static void testSessionAcceptA(void)
     TEST_ASSERT_EQUAL(1, mem_payload.allocated_fragments);
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
     // Free the payload.
-    udpardRxFragmentFree(transfer.payload, &mem_fragment.base, &mem_payload.base);
+    udpardRxFragmentFree(transfer.payload, mem.fragment, mem.payload);
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
     // Send the same transfer again through a different iface; it is a duplicate and so it is rejected and freed.
@@ -2063,7 +2063,7 @@ static void testSessionAcceptA(void)
                       rxSessionAccept(&session,
                                       0,
                                       10000010,
-                                      makeRxFrameString(&mem_payload.base,  //
+                                      makeRxFrameString(&mem_payload,  //
                                                         (TransferMetadata){.priority       = UdpardPriorityExceptional,
                                                                            .src_node_id    = 2222,
                                                                            .dst_node_id    = UDPARD_NODE_ID_UNSET,
@@ -2084,7 +2084,7 @@ static void testSessionAcceptA(void)
                       rxSessionAccept(&session,
                                       2,
                                       12000020,
-                                      makeRxFrameString(&mem_payload.base,  //
+                                      makeRxFrameString(&mem_payload,  //
                                                         (TransferMetadata){.priority       = UdpardPriorityExceptional,
                                                                            .src_node_id    = 2222,
                                                                            .dst_node_id    = UDPARD_NODE_ID_UNSET,
@@ -2111,9 +2111,9 @@ static inline void testPortAcceptFrameA(void)
     instrumentedAllocatorNew(&mem_session);
     instrumentedAllocatorNew(&mem_fragment);
     instrumentedAllocatorNew(&mem_payload);
-    const struct UdpardRxMemoryResources mem      = {.session  = &mem_session.base,
-                                                     .fragment = &mem_fragment.base,
-                                                     .payload  = &mem_payload.base};
+    const struct UdpardRxMemoryResources mem = {.session  = instrumentedAllocatorMakeMemoryResource(&mem_session),  //
+                                                .fragment = instrumentedAllocatorMakeMemoryResource(&mem_fragment),
+                                                .payload  = instrumentedAllocatorMakeMemoryDeleter(&mem_payload)};
     struct UdpardRxTransfer              transfer = {0};
     // Initialize the port.
     struct UdpardRxPort port;
@@ -2128,7 +2128,7 @@ static inline void testPortAcceptFrameA(void)
         rxPortAcceptFrame(&port,
                           1,
                           10000000,
-                          makeDatagramPayloadSingleFrameString(&mem_payload.base,  //
+                          makeDatagramPayloadSingleFrameString(&mem_payload,  //
                                                                (TransferMetadata){.priority = UdpardPriorityImmediate,
                                                                                   .src_node_id = 2222,
                                                                                   .dst_node_id = UDPARD_NODE_ID_UNSET,
@@ -2151,7 +2151,7 @@ static inline void testPortAcceptFrameA(void)
                                          "Solar System into two dimensions cease?",
                                          transfer.payload.view));
     // Free the memory.
-    udpardRxFragmentFree(transfer.payload, &mem_fragment.base, &mem_payload.base);
+    udpardRxFragmentFree(transfer.payload, mem.fragment, mem.payload);
     TEST_ASSERT_EQUAL(1, mem_session.allocated_fragments);  // The session remains.
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
@@ -2162,7 +2162,7 @@ static inline void testPortAcceptFrameA(void)
         rxPortAcceptFrame(&port,
                           0,
                           10000010,
-                          makeDatagramPayloadSingleFrameString(&mem_payload.base,  //
+                          makeDatagramPayloadSingleFrameString(&mem_payload,  //
                                                                (TransferMetadata){.priority = UdpardPriorityImmediate,
                                                                                   .src_node_id = 3333,
                                                                                   .dst_node_id = UDPARD_NODE_ID_UNSET,
@@ -2182,7 +2182,7 @@ static inline void testPortAcceptFrameA(void)
     TEST_ASSERT_EQUAL(20, transfer.payload_size);
     TEST_ASSERT(compareStringWithPayload("It will never cease.", transfer.payload.view));
     // Free the memory.
-    udpardRxFragmentFree(transfer.payload, &mem_fragment.base, &mem_payload.base);
+    udpardRxFragmentFree(transfer.payload, mem.fragment, mem.payload);
     TEST_ASSERT_EQUAL(2, mem_session.allocated_fragments);  // The sessions remain.
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
@@ -2194,7 +2194,7 @@ static inline void testPortAcceptFrameA(void)
         rxPortAcceptFrame(&port,
                           2,
                           10000020,
-                          makeDatagramPayloadSingleFrameString(&mem_payload.base,  //
+                          makeDatagramPayloadSingleFrameString(&mem_payload,  //
                                                                (TransferMetadata){.priority = UdpardPriorityImmediate,
                                                                                   .src_node_id = 4444,
                                                                                   .dst_node_id = UDPARD_NODE_ID_UNSET,
@@ -2214,7 +2214,7 @@ static inline void testPortAcceptFrameA(void)
         rxPortAcceptFrame(&port,
                           2,
                           10000030,
-                          makeDatagramPayloadSingleFrameString(&mem_payload.base,  //
+                          makeDatagramPayloadSingleFrameString(&mem_payload,  //
                                                                (TransferMetadata){.priority = UdpardPriorityImmediate,
                                                                                   .src_node_id = UDPARD_NODE_ID_UNSET,
                                                                                   .dst_node_id = UDPARD_NODE_ID_UNSET,
@@ -2234,7 +2234,7 @@ static inline void testPortAcceptFrameA(void)
     TEST_ASSERT_EQUAL(20, transfer.payload_size);
     TEST_ASSERT(compareStringWithPayload("Cheng Xin shuddered.", transfer.payload.view));
     // Free the memory.
-    udpardRxFragmentFree(transfer.payload, &mem_fragment.base, &mem_payload.base);
+    udpardRxFragmentFree(transfer.payload, mem.fragment, mem.payload);
     TEST_ASSERT_EQUAL(2, mem_session.allocated_fragments);  // The sessions remain.
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
@@ -2242,7 +2242,7 @@ static inline void testPortAcceptFrameA(void)
     // Send invalid anonymous transfers and see them fail.
     {  // Bad CRC.
         struct UdpardMutablePayload datagram =
-            makeDatagramPayloadSingleFrameString(&mem_payload.base,  //
+            makeDatagramPayloadSingleFrameString(&mem_payload,  //
                                                  (TransferMetadata){.priority       = UdpardPriorityImmediate,
                                                                     .src_node_id    = UDPARD_NODE_ID_UNSET,
                                                                     .dst_node_id    = UDPARD_NODE_ID_UNSET,
@@ -2257,7 +2257,7 @@ static inline void testPortAcceptFrameA(void)
         TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
     }
     {  // No payload (transfer CRC is always required).
-        byte_t* const payload = memAlloc(&mem_payload.base, HEADER_SIZE_BYTES);
+        byte_t* const payload = instrumentedAllocatorAllocate(&mem_payload, HEADER_SIZE_BYTES);
         (void) txSerializeHeader(payload,
                                  (TransferMetadata){.priority       = UdpardPriorityImmediate,
                                                     .src_node_id    = UDPARD_NODE_ID_UNSET,
@@ -2283,9 +2283,11 @@ static inline void testPortAcceptFrameA(void)
                       rxPortAcceptFrame(&port,
                                         0,
                                         10000060,
-                                        (struct UdpardMutablePayload){.size = HEADER_SIZE_BYTES,
-                                                                      .data = memAlloc(&mem_payload.base,
-                                                                                       HEADER_SIZE_BYTES)},
+                                        (struct
+                                         UdpardMutablePayload){.size = HEADER_SIZE_BYTES,
+                                                               .data =
+                                                                   instrumentedAllocatorAllocate(&mem_payload,
+                                                                                                 HEADER_SIZE_BYTES)},
                                         mem,
                                         &transfer));
     TEST_ASSERT_EQUAL(2, mem_session.allocated_fragments);   // Not increased.
@@ -2298,7 +2300,7 @@ static inline void testPortAcceptFrameA(void)
                       rxPortAcceptFrame(&port,
                                         0,
                                         10000070,
-                                        makeDatagramPayloadString(&mem_payload.base,  //
+                                        makeDatagramPayloadString(&mem_payload,  //
                                                                   (TransferMetadata){
                                                                       .priority       = UdpardPriorityImmediate,
                                                                       .src_node_id    = 10000,
@@ -2320,7 +2322,7 @@ static inline void testPortAcceptFrameA(void)
                       rxPortAcceptFrame(&port,
                                         0,
                                         10000080,
-                                        makeDatagramPayloadString(&mem_payload.base,  //
+                                        makeDatagramPayloadString(&mem_payload,  //
                                                                   (TransferMetadata){
                                                                       .priority       = UdpardPriorityImmediate,
                                                                       .src_node_id    = 10000,
@@ -2344,7 +2346,7 @@ static inline void testPortAcceptFrameA(void)
                       rxPortAcceptFrame(&port,
                                         2,
                                         10000090,
-                                        makeDatagramPayloadString(&mem_payload.base,  //
+                                        makeDatagramPayloadString(&mem_payload,  //
                                                                   (TransferMetadata){
                                                                       .priority       = UdpardPriorityImmediate,
                                                                       .src_node_id    = 10001,
