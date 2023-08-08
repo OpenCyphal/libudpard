@@ -1467,7 +1467,7 @@ static inline struct UdpardTreeNode* rxPortSessionFactory(void* const user_refer
 }
 
 /// Accepts a frame into a port, possibly creating a new session along the way.
-/// Takes ownership of the frame payload buffer.
+/// The frame shall not be anonymous. Takes ownership of the frame payload buffer.
 static inline int_fast8_t rxPortAccept(struct UdpardRxPort* const           self,
                                        const uint_fast8_t                   redundant_iface_index,
                                        const UdpardMicrosecond              ts_usec,
@@ -1476,61 +1476,64 @@ static inline int_fast8_t rxPortAccept(struct UdpardRxPort* const           self
                                        struct UdpardRxTransfer* const       out_transfer)
 {
     UDPARD_ASSERT((self != NULL) && (redundant_iface_index < UDPARD_NETWORK_INTERFACE_COUNT_MAX) &&
-                  (out_transfer != NULL));
-    int_fast8_t result    = 0;
-    bool        release   = true;
-    const bool  anonymous = frame.meta.src_node_id == UDPARD_NODE_ID_UNSET;
-    if (!anonymous)
+                  (out_transfer != NULL) && (frame.meta.src_node_id != UDPARD_NODE_ID_UNSET));
+    int_fast8_t                           result  = 0;
+    struct UdpardInternalRxSession* const session = (struct UdpardInternalRxSession*) (void*)
+        cavlSearch((struct UdpardTreeNode**) &self->sessions,
+                   &(RxPortSessionSearchContext){.remote_node_id = frame.meta.src_node_id, .memory = memory},
+                   &rxPortSessionSearch,
+                   &rxPortSessionFactory);
+    if (session != NULL)
     {
-        struct UdpardInternalRxSession* const session = (struct UdpardInternalRxSession*) (void*)
-            cavlSearch((struct UdpardTreeNode**) &self->sessions,
-                       &(RxPortSessionSearchContext){.remote_node_id = frame.meta.src_node_id, .memory = memory},
-                       &rxPortSessionSearch,
-                       &rxPortSessionFactory);
-        if (session != NULL)
-        {
-            UDPARD_ASSERT(session->remote_node_id == frame.meta.src_node_id);
-            release = false;  // The callee takes ownership of the memory.
-            result  = rxSessionAccept(session,
-                                     redundant_iface_index,
-                                     ts_usec,
-                                     frame,
-                                     self->extent,
-                                     self->transfer_id_timeout_usec,
-                                     (RxMemory){.payload = memory.payload, .fragment = memory.fragment},
-                                     out_transfer);
-        }
-        else  // Failed to allocate a new session.
-        {
-            result = -UDPARD_ERROR_MEMORY;
-        }
+        UDPARD_ASSERT(session->remote_node_id == frame.meta.src_node_id);
+        result = rxSessionAccept(session,  // The callee takes ownership of the memory.
+                                 redundant_iface_index,
+                                 ts_usec,
+                                 frame,
+                                 self->extent,
+                                 self->transfer_id_timeout_usec,
+                                 (RxMemory){.payload = memory.payload, .fragment = memory.fragment},
+                                 out_transfer);
     }
-    else  // Valid anonymous transfers are always accepted unconditionally.
+    else  // Failed to allocate a new session.
     {
-        const bool size_ok = frame.base.payload.size >= TRANSFER_CRC_SIZE_BYTES;
-        const bool crc_ok  = transferCRCCompute(frame.base.payload.size, frame.base.payload.data) ==
-                            TRANSFER_CRC_RESIDUE_AFTER_OUTPUT_XOR;
-        if (size_ok && crc_ok)
-        {
-            result  = 1;
-            release = false;
-            memZero(sizeof(*out_transfer), out_transfer);
-            // Copy relevant metadata from the frame. Remember that anonymous transfers are always single-frame.
-            out_transfer->timestamp_usec = ts_usec;
-            out_transfer->priority       = frame.meta.priority;
-            out_transfer->source_node_id = frame.meta.src_node_id;
-            out_transfer->transfer_id    = frame.meta.transfer_id;
-            // Manually set up the transfer payload to point to the relevant slice inside the frame payload.
-            out_transfer->payload.next      = NULL;
-            out_transfer->payload.view.size = frame.base.payload.size - TRANSFER_CRC_SIZE_BYTES;
-            out_transfer->payload.view.data = frame.base.payload.data;
-            out_transfer->payload.origin    = frame.base.origin;
-            out_transfer->payload_size      = out_transfer->payload.view.size;
-        }
-    }
-    if (release)
-    {
+        result = -UDPARD_ERROR_MEMORY;
         memFreePayload(memory.payload, frame.base.origin);
+    }
+    return result;
+}
+
+/// A special case of rxPortAccept() for anonymous transfers. Accepts all transfers unconditionally.
+/// Does not allocate new memory. Takes ownership of the frame payload buffer.
+static inline int_fast8_t rxPortAcceptAnonymous(const UdpardMicrosecond          ts_usec,
+                                                const RxFrame                    frame,
+                                                const struct UdpardMemoryDeleter memory,
+                                                struct UdpardRxTransfer* const   out_transfer)
+{
+    UDPARD_ASSERT((out_transfer != NULL) && (frame.meta.src_node_id == UDPARD_NODE_ID_UNSET));
+    int_fast8_t result  = 0;
+    const bool  size_ok = frame.base.payload.size >= TRANSFER_CRC_SIZE_BYTES;
+    const bool  crc_ok =
+        transferCRCCompute(frame.base.payload.size, frame.base.payload.data) == TRANSFER_CRC_RESIDUE_AFTER_OUTPUT_XOR;
+    if (size_ok && crc_ok)
+    {
+        result = 1;
+        memZero(sizeof(*out_transfer), out_transfer);
+        // Copy relevant metadata from the frame. Remember that anonymous transfers are always single-frame.
+        out_transfer->timestamp_usec = ts_usec;
+        out_transfer->priority       = frame.meta.priority;
+        out_transfer->source_node_id = frame.meta.src_node_id;
+        out_transfer->transfer_id    = frame.meta.transfer_id;
+        // Manually set up the transfer payload to point to the relevant slice inside the frame payload.
+        out_transfer->payload.next      = NULL;
+        out_transfer->payload.view.size = frame.base.payload.size - TRANSFER_CRC_SIZE_BYTES;
+        out_transfer->payload.view.data = frame.base.payload.data;
+        out_transfer->payload.origin    = frame.base.origin;
+        out_transfer->payload_size      = out_transfer->payload.view.size;
+    }
+    else
+    {
+        memFreePayload(memory, frame.base.origin);
     }
     return result;
 }
@@ -1548,9 +1551,16 @@ static inline int_fast8_t rxPortAcceptFrame(struct UdpardRxPort* const          
     RxFrame     frame  = {0};
     if (rxParseFrame(datagram_payload, &frame))
     {
-        result = rxPortAccept(self, redundant_iface_index, ts_usec, frame, memory, out_transfer);
+        if (frame.meta.src_node_id != UDPARD_NODE_ID_UNSET)
+        {
+            result = rxPortAccept(self, redundant_iface_index, ts_usec, frame, memory, out_transfer);
+        }
+        else
+        {
+            result = rxPortAcceptAnonymous(ts_usec, frame, memory.payload, out_transfer);
+        }
     }
-    else
+    else  // Malformed datagram or unsupported header version, drop.
     {
         memFreePayload(memory.payload, datagram_payload);
     }
