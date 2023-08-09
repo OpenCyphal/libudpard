@@ -38,17 +38,17 @@ extern "C" {
         }                            \
     } while (0)
 
-static inline void* dummyAllocatorAllocate(struct UdpardMemoryResource* const self, const size_t size)
+static inline void* dummyAllocatorAllocate(void* const user_reference, const size_t size)
 {
-    (void) self;
+    (void) user_reference;
     (void) size;
     return NULL;
 }
 
-static inline void dummyAllocatorFree(struct UdpardMemoryResource* const self, const size_t size, void* const pointer)
+static inline void dummyAllocatorDeallocate(void* const user_reference, const size_t size, void* const pointer)
 {
+    (void) user_reference;
     (void) size;
-    TEST_PANIC_UNLESS(self != NULL);
     TEST_PANIC_UNLESS(pointer == NULL);
 }
 
@@ -57,22 +57,23 @@ static inline void dummyAllocatorFree(struct UdpardMemoryResource* const self, c
 #define INSTRUMENTED_ALLOCATOR_CANARY_SIZE 1024U
 typedef struct
 {
-    struct UdpardMemoryResource base;
-    uint_least8_t               canary[INSTRUMENTED_ALLOCATOR_CANARY_SIZE];
+    uint_least8_t canary[INSTRUMENTED_ALLOCATOR_CANARY_SIZE];
     /// The limit can be changed at any moment to control the maximum amount of memory that can be allocated.
     /// It may be set to a value less than the currently allocated amount.
+    size_t limit_fragments;
     size_t limit_bytes;
     /// The current state of the allocator.
     size_t allocated_fragments;
     size_t allocated_bytes;
 } InstrumentedAllocator;
 
-static inline void* instrumentedAllocatorAllocate(struct UdpardMemoryResource* const base, const size_t size)
+static inline void* instrumentedAllocatorAllocate(void* const user_reference, const size_t size)
 {
-    InstrumentedAllocator* const self = (InstrumentedAllocator*) base;
-    TEST_PANIC_UNLESS(self->base.allocate == &instrumentedAllocatorAllocate);
-    void* result = NULL;
-    if ((size > 0U) && ((self->allocated_bytes + size) <= self->limit_bytes))
+    InstrumentedAllocator* const self   = (InstrumentedAllocator*) user_reference;
+    void*                        result = NULL;
+    if ((size > 0U) &&                                            //
+        ((self->allocated_bytes + size) <= self->limit_bytes) &&  //
+        ((self->allocated_fragments + 1U) <= self->limit_fragments))
     {
         const size_t size_with_canaries = size + ((size_t) INSTRUMENTED_ALLOCATOR_CANARY_SIZE * 2U);
         void*        origin             = malloc(size_with_canaries);
@@ -98,13 +99,9 @@ static inline void* instrumentedAllocatorAllocate(struct UdpardMemoryResource* c
     return result;
 }
 
-static inline void instrumentedAllocatorFree(struct UdpardMemoryResource* const base,
-                                             const size_t                       size,
-                                             void* const                        pointer)
+static inline void instrumentedAllocatorDeallocate(void* const user_reference, const size_t size, void* const pointer)
 {
-    InstrumentedAllocator* const self = (InstrumentedAllocator*) base;
-    TEST_PANIC_UNLESS(self->base.allocate == &instrumentedAllocatorAllocate);
-    TEST_PANIC_UNLESS(self->base.free == &instrumentedAllocatorFree);
+    InstrumentedAllocator* const self = (InstrumentedAllocator*) user_reference;
     if (pointer != NULL)
     {
         uint_least8_t* p         = ((uint_least8_t*) pointer) - INSTRUMENTED_ALLOCATOR_CANARY_SIZE;
@@ -135,16 +132,30 @@ static inline void instrumentedAllocatorFree(struct UdpardMemoryResource* const 
 /// By default, the limit is unrestricted (set to the maximum possible value).
 static inline void instrumentedAllocatorNew(InstrumentedAllocator* const self)
 {
-    self->base.allocate       = &instrumentedAllocatorAllocate;
-    self->base.free           = &instrumentedAllocatorFree;
-    self->base.user_reference = NULL;
     for (size_t i = 0; i < INSTRUMENTED_ALLOCATOR_CANARY_SIZE; i++)
     {
         self->canary[i] = (uint_least8_t) (rand() % (UINT_LEAST8_MAX + 1));
     }
+    self->limit_fragments     = SIZE_MAX;
     self->limit_bytes         = SIZE_MAX;
     self->allocated_fragments = 0U;
     self->allocated_bytes     = 0U;
+}
+
+static inline struct UdpardMemoryResource instrumentedAllocatorMakeMemoryResource(
+    const InstrumentedAllocator* const self)
+{
+    const struct UdpardMemoryResource out = {.user_reference = (void*) self,
+                                             .deallocate     = &instrumentedAllocatorDeallocate,
+                                             .allocate       = &instrumentedAllocatorAllocate};
+    return out;
+}
+
+static inline struct UdpardMemoryDeleter instrumentedAllocatorMakeMemoryDeleter(const InstrumentedAllocator* const self)
+{
+    const struct UdpardMemoryDeleter out = {.user_reference = (void*) self,
+                                            .deallocate     = &instrumentedAllocatorDeallocate};
+    return out;
 }
 
 #ifdef __cplusplus

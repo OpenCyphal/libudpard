@@ -11,41 +11,49 @@ static void testInstrumentedAllocator(void)
     TEST_ASSERT_EQUAL_size_t(0, al.allocated_fragments);
     TEST_ASSERT_EQUAL_size_t(SIZE_MAX, al.limit_bytes);
 
-    void* a = al.base.allocate(&al.base, 123);
+    const struct UdpardMemoryResource resource = instrumentedAllocatorMakeMemoryResource(&al);
+
+    void* a = resource.allocate(resource.user_reference, 123);
     TEST_ASSERT_EQUAL_size_t(1, al.allocated_fragments);
     TEST_ASSERT_EQUAL_size_t(123, al.allocated_bytes);
 
-    void* b = al.base.allocate(&al.base, 456);
+    void* b = resource.allocate(resource.user_reference, 456);
     TEST_ASSERT_EQUAL_size_t(2, al.allocated_fragments);
     TEST_ASSERT_EQUAL_size_t(579, al.allocated_bytes);
 
-    al.limit_bytes = 600;
+    al.limit_bytes     = 600;
+    al.limit_fragments = 2;
 
-    TEST_ASSERT_EQUAL_PTR(NULL, al.base.allocate(&al.base, 100));
+    TEST_ASSERT_EQUAL_PTR(NULL, resource.allocate(resource.user_reference, 100));
     TEST_ASSERT_EQUAL_size_t(2, al.allocated_fragments);
     TEST_ASSERT_EQUAL_size_t(579, al.allocated_bytes);
 
-    void* c = al.base.allocate(&al.base, 21);
+    TEST_ASSERT_EQUAL_PTR(NULL, resource.allocate(resource.user_reference, 21));
+    TEST_ASSERT_EQUAL_size_t(2, al.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(579, al.allocated_bytes);
+    al.limit_fragments = 4;
+
+    void* c = resource.allocate(resource.user_reference, 21);
     TEST_ASSERT_EQUAL_size_t(3, al.allocated_fragments);
     TEST_ASSERT_EQUAL_size_t(600, al.allocated_bytes);
 
-    al.base.free(&al.base, 123, a);
+    resource.deallocate(resource.user_reference, 123, a);
     TEST_ASSERT_EQUAL_size_t(2, al.allocated_fragments);
     TEST_ASSERT_EQUAL_size_t(477, al.allocated_bytes);
 
-    void* d = al.base.allocate(&al.base, 100);
+    void* d = resource.allocate(resource.user_reference, 100);
     TEST_ASSERT_EQUAL_size_t(3, al.allocated_fragments);
     TEST_ASSERT_EQUAL_size_t(577, al.allocated_bytes);
 
-    al.base.free(&al.base, 21, c);
+    resource.deallocate(resource.user_reference, 21, c);
     TEST_ASSERT_EQUAL_size_t(2, al.allocated_fragments);
     TEST_ASSERT_EQUAL_size_t(556, al.allocated_bytes);
 
-    al.base.free(&al.base, 100, d);
+    resource.deallocate(resource.user_reference, 100, d);
     TEST_ASSERT_EQUAL_size_t(1, al.allocated_fragments);
     TEST_ASSERT_EQUAL_size_t(456, al.allocated_bytes);
 
-    al.base.free(&al.base, 456, b);
+    resource.deallocate(resource.user_reference, 456, b);
     TEST_ASSERT_EQUAL_size_t(0, al.allocated_fragments);
     TEST_ASSERT_EQUAL_size_t(0, al.allocated_bytes);
 }

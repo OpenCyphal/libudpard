@@ -71,6 +71,9 @@
 /// As will be shown below, a typical application with R redundant network interfaces and S topic subscriptions needs
 /// R*(S+2) sockets (or equivalent abstractions provided by the underlying UDP/IP stack).
 ///
+/// As a matter of convention, resource disposal functions are named "free" if the memory of the resource itself is
+/// not deallocated, and "destroy" if the memory is deallocated.
+///
 ///
 ///     Transmission pipeline
 ///
@@ -110,7 +113,9 @@
 /// Said pipelines are entirely independent from each other and can be operated from different threads,
 /// as they share no resources.
 ///
-/// The reception pipeline is able to accept datagrams with arbitrary MTU.
+/// The reception pipeline is able to accept datagrams with arbitrary MTU, frames delivered out-of-order (OOO) with
+/// arbitrary duplication, including duplication of non-adjacent frames, and/or frames interleaved between adjacent
+/// transfers. The support for OOO reassembly is particularly interesting when simple repetition coding FEC is used.
 ///
 /// The application should instantiate one subscription instance per subject it needs to receive messages from,
 /// irrespective of the number of redundant interfaces. There needs to be one socket (or a similar abstraction
@@ -170,7 +175,7 @@
 ///
 ///     - (MTU+library overhead) blocks for the TX and RX pipelines (usually less than 2048 bytes);
 ///     - RX session object sized blocks for the RX pipeline (less than 512 bytes);
-///     - RX payload fragment handle sized blocks for the RX pipeline (less than 128 bytes).
+///     - RX fragment handle sized blocks for the RX pipeline (less than 128 bytes).
 ///
 /// The detailed information is given in the API documentation.
 ///
@@ -237,10 +242,10 @@ extern "C" {
 /// The library supports at most this many redundant network interfaces per Cyphal node.
 #define UDPARD_NETWORK_INTERFACE_COUNT_MAX 3U
 
-typedef uint64_t UdpardMicrosecond;
+typedef uint64_t UdpardMicrosecond;  ///< UINT64_MAX is not a valid timestamp value.
 typedef uint16_t UdpardPortID;
 typedef uint16_t UdpardNodeID;
-typedef uint64_t UdpardTransferID;
+typedef uint64_t UdpardTransferID;  ///< UINT64_MAX is not a valid transfer-ID value.
 
 /// Transfer priority level mnemonics per the recommendations given in the Cyphal Specification.
 /// For outgoing transfers they are mapped to DSCP values as configured per redundant interface (per UdpardTx instance).
@@ -262,7 +267,7 @@ struct UdpardTreeNode
 {
     struct UdpardTreeNode* up;     ///< Do not access this field.
     struct UdpardTreeNode* lr[2];  ///< Left and right children of this node may be accessed for tree traversal.
-    int8_t                 bf;     ///< Do not access this field.
+    int_fast8_t            bf;     ///< Do not access this field.
 };
 
 struct UdpardMutablePayload
@@ -271,7 +276,7 @@ struct UdpardMutablePayload
     void*  data;
 };
 
-struct UdpardConstPayload
+struct UdpardPayload
 {
     size_t      size;
     const void* data;
@@ -282,27 +287,27 @@ struct UdpardConstPayload
 /// as well as the payload structure itself, assuming that it is also heap-allocated.
 /// The model is as follows:
 ///
-///     (payload header) ---> UdpardPayloadFragmentHandle:
-///                               next  ---> UdpardPayloadFragmentHandle...
-///                               owner ---> (the free()able payload data buffer)
-///                               view  ---> (somewhere inside the payload data buffer)
+///     (payload header) ---> UdpardFragment:
+///                               next   ---> UdpardFragment...
+///                               origin ---> (the free()able payload data buffer)
+///                               view   ---> (somewhere inside the payload data buffer)
 ///
 /// Payloads of received transfers are represented using this type, where each fragment corresponds to a frame.
 /// The application can either consume them directly or to copy the data into a contiguous buffer beforehand
 /// at the expense of extra time and memory utilization.
-struct UdpardPayloadFragmentHandle
+struct UdpardFragment
 {
     /// Points to the next fragment in the fragmented buffer; NULL if this is the last fragment.
-    struct UdpardPayloadFragmentHandle* next;
+    struct UdpardFragment* next;
 
     /// Contains the actual data to be used by the application.
     /// The memory pointed to by this fragment shall not be freed by the application.
-    struct UdpardConstPayload view;
+    struct UdpardPayload view;
 
     /// This entity points to the base buffer that contains this fragment.
     /// The application can use this pointer to free the outer buffer after the payload has been consumed.
     /// In the most simple case this field is identical to the "view" field above, but it is not always the case.
-    struct UdpardMutablePayload owner;
+    struct UdpardMutablePayload origin;
 };
 
 /// Cyphal/UDP uses only multicast traffic.
@@ -317,38 +322,51 @@ struct UdpardUDPIPEndpoint
 // =================================================  MEMORY RESOURCE  =================================================
 // =====================================================================================================================
 
-struct UdpardMemoryResource;
-
 /// A pointer to the memory allocation function. The semantics are similar to malloc():
 ///     - The returned pointer shall point to an uninitialized block of memory that is at least "size" bytes large.
 ///     - If there is not enough memory, the returned pointer shall be NULL.
 ///     - The memory shall be aligned at least at max_align_t.
 ///     - The execution time should be constant (O(1)).
 ///     - The worst-case memory consumption (worst fragmentation) should be understood by the developer.
+///
 /// If the standard dynamic memory manager of the target platform does not satisfy the above requirements,
-/// consider using O1Heap: https://github.com/pavel-kirienko/o1heap.
-typedef void* (*UdpardMemoryAllocate)(struct UdpardMemoryResource* const self, const size_t size);
+/// consider using O1Heap: https://github.com/pavel-kirienko/o1heap. Alternatively, some applications may prefer to
+/// use a set of fixed-size block pool allocators (see the high-level overview for details).
+///
+/// The API documentation is written on the assumption that the memory management functions have constant
+/// complexity and are non-blocking.
+///
+/// The value of the user reference is taken from the corresponding field of the memory resource structure.
+typedef void* (*UdpardMemoryAllocate)(void* const user_reference, const size_t size);
 
 /// The counterpart of the above -- this function is invoked to return previously allocated memory to the allocator.
-/// The size argument contains the amount of memory that was originally requested via the allocation function.
+/// The size argument contains the amount of memory that was originally requested via the allocation function;
+/// its value is undefined if the pointer is NULL.
 /// The semantics are similar to free():
 ///     - The pointer was previously returned by the allocation function.
 ///     - The pointer may be NULL, in which case the function shall have no effect.
 ///     - The execution time should be constant (O(1)).
-typedef void (*UdpardMemoryFree)(struct UdpardMemoryResource* const self, const size_t size, void* const pointer);
+///
+/// The value of the user reference is taken from the corresponding field of the memory resource structure.
+typedef void (*UdpardMemoryDeallocate)(void* const user_reference, const size_t size, void* const pointer);
+
+/// A kind of memory resource that can only be used to free memory previously allocated by the user.
+/// Instances are mostly intended to be passed by value.
+struct UdpardMemoryDeleter
+{
+    void*                  user_reference;  ///< Passed as the first argument.
+    UdpardMemoryDeallocate deallocate;      ///< Shall be a valid pointer.
+};
 
 /// A memory resource encapsulates the dynamic memory allocation and deallocation facilities.
-/// The time complexity models given in the API documentation are made on the assumption that the memory management
-/// functions have constant complexity O(1).
 /// Note that the library allocates a large amount of small fixed-size objects for bookkeeping purposes;
-/// allocators for them can be implemented using fixed-size block pools to eliminate memory fragmentation.
+/// allocators for them can be implemented using fixed-size block pools to eliminate extrinsic memory fragmentation.
+/// Instances are mostly intended to be passed by value.
 struct UdpardMemoryResource
 {
-    /// The function pointers shall be valid at all times.
-    UdpardMemoryAllocate allocate;
-    UdpardMemoryFree     free;
-    /// This is an opaque pointer that can be freely utilized by the user for arbitrary needs.
-    void* user_reference;
+    void*                  user_reference;  ///< Passed as the first argument.
+    UdpardMemoryDeallocate deallocate;      ///< Shall be a valid pointer.
+    UdpardMemoryAllocate   allocate;        ///< Shall be a valid pointer.
 };
 
 // =====================================================================================================================
@@ -410,8 +428,8 @@ struct UdpardTx
     /// There is exactly one allocation per enqueued item, each allocation contains both the UdpardTxItem
     /// and its payload, hence the size is variable.
     /// In a simple application there would be just one memory resource shared by all parts of the library.
-    /// If the application knows its MTU, it can use block allocation to avoid fragmentation.
-    struct UdpardMemoryResource* memory;
+    /// If the application knows its MTU, it can use block allocation to avoid extrinsic fragmentation.
+    struct UdpardMemoryResource memory;
 
     /// The number of frames that are currently contained in the queue, initially zero.
     /// READ-ONLY
@@ -471,10 +489,10 @@ struct UdpardTxItem
 /// To safely discard it, simply pop all enqueued frames from it.
 ///
 /// The time complexity is constant. This function does not invoke the dynamic memory manager.
-int8_t udpardTxInit(struct UdpardTx* const             self,
-                    const UdpardNodeID* const          local_node_id,
-                    const size_t                       queue_capacity,
-                    struct UdpardMemoryResource* const memory);
+int_fast8_t udpardTxInit(struct UdpardTx* const            self,
+                         const UdpardNodeID* const         local_node_id,
+                         const size_t                      queue_capacity,
+                         const struct UdpardMemoryResource memory);
 
 /// This function serializes a message transfer into a sequence of UDP datagrams and inserts them into the prioritized
 /// transmission queue at the appropriate position. Afterwards, the application is supposed to take the enqueued frames
@@ -527,13 +545,13 @@ int8_t udpardTxInit(struct UdpardTx* const             self,
 ///
 /// The time complexity is O(p + log e), where p is the amount of payload in the transfer, and e is the number of
 /// frames already enqueued in the transmission queue.
-int32_t udpardTxPublish(struct UdpardTx* const          self,
-                        const UdpardMicrosecond         deadline_usec,
-                        const enum UdpardPriority       priority,
-                        const UdpardPortID              subject_id,
-                        UdpardTransferID* const         transfer_id,
-                        const struct UdpardConstPayload payload,
-                        void* const                     user_transfer_reference);
+int32_t udpardTxPublish(struct UdpardTx* const     self,
+                        const UdpardMicrosecond    deadline_usec,
+                        const enum UdpardPriority  priority,
+                        const UdpardPortID         subject_id,
+                        UdpardTransferID* const    transfer_id,
+                        const struct UdpardPayload payload,
+                        void* const                user_transfer_reference);
 
 /// This is similar to udpardTxPublish except that it is intended for service request transfers.
 /// It takes the node-ID of the server that is intended to receive the request.
@@ -550,27 +568,27 @@ int32_t udpardTxPublish(struct UdpardTx* const          self,
 ///     - UDPARD_ERROR_ANONYMOUS if the local node is anonymous (the local node-ID is unset).
 ///
 /// Other considerations are the same as for udpardTxPublish.
-int32_t udpardTxRequest(struct UdpardTx* const          self,
-                        const UdpardMicrosecond         deadline_usec,
-                        const enum UdpardPriority       priority,
-                        const UdpardPortID              service_id,
-                        const UdpardNodeID              server_node_id,
-                        UdpardTransferID* const         transfer_id,
-                        const struct UdpardConstPayload payload,
-                        void* const                     user_transfer_reference);
+int32_t udpardTxRequest(struct UdpardTx* const     self,
+                        const UdpardMicrosecond    deadline_usec,
+                        const enum UdpardPriority  priority,
+                        const UdpardPortID         service_id,
+                        const UdpardNodeID         server_node_id,
+                        UdpardTransferID* const    transfer_id,
+                        const struct UdpardPayload payload,
+                        void* const                user_transfer_reference);
 
 /// This is similar to udpardTxRequest except that it takes the node-ID of the client instead of server,
 /// and the transfer-ID is passed by value rather than by pointer.
 /// The transfer-ID is passed by value because when responding to an RPC-service request, the server must
 /// reuse the transfer-ID value of the request (this is to allow the client to match responses with their requests).
-int32_t udpardTxRespond(struct UdpardTx* const          self,
-                        const UdpardMicrosecond         deadline_usec,
-                        const enum UdpardPriority       priority,
-                        const UdpardPortID              service_id,
-                        const UdpardNodeID              client_node_id,
-                        const UdpardTransferID          transfer_id,
-                        const struct UdpardConstPayload payload,
-                        void* const                     user_transfer_reference);
+int32_t udpardTxRespond(struct UdpardTx* const     self,
+                        const UdpardMicrosecond    deadline_usec,
+                        const enum UdpardPriority  priority,
+                        const UdpardPortID         service_id,
+                        const UdpardNodeID         client_node_id,
+                        const UdpardTransferID     transfer_id,
+                        const struct UdpardPayload payload,
+                        void* const                user_transfer_reference);
 
 /// This function accesses the enqueued UDP datagram scheduled for transmission next. The queue itself is not modified
 /// (i.e., the accessed element is not removed). The application should invoke this function to collect the datagrams
@@ -612,8 +630,8 @@ struct UdpardTxItem* udpardTxPop(struct UdpardTx* const self, const struct Udpar
 /// This is a simple helper that frees the memory allocated for the item with the correct size.
 /// It is needed because the application does not have access to the required context to compute the size.
 /// If the chosen allocator does not leverage the size information, the deallocation function can be invoked directly.
-/// If any of the arguments are NULL, the function has no effect. The time complexity is constant.
-void udpardTxFree(struct UdpardMemoryResource* const memory, struct UdpardTxItem* const item);
+/// If the item argument is NULL, the function has no effect. The time complexity is constant.
+void udpardTxFree(const struct UdpardMemoryResource memory, struct UdpardTxItem* const item);
 
 // =====================================================================================================================
 // =================================================    RX PIPELINE    =================================================
@@ -626,10 +644,6 @@ void udpardTxFree(struct UdpardMemoryResource* const memory, struct UdpardTxItem
 /// redundant network interfaces.
 struct UdpardRxPort
 {
-    /// For subject ports this is the subject-ID. For RPC-service ports this is the service-ID.
-    /// READ-ONLY
-    UdpardPortID port_id;
-
     /// The maximum payload size that can be accepted at this port.
     /// The rest will be truncated away following the implicit truncation rule defined in the Cyphal specification.
     /// READ-ONLY
@@ -654,7 +668,7 @@ struct UdpardRxPort
     /// Each session instance takes sizeof(UdpardInternalRxSession) bytes of dynamic memory for itself,
     /// which is at most 512 bytes on wide-word platforms (on small word size platforms it is usually much smaller).
     /// On top of that, each session instance holds memory for the transfer payload fragments and small fixed-size
-    /// metadata objects called "payload fragment handles" (at most 128 bytes large, usually much smaller,
+    /// metadata objects called "fragment handles" (at most 128 bytes large, usually much smaller,
     /// depending on the pointer width and the word size), one handle per fragment.
     ///
     /// The transfer payload memory is not allocated by the library but rather moved from the application
@@ -664,9 +678,9 @@ struct UdpardRxPort
     /// of the entire datagram payload (including all overheads such as the Cyphal/UDP frame header and possible
     /// data that spills over the configured extent value for this port).
     /// If the library does not need the datagram to reassemble the transfer, its payload buffer is freed immediately.
-    /// There is a 1-to-1 correspondence between the payload fragment handles and the payload fragments.
+    /// There is a 1-to-1 correspondence between the fragment handles and the payload fragments.
     /// Remote nodes that emit highly fragmented transfers cause a higher memory utilization in the local node
-    /// because of the increased number of payload fragment handles and per-datagram overheads.
+    /// because of the increased number of fragment handles and per-datagram overheads.
     ///
     /// In the worst case, the library may keep up to two full transfer payloads in memory at the same time
     /// (two transfer states are kept to allow acceptance of interleaved frames).
@@ -698,18 +712,17 @@ struct UdpardRxMemoryResources
 {
     /// The session memory resource is used to provide memory for the session instances described above.
     /// Each instance is fixed-size, so a trivial zero-fragmentation block allocator is sufficient.
-    struct UdpardMemoryResource* session;
+    struct UdpardMemoryResource session;
 
-    /// The payload fragment handles are allocated per payload fragment; each handle contains a pointer to its fragment.
+    /// The fragment handles are allocated per payload fragment; each handle contains a pointer to its fragment.
     /// Each instance is of a very small fixed size, so a trivial zero-fragmentation block allocator is sufficient.
-    struct UdpardMemoryResource* payload_fragment_handle;
+    struct UdpardMemoryResource fragment;
 
     /// The library never allocates payload buffers itself, as they are handed over by the application via
     /// udpardRx*Receive. Once a buffer is handed over, the library may choose to keep it if it is deemed to be
     /// necessary to complete a transfer reassembly, or to discard it if it is deemed to be unnecessary.
-    /// Discarded payload buffers are freed using this memory resource.
-    /// As this resource is never used to allocate memory, the "allocate" pointer can be NULL.
-    struct UdpardMemoryResource* payload;
+    /// Discarded payload buffers are freed using this object.
+    struct UdpardMemoryDeleter payload;
 };
 
 /// Represents a received Cyphal transfer.
@@ -732,18 +745,23 @@ struct UdpardRxTransfer
     /// this requires freeing both the handles and the payload buffers they point to.
     /// Beware that different memory resources may have been used to allocate the handles and the payload buffers;
     /// the application is responsible for freeing them using the correct memory resource.
-    size_t                             payload_size;
-    struct UdpardPayloadFragmentHandle payload;
+    ///
+    /// If the payload is empty, the corresponding buffer pointers may be NULL.
+    size_t                payload_size;
+    struct UdpardFragment payload;
 };
 
 /// This is, essentially, a helper that frees the memory allocated for the payload and its fragment headers
-/// using the correct memory resource. The application can do the same thing manually if it has access to the
+/// using the correct memory resources. The application can do the same thing manually if it has access to the
 /// required context to compute the size, or if the memory resource implementation does not require deallocation size.
 ///
+/// The head of the fragment list is passed by value so it is not freed. This is in line with the UdpardRxTransfer
+/// design, where the head is stored by value to reduce indirection in small transfers. We call it Scott's Head.
+///
 /// If any of the arguments are NULL, the function has no effect.
-void udpardRxTransferFree(struct UdpardRxTransfer* const     self,
-                          struct UdpardMemoryResource* const memory_payload_fragment_handle,
-                          struct UdpardMemoryResource* const memory_payload);
+void udpardRxFragmentFree(const struct UdpardFragment       head,
+                          const struct UdpardMemoryResource memory_fragment,
+                          const struct UdpardMemoryDeleter  memory_payload);
 
 // ---------------------------------------------  SUBJECTS  ---------------------------------------------
 
@@ -800,15 +818,15 @@ struct UdpardRxSubscription
 /// The return value is a negated UDPARD_ERROR_ARGUMENT if any of the input arguments are invalid.
 ///
 /// The time complexity is constant. This function does not invoke the dynamic memory manager.
-int8_t udpardRxSubscriptionInit(struct UdpardRxSubscription* const   self,
-                                const UdpardPortID                   subject_id,
-                                const size_t                         extent,
-                                const struct UdpardRxMemoryResources memory);
+int_fast8_t udpardRxSubscriptionInit(struct UdpardRxSubscription* const   self,
+                                     const UdpardPortID                   subject_id,
+                                     const size_t                         extent,
+                                     const struct UdpardRxMemoryResources memory);
 
 /// Frees all memory held by the subscription instance.
 /// After invoking this function, the instance is no longer usable.
 /// Do not forget to close the sockets that were opened for this subscription.
-void udpardRxSubscriptionDestroy(struct UdpardRxSubscription* const self);
+void udpardRxSubscriptionFree(struct UdpardRxSubscription* const self);
 
 /// Datagrams received from the sockets of this subscription are fed into this function.
 ///
@@ -822,18 +840,20 @@ void udpardRxSubscriptionDestroy(struct UdpardRxSubscription* const self);
 ///
 /// The function takes ownership of the passed datagram payload buffer. The library will either store it as a
 /// fragment of the reassembled transfer payload or free it using the corresponding memory resource
-/// (see UdpardRxMemoryResources) if the datagram is not needed for reassembly.
+/// (see UdpardRxMemoryResources) if the datagram is not needed for reassembly. Because of the ownership transfer,
+/// the datagram payload buffer has to be mutable (non-const).
 ///
 /// The accepted datagram may either be invalid, carry a non-final part of a multi-frame transfer,
 /// carry a final part of a valid multi-frame transfer, or carry a valid single-frame transfer.
 /// The last two cases are said to complete a transfer.
 ///
-/// If the datagram completes a transfer, the received_transfer argument is filled with the transfer details
+/// If the datagram completes a transfer, the out_transfer argument is filled with the transfer details
 /// and the return value is one.
 /// The caller is assigned ownership of the transfer payload buffer memory; it has to be freed after use as described
 /// in the documentation for UdpardRxTransfer.
+/// The memory pointed to by out_transfer may be mutated arbitrarily if no transfer is completed.
 ///
-/// If the datagram does not complete a transfer or is malformed, the function returns zero and the received_transfer
+/// If the datagram does not complete a transfer or is malformed, the function returns zero and the out_transfer
 /// is not modified. Observe that malformed frames are not treated as errors, as the local application is not
 /// responsible for the behavior of external agents producing the datagrams.
 ///
@@ -841,7 +861,7 @@ void udpardRxSubscriptionDestroy(struct UdpardRxSubscription* const self);
 ///
 ///     1. A new session state instance is allocated when a new session is initiated.
 ///
-///     2. A new transfer payload fragment handle is allocated when a new transfer fragment is accepted.
+///     2. A new transfer fragment handle is allocated when a new transfer fragment is accepted.
 ///
 ///     3. Allocated objects may occasionally be deallocated at the discretion of the library.
 ///        This behavior does not increase the worst case execution time and does not improve the worst case memory
@@ -850,14 +870,17 @@ void udpardRxSubscriptionDestroy(struct UdpardRxSubscription* const self);
 ///
 /// The time complexity is O(log n) where n is the number of remote notes publishing on this subject (topic).
 /// No data copy takes place. Malformed frames are discarded in constant time.
+/// Linear time is spent on the CRC verification of the transfer payload when the transfer is complete.
+///
+/// This function performs log(n) of recursive calls internally, where n is the number of frames in a transfer.
 ///
 /// UDPARD_ERROR_MEMORY is returned if the function fails to allocate memory.
 /// UDPARD_ERROR_ARGUMENT is returned if any of the input arguments are invalid.
-int8_t udpardRxSubscriptionReceive(struct UdpardRxSubscription* const self,
-                                   const UdpardMicrosecond            timestamp_usec,
-                                   const struct UdpardConstPayload    datagram_payload,
-                                   const uint_fast8_t                 redundant_iface_index,
-                                   struct UdpardRxTransfer* const     received_transfer);
+int_fast8_t udpardRxSubscriptionReceive(struct UdpardRxSubscription* const self,
+                                        const UdpardMicrosecond            timestamp_usec,
+                                        const struct UdpardMutablePayload  datagram_payload,
+                                        const uint_fast8_t                 redundant_iface_index,
+                                        struct UdpardRxTransfer* const     out_transfer);
 
 // ---------------------------------------------  RPC-SERVICES  ---------------------------------------------
 
@@ -867,6 +890,9 @@ struct UdpardRxRPC
 {
     /// READ-ONLY
     struct UdpardTreeNode base;
+
+    /// READ-ONLY
+    UdpardPortID service_id;
 
     /// See UdpardRxPort.
     /// Use this to change the transfer-ID timeout value for this RPC-service port.
@@ -935,14 +961,14 @@ struct UdpardRxRPCTransfer
 /// The return value is a negated UDPARD_ERROR_ARGUMENT if any of the input arguments are invalid.
 ///
 /// The time complexity is constant. This function does not invoke the dynamic memory manager.
-int8_t udpardRxRPCDispatcherInit(struct UdpardRxRPCDispatcher* const  self,
-                                 const UdpardNodeID                   local_node_id,
-                                 const struct UdpardRxMemoryResources memory);
+int_fast8_t udpardRxRPCDispatcherInit(struct UdpardRxRPCDispatcher* const  self,
+                                      const UdpardNodeID                   local_node_id,
+                                      const struct UdpardRxMemoryResources memory);
 
 /// Frees all memory held by the RPC-service dispatcher instance.
 /// After invoking this function, the instance is no longer usable.
 /// Do not forget to close the sockets that were opened for this instance.
-void udpardRxRPCDispatcherDestroy(struct UdpardRxRPCDispatcher* const self);
+void udpardRxRPCDispatcherFree(struct UdpardRxRPCDispatcher* const self);
 
 /// This function lets the application register its interest in a particular service-ID and kind (request/response)
 /// by creating an RPC-service RX port. The service pointer shall retain validity until its unregistration or until
@@ -965,11 +991,11 @@ void udpardRxRPCDispatcherDestroy(struct UdpardRxRPCDispatcher* const self);
 /// (request or response).
 /// This function does not allocate new memory. The function may deallocate memory if such registration already
 /// existed; the deallocation behavior is specified in the documentation for udpardRxRPCDispatcherCancel.
-int8_t udpardRxRPCDispatcherListen(struct UdpardRxRPCDispatcher* const self,
-                                   struct UdpardRxRPC* const           service,
-                                   const UdpardPortID                  service_id,
-                                   const bool                          is_request,
-                                   const size_t                        extent);
+int_fast8_t udpardRxRPCDispatcherListen(struct UdpardRxRPCDispatcher* const self,
+                                        struct UdpardRxRPC* const           service,
+                                        const UdpardPortID                  service_id,
+                                        const bool                          is_request,
+                                        const size_t                        extent);
 
 /// This function reverses the effect of udpardRxRPCDispatcherListen.
 /// If the registration is found, all its memory is de-allocated (session states and payload buffers).
@@ -981,19 +1007,19 @@ int8_t udpardRxRPCDispatcherListen(struct UdpardRxRPCDispatcher* const self,
 ///
 /// The time complexity is logarithmic from the number of current registration under the specified transfer kind.
 /// This function does not allocate new memory.
-int8_t udpardRxRPCDispatcherCancel(struct UdpardRxRPCDispatcher* const self,
-                                   const UdpardPortID                  service_id,
-                                   const bool                          is_request);
+int_fast8_t udpardRxRPCDispatcherCancel(struct UdpardRxRPCDispatcher* const self,
+                                        const UdpardPortID                  service_id,
+                                        const bool                          is_request);
 
 /// Datagrams received from the sockets of this service dispatcher are fed into this function.
 /// It is the analog of udpardRxSubscriptionReceive for RPC-service transfers.
 /// Please refer to the documentation of udpardRxSubscriptionReceive for the usage information.
-int8_t udpardRxRPCDispatcherReceive(struct UdpardRxRPCDispatcher* const self,
-                                    struct UdpardRxRPC** const          service,
-                                    const UdpardMicrosecond             timestamp_usec,
-                                    const struct UdpardConstPayload     datagram_payload,
-                                    const uint_fast8_t                  redundant_iface_index,
-                                    struct UdpardRxRPCTransfer* const   received_transfer);
+int_fast8_t udpardRxRPCDispatcherReceive(struct UdpardRxRPCDispatcher* const self,
+                                         struct UdpardRxRPC** const          service,
+                                         const UdpardMicrosecond             timestamp_usec,
+                                         const struct UdpardMutablePayload   datagram_payload,
+                                         const uint_fast8_t                  redundant_iface_index,
+                                         struct UdpardRxRPCTransfer* const   out_transfer);
 
 #ifdef __cplusplus
 }
