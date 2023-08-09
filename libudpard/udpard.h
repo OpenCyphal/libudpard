@@ -872,8 +872,6 @@ void udpardRxSubscriptionFree(struct UdpardRxSubscription* const self);
 /// No data copy takes place. Malformed frames are discarded in constant time.
 /// Linear time is spent on the CRC verification of the transfer payload when the transfer is complete.
 ///
-/// This function performs log(n) of recursive calls internally, where n is the number of frames in a transfer.
-///
 /// UDPARD_ERROR_MEMORY is returned if the function fails to allocate memory.
 /// UDPARD_ERROR_ARGUMENT is returned if any of the input arguments are invalid.
 int_fast8_t udpardRxSubscriptionReceive(struct UdpardRxSubscription* const self,

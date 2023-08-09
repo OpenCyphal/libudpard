@@ -886,7 +886,7 @@ struct UdpardInternalRxSession
 
 /// Frees all fragments in the tree and their payload buffers. Destroys the passed fragment.
 /// This is meant to be invoked on the root of the tree.
-/// The maximum recursion depth is ceil(1.44*log2(FRAME_INDEX_MAX+1)-0.328) = 22 levels.
+/// The maximum recursion depth is ceil(1.44*log2(FRAME_INDEX_MAX+1)-0.328) = 45 levels.
 // NOLINTNEXTLINE(misc-no-recursion) MISRA C:2012 rule 17.2
 static inline void rxFragmentDestroyTree(RxFragment* const self, const RxMemory memory)
 {
@@ -996,7 +996,7 @@ typedef struct
 } RxSlotEjectContext;
 
 /// See rxSlotEject() for details.
-/// The maximum recursion depth is ceil(1.44*log2(FRAME_INDEX_MAX+1)-0.328) = 22 levels.
+/// The maximum recursion depth is ceil(1.44*log2(FRAME_INDEX_MAX+1)-0.328) = 45 levels.
 /// NOLINTNEXTLINE(misc-no-recursion) MISRA C:2012 rule 17.2
 static inline void rxSlotEjectFragment(RxFragment* const frag, RxSlotEjectContext* const ctx)
 {
