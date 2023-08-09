@@ -1098,7 +1098,7 @@ static inline bool rxSlotEject(size_t* const                out_payload_size,
 
 /// Update the frame count discovery state in this transfer.
 /// Returns true on success, false if inconsistencies are detected and the slot should be restarted.
-static inline bool rxSlotAccept_UpdateFrameCountDiscovery(RxSlot* const self, const RxFrameBase frame)
+static inline bool rxSlotAccept_UpdateFrameCount(RxSlot* const self, const RxFrameBase frame)
 {
     UDPARD_ASSERT((self != NULL) && (frame.payload.size > 0));
     bool ok         = true;
@@ -1199,7 +1199,7 @@ static inline int_fast8_t rxSlotAccept(RxSlot* const                self,
                   (out_transfer_payload_head != NULL));
     int_fast8_t result  = 0;
     bool        release = true;
-    if (rxSlotAccept_UpdateFrameCountDiscovery(self, frame))
+    if (rxSlotAccept_UpdateFrameCount(self, frame))
     {
         result = rxSlotAccept_InsertFragment(self, frame, memory);
         UDPARD_ASSERT(result <= 1);
