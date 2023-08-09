@@ -4,6 +4,7 @@
 /// SPDX-License-Identifier: MIT
 
 #include <udpard.h>
+#include "helpers.h"
 #include "hexdump.hpp"
 #include <unity.h>
 #include <iostream>
@@ -67,7 +68,10 @@ void testGather()
 }
 }  // namespace
 
-void setUp() {}
+void setUp()
+{
+    seedRandomNumberGenerator();  // Re-seed the RNG for each test to avoid coupling.
+}
 
 void tearDown() {}
 
