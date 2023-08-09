@@ -944,6 +944,13 @@ static inline void rxSlotRestart(RxSlot* const self, const UdpardTransferID tran
     self->payload_size    = 0;
 }
 
+/// This is a helper for rxSlotRestart that restarts the transfer for the next transfer-ID value.
+/// The transfer-ID increment is necessary to weed out duplicate transfers.
+static inline void rxSlotRestartAdvance(RxSlot* const self, const RxMemory memory)
+{
+    rxSlotRestart(self, self->transfer_id + 1U, memory);
+}
+
 typedef struct
 {
     uint32_t                    frame_index;
@@ -1089,71 +1096,77 @@ static inline bool rxSlotEject(size_t* const                out_payload_size,
     return result;
 }
 
-/// This function will either move the frame payload into the session, or free it if it can't be used.
-/// Upon return, certain state variables may be overwritten, so the caller should not rely on them.
-/// Returns: 1 -- transfer available, payload written; 0 -- transfer not yet available; <0 -- error.
-static inline int_fast8_t rxSlotAccept(RxSlot* const                self,
-                                       size_t* const                out_transfer_payload_size,
-                                       struct UdpardFragment* const out_transfer_payload_head,
-                                       const RxFrameBase            frame,
-                                       const size_t                 extent,
-                                       const RxMemory               memory)
+/// Update the frame count discovery state in this transfer.
+/// Returns true on success, false if inconsistencies are detected and the slot should be restarted.
+static inline bool rxSlotAccept_UpdateFrameCountDiscovery(RxSlot* const self, const RxFrameBase frame)
 {
-    UDPARD_ASSERT((self != NULL) && (frame.payload.size > 0) && (out_transfer_payload_size != NULL) &&
-                  (out_transfer_payload_head != NULL));
-    int_fast8_t result  = 0;
-    bool        restart = false;
-    bool        release = true;
-    // FIRST: Update the frame count discovery state in this transfer. Drop transfer if inconsistencies are detected.
+    UDPARD_ASSERT((self != NULL) && (frame.payload.size > 0));
+    bool ok         = true;
     self->max_index = max32(self->max_index, frame.index);
     if (frame.end_of_transfer)
     {
         if ((self->eot_index != FRAME_INDEX_UNSET) && (self->eot_index != frame.index))
         {
-            restart = true;  // Inconsistent EOT flag, could be a node-ID conflict.
-            goto finish;     // NOSONAR goto simplifies the control flow and is not prohibited by MISRA C:2012.
+            ok = false;  // Inconsistent EOT flag, could be a node-ID conflict.
         }
         self->eot_index = frame.index;
     }
     UDPARD_ASSERT(frame.index <= self->max_index);
     if (self->max_index > self->eot_index)
     {
-        restart = true;  // Frames past EOT found, discard the entire transfer because we don't trust it anymore.
-        goto finish;     // NOSONAR goto simplifies the control flow and is not prohibited by MISRA C:2012.
+        ok = false;  // Frames past EOT found, discard the entire transfer because we don't trust it anymore.
     }
-    // SECOND: Insert the fragment into the fragment tree. If it already exists, drop and free the duplicate.
-    UDPARD_ASSERT((self->max_index <= self->eot_index) && (self->accepted_frames <= self->eot_index));
+    return ok;
+}
+
+/// Insert the fragment into the fragment tree. If it already exists, drop and free the duplicate.
+/// Returns 0 if the fragment is not needed, 1 if it is needed, negative on error.
+/// The fragment shall be deallocated unless the return value is 1.
+static inline int_fast8_t rxSlotAccept_InsertFragment(RxSlot* const     self,
+                                                      const RxFrameBase frame,
+                                                      const RxMemory    memory)
+{
+    UDPARD_ASSERT((self != NULL) && (frame.payload.size > 0) && (self->max_index <= self->eot_index) &&
+                  (self->accepted_frames <= self->eot_index));
     RxSlotUpdateContext       update_ctx = {.frame_index     = frame.index,
                                             .accepted        = false,
                                             .memory_fragment = memory.fragment};
-    RxFragmentTreeNode* const frag = (RxFragmentTreeNode*) cavlSearch((struct UdpardTreeNode**) &self->fragments,  //
+    RxFragmentTreeNode* const frag   = (RxFragmentTreeNode*) cavlSearch((struct UdpardTreeNode**) &self->fragments,  //
                                                                       &update_ctx,
                                                                       &rxSlotFragmentSearch,
                                                                       &rxSlotFragmentFactory);
+    int_fast8_t               result = update_ctx.accepted ? 1 : 0;
     if (frag == NULL)
     {
         UDPARD_ASSERT(!update_ctx.accepted);
-        UDPARD_ASSERT(release);
         result = -UDPARD_ERROR_MEMORY;
         // No restart because there is hope that there will be enough memory when we receive a duplicate.
-        goto finish;  // NOSONAR goto simplifies the control flow and is not prohibited by MISRA C:2012.
     }
     UDPARD_ASSERT(self->max_index <= self->eot_index);
     if (update_ctx.accepted)
     {
-        UDPARD_ASSERT(frag->this->frame_index == frame.index);
+        UDPARD_ASSERT((result > 0) && (frag->this->frame_index == frame.index));
         frag->this->base.view   = frame.payload;
         frag->this->base.origin = frame.origin;
         self->payload_size += frame.payload.size;
         self->accepted_frames++;
-        release = false;  // Ownership of the payload buffer has been transferred to the fragment tree.
     }
-    // THIRD: Detect transfer completion. If complete, eject the payload from the fragment tree and check its CRC.
-    UDPARD_ASSERT(self->fragments != NULL);
+    return result;
+}
+
+/// Detect transfer completion. If complete, eject the payload from the fragment tree and check its CRC.
+/// The return value is passed over from rxSlotEject.
+static inline int_fast8_t rxSlotAccept_FinalizeMaybe(RxSlot* const                self,
+                                                     size_t* const                out_transfer_payload_size,
+                                                     struct UdpardFragment* const out_transfer_payload_head,
+                                                     const size_t                 extent,
+                                                     const RxMemory               memory)
+{
+    UDPARD_ASSERT((self != NULL) && (out_transfer_payload_size != NULL) && (out_transfer_payload_head != NULL) &&
+                  (self->fragments != NULL));
+    int_fast8_t result = 0;
     if (self->accepted_frames > self->eot_index)  // Mind the off-by-one: cardinal vs. ordinal.
     {
-        // This transfer is done but we don't know yet if it's valid. Either way, we need to prepare for the next one.
-        restart = true;
         if (self->payload_size >= TRANSFER_CRC_SIZE_BYTES)
         {
             result = rxSlotEject(out_transfer_payload_size,
@@ -1167,17 +1180,48 @@ static inline int_fast8_t rxSlotAccept(RxSlot* const                self,
             // The tree is now unusable and the data is moved into rx_transfer.
             self->fragments = NULL;
         }
+        rxSlotRestartAdvance(self, memory);  // Restart needed even if invalid.
     }
-finish:
-    if (restart)
+    return result;
+}
+
+/// This function will either move the frame payload into the session, or free it if it can't be used.
+/// Upon return, certain state fields may be overwritten, so the caller should not rely on them.
+/// Returns: 1 -- transfer available, payload written; 0 -- transfer not yet available; <0 -- error.
+static inline int_fast8_t rxSlotAccept(RxSlot* const                self,
+                                       size_t* const                out_transfer_payload_size,
+                                       struct UdpardFragment* const out_transfer_payload_head,
+                                       const RxFrameBase            frame,
+                                       const size_t                 extent,
+                                       const RxMemory               memory)
+{
+    UDPARD_ASSERT((self != NULL) && (frame.payload.size > 0) && (out_transfer_payload_size != NULL) &&
+                  (out_transfer_payload_head != NULL));
+    int_fast8_t result  = 0;
+    bool        release = true;
+    if (rxSlotAccept_UpdateFrameCountDiscovery(self, frame))
     {
-        // Increment is necessary to weed out duplicate transfers.
-        rxSlotRestart(self, self->transfer_id + 1U, memory);
+        result = rxSlotAccept_InsertFragment(self, frame, memory);
+        UDPARD_ASSERT(result <= 1);
+        if (result > 0)
+        {
+            release = false;
+            result  = rxSlotAccept_FinalizeMaybe(self,  //
+                                                out_transfer_payload_size,
+                                                out_transfer_payload_head,
+                                                extent,
+                                                memory);
+        }
+    }
+    else
+    {
+        rxSlotRestartAdvance(self, memory);
     }
     if (release)
     {
         memFreePayload(memory.payload, frame.origin);
     }
+    UDPARD_ASSERT(result <= 1);
     return result;
 }
 
