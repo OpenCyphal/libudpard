@@ -332,6 +332,15 @@ static void testParseFrameEmpty(void)
     TEST_ASSERT_FALSE(rxParseFrame((struct UdpardMutablePayload){.data = "", .size = 0}, &rxf));
 }
 
+static void testParseFrameInvalidTransferID(void)
+{
+    byte_t  data[] = {1,   2,   41,  9,   56, 21, 230, 29, 255, 255, 255, 255,
+                      255, 255, 255, 255, 57, 48, 0,   0,  0,   0,   42,  107,  //
+                      'a', 'b', 'c'};
+    RxFrame rxf    = {0};
+    TEST_ASSERT_FALSE(rxParseFrame((struct UdpardMutablePayload){.data = data, .size = sizeof(data)}, &rxf));
+}
+
 // --------------------------------------------------  SLOT  --------------------------------------------------
 
 static void testSlotRestartEmpty(void)
@@ -2395,6 +2404,7 @@ int main(void)
     RUN_TEST(testParseFrameUnknownHeaderVersion);
     RUN_TEST(testParseFrameHeaderWithoutPayload);
     RUN_TEST(testParseFrameEmpty);
+    RUN_TEST(testParseFrameInvalidTransferID);
     // slot
     RUN_TEST(testSlotRestartEmpty);
     RUN_TEST(testSlotRestartNonEmpty);

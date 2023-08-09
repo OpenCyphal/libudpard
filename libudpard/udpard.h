@@ -825,6 +825,7 @@ int_fast8_t udpardRxSubscriptionInit(struct UdpardRxSubscription* const   self,
 
 /// Frees all memory held by the subscription instance.
 /// After invoking this function, the instance is no longer usable.
+/// The function has no effect if the instance is NULL.
 /// Do not forget to close the sockets that were opened for this subscription.
 void udpardRxSubscriptionFree(struct UdpardRxSubscription* const self);
 
