@@ -1472,20 +1472,23 @@ static inline void rxSessionInit(struct UdpardInternalRxSession* const self, con
 static inline void rxSessionDestroyTree(struct UdpardInternalRxSession* const self,
                                         const struct UdpardRxMemoryResources  memory)
 {
-    for (uint_fast8_t i = 0; i < UDPARD_NETWORK_INTERFACE_COUNT_MAX; i++)
+    if (self != NULL)
     {
-        rxIfaceFree(&self->ifaces[i], (RxMemory){.fragment = memory.fragment, .payload = memory.payload});
-    }
-    for (uint_fast8_t i = 0; i < 2; i++)
-    {
-        struct UdpardInternalRxSession* const child = (struct UdpardInternalRxSession*) (void*) self->base.lr[i];
-        if (child != NULL)
+        for (uint_fast8_t i = 0; i < UDPARD_NETWORK_INTERFACE_COUNT_MAX; i++)
         {
-            UDPARD_ASSERT(child->base.up == &self->base);
-            rxSessionDestroyTree(child, memory);  // NOSONAR recursion
+            rxIfaceFree(&self->ifaces[i], (RxMemory){.fragment = memory.fragment, .payload = memory.payload});
         }
+        for (uint_fast8_t i = 0; i < 2; i++)
+        {
+            struct UdpardInternalRxSession* const child = (struct UdpardInternalRxSession*) (void*) self->base.lr[i];
+            if (child != NULL)
+            {
+                UDPARD_ASSERT(child->base.up == &self->base);
+                rxSessionDestroyTree(child, memory);  // NOSONAR recursion
+            }
+        }
+        memFree(memory.session, sizeof(struct UdpardInternalRxSession), self);
     }
-    memFree(memory.session, sizeof(struct UdpardInternalRxSession), self);
 }
 
 // --------------------------------------------------  RX PORT  --------------------------------------------------
@@ -1632,6 +1635,7 @@ static inline void rxPortInit(struct UdpardRxPort* const self)
 static inline void rxPortFree(struct UdpardRxPort* const self, const struct UdpardRxMemoryResources memory)
 {
     rxSessionDestroyTree(self->sessions, memory);
+    self->sessions = NULL;
 }
 
 // --------------------------------------------------  RX API  --------------------------------------------------
