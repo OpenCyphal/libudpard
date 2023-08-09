@@ -1034,7 +1034,7 @@ int_fast8_t udpardRxRPCDispatcherReceive(struct UdpardRxRPCDispatcher* const sel
 /// The data pointers in the fragment list shall be valid, otherwise the behavior is undefined.
 ///
 /// Returns the number of bytes copied into the contiguous destination buffer.
-size_t udpardGather(const struct UdpardFragment head, const size_t destination_size, void* const destination);
+size_t udpardGather(const struct UdpardFragment head, const size_t destination_size_bytes, void* const destination);
 
 #ifdef __cplusplus
 }

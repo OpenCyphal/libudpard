@@ -1699,20 +1699,20 @@ int_fast8_t udpardRxSubscriptionReceive(struct UdpardRxSubscription* const self,
 // ====================================================    MISC    =====================================================
 // =====================================================================================================================
 
-size_t udpardGather(const struct UdpardFragment head, const size_t destination_size, void* const destination)
+size_t udpardGather(const struct UdpardFragment head, const size_t destination_size_bytes, void* const destination)
 {
     size_t offset = 0;
     if (NULL != destination)
     {
         const struct UdpardFragment* frag = &head;
-        while ((frag != NULL) && (offset < destination_size))
+        while ((frag != NULL) && (offset < destination_size_bytes))
         {
             UDPARD_ASSERT(frag->view.data != NULL);
-            const size_t frag_size = smaller(frag->view.size, destination_size - offset);
+            const size_t frag_size = smaller(frag->view.size, destination_size_bytes - offset);
             // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
             (void) memmove(((byte_t*) destination) + offset, frag->view.data, frag_size);
             offset += frag_size;
-            UDPARD_ASSERT(offset <= destination_size);
+            UDPARD_ASSERT(offset <= destination_size_bytes);
             frag = frag->next;
         }
     }
