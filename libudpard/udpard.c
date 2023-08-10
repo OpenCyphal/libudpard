@@ -1773,7 +1773,7 @@ int_fast8_t udpardRxRPCDispatcherCancel(struct UdpardRxRPCDispatcher* const self
         UdpardPortID                  service_id_mutable = service_id;
         struct UdpardTreeNode** const root               = is_request ? &self->request_ports : &self->response_ports;
         struct UdpardRxRPC* const     item =
-            (struct UdpardRxRPC*) cavlSearch(root, &service_id_mutable, &rxRPCSearchByServiceID, NULL);
+            (struct UdpardRxRPC*) (void*) cavlSearch(root, &service_id_mutable, &rxRPCSearchByServiceID, NULL);
         if (item != NULL)
         {
             cavlRemove(root, &item->base);
