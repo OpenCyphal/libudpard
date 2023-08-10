@@ -7,10 +7,7 @@
 #include "helpers.h"
 #include "hexdump.hpp"
 #include <unity.h>
-#include <cstdint>
-#include <variant>
 #include <cstring>
-#include <iostream>
 #include <array>
 
 namespace
@@ -147,6 +144,60 @@ void testRxSubscriptionReceive()
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);  // Yeah.
 }
 
+void testRxSubscriptionReceiveInvalidArgument()
+{
+    InstrumentedAllocator mem_session{};
+    InstrumentedAllocator mem_fragment{};
+    InstrumentedAllocator mem_payload{};
+    instrumentedAllocatorNew(&mem_session);
+    instrumentedAllocatorNew(&mem_fragment);
+    instrumentedAllocatorNew(&mem_payload);
+    UdpardRxSubscription sub{};
+    TEST_ASSERT_EQUAL(0,
+                      udpardRxSubscriptionInit(&sub,
+                                               0x1234,
+                                               1000,
+                                               {
+                                                   .session  = instrumentedAllocatorMakeMemoryResource(&mem_session),
+                                                   .fragment = instrumentedAllocatorMakeMemoryResource(&mem_fragment),
+                                                   .payload  = instrumentedAllocatorMakeMemoryDeleter(&mem_payload),
+                                               }));
+    TEST_ASSERT_EQUAL(1000, sub.port.extent);
+    TEST_ASSERT_EQUAL(UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC, sub.port.transfer_id_timeout_usec);
+    TEST_ASSERT_EQUAL(nullptr, sub.port.sessions);
+    TEST_ASSERT_EQUAL(0xEF001234UL, sub.udp_ip_endpoint.ip_address);
+    TEST_ASSERT_EQUAL(9382, sub.udp_ip_endpoint.udp_port);
+    TEST_ASSERT_EQUAL(0, mem_session.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
+    // Pass invalid arguments with a valid instance; the memory will be freed anyway to avoid leaks.
+    TEST_ASSERT_EQUAL(-UDPARD_ERROR_ARGUMENT,
+                      udpardRxSubscriptionReceive(&sub,
+                                                  0xFFFF'FFFF'FFFF'FFFFUL,
+                                                  UdpardMutablePayload{.size = 100,
+                                                                       .data =
+                                                                           instrumentedAllocatorAllocate(&mem_payload,
+                                                                                                         100)},
+                                                  0xFF,
+                                                  nullptr));
+    TEST_ASSERT_EQUAL(0, mem_session.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);  // Memory freed on exit despite the error.
+    // Calls with an invalid self pointer also result in the invalid argument error but the memory won't be freed.
+    TEST_ASSERT_EQUAL(-UDPARD_ERROR_ARGUMENT,
+                      udpardRxSubscriptionReceive(nullptr,
+                                                  0xFFFF'FFFF'FFFF'FFFFUL,
+                                                  UdpardMutablePayload{},
+                                                  0xFF,
+                                                  nullptr));
+    // Free the subscription.
+    udpardRxSubscriptionFree(&sub);
+    udpardRxSubscriptionFree(&sub);  // The API does not guarantee anything but this is for extra safety.
+    TEST_ASSERT_EQUAL(0, mem_session.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
+}
+
 }  // namespace
 
 void setUp() {}
@@ -158,5 +209,6 @@ int main()
     UNITY_BEGIN();
     RUN_TEST(testRxSubscriptionInit);
     RUN_TEST(testRxSubscriptionReceive);
+    RUN_TEST(testRxSubscriptionReceiveInvalidArgument);
     return UNITY_END();
 }
