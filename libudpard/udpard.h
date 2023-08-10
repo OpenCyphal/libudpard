@@ -843,6 +843,7 @@ void udpardRxSubscriptionFree(struct UdpardRxSubscription* const self);
 /// fragment of the reassembled transfer payload or free it using the corresponding memory resource
 /// (see UdpardRxMemoryResources) if the datagram is not needed for reassembly. Because of the ownership transfer,
 /// the datagram payload buffer has to be mutable (non-const).
+/// In the case of an invalid argument error the library will attempt to free the datagram payload buffer.
 ///
 /// The accepted datagram may either be invalid, carry a non-final part of a multi-frame transfer,
 /// carry a final part of a valid multi-frame transfer, or carry a valid single-frame transfer.
@@ -924,8 +925,8 @@ struct UdpardRxRPCDispatcher
     struct UdpardRxMemoryResources memory;
 
     /// READ-ONLY
-    struct UdpardRxRPC* request_ports;
-    struct UdpardRxRPC* response_ports;
+    struct UdpardTreeNode* request_ports;
+    struct UdpardTreeNode* response_ports;
 };
 
 /// Represents a received Cyphal RPC-service transfer -- either request or response.
@@ -956,6 +957,10 @@ struct UdpardRxRPCTransfer
 ///        udpardRxRPCDispatcherReceive, along with the index of the redundant interface
 ///        the datagram was received on. Only those services that were announced in step 4 will be processed.
 ///
+/// There is no resource deallocation function ("free") for the RPC dispatcher. This is because the dispatcher
+/// does not own any resources. To dispose of a dispatcher safely, the application shall invoke
+/// udpardRxRPCDispatcherCancel for each RPC-service port on that dispatcher.
+///
 /// The return value is 0 on success.
 /// The return value is a negated UDPARD_ERROR_ARGUMENT if any of the input arguments are invalid.
 ///
@@ -963,11 +968,6 @@ struct UdpardRxRPCTransfer
 int_fast8_t udpardRxRPCDispatcherInit(struct UdpardRxRPCDispatcher* const  self,
                                       const UdpardNodeID                   local_node_id,
                                       const struct UdpardRxMemoryResources memory);
-
-/// Frees all memory held by the RPC-service dispatcher instance.
-/// After invoking this function, the instance is no longer usable.
-/// Do not forget to close the sockets that were opened for this instance.
-void udpardRxRPCDispatcherFree(struct UdpardRxRPCDispatcher* const self);
 
 /// This function lets the application register its interest in a particular service-ID and kind (request/response)
 /// by creating an RPC-service RX port. The service pointer shall retain validity until its unregistration or until
@@ -1013,11 +1013,18 @@ int_fast8_t udpardRxRPCDispatcherCancel(struct UdpardRxRPCDispatcher* const self
 /// Datagrams received from the sockets of this service dispatcher are fed into this function.
 /// It is the analog of udpardRxSubscriptionReceive for RPC-service transfers.
 /// Please refer to the documentation of udpardRxSubscriptionReceive for the usage information.
+///
+/// The "out_service" pointer-to-pointer can be used to retrieve the specific UdpardRxRPC instance that was used to
+/// process the received transfer. Remember that each UdpardRxRPC instance has a user reference field,
+/// which in combination with this feature can be used to construct OOP interfaces on top of the library.
+/// If this is not needed, the pointer-to-pointer can be NULL.
+///
+/// The memory pointed to by out_transfer may be mutated arbitrarily if no transfer is completed.
 int_fast8_t udpardRxRPCDispatcherReceive(struct UdpardRxRPCDispatcher* const self,
-                                         struct UdpardRxRPC** const          service,
                                          const UdpardMicrosecond             timestamp_usec,
                                          const struct UdpardMutablePayload   datagram_payload,
                                          const uint_fast8_t                  redundant_iface_index,
+                                         struct UdpardRxRPC** const          out_service,
                                          struct UdpardRxRPCTransfer* const   out_transfer);
 
 // =====================================================================================================================
