@@ -1809,11 +1809,11 @@ int_fast8_t udpardRxRPCDispatcherReceive(struct UdpardRxRPCDispatcher* const sel
             out_transfer->service_id = frame.meta.data_specifier & DATA_SPECIFIER_SERVICE_ID_MASK;
             // Search for the RPC-port that is registered for this service transfer in the tree.
             struct UdpardRxRPC* const item =
-                (struct UdpardRxRPC*) cavlSearch(out_transfer->is_request ? &self->request_ports
-                                                                          : &self->response_ports,
-                                                 &out_transfer->service_id,
-                                                 &rxRPCSearchByServiceID,
-                                                 NULL);
+                (struct UdpardRxRPC*) (void*) cavlSearch(out_transfer->is_request ? &self->request_ports
+                                                                                  : &self->response_ports,
+                                                         &out_transfer->service_id,
+                                                         &rxRPCSearchByServiceID,
+                                                         NULL);
             // If such a port is found, accept the frame on it.
             if (item != NULL)
             {
