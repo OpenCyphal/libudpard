@@ -825,6 +825,7 @@ int_fast8_t udpardRxSubscriptionInit(struct UdpardRxSubscription* const   self,
 
 /// Frees all memory held by the subscription instance.
 /// After invoking this function, the instance is no longer usable.
+/// The function has no effect if the instance is NULL.
 /// Do not forget to close the sockets that were opened for this subscription.
 void udpardRxSubscriptionFree(struct UdpardRxSubscription* const self);
 
@@ -871,8 +872,6 @@ void udpardRxSubscriptionFree(struct UdpardRxSubscription* const self);
 /// The time complexity is O(log n) where n is the number of remote notes publishing on this subject (topic).
 /// No data copy takes place. Malformed frames are discarded in constant time.
 /// Linear time is spent on the CRC verification of the transfer payload when the transfer is complete.
-///
-/// This function performs log(n) of recursive calls internally, where n is the number of frames in a transfer.
 ///
 /// UDPARD_ERROR_MEMORY is returned if the function fails to allocate memory.
 /// UDPARD_ERROR_ARGUMENT is returned if any of the input arguments are invalid.
@@ -1020,6 +1019,22 @@ int_fast8_t udpardRxRPCDispatcherReceive(struct UdpardRxRPCDispatcher* const sel
                                          const struct UdpardMutablePayload   datagram_payload,
                                          const uint_fast8_t                  redundant_iface_index,
                                          struct UdpardRxRPCTransfer* const   out_transfer);
+
+// =====================================================================================================================
+// ====================================================    MISC    =====================================================
+// =====================================================================================================================
+
+/// This helper function takes the head of a fragmented buffer list and copies the data into the contiguous buffer
+/// provided by the user. If the total size of all fragments combined exceeds the size of the user-provided buffer,
+/// copying will stop early after the buffer is filled, thus truncating the fragmented data short.
+///
+/// The source list is not modified. Do not forget to free its memory afterward if it was dynamically allocated.
+///
+/// The function has no effect and returns zero if the destination buffer is NULL.
+/// The data pointers in the fragment list shall be valid, otherwise the behavior is undefined.
+///
+/// Returns the number of bytes copied into the contiguous destination buffer.
+size_t udpardGather(const struct UdpardFragment head, const size_t destination_size_bytes, void* const destination);
 
 #ifdef __cplusplus
 }

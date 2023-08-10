@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <limits.h>
+#include <time.h>
 
 #if !(defined(UDPARD_VERSION_MAJOR) && defined(UDPARD_VERSION_MINOR))
 #    error "Library version not defined"
@@ -156,6 +157,18 @@ static inline struct UdpardMemoryDeleter instrumentedAllocatorMakeMemoryDeleter(
     const struct UdpardMemoryDeleter out = {.user_reference = (void*) self,
                                             .deallocate     = &instrumentedAllocatorDeallocate};
     return out;
+}
+
+static inline void seedRandomNumberGenerator(void)
+{
+    unsigned          seed    = (unsigned) time(NULL);
+    const char* const env_var = getenv("RANDOM_SEED");
+    if (env_var != NULL)
+    {
+        seed = (unsigned) atoll(env_var);  // Conversion errors are possible but ignored.
+    }
+    srand(seed);
+    (void) fprintf(stderr, "RANDOM_SEED=%u\n", seed);
 }
 
 #ifdef __cplusplus

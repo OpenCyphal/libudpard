@@ -787,8 +787,16 @@ static inline bool rxParseFrame(const struct UdpardMutablePayload datagram_paylo
         const bool service      = (out->meta.data_specifier & DATA_SPECIFIER_SERVICE_NOT_MESSAGE_MASK) != 0;
         const bool single_frame = (out->base.index == 0) && out->base.end_of_transfer;
         ok = service ? ((!broadcast) && (!anonymous)) : (broadcast && ((!anonymous) || single_frame));
+        ok = ok && (out->meta.transfer_id != TRANSFER_ID_UNSET);
     }
     return ok;
+}
+
+static inline bool rxValidateMemoryResources(const struct UdpardRxMemoryResources memory)
+{
+    return (memory.session.allocate != NULL) && (memory.session.deallocate != NULL) &&
+           (memory.fragment.allocate != NULL) && (memory.fragment.deallocate != NULL) &&
+           (memory.payload.deallocate != NULL);
 }
 
 /// This helper is needed to minimize the risk of argument swapping when passing these two resources around,
@@ -886,7 +894,7 @@ struct UdpardInternalRxSession
 
 /// Frees all fragments in the tree and their payload buffers. Destroys the passed fragment.
 /// This is meant to be invoked on the root of the tree.
-/// The maximum recursion depth is ceil(1.44*log2(FRAME_INDEX_MAX+1)-0.328) = 22 levels.
+/// The maximum recursion depth is ceil(1.44*log2(FRAME_INDEX_MAX+1)-0.328) = 45 levels.
 // NOLINTNEXTLINE(misc-no-recursion) MISRA C:2012 rule 17.2
 static inline void rxFragmentDestroyTree(RxFragment* const self, const RxMemory memory)
 {
@@ -996,7 +1004,7 @@ typedef struct
 } RxSlotEjectContext;
 
 /// See rxSlotEject() for details.
-/// The maximum recursion depth is ceil(1.44*log2(FRAME_INDEX_MAX+1)-0.328) = 22 levels.
+/// The maximum recursion depth is ceil(1.44*log2(FRAME_INDEX_MAX+1)-0.328) = 45 levels.
 /// NOLINTNEXTLINE(misc-no-recursion) MISRA C:2012 rule 17.2
 static inline void rxSlotEjectFragment(RxFragment* const frag, RxSlotEjectContext* const ctx)
 {
@@ -1464,20 +1472,23 @@ static inline void rxSessionInit(struct UdpardInternalRxSession* const self, con
 static inline void rxSessionDestroyTree(struct UdpardInternalRxSession* const self,
                                         const struct UdpardRxMemoryResources  memory)
 {
-    for (uint_fast8_t i = 0; i < UDPARD_NETWORK_INTERFACE_COUNT_MAX; i++)
+    if (self != NULL)
     {
-        rxIfaceFree(&self->ifaces[i], (RxMemory){.fragment = memory.fragment, .payload = memory.payload});
-    }
-    for (uint_fast8_t i = 0; i < 2; i++)
-    {
-        struct UdpardInternalRxSession* const child = (struct UdpardInternalRxSession*) (void*) self->base.lr[i];
-        if (child != NULL)
+        for (uint_fast8_t i = 0; i < UDPARD_NETWORK_INTERFACE_COUNT_MAX; i++)
         {
-            UDPARD_ASSERT(child->base.up == &self->base);
-            rxSessionDestroyTree(child, memory);  // NOSONAR recursion
+            rxIfaceFree(&self->ifaces[i], (RxMemory){.fragment = memory.fragment, .payload = memory.payload});
         }
+        for (uint_fast8_t i = 0; i < 2; i++)
+        {
+            struct UdpardInternalRxSession* const child = (struct UdpardInternalRxSession*) (void*) self->base.lr[i];
+            if (child != NULL)
+            {
+                UDPARD_ASSERT(child->base.up == &self->base);
+                rxSessionDestroyTree(child, memory);  // NOSONAR recursion
+            }
+        }
+        memFree(memory.session, sizeof(struct UdpardInternalRxSession), self);
     }
-    memFree(memory.session, sizeof(struct UdpardInternalRxSession), self);
 }
 
 // --------------------------------------------------  RX PORT  --------------------------------------------------
@@ -1624,6 +1635,7 @@ static inline void rxPortInit(struct UdpardRxPort* const self)
 static inline void rxPortFree(struct UdpardRxPort* const self, const struct UdpardRxMemoryResources memory)
 {
     rxSessionDestroyTree(self->sessions, memory);
+    self->sessions = NULL;
 }
 
 // --------------------------------------------------  RX API  --------------------------------------------------
@@ -1642,12 +1654,67 @@ int_fast8_t udpardRxSubscriptionInit(struct UdpardRxSubscription* const   self,
                                      const size_t                         extent,
                                      const struct UdpardRxMemoryResources memory)
 {
-    (void) self;
-    (void) subject_id;
-    (void) extent;
-    (void) memory;
-    (void) &rxPortAcceptFrame;
-    (void) &rxPortInit;
-    (void) &rxPortFree;
-    return 0;
+    int_fast8_t result = -UDPARD_ERROR_ARGUMENT;
+    if ((self != NULL) && (subject_id <= UDPARD_SUBJECT_ID_MAX) && rxValidateMemoryResources(memory))
+    {
+        memZero(sizeof(*self), self);
+        rxPortInit(&self->port);
+        self->port.extent     = extent;
+        self->udp_ip_endpoint = makeSubjectUDPIPEndpoint(subject_id);
+        self->memory          = memory;
+        result                = 0;
+    }
+    return result;
+}
+
+void udpardRxSubscriptionFree(struct UdpardRxSubscription* const self)
+{
+    if (self != NULL)
+    {
+        rxPortFree(&self->port, self->memory);
+    }
+}
+
+int_fast8_t udpardRxSubscriptionReceive(struct UdpardRxSubscription* const self,
+                                        const UdpardMicrosecond            timestamp_usec,
+                                        const struct UdpardMutablePayload  datagram_payload,
+                                        const uint_fast8_t                 redundant_iface_index,
+                                        struct UdpardRxTransfer* const     out_transfer)
+{
+    int_fast8_t result = -UDPARD_ERROR_ARGUMENT;
+    if ((self != NULL) && (timestamp_usec != TIMESTAMP_UNSET) && (datagram_payload.data != NULL) &&
+        (redundant_iface_index < UDPARD_NETWORK_INTERFACE_COUNT_MAX) && (out_transfer != NULL))
+    {
+        result = rxPortAcceptFrame(&self->port,
+                                   redundant_iface_index,
+                                   timestamp_usec,
+                                   datagram_payload,
+                                   self->memory,
+                                   out_transfer);
+    }
+    return result;
+}
+
+// =====================================================================================================================
+// ====================================================    MISC    =====================================================
+// =====================================================================================================================
+
+size_t udpardGather(const struct UdpardFragment head, const size_t destination_size_bytes, void* const destination)
+{
+    size_t offset = 0;
+    if (NULL != destination)
+    {
+        const struct UdpardFragment* frag = &head;
+        while ((frag != NULL) && (offset < destination_size_bytes))
+        {
+            UDPARD_ASSERT(frag->view.data != NULL);
+            const size_t frag_size = smaller(frag->view.size, destination_size_bytes - offset);
+            // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
+            (void) memmove(((byte_t*) destination) + offset, frag->view.data, frag_size);
+            offset += frag_size;
+            UDPARD_ASSERT(offset <= destination_size_bytes);
+            frag = frag->next;
+        }
+    }
+    return offset;
 }
