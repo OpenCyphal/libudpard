@@ -153,9 +153,9 @@
 ///
 /// Graphically, the service dispatcher pipeline is arranged as shown below.
 ///
-///   REDUNDANT INTERFACE A ---> UDP SOCKET ---+                           +---> RPC-SERVICE X ---> SERIALIZED TRANSFERS
+///   REDUNDANT INTERFACE A ---> UDP SOCKET ---+                           +---> RPC PORT X ---> SERIALIZED TRANSFERS
 ///                                            |                           |
-///   REDUNDANT INTERFACE B ---> UDP SOCKET ---+---> SERVICE DISPATCHER ---+---> RPC-SERVICE Y ---> SERIALIZED TRANSFERS
+///   REDUNDANT INTERFACE B ---> UDP SOCKET ---+---> SERVICE DISPATCHER ---+---> RPC PORT Y ---> SERIALIZED TRANSFERS
 ///                                            |                           |
 ///                                     ... ---+                           +---> ...
 ///
@@ -886,7 +886,7 @@ int_fast8_t udpardRxSubscriptionReceive(struct UdpardRxSubscription* const self,
 
 /// An RPC-service RX port models the interest of the application in receiving RPC-service transfers of
 /// a particular kind (request or response) and a particular service-ID.
-struct UdpardRxRPC
+struct UdpardRxRPCPort
 {
     /// READ-ONLY
     struct UdpardTreeNode base;
@@ -916,6 +916,12 @@ struct UdpardRxRPC
 /// Anonymous nodes (nodes without a node-ID of their own) cannot use RPC-services.
 struct UdpardRxRPCDispatcher
 {
+    /// The local node-ID has to be stored to facilitate correctness checking of incoming transfers.
+    /// This value shall not be modified after initialization. If the local node needs to change its node-ID,
+    /// this dispatcher instance must be destroyed and a new one created instead.
+    /// READ-ONLY
+    UdpardNodeID local_node_id;
+
     /// The IP address and UDP port number where UDP/IP datagrams carrying RPC-service transfers destined to this node
     /// will be sent.
     /// READ-ONLY
@@ -947,7 +953,7 @@ struct UdpardRxRPCTransfer
 ///
 ///     3. Per redundant network interface:
 ///        - Create a new socket bound to the IP multicast group address and UDP port number specified in the
-///          udp_ip_endpoint field of the initialized service dispatcher instance. The library will determine the
+///          udp_ip_endpoint field of the initialized RPC dispatcher instance. The library will determine the
 ///          endpoint to use based on the node-ID.
 ///
 ///     4. Announce its interest in specific RPC-services (requests and/or responses) by calling
@@ -970,7 +976,7 @@ int_fast8_t udpardRxRPCDispatcherInit(struct UdpardRxRPCDispatcher* const  self,
                                       const struct UdpardRxMemoryResources memory);
 
 /// This function lets the application register its interest in a particular service-ID and kind (request/response)
-/// by creating an RPC-service RX port. The service pointer shall retain validity until its unregistration or until
+/// by creating an RPC-service RX port. The port pointer shall retain validity until its unregistration or until
 /// the dispatcher is destroyed. The service instance shall not be moved or destroyed.
 ///
 /// If such registration already exists, it will be unregistered first as if udpardRxRPCDispatcherCancel was
@@ -991,7 +997,7 @@ int_fast8_t udpardRxRPCDispatcherInit(struct UdpardRxRPCDispatcher* const  self,
 /// This function does not allocate new memory. The function may deallocate memory if such registration already
 /// existed; the deallocation behavior is specified in the documentation for udpardRxRPCDispatcherCancel.
 int_fast8_t udpardRxRPCDispatcherListen(struct UdpardRxRPCDispatcher* const self,
-                                        struct UdpardRxRPC* const           service,
+                                        struct UdpardRxRPCPort* const       port,
                                         const UdpardPortID                  service_id,
                                         const bool                          is_request,
                                         const size_t                        extent);
@@ -1010,12 +1016,12 @@ int_fast8_t udpardRxRPCDispatcherCancel(struct UdpardRxRPCDispatcher* const self
                                         const UdpardPortID                  service_id,
                                         const bool                          is_request);
 
-/// Datagrams received from the sockets of this service dispatcher are fed into this function.
+/// Datagrams received from the sockets of this RPC service dispatcher are fed into this function.
 /// It is the analog of udpardRxSubscriptionReceive for RPC-service transfers.
 /// Please refer to the documentation of udpardRxSubscriptionReceive for the usage information.
 ///
-/// The "out_service" pointer-to-pointer can be used to retrieve the specific UdpardRxRPC instance that was used to
-/// process the received transfer. Remember that each UdpardRxRPC instance has a user reference field,
+/// The "out_port" pointer-to-pointer can be used to retrieve the specific UdpardRxRPCPort instance that was used to
+/// process the received transfer. Remember that each UdpardRxRPCPort instance has a user reference field,
 /// which in combination with this feature can be used to construct OOP interfaces on top of the library.
 /// If this is not needed, the pointer-to-pointer can be NULL.
 ///
@@ -1024,7 +1030,7 @@ int_fast8_t udpardRxRPCDispatcherReceive(struct UdpardRxRPCDispatcher* const sel
                                          const UdpardMicrosecond             timestamp_usec,
                                          const struct UdpardMutablePayload   datagram_payload,
                                          const uint_fast8_t                  redundant_iface_index,
-                                         struct UdpardRxRPC** const          out_service,
+                                         struct UdpardRxRPCPort** const      out_port,
                                          struct UdpardRxRPCTransfer* const   out_transfer);
 
 // =====================================================================================================================

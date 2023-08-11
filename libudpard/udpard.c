@@ -1643,8 +1643,8 @@ static inline int_fast8_t rxRPCSearch(void* const user_reference,  // NOSONAR Ca
                                       const struct UdpardTreeNode* node)
 {
     UDPARD_ASSERT((user_reference != NULL) && (node != NULL));
-    return compare32(((const struct UdpardRxRPC*) user_reference)->service_id,
-                     ((const struct UdpardRxRPC*) (const void*) node)->service_id);
+    return compare32(((const struct UdpardRxRPCPort*) user_reference)->service_id,
+                     ((const struct UdpardRxRPCPort*) (const void*) node)->service_id);
 }
 
 static inline int_fast8_t rxRPCSearchByServiceID(void* const user_reference,  // NOSONAR Cavl API requires non-const.
@@ -1652,7 +1652,7 @@ static inline int_fast8_t rxRPCSearchByServiceID(void* const user_reference,  //
 {
     UDPARD_ASSERT((user_reference != NULL) && (node != NULL));
     return compare32(*(const UdpardPortID*) user_reference,
-                     ((const struct UdpardRxRPC*) (const void*) node)->service_id);
+                     ((const struct UdpardRxRPCPort*) (const void*) node)->service_id);
 }
 
 // --------------------------------------------------  RX API  --------------------------------------------------
@@ -1726,6 +1726,7 @@ int_fast8_t udpardRxRPCDispatcherInit(struct UdpardRxRPCDispatcher* const  self,
     if ((self != NULL) && (local_node_id <= UDPARD_NODE_ID_MAX) && rxValidateMemoryResources(memory))
     {
         memZero(sizeof(*self), self);
+        self->local_node_id   = local_node_id;
         self->udp_ip_endpoint = makeServiceUDPIPEndpoint(local_node_id);
         self->memory          = memory;
         self->request_ports   = NULL;
@@ -1736,27 +1737,27 @@ int_fast8_t udpardRxRPCDispatcherInit(struct UdpardRxRPCDispatcher* const  self,
 }
 
 int_fast8_t udpardRxRPCDispatcherListen(struct UdpardRxRPCDispatcher* const self,
-                                        struct UdpardRxRPC* const           service,
+                                        struct UdpardRxRPCPort* const       port,
                                         const UdpardPortID                  service_id,
                                         const bool                          is_request,
                                         const size_t                        extent)
 {
     int_fast8_t result = -UDPARD_ERROR_ARGUMENT;
-    if ((self != NULL) && (service != NULL) && (service_id <= UDPARD_SERVICE_ID_MAX))
+    if ((self != NULL) && (port != NULL) && (service_id <= UDPARD_SERVICE_ID_MAX))
     {
         const int_fast8_t cancel_result = udpardRxRPCDispatcherCancel(self, service_id, is_request);
         UDPARD_ASSERT((cancel_result == 0) || (cancel_result == 1));  // We already checked the arguments.
-        memZero(sizeof(*service), service);
-        service->service_id = service_id;
-        rxPortInit(&service->port);
-        service->port.extent    = extent;
-        service->user_reference = NULL;
+        memZero(sizeof(*port), port);
+        port->service_id = service_id;
+        rxPortInit(&port->port);
+        port->port.extent    = extent;
+        port->user_reference = NULL;
         // Insert the newly initialized service into the tree.
         const struct UdpardTreeNode* const item = cavlSearch(is_request ? &self->request_ports : &self->response_ports,
-                                                             service,
+                                                             port,
                                                              &rxRPCSearch,
                                                              &avlTrivialFactory);
-        UDPARD_ASSERT((item != NULL) && (item == &service->base));
+        UDPARD_ASSERT((item != NULL) && (item == &port->base));
         (void) item;
         result = (cancel_result > 0) ? 0 : 1;
     }
@@ -1772,8 +1773,8 @@ int_fast8_t udpardRxRPCDispatcherCancel(struct UdpardRxRPCDispatcher* const self
     {
         UdpardPortID                  service_id_mutable = service_id;
         struct UdpardTreeNode** const root               = is_request ? &self->request_ports : &self->response_ports;
-        struct UdpardRxRPC* const     item =
-            (struct UdpardRxRPC*) (void*) cavlSearch(root, &service_id_mutable, &rxRPCSearchByServiceID, NULL);
+        struct UdpardRxRPCPort* const item =
+            (struct UdpardRxRPCPort*) (void*) cavlSearch(root, &service_id_mutable, &rxRPCSearchByServiceID, NULL);
         if (item != NULL)
         {
             cavlRemove(root, &item->base);
@@ -1788,7 +1789,7 @@ int_fast8_t udpardRxRPCDispatcherReceive(struct UdpardRxRPCDispatcher* const sel
                                          const UdpardMicrosecond             timestamp_usec,
                                          const struct UdpardMutablePayload   datagram_payload,
                                          const uint_fast8_t                  redundant_iface_index,
-                                         struct UdpardRxRPC** const          out_service,
+                                         struct UdpardRxRPCPort** const      out_port,
                                          struct UdpardRxRPCTransfer* const   out_transfer)
 {
     bool        release = true;
@@ -1796,24 +1797,26 @@ int_fast8_t udpardRxRPCDispatcherReceive(struct UdpardRxRPCDispatcher* const sel
     if ((self != NULL) && (timestamp_usec != TIMESTAMP_UNSET) && (datagram_payload.data != NULL) &&
         (redundant_iface_index < UDPARD_NETWORK_INTERFACE_COUNT_MAX) && (out_transfer != NULL))
     {
-        result        = 0;  // Invalid frames cannot complete a transfer, so zero is the new default.
-        RxFrame frame = {0};
-        if (rxParseFrame(datagram_payload, &frame) &&
-            ((frame.meta.data_specifier & DATA_SPECIFIER_SERVICE_NOT_MESSAGE_MASK) != 0))
+        result            = 0;  // Invalid frames cannot complete a transfer, so zero is the new default.
+        RxFrame    frame  = {0};
+        const bool accept = rxParseFrame(datagram_payload, &frame) &&
+                            ((frame.meta.data_specifier & DATA_SPECIFIER_SERVICE_NOT_MESSAGE_MASK) != 0) &&
+                            (frame.meta.dst_node_id == self->local_node_id);
+        if (accept)
         {
             // Service transfers cannot be anonymous. This is enforced by the rxParseFrame function; we re-check this.
             UDPARD_ASSERT(frame.meta.src_node_id != UDPARD_NODE_ID_UNSET);
-            // Extract the data specifier from the frame. Update the transfer object even if no transfer is completed.
+            // Parse the data specifier in the frame.
             out_transfer->is_request =
                 (frame.meta.data_specifier & DATA_SPECIFIER_SERVICE_REQUEST_NOT_RESPONSE_MASK) != 0;
             out_transfer->service_id = frame.meta.data_specifier & DATA_SPECIFIER_SERVICE_ID_MASK;
             // Search for the RPC-port that is registered for this service transfer in the tree.
-            struct UdpardRxRPC* const item =
-                (struct UdpardRxRPC*) (void*) cavlSearch(out_transfer->is_request ? &self->request_ports
-                                                                                  : &self->response_ports,
-                                                         &out_transfer->service_id,
-                                                         &rxRPCSearchByServiceID,
-                                                         NULL);
+            struct UdpardRxRPCPort* const item =
+                (struct UdpardRxRPCPort*) (void*) cavlSearch(out_transfer->is_request ? &self->request_ports
+                                                                                      : &self->response_ports,
+                                                             &out_transfer->service_id,
+                                                             &rxRPCSearchByServiceID,
+                                                             NULL);
             // If such a port is found, accept the frame on it.
             if (item != NULL)
             {
@@ -1825,10 +1828,10 @@ int_fast8_t udpardRxRPCDispatcherReceive(struct UdpardRxRPCDispatcher* const sel
                                       &out_transfer->base);
                 release = false;
             }
-            // Expose the RPC-service instance to the caller if requested.
-            if (out_service != NULL)
+            // Expose the port instance to the caller if requested.
+            if (out_port != NULL)
             {
-                *out_service = item;
+                *out_port = item;
             }
         }
     }
