@@ -488,6 +488,7 @@ struct UdpardTxItem
 /// The instance does not hold any resources itself except for the allocated memory.
 /// To safely discard it, simply pop all enqueued frames from it.
 ///
+/// The return value is zero on success, otherwise it is a negative error code.
 /// The time complexity is constant. This function does not invoke the dynamic memory manager.
 int_fast8_t udpardTxInit(struct UdpardTx* const            self,
                          const UdpardNodeID* const         local_node_id,
