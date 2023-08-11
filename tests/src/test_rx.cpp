@@ -272,6 +272,18 @@ void testRxRPCDispatcher()
     TEST_ASSERT_NOT_NULL(self.request_ports);
     TEST_ASSERT_NOT_NULL(self.response_ports);
 
+    // Add another response port.
+    UdpardRxRPCPort port_response_baz{};
+    TEST_ASSERT_EQUAL(1, udpardRxRPCDispatcherListen(&self, &port_response_baz, 9, false, 50));  // Added successfully.
+    TEST_ASSERT_EQUAL(0, udpardRxRPCDispatcherListen(&self, &port_response_baz, 9, false, 50));  // Re-added.
+    TEST_ASSERT_EQUAL(9, port_response_baz.service_id);
+    TEST_ASSERT_EQUAL(UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC, port_response_baz.port.transfer_id_timeout_usec);
+    TEST_ASSERT_EQUAL(50, port_response_baz.port.extent);
+    TEST_ASSERT_NULL(port_response_baz.port.sessions);
+    TEST_ASSERT_NULL(port_response_baz.user_reference);
+    TEST_ASSERT_NOT_NULL(self.request_ports);
+    TEST_ASSERT_NOT_NULL(self.response_ports);
+
     // Check the global states.
     TEST_ASSERT_EQUAL(0, mem_session.allocated_fragments);
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
@@ -453,6 +465,7 @@ void testRxRPCDispatcher()
     // Remove the ports.
     TEST_ASSERT_EQUAL(0, udpardRxRPCDispatcherCancel(&self, 511, false));  // No such port.
     TEST_ASSERT_EQUAL(0, udpardRxRPCDispatcherCancel(&self, 0, true));     // No such port.
+    TEST_ASSERT_EQUAL(0, udpardRxRPCDispatcherCancel(&self, 9, true));     // No such port.
 
     TEST_ASSERT_EQUAL(1, udpardRxRPCDispatcherCancel(&self, 511, true));  // Removed.
     TEST_ASSERT_NULL(self.request_ports);
@@ -463,6 +476,13 @@ void testRxRPCDispatcher()
 
     TEST_ASSERT_EQUAL(1, udpardRxRPCDispatcherCancel(&self, 0, false));  // Removed.
     TEST_ASSERT_NULL(self.request_ports);
+    TEST_ASSERT_NOT_NULL(self.response_ports);
+    TEST_ASSERT_EQUAL(0, mem_session.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
+
+    TEST_ASSERT_EQUAL(1, udpardRxRPCDispatcherCancel(&self, 9, false));  // Removed.
+    TEST_ASSERT_NULL(self.request_ports);
     TEST_ASSERT_NULL(self.response_ports);
     TEST_ASSERT_EQUAL(0, mem_session.allocated_fragments);
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
@@ -470,6 +490,7 @@ void testRxRPCDispatcher()
 
     TEST_ASSERT_EQUAL(0, udpardRxRPCDispatcherCancel(&self, 511, true));  // Idempotency.
     TEST_ASSERT_EQUAL(0, udpardRxRPCDispatcherCancel(&self, 0, false));   // Idempotency.
+    TEST_ASSERT_EQUAL(0, udpardRxRPCDispatcherCancel(&self, 9, false));   // Idempotency.
 
     TEST_ASSERT_EQUAL(-UDPARD_ERROR_ARGUMENT, udpardRxRPCDispatcherCancel(&self, 0xFFFF, true));
     TEST_ASSERT_EQUAL(-UDPARD_ERROR_ARGUMENT, udpardRxRPCDispatcherCancel(nullptr, 123, false));
