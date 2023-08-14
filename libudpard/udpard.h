@@ -844,7 +844,9 @@ void udpardRxSubscriptionFree(struct UdpardRxSubscription* const self);
 /// fragment of the reassembled transfer payload or free it using the corresponding memory resource
 /// (see UdpardRxMemoryResources) if the datagram is not needed for reassembly. Because of the ownership transfer,
 /// the datagram payload buffer has to be mutable (non-const).
-/// In the case of an invalid argument error the library will attempt to free the datagram payload buffer.
+/// One exception is that if the "self" pointer is invalid, the library will be unable to process or free the datagram,
+/// which may lead to a memory leak in the application; hence, the caller should always check that the "self" pointer
+/// is always valid.
 ///
 /// The accepted datagram may either be invalid, carry a non-final part of a multi-frame transfer,
 /// carry a final part of a valid multi-frame transfer, or carry a valid single-frame transfer.
@@ -1020,6 +1022,8 @@ int_fast8_t udpardRxRPCDispatcherCancel(struct UdpardRxRPCDispatcher* const self
 /// Datagrams received from the sockets of this RPC service dispatcher are fed into this function.
 /// It is the analog of udpardRxSubscriptionReceive for RPC-service transfers.
 /// Please refer to the documentation of udpardRxSubscriptionReceive for the usage information.
+///
+/// Frames (datagrams) that belong to transfers for which there is no active RX RPC port are ignored.
 ///
 /// The "out_port" pointer-to-pointer can be used to retrieve the specific UdpardRxRPCPort instance that was used to
 /// process the received transfer. Remember that each UdpardRxRPCPort instance has a user reference field,

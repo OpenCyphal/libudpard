@@ -1698,22 +1698,24 @@ int_fast8_t udpardRxSubscriptionReceive(struct UdpardRxSubscription* const self,
                                         const uint_fast8_t                 redundant_iface_index,
                                         struct UdpardRxTransfer* const     out_transfer)
 {
-    bool        release = true;
-    int_fast8_t result  = -UDPARD_ERROR_ARGUMENT;
+    int_fast8_t result = -UDPARD_ERROR_ARGUMENT;
     if ((self != NULL) && (timestamp_usec != TIMESTAMP_UNSET) && (datagram_payload.data != NULL) &&
         (redundant_iface_index < UDPARD_NETWORK_INTERFACE_COUNT_MAX) && (out_transfer != NULL))
     {
-        result  = rxPortAcceptFrame(&self->port,
+        result = rxPortAcceptFrame(&self->port,
                                    redundant_iface_index,
                                    timestamp_usec,
                                    datagram_payload,
                                    self->memory,
                                    out_transfer);
-        release = false;
     }
-    if ((self != NULL) && release)
+    else if (self != NULL)
     {
         memFreePayload(self->memory.payload, datagram_payload);
+    }
+    else
+    {
+        (void) 0;
     }
     return result;
 }
@@ -1827,13 +1829,13 @@ int_fast8_t udpardRxRPCDispatcherReceive(struct UdpardRxRPCDispatcher* const sel
                                       self->memory,
                                       &out_transfer->base);
                 release = false;
-            }
+            }  // else, the application is not interested in this service-ID (does not know how to handle it).
             // Expose the port instance to the caller if requested.
             if (out_port != NULL)
             {
                 *out_port = item;
             }
-        }
+        }  // else, we didn't accept so we just ignore this frame
     }
     if ((self != NULL) && release)
     {
