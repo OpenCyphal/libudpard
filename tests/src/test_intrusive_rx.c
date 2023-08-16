@@ -334,6 +334,7 @@ static void testParseFrameEmpty(void)
 
 static void testParseFrameInvalidTransferID(void)
 {
+    // The transfer-ID offset is 8 bytes, starting from-->|
     byte_t  data[] = {1,   2,   41,  9,   56, 21, 230, 29, 255, 255, 255, 255,
                       255, 255, 255, 255, 57, 48, 0,   0,  0,   0,   42,  107,  //
                       'a', 'b', 'c'};
