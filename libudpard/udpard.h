@@ -523,6 +523,12 @@ int_fast8_t udpardTxInit(struct UdpardTx* const            self,
 /// The library itself, however, does not use or check this value in any way, so it can be zero if not needed
 /// (this is not recommended for real-time systems).
 ///
+/// Note that due to the priority ordering, transient transfer loss may occur if the user increases the priority
+/// level on a given port. This is because the frames of the new transfer will be enqueued before the frames of
+/// the previous transfer, so the frames of the previous transfer will be transmitted only after the frames of
+/// the new transfer are transmitted, causing the receiver to discard them as duplicates due to their lower transfer-ID.
+/// It is therefore not recommended to change the priority level dynamically.
+///
 /// The function returns the number of UDP datagrams enqueued, which is always a positive number, in case of success.
 /// In case of failure, the function returns a negated error code.
 ///

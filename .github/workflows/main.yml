@@ -28,7 +28,7 @@ jobs:
           -DCMAKE_BUILD_TYPE=Debug
           -DCMAKE_C_COMPILER=${{ matrix.c-compiler }}
           -DCMAKE_CXX_COMPILER=${{ matrix.cxx-compiler }}
-          tests
+          .
       # language=bash
       - run: |
           cd ${{ github.workspace }}/build
@@ -72,7 +72,7 @@ jobs:
           -DCMAKE_CXX_COMPILER=${{ matrix.cxx-compiler }}
           -DCMAKE_CXX_FLAGS="${{ matrix.cxx-flags }}"
           -DNO_STATIC_ANALYSIS=1
-          tests
+          .
       # language=bash
       - run: |
           cd ${{ github.workspace }}/build
