@@ -390,11 +390,11 @@ struct UdpardMemoryResource
 /// datagrams ready for transmission are not enqueued into the local prioritized queue but instead are sent directly
 /// to the network interface driver using a dedicated callback. The callback would accept not just a single
 /// chunk of data but a list of three chunks to avoid copying the source transfer payload: the datagram header,
-/// the payload, and (only for the last frame) the CRC. The driver would then use some form of vectorized IO to
-/// transmit the data; the advantage of this approach is that up to two data copy operations are eliminated from the
-/// stack and the memory allocator is not used at all. The disadvantage is that if the driver callback is blocking,
-/// the application thread will be blocked as well; plus the driver will be responsible for the correct prioritization
-/// of the outgoing datagrams according to the DSCP value.
+/// the payload, and (only for the last frame) the CRC. The driver would then use some form of vectorized IO or
+/// MSG_MORE/UDP_CORK to transmit the data; the advantage of this approach is that up to two data copy operations are
+/// eliminated from the stack and the memory allocator is not used at all. The disadvantage is that if the driver
+/// callback is blocking, the application thread will be blocked as well; plus the driver will be responsible
+/// for the correct prioritization of the outgoing datagrams according to the DSCP value.
 struct UdpardTx
 {
     /// Pointer to the node-ID of the local node, which is used to populate the source node-ID field of outgoing
