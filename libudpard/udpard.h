@@ -527,7 +527,9 @@ int_fast8_t udpardTxInit(struct UdpardTx* const            self,
 /// level on a given port. This is because the frames of the new transfer will be enqueued before the frames of
 /// the previous transfer, so the frames of the previous transfer will be transmitted only after the frames of
 /// the new transfer are transmitted, causing the receiver to discard them as duplicates due to their lower transfer-ID.
-/// It is therefore not recommended to change the priority level dynamically.
+/// To avoid this, it is necessary to wait for all frames originating from the port to be delivered before increasing
+/// the priority level on the port. The "user_transfer_reference" may help here as it allows the user to establish
+/// traceability from enqueued transfer frames (datagrams) back to the port they originate from.
 ///
 /// The function returns the number of UDP datagrams enqueued, which is always a positive number, in case of success.
 /// In case of failure, the function returns a negated error code.
