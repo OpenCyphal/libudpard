@@ -37,7 +37,7 @@ mkdir $BUILD_DIR && cd $BUILD_DIR || die
 # RTFM: https://clang.llvm.org/docs/UsersManual.html#profiling-with-instrumentation
 #       https://clang.llvm.org/docs/SourceBasedCodeCoverage.html
 profile_flags="-fprofile-instr-generate='%p.profraw' -fcoverage-mapping"
-cmake ../tests \
+cmake .. \
 -DNO_STATIC_ANALYSIS=1 \
 -DCMAKE_BUILD_TYPE=Debug \
 -DCMAKE_C_COMPILER=clang \
@@ -47,11 +47,11 @@ cmake ../tests \
 build-wrapper-linux-x86-64 --out-dir . make VERBOSE=1 -j"$(nproc)" || die "Build wrapper failed"
 make test ARGS="--verbose" || die "Test execution failed"
 # These tools shall be of the same version as LLVM/Clang.
-llvm-profdata merge -sparse *.profraw -o profdata || die
+llvm-profdata merge -sparse tests/*.profraw -o profdata || die
 
 # Generate coverage reports both for the SonarCloud scanner and for us humans.
 llvm_cov_objects=""
-for file in test_*_*; do llvm_cov_objects="$llvm_cov_objects -object $file"; done
+for file in tests/test_*_*; do llvm_cov_objects="$llvm_cov_objects -object $file"; done
 echo "llvm-cov objects: $llvm_cov_objects"
 llvm-cov report $llvm_cov_objects -instr-profile=profdata || die
 llvm-cov show   $llvm_cov_objects -instr-profile=profdata -format=text > "coverage.txt"  || die
