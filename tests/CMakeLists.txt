@@ -1,5 +1,7 @@
 # This software is distributed under the terms of the MIT License.
-# Copyright (c) OpenCyphal.
+# Copyright (C) OpenCyphal Development Team  <opencyphal.org>
+# Copyright Amazon.com Inc. or its affiliates.
+# SPDX-License-Identifier: MIT
 # Author: Pavel Kirienko <pavel@opencyphal.org>
 
 cmake_minimum_required(VERSION 3.12)
@@ -14,8 +16,8 @@ enable_testing()
 set(CTEST_OUTPUT_ON_FAILURE ON)
 set(NO_STATIC_ANALYSIS OFF CACHE BOOL "disable udpard static analysis")
 
-set(library_dir "${CMAKE_SOURCE_DIR}/../libudpard")
-set(unity_root "${CMAKE_CURRENT_SOURCE_DIR}/../submodules/unity")
+set(library_dir "${CMAKE_SOURCE_DIR}/libudpard")
+set(unity_root "${CMAKE_SOURCE_DIR}/submodules/unity")
 
 # Use -DNO_STATIC_ANALYSIS=1 to suppress static analysis.
 # If not suppressed, the tools used here shall be available, otherwise the build will fail.
@@ -26,19 +28,6 @@ if (NOT NO_STATIC_ANALYSIS)
         message(FATAL_ERROR "Could not locate clang-tidy")
     endif ()
     message(STATUS "Using clang-tidy: ${clang_tidy}")
-endif ()
-
-# clang-format
-find_program(clang_format NAMES clang-format)
-if (NOT clang_format)
-    message(STATUS "Could not locate clang-format")
-else ()
-    file(GLOB_RECURSE format_files
-            ${library_dir}/*.[ch]
-            ${CMAKE_SOURCE_DIR}/src/*.[ch]
-            ${CMAKE_SOURCE_DIR}/src/*.[ch]pp)
-    message(STATUS "Using clang-format: ${clang_format}; files: ${format_files}")
-    add_custom_target(format COMMAND ${clang_format} -i -fallback-style=none -style=file --verbose ${format_files})
 endif ()
 
 function(gen_test name files compile_definitions compile_flags link_flags c_standard)

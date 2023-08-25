@@ -390,11 +390,11 @@ struct UdpardMemoryResource
 /// datagrams ready for transmission are not enqueued into the local prioritized queue but instead are sent directly
 /// to the network interface driver using a dedicated callback. The callback would accept not just a single
 /// chunk of data but a list of three chunks to avoid copying the source transfer payload: the datagram header,
-/// the payload, and (only for the last frame) the CRC. The driver would then use some form of vectorized IO to
-/// transmit the data; the advantage of this approach is that up to two data copy operations are eliminated from the
-/// stack and the memory allocator is not used at all. The disadvantage is that if the driver callback is blocking,
-/// the application thread will be blocked as well; plus the driver will be responsible for the correct prioritization
-/// of the outgoing datagrams according to the DSCP value.
+/// the payload, and (only for the last frame) the CRC. The driver would then use some form of vectorized IO or
+/// MSG_MORE/UDP_CORK to transmit the data; the advantage of this approach is that up to two data copy operations are
+/// eliminated from the stack and the memory allocator is not used at all. The disadvantage is that if the driver
+/// callback is blocking, the application thread will be blocked as well; plus the driver will be responsible
+/// for the correct prioritization of the outgoing datagrams according to the DSCP value.
 struct UdpardTx
 {
     /// Pointer to the node-ID of the local node, which is used to populate the source node-ID field of outgoing
@@ -522,6 +522,14 @@ int_fast8_t udpardTxInit(struct UdpardTx* const            self,
 /// therefore, normally, the timestamp value should be in the future.
 /// The library itself, however, does not use or check this value in any way, so it can be zero if not needed
 /// (this is not recommended for real-time systems).
+///
+/// Note that due to the priority ordering, transient transfer loss may occur if the user increases the priority
+/// level on a given port. This is because the frames of the new transfer will be enqueued before the frames of
+/// the previous transfer, so the frames of the previous transfer will be transmitted only after the frames of
+/// the new transfer are transmitted, causing the receiver to discard them as duplicates due to their lower transfer-ID.
+/// To avoid this, it is necessary to wait for all frames originating from the port to be delivered before increasing
+/// the priority level on the port. The "user_transfer_reference" may help here as it allows the user to establish
+/// traceability from enqueued transfer frames (datagrams) back to the port they originate from.
 ///
 /// The function returns the number of UDP datagrams enqueued, which is always a positive number, in case of success.
 /// In case of failure, the function returns a negated error code.
