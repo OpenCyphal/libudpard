@@ -1,11 +1,11 @@
-# Compact Cyphal/UDP v1 in C
+# Compact Cyphal/UDP in C
 
 [![Main Workflow](https://github.com/OpenCyphal-Garage/libudpard/actions/workflows/main.yml/badge.svg)](https://github.com/OpenCyphal-Garage/libudpard/actions/workflows/main.yml)
 [![Reliability Rating](https://sonarcloud.io/api/project_badges/measure?project=libudpard&metric=reliability_rating)](https://sonarcloud.io/summary?id=libudpard)
 [![Coverage](https://sonarcloud.io/api/project_badges/measure?project=libudpard&metric=coverage)](https://sonarcloud.io/summary?id=libudpard)
 [![Forum](https://img.shields.io/discourse/users.svg?server=https%3A%2F%2Fforum.opencyphal.org&color=1700b3)](https://forum.opencyphal.org)
 
-LibUDPard is a compact implementation of the Cyphal/UDP protocol stack in C99/C11 for high-integrity real-time
+LibUDPard is a compact implementation of the Cyphal/UDP protocol in C99/C11 for high-integrity real-time
 embedded systems.
 
 [Cyphal](https://opencyphal.org) is an open lightweight data bus standard designed for reliable intravehicular
