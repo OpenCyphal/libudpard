@@ -210,16 +210,7 @@ void testRxRPCDispatcher()
     // Initialize the RPC dispatcher.
     UdpardRxRPCDispatcher self{};
     TEST_ASSERT_EQUAL(-UDPARD_ERROR_ARGUMENT,
-                      udpardRxRPCDispatcherInit(nullptr,
-                                                0xFFFFU,
-                                                {
-                                                    .session  = instrumentedAllocatorMakeMemoryResource(&mem_session),
-                                                    .fragment = instrumentedAllocatorMakeMemoryResource(&mem_fragment),
-                                                    .payload  = instrumentedAllocatorMakeMemoryDeleter(&mem_payload),
-                                                }));
-    TEST_ASSERT_EQUAL(-UDPARD_ERROR_ARGUMENT,
                       udpardRxRPCDispatcherInit(&self,
-                                                0x1042,
                                                 {
                                                     .session  = {nullptr, nullptr, nullptr},
                                                     .fragment = instrumentedAllocatorMakeMemoryResource(&mem_fragment),
@@ -227,7 +218,6 @@ void testRxRPCDispatcher()
                                                 }));
     TEST_ASSERT_EQUAL(0,
                       udpardRxRPCDispatcherInit(&self,
-                                                0x1042,
                                                 {
                                                     .session  = instrumentedAllocatorMakeMemoryResource(&mem_session),
                                                     .fragment = instrumentedAllocatorMakeMemoryResource(&mem_fragment),
@@ -237,12 +227,20 @@ void testRxRPCDispatcher()
     TEST_ASSERT_EQUAL(&instrumentedAllocatorDeallocate, self.memory.session.deallocate);
     TEST_ASSERT_NULL(self.request_ports);
     TEST_ASSERT_NULL(self.response_ports);
-    TEST_ASSERT_EQUAL(0x1042, self.local_node_id);
-    TEST_ASSERT_EQUAL(0xEF011042UL, self.udp_ip_endpoint.ip_address);
-    TEST_ASSERT_EQUAL(9382, self.udp_ip_endpoint.udp_port);
+    TEST_ASSERT_EQUAL(0xFFFF, self.local_node_id);
     TEST_ASSERT_EQUAL(0, mem_session.allocated_fragments);
     TEST_ASSERT_EQUAL(0, mem_fragment.allocated_fragments);
     TEST_ASSERT_EQUAL(0, mem_payload.allocated_fragments);
+
+    // Start the dispatcher by setting the local node ID.
+    UdpardUDPIPEndpoint udp_ip_endpoint{};
+    TEST_ASSERT_EQUAL(-UDPARD_ERROR_ARGUMENT, udpardRxRPCDispatcherStart(&self, 0xFFFF, &udp_ip_endpoint));
+    TEST_ASSERT_EQUAL(-UDPARD_ERROR_ARGUMENT, udpardRxRPCDispatcherStart(&self, 0x1042, nullptr));
+    TEST_ASSERT_EQUAL(0, udpardRxRPCDispatcherStart(&self, 0x1042, &udp_ip_endpoint));
+    TEST_ASSERT_EQUAL(-UDPARD_ERROR_ARGUMENT, udpardRxRPCDispatcherStart(&self, 0x1042, &udp_ip_endpoint));
+    TEST_ASSERT_EQUAL(0x1042, self.local_node_id);
+    TEST_ASSERT_EQUAL(0xEF011042UL, udp_ip_endpoint.ip_address);
+    TEST_ASSERT_EQUAL(9382, udp_ip_endpoint.udp_port);
 
     // Add a request port.
     UdpardRxRPCPort port_request_foo{};

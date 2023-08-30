@@ -1721,19 +1721,32 @@ int_fast8_t udpardRxSubscriptionReceive(struct UdpardRxSubscription* const self,
 }
 
 int_fast8_t udpardRxRPCDispatcherInit(struct UdpardRxRPCDispatcher* const  self,
-                                      const UdpardNodeID                   local_node_id,
                                       const struct UdpardRxMemoryResources memory)
 {
     int_fast8_t result = -UDPARD_ERROR_ARGUMENT;
-    if ((self != NULL) && (local_node_id <= UDPARD_NODE_ID_MAX) && rxValidateMemoryResources(memory))
+    if ((self != NULL) && rxValidateMemoryResources(memory))
     {
         memZero(sizeof(*self), self);
-        self->local_node_id   = local_node_id;
-        self->udp_ip_endpoint = makeServiceUDPIPEndpoint(local_node_id);
-        self->memory          = memory;
-        self->request_ports   = NULL;
-        self->response_ports  = NULL;
-        result                = 0;
+        self->local_node_id  = UDPARD_NODE_ID_UNSET;
+        self->memory         = memory;
+        self->request_ports  = NULL;
+        self->response_ports = NULL;
+        result               = 0;
+    }
+    return result;
+}
+
+int_fast8_t udpardRxRPCDispatcherStart(struct UdpardRxRPCDispatcher* const self,
+                                       const UdpardNodeID                  local_node_id,
+                                       struct UdpardUDPIPEndpoint* const   out_udp_ip_endpoint)
+{
+    int_fast8_t result = -UDPARD_ERROR_ARGUMENT;
+    if ((self != NULL) && (out_udp_ip_endpoint != NULL) && (local_node_id <= UDPARD_NODE_ID_MAX) &&
+        (self->local_node_id > UDPARD_NODE_ID_MAX))
+    {
+        self->local_node_id  = local_node_id;
+        *out_udp_ip_endpoint = makeServiceUDPIPEndpoint(local_node_id);
+        result               = 0;
     }
     return result;
 }

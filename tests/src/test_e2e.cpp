@@ -427,7 +427,9 @@ void testRPC()
     }
     // Initialize the RPC dispatcher and the RPC services.
     UdpardRxRPCDispatcher dispatcher{};
-    TEST_ASSERT_EQUAL(0, udpardRxRPCDispatcherInit(&dispatcher, 4321, mem_rx));
+    TEST_ASSERT_EQUAL(0, udpardRxRPCDispatcherInit(&dispatcher, mem_rx));
+    UdpardUDPIPEndpoint udp_ip_endpoint{};
+    TEST_ASSERT_EQUAL(0, udpardRxRPCDispatcherStart(&dispatcher, 4321, &udp_ip_endpoint));
     UdpardRxRPCPort port_foo_a{};
     UdpardRxRPCPort port_foo_q{};
     TEST_ASSERT_EQUAL(1, udpardRxRPCDispatcherListen(&dispatcher, &port_foo_a, 200, false, 500));
@@ -473,7 +475,7 @@ void testRPC()
     TEST_ASSERT_EQUAL(0, alloc_rx_payload.allocated_fragments);
     const UdpardTxItem* tx_item = udpardTxPeek(&tx);
     TEST_ASSERT_NOT_NULL(tx_item);
-    TEST_ASSERT_EQUAL(dispatcher.udp_ip_endpoint.ip_address, tx_item->destination.ip_address);
+    TEST_ASSERT_EQUAL(udp_ip_endpoint.ip_address, tx_item->destination.ip_address);
     TEST_ASSERT_NULL(tx_item->next_in_transfer);
     TEST_ASSERT_EQUAL(10'001'000, tx_item->deadline_usec);
     TEST_ASSERT_EQUAL(0xA1, tx_item->dscp);
@@ -533,7 +535,7 @@ void testRPC()
     // Second transfer.
     tx_item = udpardTxPeek(&tx);
     TEST_ASSERT_NOT_NULL(tx_item);
-    TEST_ASSERT_EQUAL(dispatcher.udp_ip_endpoint.ip_address, tx_item->destination.ip_address);
+    TEST_ASSERT_EQUAL(udp_ip_endpoint.ip_address, tx_item->destination.ip_address);
     TEST_ASSERT_NULL(tx_item->next_in_transfer);
     TEST_ASSERT_EQUAL(10'000'000, tx_item->deadline_usec);
     TEST_ASSERT_EQUAL(0xA2, tx_item->dscp);

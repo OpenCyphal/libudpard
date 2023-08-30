@@ -915,28 +915,13 @@ struct UdpardRxRPCPort
 };
 
 /// A service dispatcher is a collection of RPC-service RX ports.
-///
-/// In Cyphal/UDP, each node has a specific IP multicast group address where RPC-service transfers destined to that
-/// node are sent to. This is similar to subject (topic) multicast group addressed except that the node-ID takes
-/// the place of the subject-ID. The IP multicast group address is derived from the local node-ID.
-/// This address is available in the field named "udp_ip_endpoint".
-/// The application is expected to open a separate socket bound to that endpoint per redundant interface,
-/// and then feed the UDP datagrams received from these sockets into udpardRxRPCDispatcherReceive,
-/// collecting UdpardRxRPCTransfer instances at the output.
-///
 /// Anonymous nodes (nodes without a node-ID of their own) cannot use RPC-services.
 struct UdpardRxRPCDispatcher
 {
     /// The local node-ID has to be stored to facilitate correctness checking of incoming transfers.
-    /// This value shall not be modified after initialization. If the local node needs to change its node-ID,
-    /// this dispatcher instance must be destroyed and a new one created instead.
+    /// This value shall not be modified.
     /// READ-ONLY
     UdpardNodeID local_node_id;
-
-    /// The IP address and UDP port number where UDP/IP datagrams carrying RPC-service transfers destined to this node
-    /// will be sent.
-    /// READ-ONLY
-    struct UdpardUDPIPEndpoint udp_ip_endpoint;
 
     /// Refer to UdpardRxMemoryResources.
     struct UdpardRxMemoryResources memory;
@@ -956,23 +941,29 @@ struct UdpardRxRPCTransfer
 
 /// To begin receiving RPC-service requests and/or responses, the application should do this:
 ///
-///     1. Create a new UdpardRxRPCDispatcher instance.
+///     1. Create a new UdpardRxRPCDispatcher instance and initialize it by calling udpardRxRPCDispatcherInit.
 ///
-///     2. Initialize it by calling udpardRxRPCDispatcherInit. Observe that a valid node-ID is required here.
-///        If the application has to perform a plug-and-play node-ID allocation, it has to complete that beforehand.
-///        The dispatcher is not needed to perform PnP node-ID allocation.
-///
-///     3. Per redundant network interface:
-///        - Create a new socket bound to the IP multicast group address and UDP port number specified in the
-///          udp_ip_endpoint field of the initialized RPC dispatcher instance. The library will determine the
-///          endpoint to use based on the node-ID.
-///
-///     4. Announce its interest in specific RPC-services (requests and/or responses) by calling
+///     2. Announce its interest in specific RPC-services (requests and/or responses) by calling
 ///        udpardRxRPCDispatcherListen per each. This can be done at any later point as well.
+///
+///     3. When the local node-ID is known, invoke udpardRxRPCDispatcherStart to inform the library of the
+///        node-ID value of the local node, and at the same time obtain the address of the UDP/IP multicast group
+///        to bind the socket(s) to. This step can be taken before or after the RPC-service port registration.
+///        If the application has to perform a plug-and-play node-ID allocation, it has to complete that beforehand
+///        (the dispatcher is not needed for PnP node-ID allocation).
+///
+///     4. Having obtained the UDP/IP endpoint in the previous step, do per redundant network interface:
+///        - Create a new socket bound to the IP multicast group address and UDP port number obtained earlier.
+///          The multicast group address depends on the local node-ID.
 ///
 ///     5. Read data from the sockets continuously and forward each received UDP datagram to
 ///        udpardRxRPCDispatcherReceive, along with the index of the redundant interface
-///        the datagram was received on. Only those services that were announced in step 4 will be processed.
+///        the datagram was received on. Only those services that were announced in step 3 will be processed.
+///
+/// The reason the local node-ID has to be specified via a separate call is to allow the application to set up the
+/// RPC ports early, without having to be aware of its own node-ID. This is useful for applications that perform
+/// plug-and-play node-ID allocation. Applications where PnP is not needed will simply call both functions
+/// at the same time during early initialization.
 ///
 /// There is no resource deallocation function ("free") for the RPC dispatcher. This is because the dispatcher
 /// does not own any resources. To dispose of a dispatcher safely, the application shall invoke
@@ -983,8 +974,30 @@ struct UdpardRxRPCTransfer
 ///
 /// The time complexity is constant. This function does not invoke the dynamic memory manager.
 int_fast8_t udpardRxRPCDispatcherInit(struct UdpardRxRPCDispatcher* const  self,
-                                      const UdpardNodeID                   local_node_id,
                                       const struct UdpardRxMemoryResources memory);
+
+/// This function must be called exactly once to complete the initialization of the RPC dispatcher.
+/// It takes the node-ID of the local node, which is used to derive the UDP/IP multicast group address
+/// to bind the sockets to, which is returned via the out parameter.
+///
+/// In Cyphal/UDP, each node has a specific IP multicast group address where RPC-service transfers destined to that
+/// node are sent to. This is similar to subject (topic) multicast group addressed except that the node-ID takes
+/// the place of the subject-ID. The IP multicast group address is derived from the local node-ID.
+///
+/// The application is expected to open a separate socket bound to that endpoint per redundant interface,
+/// and then feed the UDP datagrams received from these sockets into udpardRxRPCDispatcherReceive,
+/// collecting UdpardRxRPCTransfer instances at the output.
+///
+/// This function shall not be called more than once per dispatcher. If the local node needs to change its node-ID,
+/// this dispatcher instance must be destroyed and a new one created instead.
+///
+/// The return value is 0 on success.
+/// The return value is a negated UDPARD_ERROR_ARGUMENT if any of the input arguments are invalid.
+///
+/// The time complexity is constant. This function does not invoke the dynamic memory manager.
+int_fast8_t udpardRxRPCDispatcherStart(struct UdpardRxRPCDispatcher* const self,
+                                       const UdpardNodeID                  local_node_id,
+                                       struct UdpardUDPIPEndpoint* const   out_udp_ip_endpoint);
 
 /// This function lets the application register its interest in a particular service-ID and kind (request/response)
 /// by creating an RPC-service RX port. The port pointer shall retain validity until its unregistration or until
