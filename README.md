@@ -61,7 +61,7 @@ flowchart TD
     class LibUDPard OpenCyphal
     LibUDPard <-->|multicast datagrams| UDP
     subgraph domain_udpip["3rd-party UDP/IP+IGMP stack"]
-        UDP <--> IP["IPv4,\nIGMPv1+"] <--> MAC
+        UDP <--> IP["IPv4, IGMPv1+"] <--> MAC
     end
     MAC <--> PHY
 ```
