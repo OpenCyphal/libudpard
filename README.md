@@ -53,6 +53,26 @@ and the network layer below the library using a third-party UDP/IP stack impleme
 In the most straightforward case, the network layer can be based on the standard Berkeley socket API
 or a lightweight embedded stack such as LwIP.
 
+```mermaid
+%%{init: {"fontFamily": "Ubuntu Mono, monospace", "flowchart": {"curve": "basis"}}}%%
+flowchart TD
+    classDef OpenCyphal color:#00DAC6,fill:#1700b3,stroke:#00DAC6,stroke-width:2px,font-weight:600
+    Application <-->|messages,\nrequests,\nresponses| LibUDPard[fa:fa-code LibUDPard]
+    class LibUDPard OpenCyphal
+    LibUDPard <-->|multicast datagrams| UDP
+    subgraph domain_udpip["3rd-party UDP/IP+IGMP stack"]
+        UDP <--> IP["IPv4,\nIGMPv1+"] <--> MAC
+    end
+    MAC <--> PHY
+```
+
+To integrate the library into your application, simply copy the files under `libudpard/` into your project tree,
+or add this entire repository as a submodule.
+The library contains only one translation unit named `udpard.c`;
+no special compiler options are needed to build it.
+The library should be compatible with all conventional computer architectures where a standards-compliant C99 compiler
+is available.
+
 **Read the API docs in [`libudpard/udpard.h`](libudpard/udpard.h).**
 For complete usage examples, please refer to <https://github.com/OpenCyphal-Garage/demos>.
 
