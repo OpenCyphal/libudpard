@@ -548,14 +548,13 @@ int32_t udpardTxPublish(struct UdpardTx* const     self,
                         const UdpardMicrosecond    deadline_usec,
                         const enum UdpardPriority  priority,
                         const UdpardPortID         subject_id,
-                        UdpardTransferID* const    transfer_id,
+                        const UdpardTransferID     transfer_id,
                         const struct UdpardPayload payload,
                         void* const                user_transfer_reference)
 {
     int32_t    out     = -UDPARD_ERROR_ARGUMENT;
     const bool args_ok = (self != NULL) && (self->local_node_id != NULL) && (priority <= UDPARD_PRIORITY_MAX) &&
-                         (subject_id <= UDPARD_SUBJECT_ID_MAX) && (transfer_id != NULL) &&
-                         ((payload.data != NULL) || (payload.size == 0U));
+                         (subject_id <= UDPARD_SUBJECT_ID_MAX) && ((payload.data != NULL) || (payload.size == 0U));
     if (args_ok)
     {
         out = txPush(self,
@@ -564,16 +563,12 @@ int32_t udpardTxPublish(struct UdpardTx* const     self,
                          .priority       = priority,
                          .src_node_id    = *self->local_node_id,
                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
-                         .transfer_id    = *transfer_id,
+                         .transfer_id    = transfer_id,
                          .data_specifier = subject_id,
                      },
                      makeSubjectUDPIPEndpoint(subject_id),
                      payload,
                      user_transfer_reference);
-        if (out > 0)
-        {
-            ++(*transfer_id);
-        }
     }
     return out;
 }
@@ -583,14 +578,14 @@ int32_t udpardTxRequest(struct UdpardTx* const     self,
                         const enum UdpardPriority  priority,
                         const UdpardPortID         service_id,
                         const UdpardNodeID         server_node_id,
-                        UdpardTransferID* const    transfer_id,
+                        const UdpardTransferID     transfer_id,
                         const struct UdpardPayload payload,
                         void* const                user_transfer_reference)
 {
     int32_t    out     = -UDPARD_ERROR_ARGUMENT;
     const bool args_ok = (self != NULL) && (self->local_node_id != NULL) && (priority <= UDPARD_PRIORITY_MAX) &&
                          (service_id <= UDPARD_SERVICE_ID_MAX) && (server_node_id <= UDPARD_NODE_ID_MAX) &&
-                         (transfer_id != NULL) && ((payload.data != NULL) || (payload.size == 0U));
+                         ((payload.data != NULL) || (payload.size == 0U));
     if (args_ok)
     {
         out = txPush(self,
@@ -599,17 +594,13 @@ int32_t udpardTxRequest(struct UdpardTx* const     self,
                          .priority       = priority,
                          .src_node_id    = *self->local_node_id,
                          .dst_node_id    = server_node_id,
-                         .transfer_id    = *transfer_id,
+                         .transfer_id    = transfer_id,
                          .data_specifier = DATA_SPECIFIER_SERVICE_NOT_MESSAGE_MASK |
                                            DATA_SPECIFIER_SERVICE_REQUEST_NOT_RESPONSE_MASK | service_id,
                      },
                      makeServiceUDPIPEndpoint(server_node_id),
                      payload,
                      user_transfer_reference);
-        if (out > 0)
-        {
-            ++(*transfer_id);
-        }
     }
     return out;
 }

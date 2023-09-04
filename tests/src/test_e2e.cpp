@@ -101,7 +101,7 @@ void testPubSub()
                                       10'000'000,
                                       UdpardPrioritySlow,
                                       5000,
-                                      &transfer_id.at(0),
+                                      transfer_id.at(0)++,
                                       makePayload("Last night, I had a dream."),
                                       nullptr));
     const std::string_view Eden =
@@ -114,7 +114,7 @@ void testPubSub()
                                       10'001'000,
                                       UdpardPriorityNominal,
                                       5000,
-                                      &transfer_id.at(0),
+                                      transfer_id.at(0),
                                       makePayload(Eden),
                                       nullptr));
     node_id = 42;  // Change the node-ID to allow multi-frame transfers, then try again.
@@ -123,7 +123,7 @@ void testPubSub()
                                       10'002'000,
                                       UdpardPriorityOptional,
                                       5000,
-                                      &transfer_id.at(0),
+                                      transfer_id.at(0)++,
                                       makePayload(Eden),
                                       nullptr));
     TEST_ASSERT_EQUAL(5, tx.queue_size);
@@ -136,7 +136,7 @@ void testPubSub()
                                       10'003'000,
                                       UdpardPriorityNominal,
                                       5001,
-                                      &transfer_id.at(1),
+                                      transfer_id.at(1)++,
                                       makePayload(Later),
                                       nullptr));
     TEST_ASSERT_EQUAL(6, tx.queue_size);
@@ -148,7 +148,7 @@ void testPubSub()
                                       10'004'000,
                                       UdpardPriorityNominal,
                                       5002,
-                                      &transfer_id.at(2),
+                                      transfer_id.at(2)++,
                                       makePayload(Dark),
                                       nullptr));
     TEST_ASSERT_EQUAL(7, tx.queue_size);
@@ -446,7 +446,7 @@ void testRPC()
                                             UdpardPriorityFast,
                                             200,
                                             4321,
-                                            &transfer_id_shared,
+                                            transfer_id_shared++,
                                             makePayload(Entry),
                                             nullptr));
     TEST_ASSERT_EQUAL(1, tx.queue_size);
@@ -464,7 +464,6 @@ void testRPC()
                                             makePayload(Forest),
                                             nullptr));
     TEST_ASSERT_EQUAL(2, tx.queue_size);
-    TEST_ASSERT_EQUAL(1, transfer_id_shared);  // Not incremented.
 
     // Transmit the enqueued frames by pushing them into the RPC dispatcher.
     UdpardRxRPCTransfer transfer{};

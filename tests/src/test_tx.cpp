@@ -99,10 +99,9 @@ void testPublish()
                                       1234567890,
                                       UdpardPriorityNominal,
                                       0x1432,
-                                      &transfer_id,
+                                      transfer_id++,
                                       {.size = FleetingEvents.size(), .data = FleetingEvents.data()},
                                       &user_transfer_referent));
-    TEST_ASSERT_EQUAL(1, transfer_id);
     TEST_ASSERT_EQUAL(1, alloc.allocated_fragments);
     TEST_ASSERT_EQUAL(1, tx.queue_size);
     const auto* frame = udpardTxPeek(&tx);
@@ -133,10 +132,9 @@ void testPublish()
                                       1234567890,
                                       UdpardPriorityNominal,
                                       0x1432,
-                                      &transfer_id,
+                                      transfer_id,
                                       {.size = tx.mtu * 2, .data = FleetingEvents.data()},
                                       nullptr));
-    TEST_ASSERT_EQUAL(1, transfer_id);
 
     // Attempt to publish a multi-frame transfer with an anonymous local node.
     {
@@ -150,10 +148,9 @@ void testPublish()
                                           1234567890,
                                           UdpardPriorityNominal,
                                           0x1432,
-                                          &transfer_id,
+                                          transfer_id,
                                           {.size = FleetingEvents.size(), .data = FleetingEvents.data()},
                                           nullptr));
-        TEST_ASSERT_EQUAL(1, transfer_id);
     }
 
     // Invalid Tx.
@@ -162,10 +159,9 @@ void testPublish()
                                       1234567890,
                                       UdpardPriorityNominal,
                                       0x1432,
-                                      &transfer_id,
+                                      transfer_id,
                                       {.size = FleetingEvents.size(), .data = FleetingEvents.data()},
                                       nullptr));
-    TEST_ASSERT_EQUAL(1, transfer_id);
     // Invalid local node-ID.
     {
         auto tx_bad          = tx;
@@ -175,10 +171,9 @@ void testPublish()
                                           1234567890,
                                           UdpardPriorityNominal,
                                           0x1432,
-                                          &transfer_id,
+                                          transfer_id,
                                           {.size = FleetingEvents.size(), .data = FleetingEvents.data()},
                                           nullptr));
-        TEST_ASSERT_EQUAL(1, transfer_id);
     }
     // Invalid priority.
     {
@@ -188,10 +183,9 @@ void testPublish()
                                           1234567890,
                                           (UdpardPriority) (bad_priority + 1),
                                           0x1432,
-                                          &transfer_id,
+                                          transfer_id,
                                           {.size = FleetingEvents.size(), .data = FleetingEvents.data()},
                                           nullptr));
-        TEST_ASSERT_EQUAL(1, transfer_id);
     }
     // Invalid subject.
     TEST_ASSERT_EQUAL(-UDPARD_ERROR_ARGUMENT,
@@ -199,17 +193,7 @@ void testPublish()
                                       1234567890,
                                       UdpardPriorityNominal,
                                       0xFFFFU,
-                                      &transfer_id,
-                                      {.size = FleetingEvents.size(), .data = FleetingEvents.data()},
-                                      nullptr));
-    TEST_ASSERT_EQUAL(1, transfer_id);
-    // Invalid transfer-ID pointer.
-    TEST_ASSERT_EQUAL(-UDPARD_ERROR_ARGUMENT,
-                      udpardTxPublish(&tx,
-                                      1234567890,
-                                      UdpardPriorityNominal,
-                                      0x1432,
-                                      nullptr,
+                                      transfer_id,
                                       {.size = FleetingEvents.size(), .data = FleetingEvents.data()},
                                       nullptr));
     // Invalid payload pointer.
@@ -218,7 +202,7 @@ void testPublish()
                                       1234567890,
                                       UdpardPriorityNominal,
                                       0x1432,
-                                      &transfer_id,
+                                      transfer_id,
                                       {.size = FleetingEvents.size(), .data = nullptr},
                                       nullptr));
     TEST_ASSERT_EQUAL(1, transfer_id);
@@ -248,10 +232,9 @@ void testRequest()
                                       UdpardPriorityNominal,
                                       0x123,
                                       0x1538,
-                                      &transfer_id,
+                                      transfer_id++,
                                       {.size = FleetingEvents.size(), .data = FleetingEvents.data()},
                                       &user_transfer_referent));
-    TEST_ASSERT_EQUAL(1, transfer_id);
     TEST_ASSERT_EQUAL(1, alloc.allocated_fragments);
     TEST_ASSERT_EQUAL(1, tx.queue_size);
     const auto* frame = udpardTxPeek(&tx);
@@ -283,10 +266,9 @@ void testRequest()
                                       UdpardPriorityNominal,
                                       0x123,
                                       0x1538,
-                                      &transfer_id,
+                                      transfer_id,
                                       {.size = tx.mtu * 2, .data = FleetingEvents.data()},
                                       nullptr));
-    TEST_ASSERT_EQUAL(1, transfer_id);
 
     // Attempt to send a service transfer from an anonymous node.
     {
@@ -301,10 +283,9 @@ void testRequest()
                                           UdpardPriorityNominal,
                                           0x123,
                                           0x1538,
-                                          &transfer_id,
+                                          transfer_id,
                                           {.size = FleetingEvents.size(), .data = FleetingEvents.data()},
                                           nullptr));
-        TEST_ASSERT_EQUAL(1, transfer_id);
     }
 
     // Invalid Tx.
@@ -314,10 +295,9 @@ void testRequest()
                                       UdpardPriorityNominal,
                                       0x123,
                                       0x1538,
-                                      &transfer_id,
+                                      transfer_id,
                                       {.size = FleetingEvents.size(), .data = FleetingEvents.data()},
                                       nullptr));
-    TEST_ASSERT_EQUAL(1, transfer_id);
     // Invalid local node-ID.
     {
         auto tx_bad          = tx;
@@ -328,10 +308,9 @@ void testRequest()
                                           UdpardPriorityNominal,
                                           0x123,
                                           0x1538,
-                                          &transfer_id,
+                                          transfer_id,
                                           {.size = FleetingEvents.size(), .data = FleetingEvents.data()},
                                           nullptr));
-        TEST_ASSERT_EQUAL(1, transfer_id);
     }
     // Invalid priority.
     {
@@ -342,10 +321,9 @@ void testRequest()
                                           (UdpardPriority) (bad_priority + 1),
                                           0x123,
                                           0x1538,
-                                          &transfer_id,
+                                          transfer_id,
                                           {.size = FleetingEvents.size(), .data = FleetingEvents.data()},
                                           nullptr));
-        TEST_ASSERT_EQUAL(1, transfer_id);
     }
     // Invalid remote node-ID.
     TEST_ASSERT_EQUAL(-UDPARD_ERROR_ARGUMENT,
@@ -354,10 +332,9 @@ void testRequest()
                                       UdpardPriorityNominal,
                                       0x123,
                                       0xFFFF,
-                                      &transfer_id,
+                                      transfer_id,
                                       {.size = FleetingEvents.size(), .data = FleetingEvents.data()},
                                       nullptr));
-    TEST_ASSERT_EQUAL(1, transfer_id);
     // Invalid service-ID.
     TEST_ASSERT_EQUAL(-UDPARD_ERROR_ARGUMENT,
                       udpardTxRequest(&tx,
@@ -365,18 +342,7 @@ void testRequest()
                                       UdpardPriorityNominal,
                                       0xFFFFU,
                                       0x1538,
-                                      &transfer_id,
-                                      {.size = FleetingEvents.size(), .data = FleetingEvents.data()},
-                                      nullptr));
-    TEST_ASSERT_EQUAL(1, transfer_id);
-    // Invalid transfer-ID pointer.
-    TEST_ASSERT_EQUAL(-UDPARD_ERROR_ARGUMENT,
-                      udpardTxRequest(&tx,
-                                      1234567890,
-                                      UdpardPriorityNominal,
-                                      0x123,
-                                      0x1538,
-                                      nullptr,
+                                      transfer_id,
                                       {.size = FleetingEvents.size(), .data = FleetingEvents.data()},
                                       nullptr));
     // Invalid payload pointer.
@@ -386,7 +352,7 @@ void testRequest()
                                       UdpardPriorityNominal,
                                       0x123,
                                       0x1538,
-                                      &transfer_id,
+                                      transfer_id,
                                       {.size = FleetingEvents.size(), .data = nullptr},
                                       nullptr));
     TEST_ASSERT_EQUAL(1, transfer_id);
