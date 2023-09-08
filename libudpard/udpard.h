@@ -506,12 +506,12 @@ int_fast8_t udpardTxInit(struct UdpardTx* const            self,
 /// The MTU of the generated datagrams is dependent on the value of the MTU setting at the time when this function
 /// is invoked. The MTU setting can be changed arbitrarily between invocations.
 ///
-/// The pointer to the transfer_id will be used to populate the transfer_id field of the generated datagrams and
-/// then to increment the pointed-to value to prepare it for the next publication.
+/// The transfer_id parameter will be used to populate the transfer_id field of the generated datagrams.
+/// The caller shall increment the transfer-ID counter after each successful invocation of this function
+/// per redundant interface; the same transfer published over redundant interfaces shall have the same transfer-ID.
 /// There shall be a separate transfer-ID counter per subject (topic).
-/// The lifetime of the pointed-to transfer-ID counter must exceed the lifetime of the intent to publish on this
-/// subject (topic); one common approach is to use a static variable.
-/// The transfer-ID counter is not modified if the function fails.
+/// The lifetime of the transfer-ID counter must exceed the lifetime of the intent to publish on this subject (topic);
+/// one common approach is to use a static variable or a field in a type that contains the state of the publisher.
 ///
 /// The user_transfer_reference is an opaque pointer that will be assigned to the user_transfer_reference field of
 /// each enqueued item. The library itself does not use or check this value in any way, so it can be NULL if not needed.
@@ -558,19 +558,21 @@ int32_t udpardTxPublish(struct UdpardTx* const     self,
                         const UdpardMicrosecond    deadline_usec,
                         const enum UdpardPriority  priority,
                         const UdpardPortID         subject_id,
-                        UdpardTransferID* const    transfer_id,
+                        const UdpardTransferID     transfer_id,
                         const struct UdpardPayload payload,
                         void* const                user_transfer_reference);
 
 /// This is similar to udpardTxPublish except that it is intended for service request transfers.
 /// It takes the node-ID of the server that is intended to receive the request.
 ///
-/// The pointer to the transfer_id will be used to populate the transfer_id field of the generated datagrams and
-/// then to increment the pointed-to value to prepare it for the next request.
+/// The transfer_id parameter will be used to populate the transfer_id field of the generated datagrams.
+/// The caller shall increment the transfer-ID counter after each successful invocation of this function
+/// per redundant interface; the same transfer published over redundant interfaces shall have the same transfer-ID.
 /// There shall be a separate transfer-ID counter per pair of (service-ID, server node-ID).
-/// The lifetime of the pointed-to transfer-ID counter must exceed the lifetime of the intent to invoke this service
-/// on this server node; one common approach is to use a static array indexed by the server node-ID per service-ID
-/// (memory-constrained applications may choose a more compact container).
+/// The lifetime of the transfer-ID counter must exceed the lifetime of the intent to invoke this service
+/// on this server node; one common approach is to use a static array or a struct field indexed by
+/// the server node-ID per service-ID (memory-constrained applications may choose a more compact container;
+/// e.g., a list or an AVL tree).
 ///
 /// Additional error conditions:
 ///     - UDPARD_ERROR_ARGUMENT if the server node-ID value is invalid.
@@ -582,14 +584,13 @@ int32_t udpardTxRequest(struct UdpardTx* const     self,
                         const enum UdpardPriority  priority,
                         const UdpardPortID         service_id,
                         const UdpardNodeID         server_node_id,
-                        UdpardTransferID* const    transfer_id,
+                        const UdpardTransferID     transfer_id,
                         const struct UdpardPayload payload,
                         void* const                user_transfer_reference);
 
-/// This is similar to udpardTxRequest except that it takes the node-ID of the client instead of server,
-/// and the transfer-ID is passed by value rather than by pointer.
-/// The transfer-ID is passed by value because when responding to an RPC-service request, the server must
-/// reuse the transfer-ID value of the request (this is to allow the client to match responses with their requests).
+/// This is similar to udpardTxRequest except that it takes the node-ID of the client instead of server.
+/// The transfer-ID must be the same as that of the corresponding RPC-request transfer;
+/// this is to allow the client to match responses with their requests.
 int32_t udpardTxRespond(struct UdpardTx* const     self,
                         const UdpardMicrosecond    deadline_usec,
                         const enum UdpardPriority  priority,
