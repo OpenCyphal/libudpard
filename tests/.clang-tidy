@@ -43,6 +43,5 @@ Checks: >-
   -cppcoreguidelines-owning-memory,
 WarningsAsErrors: '*'
 HeaderFilterRegex: '.*\.hpp'
-AnalyzeTemporaryDtors: false
 FormatStyle: file
 ...
