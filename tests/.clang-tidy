@@ -41,6 +41,9 @@ Checks: >-
   -modernize-macro-to-enum,
   -modernize-use-trailing-return-type,
   -cppcoreguidelines-owning-memory,
+  -misc-include-cleaner,
+  -performance-avoid-endl,
+  -cppcoreguidelines-avoid-do-while,
 WarningsAsErrors: '*'
 HeaderFilterRegex: '.*\.hpp'
 FormatStyle: file

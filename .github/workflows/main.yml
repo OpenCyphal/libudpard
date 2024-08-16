@@ -6,7 +6,7 @@ jobs:
   debug:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
-    container: ghcr.io/opencyphal/toolshed:ts22.4.3
+    container: ghcr.io/opencyphal/toolshed:ts22.4.10
     strategy:
       matrix:
         toolchain: [ 'clang', 'gcc' ]
@@ -46,7 +46,7 @@ jobs:
   optimizations:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
-    container: ghcr.io/opencyphal/toolshed:ts22.4.3
+    container: ghcr.io/opencyphal/toolshed:ts22.4.10
     strategy:
       matrix:
         toolchain: [ 'clang', 'gcc' ]
@@ -55,7 +55,7 @@ jobs:
           - toolchain: gcc
             c-compiler: gcc
             cxx-compiler: g++
-            cxx-flags: -fno-strict-aliasing  # GCC in MinSizeRel C++20 mode misoptimizes the Cavl test.
+            cxx-flags: -fno-strict-aliasing # GCC in MinSizeRel C++20 mode misoptimizes the Cavl test.
           - toolchain: clang
             c-compiler: clang
             cxx-compiler: clang++
@@ -123,7 +123,7 @@ jobs:
 
   sonar:
     runs-on: ubuntu-latest
-    container: ghcr.io/opencyphal/toolshed:ts22.4.3
+    container: ghcr.io/opencyphal/toolshed:ts22.4.10
     if: >
       (
         (github.event_name == 'pull_request' || contains(github.ref, '/main') || contains(github.ref, '/release')) &&
