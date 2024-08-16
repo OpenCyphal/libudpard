@@ -55,7 +55,7 @@ jobs:
           - toolchain: gcc
             c-compiler: gcc
             cxx-compiler: g++
-            cxx-flags: -fno-strict-aliasing -fno-delete-null-pointer-checks # GCC in MinSizeRel C++20 mode misoptimizes the Cavl test.
+            cxx-flags: -fno-strict-aliasing # GCC in MinSizeRel C++20 mode misoptimizes the Cavl test.
           - toolchain: clang
             c-compiler: clang
             cxx-compiler: clang++
