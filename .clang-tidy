@@ -22,7 +22,7 @@ Checks: >-
   -hicpp-static-assert,
   -misc-static-assert,
   -modernize-macro-to-enum,
-  -cppcoreguidelines-macro-to-enum,-warnings-as-errors,
+  -cppcoreguidelines-macro-to-enum,
   -bugprone-casting-through-void,
   -misc-include-cleaner,
   -cppcoreguidelines-avoid-do-while,
