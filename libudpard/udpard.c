@@ -1084,18 +1084,13 @@ static inline bool rxSlotEject(size_t* const                out_payload_size,
     {
         result            = true;
         *out_payload_size = eject_ctx.retain_size;
-        if (eject_ctx.head != NULL)
-        {
-            // This is the single-frame transfer optimization suggested by Scott: we free the first fragment handle
-            // early by moving the contents into the rx_transfer structure by value.
-            // No need to free the payload buffer because it has been transferred to the transfer.
-            *out_payload_head = *eject_ctx.head;  // Slice off the derived type fields as they are not needed.
-            memFree(memory.fragment, sizeof(RxFragment), eject_ctx.head);
-        }
-        else
-        {
-            *out_payload_head = (struct UdpardFragment){.next = NULL, .view = {0, NULL}, .origin = {0, NULL}};
-        }
+        *out_payload_head = (eject_ctx.head != NULL)
+                                ? (*eject_ctx.head)  // Slice off the derived type fields as they are not needed.
+                                : (struct UdpardFragment){.next = NULL, .view = {0, NULL}, .origin = {0, NULL}};
+        // This is the single-frame transfer optimization suggested by Scott: we free the first fragment handle
+        // early by moving the contents into the rx_transfer structure by value.
+        // No need to free the payload buffer because it has been transferred to the transfer.
+        memFree(memory.fragment, sizeof(RxFragment), eject_ctx.head);  // May be empty.
     }
     else  // The transfer turned out to be invalid. We have to free the fragments. Can't use the tree anymore.
     {
