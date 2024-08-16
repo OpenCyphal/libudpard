@@ -140,7 +140,10 @@ static inline void memFree(const struct UdpardMemoryResource memory, const size_
 static inline void memFreePayload(const struct UdpardMemoryDeleter memory, const struct UdpardMutablePayload payload)
 {
     UDPARD_ASSERT(memory.deallocate != NULL);
-    memory.deallocate(memory.user_reference, payload.size, payload.data);
+    if (payload.data != NULL)
+    {
+        memory.deallocate(memory.user_reference, payload.size, payload.data);
+    }
 }
 
 static inline void memZero(const size_t size, void* const data)
