@@ -46,7 +46,7 @@ jobs:
   optimizations:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
-    container: ghcr.io/opencyphal/toolshed:ts22.4.3
+    container: ghcr.io/opencyphal/toolshed:ts22.4.10
     strategy:
       matrix:
         toolchain: [ 'clang', 'gcc' ]
@@ -123,7 +123,7 @@ jobs:
 
   sonar:
     runs-on: ubuntu-latest
-    container: ghcr.io/opencyphal/toolshed:ts22.4.3
+    container: ghcr.io/opencyphal/toolshed:ts22.4.10
     if: >
       (
         (github.event_name == 'pull_request' || contains(github.ref, '/main') || contains(github.ref, '/release')) &&
