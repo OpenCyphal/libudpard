@@ -404,13 +404,13 @@ static inline byte_t* txSerializeHeader(byte_t* const          destination_buffe
 /// Produces a chain of Tx queue items for later insertion into the Tx queue. The tail is NULL if OOM.
 /// The caller is responsible for freeing the memory allocated for the chain.
 static inline TxChain txMakeChain(const struct UdpardTxMemoryResources memory,
-                                  const uint_least8_t                  dscp_value_per_priority[UDPARD_PRIORITY_MAX + 1U],
-                                  const size_t                         mtu,
-                                  const UdpardMicrosecond              deadline_usec,
-                                  const TransferMetadata               meta,
-                                  const struct UdpardUDPIPEndpoint     endpoint,
-                                  const struct UdpardPayload           payload,
-                                  void* const                          user_transfer_reference)
+                                  const uint_least8_t              dscp_value_per_priority[UDPARD_PRIORITY_MAX + 1U],
+                                  const size_t                     mtu,
+                                  const UdpardMicrosecond          deadline_usec,
+                                  const TransferMetadata           meta,
+                                  const struct UdpardUDPIPEndpoint endpoint,
+                                  const struct UdpardPayload       payload,
+                                  void* const                      user_transfer_reference)
 {
     UDPARD_ASSERT(mtu > 0);
     UDPARD_ASSERT((payload.data != NULL) || (payload.size == 0U));
@@ -443,9 +443,9 @@ static inline TxChain txMakeChain(const struct UdpardTxMemoryResources memory,
         {
             break;
         }
-        const bool last          = (payload_size_with_crc - offset) <= mtu;
+        const bool    last       = (payload_size_with_crc - offset) <= mtu;
         byte_t* const dst_buffer = item->base.datagram_payload.data;
-        byte_t* write_ptr        = txSerializeHeader(dst_buffer, meta, (uint32_t) out.count, last);
+        byte_t*       write_ptr  = txSerializeHeader(dst_buffer, meta, (uint32_t) out.count, last);
         if (offset < payload.size)
         {
             const size_t progress = smaller(payload.size - offset, mtu);

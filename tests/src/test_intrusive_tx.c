@@ -96,15 +96,15 @@ static void testMakeChainEmpty(void)
     instrumentedAllocatorNew(&alloc);
     const struct UdpardTxMemoryResources mem = {
         .fragment = instrumentedAllocatorMakeMemoryResource(&alloc),
-        .payload = instrumentedAllocatorMakeMemoryResource(&alloc),
+        .payload  = instrumentedAllocatorMakeMemoryResource(&alloc),
     };
-    char                        user_transfer_referent = '\0';
-    const TransferMetadata      meta                   = {
-                               .priority       = UdpardPriorityFast,
-                               .src_node_id    = 1234,
-                               .dst_node_id    = 2345,
-                               .data_specifier = 5432,
-                               .transfer_id    = 0xBADC0FFEE0DDF00DULL,
+    char                   user_transfer_referent = '\0';
+    const TransferMetadata meta                   = {
+                          .priority       = UdpardPriorityFast,
+                          .src_node_id    = 1234,
+                          .dst_node_id    = 2345,
+                          .data_specifier = 5432,
+                          .transfer_id    = 0xBADC0FFEE0DDF00DULL,
     };
     const TxChain chain = txMakeChain(mem,
                                       (byte_t[]){11, 22, 33, 44, 55, 66, 77, 88},
@@ -143,15 +143,15 @@ static void testMakeChainSingleMaxMTU(void)
     instrumentedAllocatorNew(&alloc);
     const struct UdpardTxMemoryResources mem = {
         .fragment = instrumentedAllocatorMakeMemoryResource(&alloc),
-        .payload = instrumentedAllocatorMakeMemoryResource(&alloc),
+        .payload  = instrumentedAllocatorMakeMemoryResource(&alloc),
     };
-    char                        user_transfer_referent = '\0';
-    const TransferMetadata      meta                   = {
-                               .priority       = UdpardPrioritySlow,
-                               .src_node_id    = 4321,
-                               .dst_node_id    = 5432,
-                               .data_specifier = 7766,
-                               .transfer_id    = 0x0123456789ABCDEFULL,
+    char                   user_transfer_referent = '\0';
+    const TransferMetadata meta                   = {
+                          .priority       = UdpardPrioritySlow,
+                          .src_node_id    = 4321,
+                          .dst_node_id    = 5432,
+                          .data_specifier = 7766,
+                          .transfer_id    = 0x0123456789ABCDEFULL,
     };
     const TxChain chain = txMakeChain(mem,
                                       (byte_t[]){11, 22, 33, 44, 55, 66, 77, 88},
@@ -197,9 +197,9 @@ static void testMakeChainSingleFrameDefaultMTU(void)
     instrumentedAllocatorNew(&alloc);
     const struct UdpardTxMemoryResources mem = {
         .fragment = instrumentedAllocatorMakeMemoryResource(&alloc),
-        .payload = instrumentedAllocatorMakeMemoryResource(&alloc),
+        .payload  = instrumentedAllocatorMakeMemoryResource(&alloc),
     };
-    const byte_t                payload[UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME + 1] = {0};
+    const byte_t payload[UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME + 1] = {0};
     {  // Ensure UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME bytes fit in a single frame with the default MTU.
         const TxChain chain = txMakeChain(mem,
                                           (byte_t[]){11, 22, 33, 44, 55, 66, 77, 88},
@@ -257,15 +257,15 @@ static void testMakeChainThreeFrames(void)
     instrumentedAllocatorNew(&alloc);
     const struct UdpardTxMemoryResources mem = {
         .fragment = instrumentedAllocatorMakeMemoryResource(&alloc),
-        .payload = instrumentedAllocatorMakeMemoryResource(&alloc),
+        .payload  = instrumentedAllocatorMakeMemoryResource(&alloc),
     };
-    char                        user_transfer_referent = '\0';
-    const TransferMetadata      meta                   = {
-                               .priority       = UdpardPriorityNominal,
-                               .src_node_id    = 4321,
-                               .dst_node_id    = 5432,
-                               .data_specifier = 7766,
-                               .transfer_id    = 0x0123456789ABCDEFULL,
+    char                   user_transfer_referent = '\0';
+    const TransferMetadata meta                   = {
+                          .priority       = UdpardPriorityNominal,
+                          .src_node_id    = 4321,
+                          .dst_node_id    = 5432,
+                          .data_specifier = 7766,
+                          .transfer_id    = 0x0123456789ABCDEFULL,
     };
     const size_t  mtu   = (EtherealStrengthSize + 4U + 3U) / 3U;  // Force payload split into three frames.
     const TxChain chain = txMakeChain(mem,
@@ -342,15 +342,15 @@ static void testMakeChainCRCSpill1(void)
     instrumentedAllocatorNew(&alloc);
     const struct UdpardTxMemoryResources mem = {
         .fragment = instrumentedAllocatorMakeMemoryResource(&alloc),
-        .payload = instrumentedAllocatorMakeMemoryResource(&alloc),
+        .payload  = instrumentedAllocatorMakeMemoryResource(&alloc),
     };
-    char                        user_transfer_referent = '\0';
-    const TransferMetadata      meta                   = {
-                               .priority       = UdpardPriorityNominal,
-                               .src_node_id    = 4321,
-                               .dst_node_id    = 5432,
-                               .data_specifier = 7766,
-                               .transfer_id    = 0x0123456789ABCDEFULL,
+    char                   user_transfer_referent = '\0';
+    const TransferMetadata meta                   = {
+                          .priority       = UdpardPriorityNominal,
+                          .src_node_id    = 4321,
+                          .dst_node_id    = 5432,
+                          .data_specifier = 7766,
+                          .transfer_id    = 0x0123456789ABCDEFULL,
     };
     const size_t  mtu   = InterstellarWarSize + 3U;
     const TxChain chain = txMakeChain(mem,
@@ -417,15 +417,15 @@ static void testMakeChainCRCSpill2(void)
     instrumentedAllocatorNew(&alloc);
     const struct UdpardTxMemoryResources mem = {
         .fragment = instrumentedAllocatorMakeMemoryResource(&alloc),
-        .payload = instrumentedAllocatorMakeMemoryResource(&alloc),
+        .payload  = instrumentedAllocatorMakeMemoryResource(&alloc),
     };
-    char                        user_transfer_referent = '\0';
-    const TransferMetadata      meta                   = {
-                               .priority       = UdpardPriorityNominal,
-                               .src_node_id    = 4321,
-                               .dst_node_id    = 5432,
-                               .data_specifier = 7766,
-                               .transfer_id    = 0x0123456789ABCDEFULL,
+    char                   user_transfer_referent = '\0';
+    const TransferMetadata meta                   = {
+                          .priority       = UdpardPriorityNominal,
+                          .src_node_id    = 4321,
+                          .dst_node_id    = 5432,
+                          .data_specifier = 7766,
+                          .transfer_id    = 0x0123456789ABCDEFULL,
     };
     const size_t  mtu   = InterstellarWarSize + 2U;
     const TxChain chain = txMakeChain(mem,
@@ -492,15 +492,15 @@ static void testMakeChainCRCSpill3(void)
     instrumentedAllocatorNew(&alloc);
     const struct UdpardTxMemoryResources mem = {
         .fragment = instrumentedAllocatorMakeMemoryResource(&alloc),
-        .payload = instrumentedAllocatorMakeMemoryResource(&alloc),
+        .payload  = instrumentedAllocatorMakeMemoryResource(&alloc),
     };
-    char                        user_transfer_referent = '\0';
-    const TransferMetadata      meta                   = {
-                               .priority       = UdpardPriorityNominal,
-                               .src_node_id    = 4321,
-                               .dst_node_id    = 5432,
-                               .data_specifier = 7766,
-                               .transfer_id    = 0x0123456789ABCDEFULL,
+    char                   user_transfer_referent = '\0';
+    const TransferMetadata meta                   = {
+                          .priority       = UdpardPriorityNominal,
+                          .src_node_id    = 4321,
+                          .dst_node_id    = 5432,
+                          .data_specifier = 7766,
+                          .transfer_id    = 0x0123456789ABCDEFULL,
     };
     const size_t  mtu   = InterstellarWarSize + 1U;
     const TxChain chain = txMakeChain(mem,
@@ -567,15 +567,15 @@ static void testMakeChainCRCSpillFull(void)
     instrumentedAllocatorNew(&alloc);
     const struct UdpardTxMemoryResources mem = {
         .fragment = instrumentedAllocatorMakeMemoryResource(&alloc),
-        .payload = instrumentedAllocatorMakeMemoryResource(&alloc),
+        .payload  = instrumentedAllocatorMakeMemoryResource(&alloc),
     };
-    char                        user_transfer_referent = '\0';
-    const TransferMetadata      meta                   = {
-                               .priority       = UdpardPriorityNominal,
-                               .src_node_id    = 4321,
-                               .dst_node_id    = 5432,
-                               .data_specifier = 7766,
-                               .transfer_id    = 0x0123456789ABCDEFULL,
+    char                   user_transfer_referent = '\0';
+    const TransferMetadata meta                   = {
+                          .priority       = UdpardPriorityNominal,
+                          .src_node_id    = 4321,
+                          .dst_node_id    = 5432,
+                          .data_specifier = 7766,
+                          .transfer_id    = 0x0123456789ABCDEFULL,
     };
     const size_t  mtu   = InterstellarWarSize;
     const TxChain chain = txMakeChain(mem,
@@ -638,9 +638,9 @@ static void testPushPeekPopFree(void)
     instrumentedAllocatorNew(&alloc);
     const struct UdpardTxMemoryResources mem = {
         .fragment = instrumentedAllocatorMakeMemoryResource(&alloc),
-        .payload = instrumentedAllocatorMakeMemoryResource(&alloc),
+        .payload  = instrumentedAllocatorMakeMemoryResource(&alloc),
     };
-    const UdpardNodeID          node_id = 1234;
+    const UdpardNodeID node_id = 1234;
     //
     UdpardTx tx = {
         .local_node_id           = &node_id,
@@ -720,9 +720,9 @@ static void testPushPrioritization(void)
     instrumentedAllocatorNew(&alloc);
     const struct UdpardTxMemoryResources mem = {
         .fragment = instrumentedAllocatorMakeMemoryResource(&alloc),
-        .payload = instrumentedAllocatorMakeMemoryResource(&alloc),
+        .payload  = instrumentedAllocatorMakeMemoryResource(&alloc),
     };
-    const UdpardNodeID          node_id = 1234;
+    const UdpardNodeID node_id = 1234;
     //
     UdpardTx tx = {
         .local_node_id           = &node_id,
@@ -894,9 +894,9 @@ static void testPushCapacityLimit(void)
     instrumentedAllocatorNew(&alloc);
     const struct UdpardTxMemoryResources mem = {
         .fragment = instrumentedAllocatorMakeMemoryResource(&alloc),
-        .payload = instrumentedAllocatorMakeMemoryResource(&alloc),
+        .payload  = instrumentedAllocatorMakeMemoryResource(&alloc),
     };
-    const UdpardNodeID          node_id = 1234;
+    const UdpardNodeID node_id = 1234;
     //
     UdpardTx tx = {
         .local_node_id           = &node_id,
@@ -932,9 +932,9 @@ static void testPushOOM(void)
     instrumentedAllocatorNew(&alloc);
     const struct UdpardTxMemoryResources mem = {
         .fragment = instrumentedAllocatorMakeMemoryResource(&alloc),
-        .payload = instrumentedAllocatorMakeMemoryResource(&alloc),
+        .payload  = instrumentedAllocatorMakeMemoryResource(&alloc),
     };
-    const UdpardNodeID          node_id = 1234;
+    const UdpardNodeID node_id = 1234;
     //
     UdpardTx tx = {
         .local_node_id           = &node_id,
@@ -971,9 +971,9 @@ static void testPushAnonymousMultiFrame(void)
     instrumentedAllocatorNew(&alloc);
     const struct UdpardTxMemoryResources mem = {
         .fragment = instrumentedAllocatorMakeMemoryResource(&alloc),
-        .payload = instrumentedAllocatorMakeMemoryResource(&alloc),
+        .payload  = instrumentedAllocatorMakeMemoryResource(&alloc),
     };
-    const UdpardNodeID          node_id = 0xFFFFU;
+    const UdpardNodeID node_id = 0xFFFFU;
     //
     UdpardTx tx = {
         .local_node_id           = &node_id,
@@ -1009,9 +1009,9 @@ static void testPushAnonymousService(void)
     instrumentedAllocatorNew(&alloc);
     const struct UdpardTxMemoryResources mem = {
         .fragment = instrumentedAllocatorMakeMemoryResource(&alloc),
-        .payload = instrumentedAllocatorMakeMemoryResource(&alloc),
+        .payload  = instrumentedAllocatorMakeMemoryResource(&alloc),
     };
-    const UdpardNodeID          node_id = 0xFFFFU;
+    const UdpardNodeID node_id = 0xFFFFU;
     //
     UdpardTx tx = {
         .local_node_id           = &node_id,
