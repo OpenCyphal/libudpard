@@ -482,6 +482,9 @@ struct UdpardTxItem
     /// LibUDPard selects the DSCP value based on the transfer priority level and the configured DSCP mapping.
     uint_least8_t dscp;
 
+    /// Holds original transfer priority level (before DSCP mapping, see above `dscp`).
+    enum UdpardPriority priority;
+
     /// This UDP/IP datagram compiled by libudpard should be sent to this endpoint.
     /// The endpoint is always at a multicast address.
     struct UdpardUDPIPEndpoint destination;

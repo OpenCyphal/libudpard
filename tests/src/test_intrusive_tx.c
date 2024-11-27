@@ -115,25 +115,22 @@ static void testMakeChainEmpty(void)
                                       (UdpardPayload){.size = 0, .data = ""},
                                       &user_transfer_referent);
     TEST_ASSERT_EQUAL(1 * 2ULL, alloc.allocated_fragments);
-    TEST_ASSERT_EQUAL(sizeof(TxItem) + HEADER_SIZE_BYTES + 4, alloc.allocated_bytes);
+    TEST_ASSERT_EQUAL(sizeof(struct UdpardTxItem) + HEADER_SIZE_BYTES + 4, alloc.allocated_bytes);
     TEST_ASSERT_EQUAL(1, chain.count);
     TEST_ASSERT_EQUAL(chain.head, chain.tail);
-    TEST_ASSERT_EQUAL(NULL, chain.head->base.next_in_transfer);
-    TEST_ASSERT_EQUAL(1234567890, chain.head->base.deadline_usec);
-    TEST_ASSERT_EQUAL(33, chain.head->base.dscp);
-    TEST_ASSERT_EQUAL(0x0A0B0C0DU, chain.head->base.destination.ip_address);
-    TEST_ASSERT_EQUAL(0x1234, chain.head->base.destination.udp_port);
-    TEST_ASSERT_EQUAL(HEADER_SIZE_BYTES + 4, chain.head->base.datagram_payload.size);
-    TEST_ASSERT_EQUAL(0,
-                      memcmp(makeHeader(meta, 0, true).data,
-                             chain.head->base.datagram_payload.data,
-                             HEADER_SIZE_BYTES));
+    TEST_ASSERT_EQUAL(NULL, chain.head->next_in_transfer);
+    TEST_ASSERT_EQUAL(1234567890, chain.head->deadline_usec);
+    TEST_ASSERT_EQUAL(33, chain.head->dscp);
+    TEST_ASSERT_EQUAL(0x0A0B0C0DU, chain.head->destination.ip_address);
+    TEST_ASSERT_EQUAL(0x1234, chain.head->destination.udp_port);
+    TEST_ASSERT_EQUAL(HEADER_SIZE_BYTES + 4, chain.head->datagram_payload.size);
+    TEST_ASSERT_EQUAL(0, memcmp(makeHeader(meta, 0, true).data, chain.head->datagram_payload.data, HEADER_SIZE_BYTES));
     TEST_ASSERT_EQUAL(0,
                       memcmp("\x00\x00\x00\x00",  // CRC of the empty transfer.
-                             (byte_t*) (chain.head->base.datagram_payload.data) + HEADER_SIZE_BYTES,
+                             (byte_t*) (chain.head->datagram_payload.data) + HEADER_SIZE_BYTES,
                              4));
-    TEST_ASSERT_EQUAL(&user_transfer_referent, chain.head->base.user_transfer_reference);
-    udpardTxFree(mem, &chain.head->base);
+    TEST_ASSERT_EQUAL(&user_transfer_referent, chain.head->user_transfer_reference);
+    udpardTxFree(mem, chain.head);
     TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
 }
 
@@ -162,32 +159,28 @@ static void testMakeChainSingleMaxMTU(void)
                                       (UdpardPayload){.size = DetailOfTheCosmosSize, .data = DetailOfTheCosmos},
                                       &user_transfer_referent);
     TEST_ASSERT_EQUAL(1 * 2ULL, alloc.allocated_fragments);
-    TEST_ASSERT_EQUAL(sizeof(TxItem) + HEADER_SIZE_BYTES + DetailOfTheCosmosSize + TRANSFER_CRC_SIZE_BYTES,
+    TEST_ASSERT_EQUAL(sizeof(struct UdpardTxItem) + HEADER_SIZE_BYTES + DetailOfTheCosmosSize + TRANSFER_CRC_SIZE_BYTES,
                       alloc.allocated_bytes);
     TEST_ASSERT_EQUAL(1, chain.count);
     TEST_ASSERT_EQUAL(chain.head, chain.tail);
-    TEST_ASSERT_EQUAL(NULL, chain.head->base.next_in_transfer);
-    TEST_ASSERT_EQUAL(1234567890, chain.head->base.deadline_usec);
-    TEST_ASSERT_EQUAL(77, chain.head->base.dscp);
-    TEST_ASSERT_EQUAL(0x0A0B0C00U, chain.head->base.destination.ip_address);
-    TEST_ASSERT_EQUAL(7474, chain.head->base.destination.udp_port);
+    TEST_ASSERT_EQUAL(NULL, chain.head->next_in_transfer);
+    TEST_ASSERT_EQUAL(1234567890, chain.head->deadline_usec);
+    TEST_ASSERT_EQUAL(77, chain.head->dscp);
+    TEST_ASSERT_EQUAL(0x0A0B0C00U, chain.head->destination.ip_address);
+    TEST_ASSERT_EQUAL(7474, chain.head->destination.udp_port);
     TEST_ASSERT_EQUAL(HEADER_SIZE_BYTES + DetailOfTheCosmosSize + TRANSFER_CRC_SIZE_BYTES,
-                      chain.head->base.datagram_payload.size);
-    TEST_ASSERT_EQUAL(0,
-                      memcmp(makeHeader(meta, 0, true).data,
-                             chain.head->base.datagram_payload.data,
-                             HEADER_SIZE_BYTES));
+                      chain.head->datagram_payload.size);
+    TEST_ASSERT_EQUAL(0, memcmp(makeHeader(meta, 0, true).data, chain.head->datagram_payload.data, HEADER_SIZE_BYTES));
     TEST_ASSERT_EQUAL(0,
                       memcmp(DetailOfTheCosmos,
-                             (byte_t*) (chain.head->base.datagram_payload.data) + HEADER_SIZE_BYTES,
+                             (byte_t*) (chain.head->datagram_payload.data) + HEADER_SIZE_BYTES,
                              DetailOfTheCosmosSize));
     TEST_ASSERT_EQUAL(0,
                       memcmp(DetailOfTheCosmosCRC,
-                             (byte_t*) (chain.head->base.datagram_payload.data) + HEADER_SIZE_BYTES +
-                                 DetailOfTheCosmosSize,
+                             (byte_t*) (chain.head->datagram_payload.data) + HEADER_SIZE_BYTES + DetailOfTheCosmosSize,
                              TRANSFER_CRC_SIZE_BYTES));
-    TEST_ASSERT_EQUAL(&user_transfer_referent, chain.head->base.user_transfer_reference);
-    udpardTxFree(mem, &chain.head->base);
+    TEST_ASSERT_EQUAL(&user_transfer_referent, chain.head->user_transfer_reference);
+    udpardTxFree(mem, chain.head);
     TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
 }
 
@@ -214,13 +207,13 @@ static void testMakeChainSingleFrameDefaultMTU(void)
                                           (UdpardPayload){.size = UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME, .data = payload},
                                           NULL);
         TEST_ASSERT_EQUAL(1 * 2ULL, alloc.allocated_fragments);
-        TEST_ASSERT_EQUAL(sizeof(TxItem) + HEADER_SIZE_BYTES + UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME +
+        TEST_ASSERT_EQUAL(sizeof(struct UdpardTxItem) + HEADER_SIZE_BYTES + UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME +
                               TRANSFER_CRC_SIZE_BYTES,
                           alloc.allocated_bytes);
         TEST_ASSERT_EQUAL(1, chain.count);
         TEST_ASSERT_EQUAL(chain.head, chain.tail);
-        TEST_ASSERT_EQUAL(NULL, chain.head->base.next_in_transfer);
-        udpardTxFree(mem, &chain.head->base);
+        TEST_ASSERT_EQUAL(NULL, chain.head->next_in_transfer);
+        udpardTxFree(mem, chain.head);
         TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
     }
     {  // Increase the payload by 1 byte and ensure it spills over.
@@ -238,15 +231,15 @@ static void testMakeChainSingleFrameDefaultMTU(void)
                         (UdpardPayload){.size = UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME + 1, .data = payload},
                         NULL);
         TEST_ASSERT_EQUAL(2 * 2ULL, alloc.allocated_fragments);
-        TEST_ASSERT_EQUAL((sizeof(TxItem) + HEADER_SIZE_BYTES) * 2 + UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME + 1 +
-                              TRANSFER_CRC_SIZE_BYTES,
+        TEST_ASSERT_EQUAL((sizeof(struct UdpardTxItem) + HEADER_SIZE_BYTES) * 2 + UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME +
+                              1 + TRANSFER_CRC_SIZE_BYTES,
                           alloc.allocated_bytes);
         TEST_ASSERT_EQUAL(2, chain.count);
         TEST_ASSERT_NOT_EQUAL(chain.head, chain.tail);
-        TEST_ASSERT_EQUAL((UdpardTxItem*) chain.tail, chain.head->base.next_in_transfer);
-        TEST_ASSERT_EQUAL(NULL, chain.tail->base.next_in_transfer);
-        udpardTxFree(mem, &chain.head->base);
-        udpardTxFree(mem, &chain.tail->base);
+        TEST_ASSERT_EQUAL((UdpardTxItem*) chain.tail, chain.head->next_in_transfer);
+        TEST_ASSERT_EQUAL(NULL, chain.tail->next_in_transfer);
+        udpardTxFree(mem, chain.head);
+        udpardTxFree(mem, chain.tail);
         TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
     }
 }
@@ -277,9 +270,10 @@ static void testMakeChainThreeFrames(void)
                                       (UdpardPayload){.size = EtherealStrengthSize, .data = EtherealStrength},
                                       &user_transfer_referent);
     TEST_ASSERT_EQUAL(3 * 2ULL, alloc.allocated_fragments);
-    TEST_ASSERT_EQUAL(3 * (sizeof(TxItem) + HEADER_SIZE_BYTES) + EtherealStrengthSize + 4U, alloc.allocated_bytes);
+    TEST_ASSERT_EQUAL(3 * (sizeof(struct UdpardTxItem) + HEADER_SIZE_BYTES) + EtherealStrengthSize + 4U,
+                      alloc.allocated_bytes);
     TEST_ASSERT_EQUAL(3, chain.count);
-    UdpardTxItem* const first = &chain.head->base;
+    UdpardTxItem* const first = chain.head;
     TEST_ASSERT_NOT_EQUAL(NULL, first);
     UdpardTxItem* const second = first->next_in_transfer;
     TEST_ASSERT_NOT_EQUAL(NULL, second);
@@ -362,52 +356,46 @@ static void testMakeChainCRCSpill1(void)
                                       (UdpardPayload){.size = InterstellarWarSize, .data = InterstellarWar},
                                       &user_transfer_referent);
     TEST_ASSERT_EQUAL(2 * 2ULL, alloc.allocated_fragments);
-    TEST_ASSERT_EQUAL(2 * (sizeof(TxItem) + HEADER_SIZE_BYTES) + InterstellarWarSize + 4U, alloc.allocated_bytes);
+    TEST_ASSERT_EQUAL(2 * (sizeof(struct UdpardTxItem) + HEADER_SIZE_BYTES) + InterstellarWarSize + 4U,
+                      alloc.allocated_bytes);
     TEST_ASSERT_EQUAL(2, chain.count);
     TEST_ASSERT_NOT_EQUAL(chain.head, chain.tail);
-    TEST_ASSERT_EQUAL((UdpardTxItem*) chain.tail, chain.head->base.next_in_transfer);
-    TEST_ASSERT_EQUAL(NULL, chain.tail->base.next_in_transfer);
+    TEST_ASSERT_EQUAL((UdpardTxItem*) chain.tail, chain.head->next_in_transfer);
+    TEST_ASSERT_EQUAL(NULL, chain.tail->next_in_transfer);
 
     // FIRST FRAME -- contains the payload and the first three bytes of the CRC.
-    TEST_ASSERT_EQUAL(223574680, chain.head->base.deadline_usec);
-    TEST_ASSERT_EQUAL(55, chain.head->base.dscp);
-    TEST_ASSERT_EQUAL(0xBABADEDAU, chain.head->base.destination.ip_address);
-    TEST_ASSERT_EQUAL(0xD0ED, chain.head->base.destination.udp_port);
-    TEST_ASSERT_EQUAL(HEADER_SIZE_BYTES + mtu, chain.head->base.datagram_payload.size);
-    TEST_ASSERT_EQUAL(0,
-                      memcmp(makeHeader(meta, 0, false).data,
-                             chain.head->base.datagram_payload.data,
-                             HEADER_SIZE_BYTES));
+    TEST_ASSERT_EQUAL(223574680, chain.head->deadline_usec);
+    TEST_ASSERT_EQUAL(55, chain.head->dscp);
+    TEST_ASSERT_EQUAL(0xBABADEDAU, chain.head->destination.ip_address);
+    TEST_ASSERT_EQUAL(0xD0ED, chain.head->destination.udp_port);
+    TEST_ASSERT_EQUAL(HEADER_SIZE_BYTES + mtu, chain.head->datagram_payload.size);
+    TEST_ASSERT_EQUAL(0, memcmp(makeHeader(meta, 0, false).data, chain.head->datagram_payload.data, HEADER_SIZE_BYTES));
     TEST_ASSERT_EQUAL(0,
                       memcmp(InterstellarWar,
-                             (byte_t*) (chain.head->base.datagram_payload.data) + HEADER_SIZE_BYTES,
+                             (byte_t*) (chain.head->datagram_payload.data) + HEADER_SIZE_BYTES,
                              InterstellarWarSize));
     TEST_ASSERT_EQUAL(0,
                       memcmp(InterstellarWarCRC,
-                             (byte_t*) (chain.head->base.datagram_payload.data) + HEADER_SIZE_BYTES +
-                                 InterstellarWarSize,
+                             (byte_t*) (chain.head->datagram_payload.data) + HEADER_SIZE_BYTES + InterstellarWarSize,
                              3U));
-    TEST_ASSERT_EQUAL(&user_transfer_referent, chain.head->base.user_transfer_reference);
+    TEST_ASSERT_EQUAL(&user_transfer_referent, chain.head->user_transfer_reference);
 
     // SECOND FRAME -- contains the last byte of the CRC.
-    TEST_ASSERT_EQUAL(223574680, chain.tail->base.deadline_usec);
-    TEST_ASSERT_EQUAL(55, chain.tail->base.dscp);
-    TEST_ASSERT_EQUAL(0xBABADEDAU, chain.tail->base.destination.ip_address);
-    TEST_ASSERT_EQUAL(0xD0ED, chain.tail->base.destination.udp_port);
-    TEST_ASSERT_EQUAL(HEADER_SIZE_BYTES + 1U, chain.tail->base.datagram_payload.size);
-    TEST_ASSERT_EQUAL(0,
-                      memcmp(makeHeader(meta, 1, true).data,
-                             chain.tail->base.datagram_payload.data,
-                             HEADER_SIZE_BYTES));
+    TEST_ASSERT_EQUAL(223574680, chain.tail->deadline_usec);
+    TEST_ASSERT_EQUAL(55, chain.tail->dscp);
+    TEST_ASSERT_EQUAL(0xBABADEDAU, chain.tail->destination.ip_address);
+    TEST_ASSERT_EQUAL(0xD0ED, chain.tail->destination.udp_port);
+    TEST_ASSERT_EQUAL(HEADER_SIZE_BYTES + 1U, chain.tail->datagram_payload.size);
+    TEST_ASSERT_EQUAL(0, memcmp(makeHeader(meta, 1, true).data, chain.tail->datagram_payload.data, HEADER_SIZE_BYTES));
     TEST_ASSERT_EQUAL(0,
                       memcmp(InterstellarWarCRC + 3U,
-                             (byte_t*) (chain.tail->base.datagram_payload.data) + HEADER_SIZE_BYTES,
+                             (byte_t*) (chain.tail->datagram_payload.data) + HEADER_SIZE_BYTES,
                              1U));
-    TEST_ASSERT_EQUAL(&user_transfer_referent, chain.tail->base.user_transfer_reference);
+    TEST_ASSERT_EQUAL(&user_transfer_referent, chain.tail->user_transfer_reference);
 
     // Clean up.
-    udpardTxFree(mem, &chain.head->base);
-    udpardTxFree(mem, &chain.tail->base);
+    udpardTxFree(mem, chain.head);
+    udpardTxFree(mem, chain.tail);
     TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
 }
 
@@ -437,52 +425,46 @@ static void testMakeChainCRCSpill2(void)
                                       (UdpardPayload){.size = InterstellarWarSize, .data = InterstellarWar},
                                       &user_transfer_referent);
     TEST_ASSERT_EQUAL(2 * 2ULL, alloc.allocated_fragments);
-    TEST_ASSERT_EQUAL(2 * (sizeof(TxItem) + HEADER_SIZE_BYTES) + InterstellarWarSize + 4U, alloc.allocated_bytes);
+    TEST_ASSERT_EQUAL(2 * (sizeof(struct UdpardTxItem) + HEADER_SIZE_BYTES) + InterstellarWarSize + 4U,
+                      alloc.allocated_bytes);
     TEST_ASSERT_EQUAL(2, chain.count);
     TEST_ASSERT_NOT_EQUAL(chain.head, chain.tail);
-    TEST_ASSERT_EQUAL((UdpardTxItem*) chain.tail, chain.head->base.next_in_transfer);
-    TEST_ASSERT_EQUAL(NULL, chain.tail->base.next_in_transfer);
+    TEST_ASSERT_EQUAL((UdpardTxItem*) chain.tail, chain.head->next_in_transfer);
+    TEST_ASSERT_EQUAL(NULL, chain.tail->next_in_transfer);
 
     // FIRST FRAME -- contains the payload and the first two bytes of the CRC.
-    TEST_ASSERT_EQUAL(223574680, chain.head->base.deadline_usec);
-    TEST_ASSERT_EQUAL(55, chain.head->base.dscp);
-    TEST_ASSERT_EQUAL(0xBABADEDAU, chain.head->base.destination.ip_address);
-    TEST_ASSERT_EQUAL(0xD0ED, chain.head->base.destination.udp_port);
-    TEST_ASSERT_EQUAL(HEADER_SIZE_BYTES + mtu, chain.head->base.datagram_payload.size);
-    TEST_ASSERT_EQUAL(0,
-                      memcmp(makeHeader(meta, 0, false).data,
-                             chain.head->base.datagram_payload.data,
-                             HEADER_SIZE_BYTES));
+    TEST_ASSERT_EQUAL(223574680, chain.head->deadline_usec);
+    TEST_ASSERT_EQUAL(55, chain.head->dscp);
+    TEST_ASSERT_EQUAL(0xBABADEDAU, chain.head->destination.ip_address);
+    TEST_ASSERT_EQUAL(0xD0ED, chain.head->destination.udp_port);
+    TEST_ASSERT_EQUAL(HEADER_SIZE_BYTES + mtu, chain.head->datagram_payload.size);
+    TEST_ASSERT_EQUAL(0, memcmp(makeHeader(meta, 0, false).data, chain.head->datagram_payload.data, HEADER_SIZE_BYTES));
     TEST_ASSERT_EQUAL(0,
                       memcmp(InterstellarWar,
-                             (byte_t*) (chain.head->base.datagram_payload.data) + HEADER_SIZE_BYTES,
+                             (byte_t*) (chain.head->datagram_payload.data) + HEADER_SIZE_BYTES,
                              InterstellarWarSize));
     TEST_ASSERT_EQUAL(0,
                       memcmp(InterstellarWarCRC,
-                             (byte_t*) (chain.head->base.datagram_payload.data) + HEADER_SIZE_BYTES +
-                                 InterstellarWarSize,
+                             (byte_t*) (chain.head->datagram_payload.data) + HEADER_SIZE_BYTES + InterstellarWarSize,
                              2U));
-    TEST_ASSERT_EQUAL(&user_transfer_referent, chain.head->base.user_transfer_reference);
+    TEST_ASSERT_EQUAL(&user_transfer_referent, chain.head->user_transfer_reference);
 
     // SECOND FRAME -- contains the last two bytes of the CRC.
-    TEST_ASSERT_EQUAL(223574680, chain.tail->base.deadline_usec);
-    TEST_ASSERT_EQUAL(55, chain.tail->base.dscp);
-    TEST_ASSERT_EQUAL(0xBABADEDAU, chain.tail->base.destination.ip_address);
-    TEST_ASSERT_EQUAL(0xD0ED, chain.tail->base.destination.udp_port);
-    TEST_ASSERT_EQUAL(HEADER_SIZE_BYTES + 2U, chain.tail->base.datagram_payload.size);
-    TEST_ASSERT_EQUAL(0,
-                      memcmp(makeHeader(meta, 1, true).data,
-                             chain.tail->base.datagram_payload.data,
-                             HEADER_SIZE_BYTES));
+    TEST_ASSERT_EQUAL(223574680, chain.tail->deadline_usec);
+    TEST_ASSERT_EQUAL(55, chain.tail->dscp);
+    TEST_ASSERT_EQUAL(0xBABADEDAU, chain.tail->destination.ip_address);
+    TEST_ASSERT_EQUAL(0xD0ED, chain.tail->destination.udp_port);
+    TEST_ASSERT_EQUAL(HEADER_SIZE_BYTES + 2U, chain.tail->datagram_payload.size);
+    TEST_ASSERT_EQUAL(0, memcmp(makeHeader(meta, 1, true).data, chain.tail->datagram_payload.data, HEADER_SIZE_BYTES));
     TEST_ASSERT_EQUAL(0,
                       memcmp(InterstellarWarCRC + 2U,
-                             (byte_t*) (chain.tail->base.datagram_payload.data) + HEADER_SIZE_BYTES,
+                             (byte_t*) (chain.tail->datagram_payload.data) + HEADER_SIZE_BYTES,
                              2U));
-    TEST_ASSERT_EQUAL(&user_transfer_referent, chain.tail->base.user_transfer_reference);
+    TEST_ASSERT_EQUAL(&user_transfer_referent, chain.tail->user_transfer_reference);
 
     // Clean up.
-    udpardTxFree(mem, &chain.head->base);
-    udpardTxFree(mem, &chain.tail->base);
+    udpardTxFree(mem, chain.head);
+    udpardTxFree(mem, chain.tail);
     TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
 }
 
@@ -512,52 +494,46 @@ static void testMakeChainCRCSpill3(void)
                                       (UdpardPayload){.size = InterstellarWarSize, .data = InterstellarWar},
                                       &user_transfer_referent);
     TEST_ASSERT_EQUAL(2 * 2ULL, alloc.allocated_fragments);
-    TEST_ASSERT_EQUAL(2 * (sizeof(TxItem) + HEADER_SIZE_BYTES) + InterstellarWarSize + 4U, alloc.allocated_bytes);
+    TEST_ASSERT_EQUAL(2 * (sizeof(struct UdpardTxItem) + HEADER_SIZE_BYTES) + InterstellarWarSize + 4U,
+                      alloc.allocated_bytes);
     TEST_ASSERT_EQUAL(2, chain.count);
     TEST_ASSERT_NOT_EQUAL(chain.head, chain.tail);
-    TEST_ASSERT_EQUAL((UdpardTxItem*) chain.tail, chain.head->base.next_in_transfer);
-    TEST_ASSERT_EQUAL(NULL, chain.tail->base.next_in_transfer);
+    TEST_ASSERT_EQUAL((UdpardTxItem*) chain.tail, chain.head->next_in_transfer);
+    TEST_ASSERT_EQUAL(NULL, chain.tail->next_in_transfer);
 
     // FIRST FRAME -- contains the payload and the first byte of the CRC.
-    TEST_ASSERT_EQUAL(223574680, chain.head->base.deadline_usec);
-    TEST_ASSERT_EQUAL(55, chain.head->base.dscp);
-    TEST_ASSERT_EQUAL(0xBABADEDAU, chain.head->base.destination.ip_address);
-    TEST_ASSERT_EQUAL(0xD0ED, chain.head->base.destination.udp_port);
-    TEST_ASSERT_EQUAL(HEADER_SIZE_BYTES + mtu, chain.head->base.datagram_payload.size);
-    TEST_ASSERT_EQUAL(0,
-                      memcmp(makeHeader(meta, 0, false).data,
-                             chain.head->base.datagram_payload.data,
-                             HEADER_SIZE_BYTES));
+    TEST_ASSERT_EQUAL(223574680, chain.head->deadline_usec);
+    TEST_ASSERT_EQUAL(55, chain.head->dscp);
+    TEST_ASSERT_EQUAL(0xBABADEDAU, chain.head->destination.ip_address);
+    TEST_ASSERT_EQUAL(0xD0ED, chain.head->destination.udp_port);
+    TEST_ASSERT_EQUAL(HEADER_SIZE_BYTES + mtu, chain.head->datagram_payload.size);
+    TEST_ASSERT_EQUAL(0, memcmp(makeHeader(meta, 0, false).data, chain.head->datagram_payload.data, HEADER_SIZE_BYTES));
     TEST_ASSERT_EQUAL(0,
                       memcmp(InterstellarWar,
-                             (byte_t*) (chain.head->base.datagram_payload.data) + HEADER_SIZE_BYTES,
+                             (byte_t*) (chain.head->datagram_payload.data) + HEADER_SIZE_BYTES,
                              InterstellarWarSize));
     TEST_ASSERT_EQUAL(0,
                       memcmp(InterstellarWarCRC,
-                             (byte_t*) (chain.head->base.datagram_payload.data) + HEADER_SIZE_BYTES +
-                                 InterstellarWarSize,
+                             (byte_t*) (chain.head->datagram_payload.data) + HEADER_SIZE_BYTES + InterstellarWarSize,
                              1U));
-    TEST_ASSERT_EQUAL(&user_transfer_referent, chain.head->base.user_transfer_reference);
+    TEST_ASSERT_EQUAL(&user_transfer_referent, chain.head->user_transfer_reference);
 
     // SECOND FRAME -- contains the last three bytes of the CRC.
-    TEST_ASSERT_EQUAL(223574680, chain.tail->base.deadline_usec);
-    TEST_ASSERT_EQUAL(55, chain.tail->base.dscp);
-    TEST_ASSERT_EQUAL(0xBABADEDAU, chain.tail->base.destination.ip_address);
-    TEST_ASSERT_EQUAL(0xD0ED, chain.tail->base.destination.udp_port);
-    TEST_ASSERT_EQUAL(HEADER_SIZE_BYTES + 3U, chain.tail->base.datagram_payload.size);
-    TEST_ASSERT_EQUAL(0,
-                      memcmp(makeHeader(meta, 1, true).data,
-                             chain.tail->base.datagram_payload.data,
-                             HEADER_SIZE_BYTES));
+    TEST_ASSERT_EQUAL(223574680, chain.tail->deadline_usec);
+    TEST_ASSERT_EQUAL(55, chain.tail->dscp);
+    TEST_ASSERT_EQUAL(0xBABADEDAU, chain.tail->destination.ip_address);
+    TEST_ASSERT_EQUAL(0xD0ED, chain.tail->destination.udp_port);
+    TEST_ASSERT_EQUAL(HEADER_SIZE_BYTES + 3U, chain.tail->datagram_payload.size);
+    TEST_ASSERT_EQUAL(0, memcmp(makeHeader(meta, 1, true).data, chain.tail->datagram_payload.data, HEADER_SIZE_BYTES));
     TEST_ASSERT_EQUAL(0,
                       memcmp(InterstellarWarCRC + 1U,
-                             (byte_t*) (chain.tail->base.datagram_payload.data) + HEADER_SIZE_BYTES,
+                             (byte_t*) (chain.tail->datagram_payload.data) + HEADER_SIZE_BYTES,
                              3U));
-    TEST_ASSERT_EQUAL(&user_transfer_referent, chain.tail->base.user_transfer_reference);
+    TEST_ASSERT_EQUAL(&user_transfer_referent, chain.tail->user_transfer_reference);
 
     // Clean up.
-    udpardTxFree(mem, &chain.head->base);
-    udpardTxFree(mem, &chain.tail->base);
+    udpardTxFree(mem, chain.head);
+    udpardTxFree(mem, chain.tail);
     TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
 }
 
@@ -587,48 +563,43 @@ static void testMakeChainCRCSpillFull(void)
                                       (UdpardPayload){.size = InterstellarWarSize, .data = InterstellarWar},
                                       &user_transfer_referent);
     TEST_ASSERT_EQUAL(2 * 2ULL, alloc.allocated_fragments);
-    TEST_ASSERT_EQUAL(2 * (sizeof(TxItem) + HEADER_SIZE_BYTES) + InterstellarWarSize + 4U, alloc.allocated_bytes);
+    TEST_ASSERT_EQUAL(2 * (sizeof(struct UdpardTxItem) + HEADER_SIZE_BYTES) + InterstellarWarSize + 4U,
+                      alloc.allocated_bytes);
     TEST_ASSERT_EQUAL(2, chain.count);
     TEST_ASSERT_NOT_EQUAL(chain.head, chain.tail);
-    TEST_ASSERT_EQUAL((UdpardTxItem*) chain.tail, chain.head->base.next_in_transfer);
-    TEST_ASSERT_EQUAL(NULL, chain.tail->base.next_in_transfer);
+    TEST_ASSERT_EQUAL((UdpardTxItem*) chain.tail, chain.head->next_in_transfer);
+    TEST_ASSERT_EQUAL(NULL, chain.tail->next_in_transfer);
 
     // FIRST FRAME -- contains the payload only.
-    TEST_ASSERT_EQUAL(223574680, chain.head->base.deadline_usec);
-    TEST_ASSERT_EQUAL(55, chain.head->base.dscp);
-    TEST_ASSERT_EQUAL(0xBABADEDAU, chain.head->base.destination.ip_address);
-    TEST_ASSERT_EQUAL(0xD0ED, chain.head->base.destination.udp_port);
-    TEST_ASSERT_EQUAL(HEADER_SIZE_BYTES + mtu, chain.head->base.datagram_payload.size);
-    TEST_ASSERT_EQUAL(HEADER_SIZE_BYTES + InterstellarWarSize, chain.head->base.datagram_payload.size);
-    TEST_ASSERT_EQUAL(0,
-                      memcmp(makeHeader(meta, 0, false).data,
-                             chain.head->base.datagram_payload.data,
-                             HEADER_SIZE_BYTES));
+    TEST_ASSERT_EQUAL(223574680, chain.head->deadline_usec);
+    TEST_ASSERT_EQUAL(55, chain.head->dscp);
+    TEST_ASSERT_EQUAL(0xBABADEDAU, chain.head->destination.ip_address);
+    TEST_ASSERT_EQUAL(0xD0ED, chain.head->destination.udp_port);
+    TEST_ASSERT_EQUAL(HEADER_SIZE_BYTES + mtu, chain.head->datagram_payload.size);
+    TEST_ASSERT_EQUAL(HEADER_SIZE_BYTES + InterstellarWarSize, chain.head->datagram_payload.size);
+    TEST_ASSERT_EQUAL(0, memcmp(makeHeader(meta, 0, false).data, chain.head->datagram_payload.data, HEADER_SIZE_BYTES));
     TEST_ASSERT_EQUAL(0,
                       memcmp(InterstellarWar,
-                             (byte_t*) (chain.head->base.datagram_payload.data) + HEADER_SIZE_BYTES,
+                             (byte_t*) (chain.head->datagram_payload.data) + HEADER_SIZE_BYTES,
                              InterstellarWarSize));
-    TEST_ASSERT_EQUAL(&user_transfer_referent, chain.head->base.user_transfer_reference);
+    TEST_ASSERT_EQUAL(&user_transfer_referent, chain.head->user_transfer_reference);
 
     // SECOND FRAME -- contains the last byte of the CRC.
-    TEST_ASSERT_EQUAL(223574680, chain.tail->base.deadline_usec);
-    TEST_ASSERT_EQUAL(55, chain.tail->base.dscp);
-    TEST_ASSERT_EQUAL(0xBABADEDAU, chain.tail->base.destination.ip_address);
-    TEST_ASSERT_EQUAL(0xD0ED, chain.tail->base.destination.udp_port);
-    TEST_ASSERT_EQUAL(HEADER_SIZE_BYTES + 4U, chain.tail->base.datagram_payload.size);
-    TEST_ASSERT_EQUAL(0,
-                      memcmp(makeHeader(meta, 1, true).data,
-                             chain.tail->base.datagram_payload.data,
-                             HEADER_SIZE_BYTES));
+    TEST_ASSERT_EQUAL(223574680, chain.tail->deadline_usec);
+    TEST_ASSERT_EQUAL(55, chain.tail->dscp);
+    TEST_ASSERT_EQUAL(0xBABADEDAU, chain.tail->destination.ip_address);
+    TEST_ASSERT_EQUAL(0xD0ED, chain.tail->destination.udp_port);
+    TEST_ASSERT_EQUAL(HEADER_SIZE_BYTES + 4U, chain.tail->datagram_payload.size);
+    TEST_ASSERT_EQUAL(0, memcmp(makeHeader(meta, 1, true).data, chain.tail->datagram_payload.data, HEADER_SIZE_BYTES));
     TEST_ASSERT_EQUAL(0,
                       memcmp(InterstellarWarCRC,
-                             (byte_t*) (chain.tail->base.datagram_payload.data) + HEADER_SIZE_BYTES,
+                             (byte_t*) (chain.tail->datagram_payload.data) + HEADER_SIZE_BYTES,
                              4U));
-    TEST_ASSERT_EQUAL(&user_transfer_referent, chain.tail->base.user_transfer_reference);
+    TEST_ASSERT_EQUAL(&user_transfer_referent, chain.tail->user_transfer_reference);
 
     // Clean up.
-    udpardTxFree(mem, &chain.head->base);
-    udpardTxFree(mem, &chain.tail->base);
+    udpardTxFree(mem, chain.head);
+    udpardTxFree(mem, chain.tail);
     TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
 }
 
@@ -667,7 +638,8 @@ static void testPushPeekPopFree(void)
                              (UdpardPayload){.size = EtherealStrengthSize, .data = EtherealStrength},
                              &user_transfer_referent));
     TEST_ASSERT_EQUAL(3 * 2ULL, alloc.allocated_fragments);
-    TEST_ASSERT_EQUAL(3 * (sizeof(TxItem) + HEADER_SIZE_BYTES) + EtherealStrengthSize + 4U, alloc.allocated_bytes);
+    TEST_ASSERT_EQUAL(3 * (sizeof(struct UdpardTxItem) + HEADER_SIZE_BYTES) + EtherealStrengthSize + 4U,
+                      alloc.allocated_bytes);
     TEST_ASSERT_EQUAL(3, tx.queue_size);
 
     const UdpardTxItem* frame = udpardTxPeek(&tx);
