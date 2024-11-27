@@ -373,6 +373,28 @@ struct UdpardMemoryResource
 // =================================================    TX PIPELINE    =================================================
 // =====================================================================================================================
 
+/// The set of memory resources is used per an TX pipeline instance.
+/// These are used to serve the memory needs of the library to keep state while assembling outgoing frames.
+/// Several memory resources are provided to enable fine control over the allocated memory.
+///
+/// This TX queue uses these memory resources for allocating the enqueued items (UDP datagrams).
+/// There are exactly two allocations per enqueued item:
+/// - the first for bookkeeping purposes (UdpardTxItem)
+/// - second for payload storage (the frame data)
+/// In a simple application, there would be just one memory resource shared by all parts of the library.
+/// If the application knows its MTU, it can use block allocation to avoid extrinsic fragmentation.
+///
+struct UdpardTxMemoryResources
+{
+    /// The fragment handles are allocated per payload fragment; each handle contains a pointer to its fragment.
+    /// Each instance is of a very small fixed size, so a trivial zero-fragmentation block allocator is enough.
+    struct UdpardMemoryResource fragment;
+
+    /// The payload fragments are allocated per payload frame; each payload fragment is at most MTU-sized buffer,
+    /// so a trivial zero-fragmentation MTU-sized block allocator is enough if MTU is known in advance.
+    struct UdpardMemoryResource payload;
+};
+
 /// The transmission pipeline is a prioritized transmission queue that keeps UDP datagrams (aka transport frames)
 /// destined for transmission via one network interface.
 /// Applications with redundant network interfaces are expected to have one instance of this type per interface.
@@ -424,12 +446,8 @@ struct UdpardTx
     /// The value can be changed arbitrarily at any time between enqueue operations.
     uint_least8_t dscp_value_per_priority[UDPARD_PRIORITY_MAX + 1U];
 
-    /// The memory resource used by this queue for allocating the enqueued items (UDP datagrams).
-    /// There is exactly one allocation per enqueued item, each allocation contains both the UdpardTxItem
-    /// and its payload, hence the size is variable.
-    /// In a simple application there would be just one memory resource shared by all parts of the library.
-    /// If the application knows its MTU, it can use block allocation to avoid extrinsic fragmentation.
-    struct UdpardMemoryResource memory;
+    /// Refer to UdpardTxMemoryResources.
+    struct UdpardTxMemoryResources memory;
 
     /// The number of frames that are currently contained in the queue, initially zero.
     /// READ-ONLY
@@ -490,10 +508,10 @@ struct UdpardTxItem
 ///
 /// The return value is zero on success, otherwise it is a negative error code.
 /// The time complexity is constant. This function does not invoke the dynamic memory manager.
-int_fast8_t udpardTxInit(struct UdpardTx* const            self,
-                         const UdpardNodeID* const         local_node_id,
-                         const size_t                      queue_capacity,
-                         const struct UdpardMemoryResource memory);
+int_fast8_t udpardTxInit(struct UdpardTx* const               self,
+                         const UdpardNodeID* const            local_node_id,
+                         const size_t                         queue_capacity,
+                         const struct UdpardTxMemoryResources memory);
 
 /// This function serializes a message transfer into a sequence of UDP datagrams and inserts them into the prioritized
 /// transmission queue at the appropriate position. Afterwards, the application is supposed to take the enqueued frames
@@ -613,23 +631,20 @@ int32_t udpardTxRespond(struct UdpardTx* const     self,
 ///
 /// If the queue is non-empty, the returned value is a pointer to its top element (i.e., the next item to transmit).
 /// The returned pointer points to an object allocated in the dynamic storage; it should be eventually freed by the
-/// application by calling udpardTxFree with UdpardTx::memory. The memory shall not be freed before the item is removed
+/// application by calling `udpardTxFree`. The memory shall not be freed before the item is removed
 /// from the queue by calling udpardTxPop; this is because until udpardTxPop is executed, the library retains
 /// ownership of the item. The pointer retains validity until explicitly freed by the application; in other words,
 /// calling udpardTxPop does not invalidate the object.
 ///
-/// The payload buffer is located shortly after the object itself, in the same memory fragment. The application shall
-/// not attempt to free it.
-///
 /// Calling functions that modify the queue may cause the next invocation to return a different pointer.
 ///
 /// The time complexity is logarithmic of the queue size. This function does not invoke the dynamic memory manager.
-const struct UdpardTxItem* udpardTxPeek(const struct UdpardTx* const self);
+struct UdpardTxItem* udpardTxPeek(const struct UdpardTx* const self);
 
 /// This function transfers the ownership of the specified item of the prioritized transmission queue from the queue
 /// to the application. The item does not necessarily need to be the top one -- it is safe to dequeue any item.
 /// The item is dequeued but not invalidated; it is the responsibility of the application to deallocate its memory
-/// later. The memory SHALL NOT be deallocated UNTIL this function is invoked.
+/// later. The memory SHALL NOT be deallocated UNTIL this function is invoked (use `udpardTxFree` helper).
 /// The function returns the same pointer that it is given except that it becomes mutable.
 ///
 /// If any of the arguments are NULL, the function has no effect and returns NULL.
@@ -637,11 +652,12 @@ const struct UdpardTxItem* udpardTxPeek(const struct UdpardTx* const self);
 /// The time complexity is logarithmic of the queue size. This function does not invoke the dynamic memory manager.
 struct UdpardTxItem* udpardTxPop(struct UdpardTx* const self, const struct UdpardTxItem* const item);
 
-/// This is a simple helper that frees the memory allocated for the item with the correct size.
-/// It is needed because the application does not have access to the required context to compute the size.
-/// If the chosen allocator does not leverage the size information, the deallocation function can be invoked directly.
+/// This is a simple helper that frees the memory allocated for the item and its payload,
+/// using the correct sizes and memory resources.
 /// If the item argument is NULL, the function has no effect. The time complexity is constant.
-void udpardTxFree(const struct UdpardMemoryResource memory, struct UdpardTxItem* const item);
+/// If the item frame payload is NULL then it is assumed that the payload buffer was already freed,
+/// or moved to a different owner (f.e. to media layer).
+void udpardTxFree(const struct UdpardTxMemoryResources memory, struct UdpardTxItem* const item);
 
 // =====================================================================================================================
 // =================================================    RX PIPELINE    =================================================
