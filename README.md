@@ -78,6 +78,9 @@ For complete usage examples, please refer to <https://github.com/OpenCyphal-Gara
 
 ## Revisions
 
+### TODO: Add new v2
+☝ todo will be addressed as soon as the new API is stable.
+
 ### v1.0
 
 Initial release.
