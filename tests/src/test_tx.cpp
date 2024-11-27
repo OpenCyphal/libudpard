@@ -88,9 +88,9 @@ void testPublish()
     instrumentedAllocatorNew(&alloc);
     const UdpardTxMemoryResources mem = {
         .fragment = instrumentedAllocatorMakeMemoryResource(&alloc),
-        .payload = instrumentedAllocatorMakeMemoryResource(&alloc),
+        .payload  = instrumentedAllocatorMakeMemoryResource(&alloc),
     };
-    const UdpardNodeID                node_id = 1234;
+    const UdpardNodeID node_id = 1234;
     //
     UdpardTx tx{
         .local_node_id           = &node_id,
@@ -223,9 +223,9 @@ void testRequest()
     instrumentedAllocatorNew(&alloc);
     const UdpardTxMemoryResources mem = {
         .fragment = instrumentedAllocatorMakeMemoryResource(&alloc),
-        .payload = instrumentedAllocatorMakeMemoryResource(&alloc),
+        .payload  = instrumentedAllocatorMakeMemoryResource(&alloc),
     };
-    const UdpardNodeID         node_id = 1234;
+    const UdpardNodeID node_id = 1234;
     //
     UdpardTx tx{
         .local_node_id           = &node_id,
@@ -376,9 +376,9 @@ void testRespond()
     instrumentedAllocatorNew(&alloc);
     const UdpardTxMemoryResources mem = {
         .fragment = instrumentedAllocatorMakeMemoryResource(&alloc),
-        .payload = instrumentedAllocatorMakeMemoryResource(&alloc),
+        .payload  = instrumentedAllocatorMakeMemoryResource(&alloc),
     };
-    const UdpardNodeID         node_id = 1234;
+    const UdpardNodeID node_id = 1234;
     //
     UdpardTx tx{
         .local_node_id           = &node_id,
@@ -399,7 +399,7 @@ void testRespond()
                                       9876543210,
                                       {.size = FleetingEvents.size(), .data = FleetingEvents.data()},
                                       &user_transfer_referent));
-    TEST_ASSERT_EQUAL(1  * 2ULL, alloc.allocated_fragments);
+    TEST_ASSERT_EQUAL(1 * 2ULL, alloc.allocated_fragments);
     TEST_ASSERT_EQUAL(1, tx.queue_size);
     const auto* frame = udpardTxPeek(&tx);
     std::cout << hexdump::hexdump(frame->datagram_payload.data, frame->datagram_payload.size) << "\n\n";

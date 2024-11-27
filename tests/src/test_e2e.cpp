@@ -75,7 +75,7 @@ void testPubSub()
     instrumentedAllocatorNew(&alloc_rx_payload);
     const UdpardTxMemoryResources mem_tx{
         .fragment = instrumentedAllocatorMakeMemoryResource(&alloc_tx),
-        .payload = instrumentedAllocatorMakeMemoryResource(&alloc_tx),
+        .payload  = instrumentedAllocatorMakeMemoryResource(&alloc_tx),
     };
     const UdpardRxMemoryResources mem_rx{
         .session  = instrumentedAllocatorMakeMemoryResource(&alloc_rx_session),
@@ -415,7 +415,7 @@ void testRPC()
     instrumentedAllocatorNew(&alloc_rx_payload);
     const UdpardTxMemoryResources mem_tx{
         .fragment = instrumentedAllocatorMakeMemoryResource(&alloc_tx),
-        .payload = instrumentedAllocatorMakeMemoryResource(&alloc_tx),
+        .payload  = instrumentedAllocatorMakeMemoryResource(&alloc_tx),
     };
     const UdpardRxMemoryResources mem_rx{
         .session  = instrumentedAllocatorMakeMemoryResource(&alloc_rx_session),
