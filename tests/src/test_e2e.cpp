@@ -164,7 +164,7 @@ void testPubSub()
     TEST_ASSERT_EQUAL(0, alloc_rx_session.allocated_fragments);
     TEST_ASSERT_EQUAL(0, alloc_rx_fragment.allocated_fragments);
     TEST_ASSERT_EQUAL(0, alloc_rx_payload.allocated_fragments);
-    const UdpardTxItem* tx_item = udpardTxPeek(&tx);
+    UdpardTxItem* tx_item = udpardTxPeek(&tx);
     TEST_ASSERT_NOT_NULL(tx_item);
     TEST_ASSERT_EQUAL(sub.at(1).udp_ip_endpoint.ip_address, tx_item->destination.ip_address);
     TEST_ASSERT_NULL(tx_item->next_in_transfer);
@@ -478,7 +478,7 @@ void testRPC()
     TEST_ASSERT_EQUAL(0, alloc_rx_session.allocated_fragments);
     TEST_ASSERT_EQUAL(0, alloc_rx_fragment.allocated_fragments);
     TEST_ASSERT_EQUAL(0, alloc_rx_payload.allocated_fragments);
-    const UdpardTxItem* tx_item = udpardTxPeek(&tx);
+    UdpardTxItem* tx_item = udpardTxPeek(&tx);
     TEST_ASSERT_NOT_NULL(tx_item);
     TEST_ASSERT_EQUAL(udp_ip_endpoint.ip_address, tx_item->destination.ip_address);
     TEST_ASSERT_NULL(tx_item->next_in_transfer);

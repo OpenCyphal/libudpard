@@ -669,7 +669,7 @@ struct UdpardTxItem* udpardTxPeek(const struct UdpardTx* const self);
 /// If any of the arguments are NULL, the function has no effect and returns NULL.
 ///
 /// The time complexity is logarithmic of the queue size. This function does not invoke the dynamic memory manager.
-struct UdpardTxItem* udpardTxPop(struct UdpardTx* const self, const struct UdpardTxItem* const item);
+struct UdpardTxItem* udpardTxPop(struct UdpardTx* const self, struct UdpardTxItem* const item);
 
 /// This is a simple helper that frees the memory allocated for the item and its payload,
 /// using the correct sizes and memory resources.

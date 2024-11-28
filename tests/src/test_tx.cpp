@@ -113,7 +113,7 @@ void testPublish()
                                       &user_transfer_referent));
     TEST_ASSERT_EQUAL(1 * 2ULL, alloc.allocated_fragments);
     TEST_ASSERT_EQUAL(1, tx.queue_size);
-    const auto* frame = udpardTxPeek(&tx);
+    auto* frame = udpardTxPeek(&tx);
     std::cout << hexdump::hexdump(frame->datagram_payload.data, frame->datagram_payload.size) << "\n\n";
     TEST_ASSERT_NOT_EQUAL(nullptr, frame);
     TEST_ASSERT_EQUAL(nullptr, frame->next_in_transfer);
@@ -249,7 +249,7 @@ void testRequest()
                                       &user_transfer_referent));
     TEST_ASSERT_EQUAL(1 * 2ULL, alloc.allocated_fragments);
     TEST_ASSERT_EQUAL(1, tx.queue_size);
-    const auto* frame = udpardTxPeek(&tx);
+    auto* frame = udpardTxPeek(&tx);
     std::cout << hexdump::hexdump(frame->datagram_payload.data, frame->datagram_payload.size) << "\n\n";
     TEST_ASSERT_NOT_EQUAL(nullptr, frame);
     TEST_ASSERT_EQUAL(nullptr, frame->next_in_transfer);
@@ -401,7 +401,7 @@ void testRespond()
                                       &user_transfer_referent));
     TEST_ASSERT_EQUAL(1 * 2ULL, alloc.allocated_fragments);
     TEST_ASSERT_EQUAL(1, tx.queue_size);
-    const auto* frame = udpardTxPeek(&tx);
+    auto* frame = udpardTxPeek(&tx);
     std::cout << hexdump::hexdump(frame->datagram_payload.data, frame->datagram_payload.size) << "\n\n";
     TEST_ASSERT_NOT_EQUAL(nullptr, frame);
     TEST_ASSERT_EQUAL(nullptr, frame->next_in_transfer);

@@ -654,15 +654,10 @@ struct UdpardTxItem* udpardTxPeek(const struct UdpardTx* const self)
     return out;
 }
 
-struct UdpardTxItem* udpardTxPop(struct UdpardTx* const self, const struct UdpardTxItem* const item)
+struct UdpardTxItem* udpardTxPop(struct UdpardTx* const self, struct UdpardTxItem* const item)
 {
-    struct UdpardTxItem* out = NULL;
     if ((self != NULL) && (item != NULL))
     {
-        // Intentional violation of MISRA: casting away const qualifier. This is considered safe because the API
-        // contract dictates that the pointer shall point to a mutable entity in RAM previously allocated by the
-        // memory manager. It is difficult to avoid this cast in this context.
-        out = (struct UdpardTxItem*) item;  // NOSONAR casting away const qualifier.
         // Paragraph 6.7.2.1.15 of the C standard says:
         //     A pointer to a structure object, suitably converted, points to its initial member, and vice versa.
         // Note that the highest-priority frame is always a leaf node in the AVL tree, which means that it is very
@@ -671,7 +666,7 @@ struct UdpardTxItem* udpardTxPop(struct UdpardTx* const self, const struct Udpar
         UDPARD_ASSERT(self->queue_size > 0U);
         self->queue_size--;
     }
-    return out;
+    return item;
 }
 
 void udpardTxFree(const struct UdpardTxMemoryResources memory, struct UdpardTxItem* const item)

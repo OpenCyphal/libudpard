@@ -642,7 +642,7 @@ static void testPushPeekPopFree(void)
                       alloc.allocated_bytes);
     TEST_ASSERT_EQUAL(3, tx.queue_size);
 
-    const UdpardTxItem* frame = udpardTxPeek(&tx);
+    UdpardTxItem* frame = udpardTxPeek(&tx);
     TEST_ASSERT_NOT_EQUAL(NULL, frame);
     TEST_ASSERT_NOT_EQUAL(NULL, frame->next_in_transfer);
     TEST_ASSERT_EQUAL(1234567890U, frame->deadline_usec);
@@ -722,7 +722,7 @@ static void testPushPrioritization(void)
                              NULL));
     TEST_ASSERT_EQUAL(3 * 2ULL, alloc.allocated_fragments);
     TEST_ASSERT_EQUAL(3, tx.queue_size);
-    const UdpardTxItem* frame = udpardTxPeek(&tx);
+    UdpardTxItem* frame = udpardTxPeek(&tx);
     TEST_ASSERT_NOT_EQUAL(NULL, frame);
     TEST_ASSERT_EQUAL(0xAAAAAAAA, frame->destination.ip_address);
 
