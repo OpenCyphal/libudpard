@@ -174,6 +174,7 @@
 /// Typically, if block pool allocators are used, the following block sizes should be served:
 ///
 ///     - (MTU+library overhead) blocks for the TX and RX pipelines (usually less than 2048 bytes);
+///     - TX fragment item sized blocks for the TX pipeline (less than 128 bytes).
 ///     - RX session object sized blocks for the RX pipeline (less than 512 bytes);
 ///     - RX fragment handle sized blocks for the RX pipeline (less than 128 bytes).
 ///
@@ -373,11 +374,11 @@ struct UdpardMemoryResource
 // =================================================    TX PIPELINE    =================================================
 // =====================================================================================================================
 
-/// The set of memory resources is used per an TX pipeline instance.
+/// The set of memory resources is used per a TX pipeline instance.
 /// These are used to serve the memory needs of the library to keep state while assembling outgoing frames.
 /// Several memory resources are provided to enable fine control over the allocated memory.
 ///
-/// This TX queue uses these memory resources for allocating the enqueued items (UDP datagrams).
+/// A TX queue uses these memory resources for allocating the enqueued items (UDP datagrams).
 /// There are exactly two allocations per enqueued item:
 /// - the first for bookkeeping purposes (UdpardTxItem)
 /// - second for payload storage (the frame data)
@@ -401,8 +402,6 @@ struct UdpardTxMemoryResources
 /// Applications that are not interested in transmission may have zero such instances.
 ///
 /// All operations are logarithmic in complexity on the number of enqueued items.
-/// There is exactly one memory allocation per element;
-/// the size of each allocation is sizeof(UdpardTxItem) plus the size of the datagram.
 ///
 /// Once initialized, instances cannot be copied.
 ///
@@ -461,7 +460,9 @@ struct UdpardTx
 /// One transport frame (UDP datagram) stored in the UdpardTx transmission queue along with its metadata.
 /// The datagram should be sent to the indicated UDP/IP endpoint with the specified DSCP value.
 /// The datagram should be discarded (transmission aborted) if the deadline has expired.
-/// All fields are READ-ONLY.
+/// All fields are READ-ONLY except mutable payload `datagram_payload` field, which could be nullified to indicate
+/// a transfer of the payload memory ownership to somewhere else.
+///
 struct UdpardTxItem
 {
     /// Internal use only; do not access this field.
@@ -568,10 +569,13 @@ int_fast8_t udpardTxInit(struct UdpardTx* const               self,
 /// In such cases, all frames allocated for this transfer (if any) will be deallocated automatically.
 /// In other words, either all frames of the transfer are enqueued successfully, or none are.
 ///
-/// The memory allocation requirement is one allocation per datagram:
-/// a single-frame transfer takes one allocation; a multi-frame transfer of N frames takes N allocations.
-/// The size of each allocation is (sizeof(UdpardTxItem) + MTU) except for the last datagram where the payload may be
-/// smaller than the MTU.
+/// The memory allocation requirement is two allocations per datagram:
+/// a single-frame transfer takes two allocations; a multi-frame transfer of N frames takes N*2 allocations.
+/// In each pair of allocations:
+/// - the first allocation is for `UdpardTxItem`; the size is `sizeof(UdpardTxItem)`;
+///   the TX queue `memory.fragment` memory resource is used for this allocation (and later for deallocation);
+/// - the second allocation is for payload storage (the frame data) - size is normally MTU but could be less for
+///   the last frame of the transfer; the TX queue `memory.payload` memory resource is used for this allocation.
 ///
 /// The time complexity is O(p + log e), where p is the amount of payload in the transfer, and e is the number of
 /// frames already enqueued in the transmission queue.
@@ -640,6 +644,18 @@ int32_t udpardTxRespond(struct UdpardTx* const     self,
 /// calling udpardTxPop does not invalidate the object.
 ///
 /// Calling functions that modify the queue may cause the next invocation to return a different pointer.
+///
+/// The payload buffer is allocated in the dynamic storage of the queue. The application may transfer ownership of
+/// the payload to a different application component (f.e. to transmission media) by copying the pointer and then
+/// (if the ownership transfer was accepted) by nullifying `datagram_payload` fields of the frame (`size` & `data`).
+/// If these fields stay with their original values, the `udpardTxFree` (after proper `udpardTxPop` of course) will
+/// deallocate the payload buffer. In any case, the payload has to be eventually deallocated by using the TX queue
+/// `memory.payload` memory resource. It will be automatically done by the `udpardTxFree` (if the payload still
+/// stays in the item), OR if moved, it is the responsibility of the application to eventually (f.e. at the end of
+/// transmission) deallocate the memory with the TX queue `memory.payload` memory resource.
+/// Note that the mentioned above nullification of the `datagram_payload` fields is the
+/// only reason why a returned TX item pointer is mutable. It was constant in the past (before v2),
+/// but it was changed to be mutable to allow the payload ownership transfer.
 ///
 /// The time complexity is logarithmic of the queue size. This function does not invoke the dynamic memory manager.
 struct UdpardTxItem* udpardTxPeek(const struct UdpardTx* const self);

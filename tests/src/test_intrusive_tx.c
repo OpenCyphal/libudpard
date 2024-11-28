@@ -937,6 +937,46 @@ static void testPushOOM(void)
     TEST_ASSERT_EQUAL(0, tx.queue_size);
 }
 
+static void testPushPayloadOOM(void)
+{
+    InstrumentedAllocator alloc;
+    instrumentedAllocatorNew(&alloc);
+    const struct UdpardTxMemoryResources mem = {
+        .fragment = instrumentedAllocatorMakeMemoryResource(&alloc),
+        .payload  = instrumentedAllocatorMakeMemoryResource(&alloc),
+    };
+    const UdpardNodeID node_id = 1234;
+    //
+    UdpardTx tx = {
+        .local_node_id           = &node_id,
+        .queue_capacity          = 10000U,
+        .mtu                     = EtherealStrengthSize + HEADER_CRC_SIZE_BYTES,
+        .dscp_value_per_priority = {0, 1, 2, 3, 4, 5, 6, 7},
+        .memory                  = mem,
+        .queue_size              = 0,
+        .root                    = NULL,
+    };
+    const TransferMetadata meta = {
+        .priority       = UdpardPriorityNominal,
+        .src_node_id    = 4321,
+        .dst_node_id    = 5432,
+        .data_specifier = 7766,
+        .transfer_id    = 0x0123456789ABCDEFULL,
+    };
+    // There is memory of the item, but 1 byte short for payload.
+    alloc.limit_bytes = sizeof(UdpardTxItem) + (HEADER_SIZE_BYTES + EtherealStrengthSize + HEADER_CRC_SIZE_BYTES - 1);
+    TEST_ASSERT_EQUAL(-UDPARD_ERROR_MEMORY,
+                      txPush(&tx,
+                             1234567890U,
+                             meta,
+                             (UdpardUDPIPEndpoint){.ip_address = 0xBABADEDAU, .udp_port = 0xD0ED},
+                             (UdpardPayload){.size = EtherealStrengthSize, .data = EtherealStrength},
+                             NULL));
+    TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, alloc.allocated_bytes);
+    TEST_ASSERT_EQUAL(0, tx.queue_size);
+}
+
 static void testPushAnonymousMultiFrame(void)
 {
     InstrumentedAllocator alloc;
@@ -1033,6 +1073,7 @@ int main(void)
     RUN_TEST(testPushPrioritization);
     RUN_TEST(testPushCapacityLimit);
     RUN_TEST(testPushOOM);
+    RUN_TEST(testPushPayloadOOM);
     RUN_TEST(testPushAnonymousMultiFrame);
     RUN_TEST(testPushAnonymousService);
     return UNITY_END();
