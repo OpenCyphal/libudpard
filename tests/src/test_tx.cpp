@@ -29,49 +29,55 @@ void testInit()
     std::monostate     user_referent;
     const UdpardNodeID node_id = 0;
     {
-        const UdpardMemoryResource memory{
+        const UdpardMemoryResource mr{
             .user_reference = &user_referent,
             .deallocate     = &dummyAllocatorDeallocate,
             .allocate       = &dummyAllocatorAllocate,
         };
+        const UdpardTxMemoryResources memory = {.fragment = mr, .payload = mr};
         TEST_ASSERT_EQUAL(-UDPARD_ERROR_ARGUMENT, udpardTxInit(nullptr, &node_id, 0, memory));
     }
     {
         UdpardTx                   tx{};
-        const UdpardMemoryResource memory{
+        const UdpardMemoryResource mr{
             .user_reference = &user_referent,
             .deallocate     = &dummyAllocatorDeallocate,
             .allocate       = &dummyAllocatorAllocate,
         };
+        const UdpardTxMemoryResources memory = {.fragment = mr, .payload = mr};
         TEST_ASSERT_EQUAL(-UDPARD_ERROR_ARGUMENT, udpardTxInit(&tx, nullptr, 0, memory));
     }
     {
         UdpardTx                   tx{};
-        const UdpardMemoryResource memory{
+        const UdpardMemoryResource mr{
             .user_reference = &user_referent,
             .deallocate     = &dummyAllocatorDeallocate,
             .allocate       = nullptr,
         };
+        const UdpardTxMemoryResources memory = {.fragment = mr, .payload = mr};
         TEST_ASSERT_EQUAL(-UDPARD_ERROR_ARGUMENT, udpardTxInit(&tx, &node_id, 0, memory));
     }
     {
         UdpardTx                   tx{};
-        const UdpardMemoryResource memory{
+        const UdpardMemoryResource mr{
             .user_reference = &user_referent,
             .deallocate     = nullptr,
             .allocate       = &dummyAllocatorAllocate,
         };
+        const UdpardTxMemoryResources memory = {.fragment = mr, .payload = mr};
         TEST_ASSERT_EQUAL(-UDPARD_ERROR_ARGUMENT, udpardTxInit(&tx, &node_id, 0, memory));
     }
     {
         UdpardTx                   tx{};
-        const UdpardMemoryResource memory{
+        const UdpardMemoryResource mr{
             .user_reference = &user_referent,
             .deallocate     = &dummyAllocatorDeallocate,
             .allocate       = &dummyAllocatorAllocate,
         };
+        const UdpardTxMemoryResources memory = {.fragment = mr, .payload = mr};
         TEST_ASSERT_EQUAL(0, udpardTxInit(&tx, &node_id, 0, memory));
-        TEST_ASSERT_EQUAL(&user_referent, tx.memory.user_reference);
+        TEST_ASSERT_EQUAL(&user_referent, tx.memory.fragment.user_reference);
+        TEST_ASSERT_EQUAL(&user_referent, tx.memory.payload.user_reference);
         TEST_ASSERT_EQUAL(UDPARD_MTU_DEFAULT, tx.mtu);
     }
 }
@@ -80,8 +86,11 @@ void testPublish()
 {
     InstrumentedAllocator alloc;
     instrumentedAllocatorNew(&alloc);
-    const struct UdpardMemoryResource mem     = instrumentedAllocatorMakeMemoryResource(&alloc);
-    const UdpardNodeID                node_id = 1234;
+    const UdpardTxMemoryResources mem = {
+        .fragment = instrumentedAllocatorMakeMemoryResource(&alloc),
+        .payload  = instrumentedAllocatorMakeMemoryResource(&alloc),
+    };
+    const UdpardNodeID node_id = 1234;
     //
     UdpardTx tx{
         .local_node_id           = &node_id,
@@ -102,9 +111,9 @@ void testPublish()
                                       transfer_id++,
                                       {.size = FleetingEvents.size(), .data = FleetingEvents.data()},
                                       &user_transfer_referent));
-    TEST_ASSERT_EQUAL(1, alloc.allocated_fragments);
+    TEST_ASSERT_EQUAL(1 * 2ULL, alloc.allocated_fragments);
     TEST_ASSERT_EQUAL(1, tx.queue_size);
-    const auto* frame = udpardTxPeek(&tx);
+    auto* frame = udpardTxPeek(&tx);
     std::cout << hexdump::hexdump(frame->datagram_payload.data, frame->datagram_payload.size) << "\n\n";
     TEST_ASSERT_NOT_EQUAL(nullptr, frame);
     TEST_ASSERT_EQUAL(nullptr, frame->next_in_transfer);
@@ -212,8 +221,11 @@ void testRequest()
 {
     InstrumentedAllocator alloc;
     instrumentedAllocatorNew(&alloc);
-    const UdpardMemoryResource mem     = instrumentedAllocatorMakeMemoryResource(&alloc);
-    const UdpardNodeID         node_id = 1234;
+    const UdpardTxMemoryResources mem = {
+        .fragment = instrumentedAllocatorMakeMemoryResource(&alloc),
+        .payload  = instrumentedAllocatorMakeMemoryResource(&alloc),
+    };
+    const UdpardNodeID node_id = 1234;
     //
     UdpardTx tx{
         .local_node_id           = &node_id,
@@ -235,9 +247,9 @@ void testRequest()
                                       transfer_id++,
                                       {.size = FleetingEvents.size(), .data = FleetingEvents.data()},
                                       &user_transfer_referent));
-    TEST_ASSERT_EQUAL(1, alloc.allocated_fragments);
+    TEST_ASSERT_EQUAL(1 * 2ULL, alloc.allocated_fragments);
     TEST_ASSERT_EQUAL(1, tx.queue_size);
-    const auto* frame = udpardTxPeek(&tx);
+    auto* frame = udpardTxPeek(&tx);
     std::cout << hexdump::hexdump(frame->datagram_payload.data, frame->datagram_payload.size) << "\n\n";
     TEST_ASSERT_NOT_EQUAL(nullptr, frame);
     TEST_ASSERT_EQUAL(nullptr, frame->next_in_transfer);
@@ -362,8 +374,11 @@ void testRespond()
 {
     InstrumentedAllocator alloc;
     instrumentedAllocatorNew(&alloc);
-    const UdpardMemoryResource mem     = instrumentedAllocatorMakeMemoryResource(&alloc);
-    const UdpardNodeID         node_id = 1234;
+    const UdpardTxMemoryResources mem = {
+        .fragment = instrumentedAllocatorMakeMemoryResource(&alloc),
+        .payload  = instrumentedAllocatorMakeMemoryResource(&alloc),
+    };
+    const UdpardNodeID node_id = 1234;
     //
     UdpardTx tx{
         .local_node_id           = &node_id,
@@ -384,9 +399,9 @@ void testRespond()
                                       9876543210,
                                       {.size = FleetingEvents.size(), .data = FleetingEvents.data()},
                                       &user_transfer_referent));
-    TEST_ASSERT_EQUAL(1, alloc.allocated_fragments);
+    TEST_ASSERT_EQUAL(1 * 2ULL, alloc.allocated_fragments);
     TEST_ASSERT_EQUAL(1, tx.queue_size);
-    const auto* frame = udpardTxPeek(&tx);
+    auto* frame = udpardTxPeek(&tx);
     std::cout << hexdump::hexdump(frame->datagram_payload.data, frame->datagram_payload.size) << "\n\n";
     TEST_ASSERT_NOT_EQUAL(nullptr, frame);
     TEST_ASSERT_EQUAL(nullptr, frame->next_in_transfer);

@@ -5,6 +5,7 @@
 
 #include "udpard.h"
 #include "_udpard_cavl.h"
+
 #include <string.h>
 
 // --------------------------------------------- BUILD CONFIGURATION ---------------------------------------------
@@ -271,55 +272,56 @@ static inline uint32_t transferCRCCompute(const size_t size, const void* const d
 // =================================================    TX PIPELINE    =================================================
 // =====================================================================================================================
 
-/// This is a subclass of UdpardTxItem. A pointer to this type can be cast to UdpardTxItem safely.
-/// This is compliant with the C99 standard; paragraph 6.7.2.1.15 says:
-///     A pointer to a structure object, suitably converted, points to its initial member (or if that member is a
-///     bit-field, then to the unit in which it resides), and vice versa. There may be unnamed padding within a
-///     structure object, but not at its beginning.
-typedef struct
-{
-    struct UdpardTxItem base;
-    enum UdpardPriority priority;  ///< Do we need this exposed in the public structure? We already have DSCP there.
-    // The MISRA violation here is hard to get rid of without having to allocate a separate memory block for the
-    // payload, which is much more costly risk-wise.
-    byte_t payload_buffer[];  // NOSONAR MISRA C 18.7 Flexible array member.
-} TxItem;
-
 /// Chain of TX frames prepared for insertion into a TX queue.
 typedef struct
 {
-    TxItem* head;
-    TxItem* tail;
-    size_t  count;
+    struct UdpardTxItem* head;
+    struct UdpardTxItem* tail;
+    size_t               count;
 } TxChain;
 
-static inline TxItem* txNewItem(const struct UdpardMemoryResource memory,
-                                const uint_least8_t               dscp_value_per_priority[UDPARD_PRIORITY_MAX + 1U],
-                                const UdpardMicrosecond           deadline_usec,
-                                const enum UdpardPriority         priority,
-                                const struct UdpardUDPIPEndpoint  endpoint,
-                                const size_t                      datagram_payload_size,
-                                void* const                       user_transfer_reference)
+static inline bool txValidateMemoryResources(const struct UdpardTxMemoryResources memory)
 {
-    TxItem* const out = (TxItem*) memAlloc(memory, sizeof(TxItem) + datagram_payload_size);
+    return (memory.fragment.allocate != NULL) && (memory.fragment.deallocate != NULL) &&
+           (memory.payload.allocate != NULL) && (memory.payload.deallocate != NULL);
+}
+
+static inline struct UdpardTxItem* txNewItem(const struct UdpardTxMemoryResources memory,
+                                             const uint_least8_t     dscp_value_per_priority[UDPARD_PRIORITY_MAX + 1U],
+                                             const UdpardMicrosecond deadline_usec,
+                                             const enum UdpardPriority        priority,
+                                             const struct UdpardUDPIPEndpoint endpoint,
+                                             const size_t                     datagram_payload_size,
+                                             void* const                      user_transfer_reference)
+{
+    struct UdpardTxItem* out = memAlloc(memory.fragment, sizeof(struct UdpardTxItem));
     if (out != NULL)
     {
         // No tree linkage by default.
-        out->base.base.up    = NULL;
-        out->base.base.lr[0] = NULL;
-        out->base.base.lr[1] = NULL;
-        out->base.base.bf    = 0;
+        out->base.up    = NULL;
+        out->base.lr[0] = NULL;
+        out->base.lr[1] = NULL;
+        out->base.bf    = 0;
         // Init metadata.
-        out->priority              = priority;
-        out->base.next_in_transfer = NULL;  // Last by default.
-        out->base.deadline_usec    = deadline_usec;
+        out->priority         = priority;
+        out->next_in_transfer = NULL;  // Last by default.
+        out->deadline_usec    = deadline_usec;
         UDPARD_ASSERT(priority <= UDPARD_PRIORITY_MAX);
-        out->base.dscp                    = dscp_value_per_priority[priority];
-        out->base.destination             = endpoint;
-        out->base.user_transfer_reference = user_transfer_reference;
-        // The payload points to the buffer already allocated.
-        out->base.datagram_payload.size = datagram_payload_size;
-        out->base.datagram_payload.data = &out->payload_buffer[0];
+        out->dscp                    = dscp_value_per_priority[priority];
+        out->destination             = endpoint;
+        out->user_transfer_reference = user_transfer_reference;
+
+        void* const payload_data = memAlloc(memory.payload, datagram_payload_size);
+        if (NULL != payload_data)
+        {
+            out->datagram_payload.data = payload_data;
+            out->datagram_payload.size = datagram_payload_size;
+        }
+        else
+        {
+            memFree(memory.fragment, sizeof(struct UdpardTxItem), out);
+            out = NULL;
+        }
     }
     return out;
 }
@@ -329,8 +331,8 @@ static inline TxItem* txNewItem(const struct UdpardMemoryResource memory,
 static inline int_fast8_t txAVLPredicate(void* const user_reference,  // NOSONAR Cavl API requires pointer to non-const.
                                          const struct UdpardTreeNode* const node)
 {
-    const TxItem* const target = (const TxItem*) user_reference;
-    const TxItem* const other  = (const TxItem*) (const void*) node;
+    const struct UdpardTxItem* const target = (const struct UdpardTxItem*) user_reference;
+    const struct UdpardTxItem* const other  = (const struct UdpardTxItem*) (const void*) node;
     UDPARD_ASSERT((target != NULL) && (other != NULL));
     return (target->priority >= other->priority) ? +1 : -1;
 }
@@ -390,14 +392,14 @@ static inline byte_t* txSerializeHeader(byte_t* const          destination_buffe
 
 /// Produces a chain of Tx queue items for later insertion into the Tx queue. The tail is NULL if OOM.
 /// The caller is responsible for freeing the memory allocated for the chain.
-static inline TxChain txMakeChain(const struct UdpardMemoryResource memory,
-                                  const uint_least8_t               dscp_value_per_priority[UDPARD_PRIORITY_MAX + 1U],
-                                  const size_t                      mtu,
-                                  const UdpardMicrosecond           deadline_usec,
-                                  const TransferMetadata            meta,
-                                  const struct UdpardUDPIPEndpoint  endpoint,
-                                  const struct UdpardPayload        payload,
-                                  void* const                       user_transfer_reference)
+static inline TxChain txMakeChain(const struct UdpardTxMemoryResources memory,
+                                  const uint_least8_t              dscp_value_per_priority[UDPARD_PRIORITY_MAX + 1U],
+                                  const size_t                     mtu,
+                                  const UdpardMicrosecond          deadline_usec,
+                                  const TransferMetadata           meta,
+                                  const struct UdpardUDPIPEndpoint endpoint,
+                                  const struct UdpardPayload       payload,
+                                  void* const                      user_transfer_reference)
 {
     UDPARD_ASSERT(mtu > 0);
     UDPARD_ASSERT((payload.data != NULL) || (payload.size == 0U));
@@ -408,13 +410,13 @@ static inline TxChain txMakeChain(const struct UdpardMemoryResource memory,
     size_t  offset = 0U;
     while (offset < payload_size_with_crc)
     {
-        TxItem* const item = txNewItem(memory,
-                                       dscp_value_per_priority,
-                                       deadline_usec,
-                                       meta.priority,
-                                       endpoint,
-                                       smaller(payload_size_with_crc - offset, mtu) + HEADER_SIZE_BYTES,
-                                       user_transfer_reference);
+        struct UdpardTxItem* const item = txNewItem(memory,
+                                                    dscp_value_per_priority,
+                                                    deadline_usec,
+                                                    meta.priority,
+                                                    endpoint,
+                                                    smaller(payload_size_with_crc - offset, mtu) + HEADER_SIZE_BYTES,
+                                                    user_transfer_reference);
         if (NULL == out.head)
         {
             out.head = item;
@@ -423,15 +425,16 @@ static inline TxChain txMakeChain(const struct UdpardMemoryResource memory,
         {
             // C std, 6.7.2.1.15: A pointer to a structure object <...> points to its initial member, and vice versa.
             // Can't just read tqi->base because tqi may be NULL; https://github.com/OpenCyphal/libcanard/issues/203.
-            out.tail->base.next_in_transfer = (struct UdpardTxItem*) item;
+            out.tail->next_in_transfer = item;
         }
         out.tail = item;
         if (NULL == out.tail)
         {
             break;
         }
-        const bool last      = (payload_size_with_crc - offset) <= mtu;
-        byte_t*    write_ptr = txSerializeHeader(&item->payload_buffer[0], meta, (uint32_t) out.count, last);
+        const bool    last       = (payload_size_with_crc - offset) <= mtu;
+        byte_t* const dst_buffer = item->datagram_payload.data;
+        byte_t*       write_ptr  = txSerializeHeader(dst_buffer, meta, (uint32_t) out.count, last);
         if (offset < payload.size)
         {
             const size_t progress = smaller(payload.size - offset, mtu);
@@ -446,7 +449,7 @@ static inline TxChain txMakeChain(const struct UdpardMemoryResource memory,
         {
             const size_t crc_offset = offset - payload.size;
             UDPARD_ASSERT(crc_offset < TRANSFER_CRC_SIZE_BYTES);
-            const size_t available = item->base.datagram_payload.size - (size_t) (write_ptr - &item->payload_buffer[0]);
+            const size_t available = item->datagram_payload.size - (size_t) (write_ptr - dst_buffer);
             UDPARD_ASSERT(available <= TRANSFER_CRC_SIZE_BYTES);
             const size_t write_size = smaller(TRANSFER_CRC_SIZE_BYTES - crc_offset, available);
             // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
@@ -495,7 +498,7 @@ static inline int32_t txPush(struct UdpardTx* const           tx,
         if (chain.tail != NULL)
         {
             UDPARD_ASSERT(frame_count == chain.count);
-            struct UdpardTxItem* next = &chain.head->base;
+            struct UdpardTxItem* next = chain.head;
             do
             {
                 const struct UdpardTreeNode* const res =
@@ -513,11 +516,11 @@ static inline int32_t txPush(struct UdpardTx* const           tx,
         else  // The queue is large enough but we ran out of heap memory, so we have to unwind the chain.
         {
             out                       = -UDPARD_ERROR_MEMORY;
-            struct UdpardTxItem* head = &chain.head->base;
+            struct UdpardTxItem* head = chain.head;
             while (head != NULL)
             {
                 struct UdpardTxItem* const next = head->next_in_transfer;
-                memFree(tx->memory, sizeof(TxItem) + head->datagram_payload.size, head);
+                udpardTxFree(tx->memory, head);
                 head = next;
             }
         }
@@ -526,13 +529,13 @@ static inline int32_t txPush(struct UdpardTx* const           tx,
     return out;
 }
 
-int_fast8_t udpardTxInit(struct UdpardTx* const            self,
-                         const UdpardNodeID* const         local_node_id,
-                         const size_t                      queue_capacity,
-                         const struct UdpardMemoryResource memory)
+int_fast8_t udpardTxInit(struct UdpardTx* const               self,
+                         const UdpardNodeID* const            local_node_id,
+                         const size_t                         queue_capacity,
+                         const struct UdpardTxMemoryResources memory)
 {
     int_fast8_t ret = -UDPARD_ERROR_ARGUMENT;
-    if ((NULL != self) && (NULL != local_node_id) && (memory.allocate != NULL) && (memory.deallocate != NULL))
+    if ((NULL != self) && (NULL != local_node_id) && txValidateMemoryResources(memory))
     {
         ret = 0;
         memZero(sizeof(*self), self);
@@ -639,27 +642,22 @@ int32_t udpardTxRespond(struct UdpardTx* const     self,
     return out;
 }
 
-const struct UdpardTxItem* udpardTxPeek(const struct UdpardTx* const self)
+struct UdpardTxItem* udpardTxPeek(const struct UdpardTx* const self)
 {
-    const struct UdpardTxItem* out = NULL;
+    struct UdpardTxItem* out = NULL;
     if (self != NULL)
     {
         // Paragraph 6.7.2.1.15 of the C standard says:
         //     A pointer to a structure object, suitably converted, points to its initial member, and vice versa.
-        out = (const struct UdpardTxItem*) (void*) cavlFindExtremum(self->root, false);
+        out = (struct UdpardTxItem*) (void*) cavlFindExtremum(self->root, false);
     }
     return out;
 }
 
-struct UdpardTxItem* udpardTxPop(struct UdpardTx* const self, const struct UdpardTxItem* const item)
+struct UdpardTxItem* udpardTxPop(struct UdpardTx* const self, struct UdpardTxItem* const item)
 {
-    struct UdpardTxItem* out = NULL;
     if ((self != NULL) && (item != NULL))
     {
-        // Intentional violation of MISRA: casting away const qualifier. This is considered safe because the API
-        // contract dictates that the pointer shall point to a mutable entity in RAM previously allocated by the
-        // memory manager. It is difficult to avoid this cast in this context.
-        out = (struct UdpardTxItem*) item;  // NOSONAR casting away const qualifier.
         // Paragraph 6.7.2.1.15 of the C standard says:
         //     A pointer to a structure object, suitably converted, points to its initial member, and vice versa.
         // Note that the highest-priority frame is always a leaf node in the AVL tree, which means that it is very
@@ -668,14 +666,19 @@ struct UdpardTxItem* udpardTxPop(struct UdpardTx* const self, const struct Udpar
         UDPARD_ASSERT(self->queue_size > 0U);
         self->queue_size--;
     }
-    return out;
+    return item;
 }
 
-void udpardTxFree(const struct UdpardMemoryResource memory, struct UdpardTxItem* const item)
+void udpardTxFree(const struct UdpardTxMemoryResources memory, struct UdpardTxItem* const item)
 {
     if (item != NULL)
     {
-        memFree(memory, sizeof(TxItem) + item->datagram_payload.size, item);
+        if (item->datagram_payload.data != NULL)
+        {
+            memFree(memory.payload, item->datagram_payload.size, item->datagram_payload.data);
+        }
+
+        memFree(memory.fragment, sizeof(struct UdpardTxItem), item);
     }
 }
 
