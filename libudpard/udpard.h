@@ -173,7 +173,7 @@
 ///
 /// Typically, if block pool allocators are used, the following block sizes should be served:
 ///
-///     - (MTU+library overhead) blocks for the TX and RX pipelines (usually less than 2048 bytes);
+///     - MTU sized blocks for the TX and RX pipelines (usually less than 2048 bytes);
 ///     - TX fragment item sized blocks for the TX pipeline (less than 128 bytes).
 ///     - RX session object sized blocks for the RX pipeline (less than 512 bytes);
 ///     - RX fragment handle sized blocks for the RX pipeline (less than 128 bytes).
@@ -201,7 +201,7 @@ extern "C" {
 
 /// Semantic version of this library (not the Cyphal specification).
 /// API will be backward compatible within the same major version.
-#define UDPARD_VERSION_MAJOR 1
+#define UDPARD_VERSION_MAJOR 2
 #define UDPARD_VERSION_MINOR 0
 
 /// The version number of the Cyphal specification implemented by this library.
@@ -460,7 +460,7 @@ struct UdpardTx
 /// One transport frame (UDP datagram) stored in the UdpardTx transmission queue along with its metadata.
 /// The datagram should be sent to the indicated UDP/IP endpoint with the specified DSCP value.
 /// The datagram should be discarded (transmission aborted) if the deadline has expired.
-/// All fields are READ-ONLY except mutable payload `datagram_payload` field, which could be nullified to indicate
+/// All fields are READ-ONLY except the mutable `datagram_payload` field, which could be nullified to indicate
 /// a transfer of the payload memory ownership to somewhere else.
 ///
 struct UdpardTxItem
@@ -483,7 +483,7 @@ struct UdpardTxItem
     /// LibUDPard selects the DSCP value based on the transfer priority level and the configured DSCP mapping.
     uint_least8_t dscp;
 
-    /// Holds original transfer priority level (before DSCP mapping, see above `dscp`).
+    /// Holds the original transfer priority level (before DSCP mapping, see above `dscp`).
     enum UdpardPriority priority;
 
     /// This UDP/IP datagram compiled by libudpard should be sent to this endpoint.
