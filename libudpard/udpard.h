@@ -462,7 +462,6 @@ struct UdpardTx
 /// The datagram should be discarded (transmission aborted) if the deadline has expired.
 /// All fields are READ-ONLY except the mutable `datagram_payload` field, which could be nullified to indicate
 /// a transfer of the payload memory ownership to somewhere else.
-///
 struct UdpardTxItem
 {
     /// Internal use only; do not access this field.

@@ -58,7 +58,7 @@ static void testTxSerializeHeader(void)
         HeaderBuffer buffer;
         TEST_ASSERT_EQUAL_PTR(&buffer.data[0] + HEADER_SIZE_BYTES,
                               txSerializeHeader(buffer.data,
-                                                (TransferMetadata){
+                                                (TransferMetadata) {
                                                     .priority       = UdpardPriorityFast,
                                                     .src_node_id    = 2345,
                                                     .dst_node_id    = 5432,
@@ -75,7 +75,7 @@ static void testTxSerializeHeader(void)
         HeaderBuffer buffer;
         TEST_ASSERT_EQUAL(&buffer.data[0] + HEADER_SIZE_BYTES,
                           txSerializeHeader(buffer.data,
-                                            (TransferMetadata){
+                                            (TransferMetadata) {
                                                 .priority       = UdpardPriorityLow,
                                                 .src_node_id    = 0xFEDC,
                                                 .dst_node_id    = 0xBA98,
@@ -107,12 +107,12 @@ static void testMakeChainEmpty(void)
                           .transfer_id    = 0xBADC0FFEE0DDF00DULL,
     };
     const TxChain chain = txMakeChain(mem,
-                                      (byte_t[]){11, 22, 33, 44, 55, 66, 77, 88},
+                                      (byte_t[]) {11, 22, 33, 44, 55, 66, 77, 88},
                                       30,
                                       1234567890,
                                       meta,
-                                      (UdpardUDPIPEndpoint){.ip_address = 0x0A0B0C0DU, .udp_port = 0x1234},
-                                      (UdpardPayload){.size = 0, .data = ""},
+                                      (UdpardUDPIPEndpoint) {.ip_address = 0x0A0B0C0DU, .udp_port = 0x1234},
+                                      (UdpardPayload) {.size = 0, .data = ""},
                                       &user_transfer_referent);
     TEST_ASSERT_EQUAL(1 * 2ULL, alloc.allocated_fragments);
     TEST_ASSERT_EQUAL(sizeof(struct UdpardTxItem) + HEADER_SIZE_BYTES + 4, alloc.allocated_bytes);
@@ -151,12 +151,12 @@ static void testMakeChainSingleMaxMTU(void)
                           .transfer_id    = 0x0123456789ABCDEFULL,
     };
     const TxChain chain = txMakeChain(mem,
-                                      (byte_t[]){11, 22, 33, 44, 55, 66, 77, 88},
+                                      (byte_t[]) {11, 22, 33, 44, 55, 66, 77, 88},
                                       DetailOfTheCosmosSize + TRANSFER_CRC_SIZE_BYTES,
                                       1234567890,
                                       meta,
-                                      (UdpardUDPIPEndpoint){.ip_address = 0x0A0B0C00U, .udp_port = 7474},
-                                      (UdpardPayload){.size = DetailOfTheCosmosSize, .data = DetailOfTheCosmos},
+                                      (UdpardUDPIPEndpoint) {.ip_address = 0x0A0B0C00U, .udp_port = 7474},
+                                      (UdpardPayload) {.size = DetailOfTheCosmosSize, .data = DetailOfTheCosmos},
                                       &user_transfer_referent);
     TEST_ASSERT_EQUAL(1 * 2ULL, alloc.allocated_fragments);
     TEST_ASSERT_EQUAL(sizeof(struct UdpardTxItem) + HEADER_SIZE_BYTES + DetailOfTheCosmosSize + TRANSFER_CRC_SIZE_BYTES,
@@ -194,18 +194,19 @@ static void testMakeChainSingleFrameDefaultMTU(void)
     };
     const byte_t payload[UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME + 1] = {0};
     {  // Ensure UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME bytes fit in a single frame with the default MTU.
-        const TxChain chain = txMakeChain(mem,
-                                          (byte_t[]){11, 22, 33, 44, 55, 66, 77, 88},
-                                          UDPARD_MTU_DEFAULT,
-                                          1234567890,
-                                          (TransferMetadata){.priority       = UdpardPrioritySlow,
-                                                             .src_node_id    = 4321,
-                                                             .dst_node_id    = 5432,
-                                                             .data_specifier = 7766,
-                                                             .transfer_id    = 0x0123456789ABCDEFULL},
-                                          (UdpardUDPIPEndpoint){.ip_address = 0x0A0B0C00U, .udp_port = 7474},
-                                          (UdpardPayload){.size = UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME, .data = payload},
-                                          NULL);
+        const TxChain chain =
+            txMakeChain(mem,
+                        (byte_t[]) {11, 22, 33, 44, 55, 66, 77, 88},
+                        UDPARD_MTU_DEFAULT,
+                        1234567890,
+                        (TransferMetadata) {.priority       = UdpardPrioritySlow,
+                                            .src_node_id    = 4321,
+                                            .dst_node_id    = 5432,
+                                            .data_specifier = 7766,
+                                            .transfer_id    = 0x0123456789ABCDEFULL},
+                        (UdpardUDPIPEndpoint) {.ip_address = 0x0A0B0C00U, .udp_port = 7474},
+                        (UdpardPayload) {.size = UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME, .data = payload},
+                        NULL);
         TEST_ASSERT_EQUAL(1 * 2ULL, alloc.allocated_fragments);
         TEST_ASSERT_EQUAL(sizeof(struct UdpardTxItem) + HEADER_SIZE_BYTES + UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME +
                               TRANSFER_CRC_SIZE_BYTES,
@@ -219,16 +220,16 @@ static void testMakeChainSingleFrameDefaultMTU(void)
     {  // Increase the payload by 1 byte and ensure it spills over.
         const TxChain chain =
             txMakeChain(mem,
-                        (byte_t[]){11, 22, 33, 44, 55, 66, 77, 88},
+                        (byte_t[]) {11, 22, 33, 44, 55, 66, 77, 88},
                         UDPARD_MTU_DEFAULT,
                         1234567890,
-                        (TransferMetadata){.priority       = UdpardPrioritySlow,
-                                           .src_node_id    = 4321,
-                                           .dst_node_id    = 5432,
-                                           .data_specifier = 7766,
-                                           .transfer_id    = 0x0123456789ABCDEFULL},
-                        (UdpardUDPIPEndpoint){.ip_address = 0x0A0B0C00U, .udp_port = 7474},
-                        (UdpardPayload){.size = UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME + 1, .data = payload},
+                        (TransferMetadata) {.priority       = UdpardPrioritySlow,
+                                            .src_node_id    = 4321,
+                                            .dst_node_id    = 5432,
+                                            .data_specifier = 7766,
+                                            .transfer_id    = 0x0123456789ABCDEFULL},
+                        (UdpardUDPIPEndpoint) {.ip_address = 0x0A0B0C00U, .udp_port = 7474},
+                        (UdpardPayload) {.size = UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME + 1, .data = payload},
                         NULL);
         TEST_ASSERT_EQUAL(2 * 2ULL, alloc.allocated_fragments);
         TEST_ASSERT_EQUAL((sizeof(struct UdpardTxItem) + HEADER_SIZE_BYTES) * 2 + UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME +
@@ -262,12 +263,12 @@ static void testMakeChainThreeFrames(void)
     };
     const size_t  mtu   = (EtherealStrengthSize + 4U + 3U) / 3U;  // Force payload split into three frames.
     const TxChain chain = txMakeChain(mem,
-                                      (byte_t[]){11, 22, 33, 44, 55, 66, 77, 88},
+                                      (byte_t[]) {11, 22, 33, 44, 55, 66, 77, 88},
                                       mtu,
                                       223574680,
                                       meta,
-                                      (UdpardUDPIPEndpoint){.ip_address = 0xBABADEDAU, .udp_port = 0xD0ED},
-                                      (UdpardPayload){.size = EtherealStrengthSize, .data = EtherealStrength},
+                                      (UdpardUDPIPEndpoint) {.ip_address = 0xBABADEDAU, .udp_port = 0xD0ED},
+                                      (UdpardPayload) {.size = EtherealStrengthSize, .data = EtherealStrength},
                                       &user_transfer_referent);
     TEST_ASSERT_EQUAL(3 * 2ULL, alloc.allocated_fragments);
     TEST_ASSERT_EQUAL(3 * (sizeof(struct UdpardTxItem) + HEADER_SIZE_BYTES) + EtherealStrengthSize + 4U,
@@ -310,11 +311,11 @@ static void testMakeChainThreeFrames(void)
     TEST_ASSERT_EQUAL(55, third->dscp);
     TEST_ASSERT_EQUAL(0xBABADEDAU, third->destination.ip_address);
     TEST_ASSERT_EQUAL(0xD0ED, third->destination.udp_port);
-    const size_t third_payload_size = EtherealStrengthSize - 2 * mtu;
+    const size_t third_payload_size = EtherealStrengthSize - (2 * mtu);
     TEST_ASSERT_EQUAL(HEADER_SIZE_BYTES + third_payload_size + 4U, third->datagram_payload.size);
     TEST_ASSERT_EQUAL(0, memcmp(makeHeader(meta, 2, true).data, third->datagram_payload.data, HEADER_SIZE_BYTES));
     TEST_ASSERT_EQUAL(0,
-                      memcmp(EtherealStrength + 2 * mtu,
+                      memcmp(EtherealStrength + (2 * mtu),
                              (byte_t*) (third->datagram_payload.data) + HEADER_SIZE_BYTES,
                              third_payload_size));
     TEST_ASSERT_EQUAL(0,
@@ -348,12 +349,12 @@ static void testMakeChainCRCSpill1(void)
     };
     const size_t  mtu   = InterstellarWarSize + 3U;
     const TxChain chain = txMakeChain(mem,
-                                      (byte_t[]){11, 22, 33, 44, 55, 66, 77, 88},
+                                      (byte_t[]) {11, 22, 33, 44, 55, 66, 77, 88},
                                       mtu,
                                       223574680,
                                       meta,
-                                      (UdpardUDPIPEndpoint){.ip_address = 0xBABADEDAU, .udp_port = 0xD0ED},
-                                      (UdpardPayload){.size = InterstellarWarSize, .data = InterstellarWar},
+                                      (UdpardUDPIPEndpoint) {.ip_address = 0xBABADEDAU, .udp_port = 0xD0ED},
+                                      (UdpardPayload) {.size = InterstellarWarSize, .data = InterstellarWar},
                                       &user_transfer_referent);
     TEST_ASSERT_EQUAL(2 * 2ULL, alloc.allocated_fragments);
     TEST_ASSERT_EQUAL(2 * (sizeof(struct UdpardTxItem) + HEADER_SIZE_BYTES) + InterstellarWarSize + 4U,
@@ -417,12 +418,12 @@ static void testMakeChainCRCSpill2(void)
     };
     const size_t  mtu   = InterstellarWarSize + 2U;
     const TxChain chain = txMakeChain(mem,
-                                      (byte_t[]){11, 22, 33, 44, 55, 66, 77, 88},
+                                      (byte_t[]) {11, 22, 33, 44, 55, 66, 77, 88},
                                       mtu,
                                       223574680,
                                       meta,
-                                      (UdpardUDPIPEndpoint){.ip_address = 0xBABADEDAU, .udp_port = 0xD0ED},
-                                      (UdpardPayload){.size = InterstellarWarSize, .data = InterstellarWar},
+                                      (UdpardUDPIPEndpoint) {.ip_address = 0xBABADEDAU, .udp_port = 0xD0ED},
+                                      (UdpardPayload) {.size = InterstellarWarSize, .data = InterstellarWar},
                                       &user_transfer_referent);
     TEST_ASSERT_EQUAL(2 * 2ULL, alloc.allocated_fragments);
     TEST_ASSERT_EQUAL(2 * (sizeof(struct UdpardTxItem) + HEADER_SIZE_BYTES) + InterstellarWarSize + 4U,
@@ -486,12 +487,12 @@ static void testMakeChainCRCSpill3(void)
     };
     const size_t  mtu   = InterstellarWarSize + 1U;
     const TxChain chain = txMakeChain(mem,
-                                      (byte_t[]){11, 22, 33, 44, 55, 66, 77, 88},
+                                      (byte_t[]) {11, 22, 33, 44, 55, 66, 77, 88},
                                       mtu,
                                       223574680,
                                       meta,
-                                      (UdpardUDPIPEndpoint){.ip_address = 0xBABADEDAU, .udp_port = 0xD0ED},
-                                      (UdpardPayload){.size = InterstellarWarSize, .data = InterstellarWar},
+                                      (UdpardUDPIPEndpoint) {.ip_address = 0xBABADEDAU, .udp_port = 0xD0ED},
+                                      (UdpardPayload) {.size = InterstellarWarSize, .data = InterstellarWar},
                                       &user_transfer_referent);
     TEST_ASSERT_EQUAL(2 * 2ULL, alloc.allocated_fragments);
     TEST_ASSERT_EQUAL(2 * (sizeof(struct UdpardTxItem) + HEADER_SIZE_BYTES) + InterstellarWarSize + 4U,
@@ -555,12 +556,12 @@ static void testMakeChainCRCSpillFull(void)
     };
     const size_t  mtu   = InterstellarWarSize;
     const TxChain chain = txMakeChain(mem,
-                                      (byte_t[]){11, 22, 33, 44, 55, 66, 77, 88},
+                                      (byte_t[]) {11, 22, 33, 44, 55, 66, 77, 88},
                                       mtu,
                                       223574680,
                                       meta,
-                                      (UdpardUDPIPEndpoint){.ip_address = 0xBABADEDAU, .udp_port = 0xD0ED},
-                                      (UdpardPayload){.size = InterstellarWarSize, .data = InterstellarWar},
+                                      (UdpardUDPIPEndpoint) {.ip_address = 0xBABADEDAU, .udp_port = 0xD0ED},
+                                      (UdpardPayload) {.size = InterstellarWarSize, .data = InterstellarWar},
                                       &user_transfer_referent);
     TEST_ASSERT_EQUAL(2 * 2ULL, alloc.allocated_fragments);
     TEST_ASSERT_EQUAL(2 * (sizeof(struct UdpardTxItem) + HEADER_SIZE_BYTES) + InterstellarWarSize + 4U,
@@ -634,8 +635,8 @@ static void testPushPeekPopFree(void)
                       txPush(&tx,
                              1234567890U,
                              meta,
-                             (UdpardUDPIPEndpoint){.ip_address = 0xBABADEDAU, .udp_port = 0xD0ED},
-                             (UdpardPayload){.size = EtherealStrengthSize, .data = EtherealStrength},
+                             (UdpardUDPIPEndpoint) {.ip_address = 0xBABADEDAU, .udp_port = 0xD0ED},
+                             (UdpardPayload) {.size = EtherealStrengthSize, .data = EtherealStrength},
                              &user_transfer_referent));
     TEST_ASSERT_EQUAL(3 * 2ULL, alloc.allocated_fragments);
     TEST_ASSERT_EQUAL(3 * (sizeof(struct UdpardTxItem) + HEADER_SIZE_BYTES) + EtherealStrengthSize + 4U,
@@ -717,8 +718,8 @@ static void testPushPrioritization(void)
                       txPush(&tx,
                              0,
                              meta_a,
-                             (UdpardUDPIPEndpoint){.ip_address = 0xAAAAAAAA, .udp_port = 0xAAAA},
-                             (UdpardPayload){.size = EtherealStrengthSize, .data = EtherealStrength},
+                             (UdpardUDPIPEndpoint) {.ip_address = 0xAAAAAAAA, .udp_port = 0xAAAA},
+                             (UdpardPayload) {.size = EtherealStrengthSize, .data = EtherealStrength},
                              NULL));
     TEST_ASSERT_EQUAL(3 * 2ULL, alloc.allocated_fragments);
     TEST_ASSERT_EQUAL(3, tx.queue_size);
@@ -730,15 +731,15 @@ static void testPushPrioritization(void)
     TEST_ASSERT_EQUAL(1,
                       txPush(&tx,
                              0,
-                             (TransferMetadata){
+                             (TransferMetadata) {
                                  .priority       = UdpardPriorityHigh,
                                  .src_node_id    = 100,
                                  .dst_node_id    = UDPARD_NODE_ID_UNSET,
                                  .data_specifier = 200,
                                  .transfer_id    = 100000,
                              },
-                             (UdpardUDPIPEndpoint){.ip_address = 0xBBBBBBBB, .udp_port = 0xBBBB},
-                             (UdpardPayload){.size = DetailOfTheCosmosSize, .data = DetailOfTheCosmos},
+                             (UdpardUDPIPEndpoint) {.ip_address = 0xBBBBBBBB, .udp_port = 0xBBBB},
+                             (UdpardPayload) {.size = DetailOfTheCosmosSize, .data = DetailOfTheCosmos},
                              NULL));
     TEST_ASSERT_EQUAL(4 * 2ULL, alloc.allocated_fragments);
     TEST_ASSERT_EQUAL(4, tx.queue_size);
@@ -750,15 +751,15 @@ static void testPushPrioritization(void)
     TEST_ASSERT_EQUAL(1,
                       txPush(&tx,
                              1002,
-                             (TransferMetadata){
+                             (TransferMetadata) {
                                  .priority       = UdpardPriorityLow,
                                  .src_node_id    = 100,
                                  .dst_node_id    = UDPARD_NODE_ID_UNSET,
                                  .data_specifier = 200,
                                  .transfer_id    = 10000,
                              },
-                             (UdpardUDPIPEndpoint){.ip_address = 0xCCCCCCCC, .udp_port = 0xCCCC},
-                             (UdpardPayload){.size = InterstellarWarSize, .data = InterstellarWar},
+                             (UdpardUDPIPEndpoint) {.ip_address = 0xCCCCCCCC, .udp_port = 0xCCCC},
+                             (UdpardPayload) {.size = InterstellarWarSize, .data = InterstellarWar},
                              NULL));
     TEST_ASSERT_EQUAL(5 * 2ULL, alloc.allocated_fragments);
     TEST_ASSERT_EQUAL(5, tx.queue_size);
@@ -770,15 +771,15 @@ static void testPushPrioritization(void)
     TEST_ASSERT_EQUAL(1,
                       txPush(&tx,
                              1003,
-                             (TransferMetadata){
+                             (TransferMetadata) {
                                  .priority       = UdpardPriorityLow,
                                  .src_node_id    = 100,
                                  .dst_node_id    = UDPARD_NODE_ID_UNSET,
                                  .data_specifier = 200,
                                  .transfer_id    = 10001,
                              },
-                             (UdpardUDPIPEndpoint){.ip_address = 0xDDDDDDDD, .udp_port = 0xDDDD},
-                             (UdpardPayload){.size = InterstellarWarSize, .data = InterstellarWar},
+                             (UdpardUDPIPEndpoint) {.ip_address = 0xDDDDDDDD, .udp_port = 0xDDDD},
+                             (UdpardPayload) {.size = InterstellarWarSize, .data = InterstellarWar},
                              NULL));
     TEST_ASSERT_EQUAL(6 * 2ULL, alloc.allocated_fragments);
     TEST_ASSERT_EQUAL(6, tx.queue_size);
@@ -790,15 +791,15 @@ static void testPushPrioritization(void)
     TEST_ASSERT_EQUAL(1,
                       txPush(&tx,
                              1003,
-                             (TransferMetadata){
+                             (TransferMetadata) {
                                  .priority       = UdpardPriorityFast,
                                  .src_node_id    = 100,
                                  .dst_node_id    = UDPARD_NODE_ID_UNSET,
                                  .data_specifier = 200,
                                  .transfer_id    = 1000,
                              },
-                             (UdpardUDPIPEndpoint){.ip_address = 0xEEEEEEEE, .udp_port = 0xEEEE},
-                             (UdpardPayload){.size = InterstellarWarSize, .data = InterstellarWar},
+                             (UdpardUDPIPEndpoint) {.ip_address = 0xEEEEEEEE, .udp_port = 0xEEEE},
+                             (UdpardPayload) {.size = InterstellarWarSize, .data = InterstellarWar},
                              NULL));
     TEST_ASSERT_EQUAL(7 * 2ULL, alloc.allocated_fragments);
     TEST_ASSERT_EQUAL(7, tx.queue_size);
@@ -890,8 +891,8 @@ static void testPushCapacityLimit(void)
                       txPush(&tx,
                              1234567890U,
                              meta,
-                             (UdpardUDPIPEndpoint){.ip_address = 0xBABADEDAU, .udp_port = 0xD0ED},
-                             (UdpardPayload){.size = EtherealStrengthSize, .data = EtherealStrength},
+                             (UdpardUDPIPEndpoint) {.ip_address = 0xBABADEDAU, .udp_port = 0xD0ED},
+                             (UdpardPayload) {.size = EtherealStrengthSize, .data = EtherealStrength},
                              NULL));
     TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
     TEST_ASSERT_EQUAL(0, alloc.allocated_bytes);
@@ -929,8 +930,8 @@ static void testPushOOM(void)
                       txPush(&tx,
                              1234567890U,
                              meta,
-                             (UdpardUDPIPEndpoint){.ip_address = 0xBABADEDAU, .udp_port = 0xD0ED},
-                             (UdpardPayload){.size = EtherealStrengthSize, .data = EtherealStrength},
+                             (UdpardUDPIPEndpoint) {.ip_address = 0xBABADEDAU, .udp_port = 0xD0ED},
+                             (UdpardPayload) {.size = EtherealStrengthSize, .data = EtherealStrength},
                              NULL));
     TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
     TEST_ASSERT_EQUAL(0, alloc.allocated_bytes);
@@ -969,8 +970,8 @@ static void testPushPayloadOOM(void)
                       txPush(&tx,
                              1234567890U,
                              meta,
-                             (UdpardUDPIPEndpoint){.ip_address = 0xBABADEDAU, .udp_port = 0xD0ED},
-                             (UdpardPayload){.size = EtherealStrengthSize, .data = EtherealStrength},
+                             (UdpardUDPIPEndpoint) {.ip_address = 0xBABADEDAU, .udp_port = 0xD0ED},
+                             (UdpardPayload) {.size = EtherealStrengthSize, .data = EtherealStrength},
                              NULL));
     TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
     TEST_ASSERT_EQUAL(0, alloc.allocated_bytes);
@@ -1007,8 +1008,8 @@ static void testPushAnonymousMultiFrame(void)
                       txPush(&tx,
                              1234567890U,
                              meta,
-                             (UdpardUDPIPEndpoint){.ip_address = 0xBABADEDAU, .udp_port = 0xD0ED},
-                             (UdpardPayload){.size = EtherealStrengthSize, .data = EtherealStrength},
+                             (UdpardUDPIPEndpoint) {.ip_address = 0xBABADEDAU, .udp_port = 0xD0ED},
+                             (UdpardPayload) {.size = EtherealStrengthSize, .data = EtherealStrength},
                              NULL));
     TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
     TEST_ASSERT_EQUAL(0, alloc.allocated_bytes);
@@ -1045,8 +1046,8 @@ static void testPushAnonymousService(void)
                       txPush(&tx,
                              1234567890U,
                              meta,
-                             (UdpardUDPIPEndpoint){.ip_address = 0xBABADEDAU, .udp_port = 0xD0ED},
-                             (UdpardPayload){.size = EtherealStrengthSize, .data = EtherealStrength},
+                             (UdpardUDPIPEndpoint) {.ip_address = 0xBABADEDAU, .udp_port = 0xD0ED},
+                             (UdpardPayload) {.size = EtherealStrengthSize, .data = EtherealStrength},
                              NULL));
     TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
     TEST_ASSERT_EQUAL(0, alloc.allocated_bytes);
