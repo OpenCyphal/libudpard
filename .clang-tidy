@@ -19,6 +19,7 @@ Checks: >-
   -bugprone-easily-swappable-parameters,
   -llvm-header-guard,
   -cert-dcl03-c,
+  -boost-use-ranges,
   -hicpp-static-assert,
   -misc-static-assert,
   -modernize-macro-to-enum,

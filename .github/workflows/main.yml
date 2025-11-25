@@ -1,12 +1,12 @@
 name: Main Workflow
 on: [ push, pull_request ]
 env:
-  LLVM_VERSION: 15
+  LLVM_VERSION: 19
 jobs:
   debug:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
-    container: ghcr.io/opencyphal/toolshed:ts22.4.10
+    container: ghcr.io/opencyphal/toolshed:ts24.4.3
     strategy:
       matrix:
         toolchain: [ 'clang', 'gcc' ]
@@ -46,7 +46,7 @@ jobs:
   optimizations:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
-    container: ghcr.io/opencyphal/toolshed:ts22.4.10
+    container: ghcr.io/opencyphal/toolshed:ts24.4.3
     strategy:
       matrix:
         toolchain: [ 'clang', 'gcc' ]
@@ -123,7 +123,7 @@ jobs:
 
   sonar:
     runs-on: ubuntu-latest
-    container: ghcr.io/opencyphal/toolshed:ts22.4.10
+    container: ghcr.io/opencyphal/toolshed:ts24.4.3
     if: >
       (
         (github.event_name == 'pull_request' || contains(github.ref, '/main') || contains(github.ref, '/release')) &&
@@ -176,7 +176,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: DoozyX/clang-format-lint-action@v0.17
+      - uses: DoozyX/clang-format-lint-action@v0.20
         with:
           source: './libudpard ./tests'
           extensions: 'c,h,cpp,hpp'

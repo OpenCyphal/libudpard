@@ -69,7 +69,7 @@ sonar-scanner \
 --define sonar.projectKey=libudpard \
 --define sonar.sources=libudpard \
 --define sonar.exclusions=libudpard/_udpard_cavl.h \
---define sonar.cfamily.build-wrapper-output="$BUILD_DIR" \
+--define sonar.cfamily.compile-commands="$BUILD_DIR/compile_commands.json" \
 --define sonar.cfamily.llvm-cov.reportPath="$BUILD_DIR/coverage.txt" \
 --define sonar.cfamily.threads="$(nproc)" \
 || die

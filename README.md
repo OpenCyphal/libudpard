@@ -78,6 +78,11 @@ For complete usage examples, please refer to <https://github.com/OpenCyphal-Gara
 
 ## Revisions
 
+### v2.0
+
+- Updating from LibUDPard v1 to v2 involves several significant changes to improve memory management and payload handling.
+- Please follow [MIGRATION_v1.x_to_v2.0](MIGRATION_v1.x_to_v2.0.md) guide and carefully update your code.
+
 ### v1.0
 
 Initial release.

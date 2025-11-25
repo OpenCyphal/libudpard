@@ -35,6 +35,8 @@ Checks: >-
   -cppcoreguidelines-avoid-const-or-ref-data-members,
   -cppcoreguidelines-pro-type-union-access,
   -cppcoreguidelines-pro-type-reinterpret-cast,
+  -boost-use-ranges,
+  -modernize-use-ranges,
   -*-no-malloc,
   -cert-msc30-c,
   -cert-msc50-cpp,

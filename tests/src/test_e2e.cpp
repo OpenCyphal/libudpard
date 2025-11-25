@@ -73,7 +73,10 @@ void testPubSub()
     instrumentedAllocatorNew(&alloc_rx_session);
     instrumentedAllocatorNew(&alloc_rx_fragment);
     instrumentedAllocatorNew(&alloc_rx_payload);
-    const auto                    mem_tx = instrumentedAllocatorMakeMemoryResource(&alloc_tx);
+    const UdpardTxMemoryResources mem_tx{
+        .fragment = instrumentedAllocatorMakeMemoryResource(&alloc_tx),
+        .payload  = instrumentedAllocatorMakeMemoryResource(&alloc_tx),
+    };
     const UdpardRxMemoryResources mem_rx{
         .session  = instrumentedAllocatorMakeMemoryResource(&alloc_rx_session),
         .fragment = instrumentedAllocatorMakeMemoryResource(&alloc_rx_fragment),
@@ -152,7 +155,7 @@ void testPubSub()
                                       makePayload(Dark),
                                       nullptr));
     TEST_ASSERT_EQUAL(7, tx.queue_size);
-    TEST_ASSERT_EQUAL(7, alloc_tx.allocated_fragments);
+    TEST_ASSERT_EQUAL(7 * 2ULL, alloc_tx.allocated_fragments);
 
     // Transmit the enqueued frames by pushing them into the subscribers.
     // Here we pop the frames one by one ensuring that they come out in the correct order.
@@ -161,7 +164,7 @@ void testPubSub()
     TEST_ASSERT_EQUAL(0, alloc_rx_session.allocated_fragments);
     TEST_ASSERT_EQUAL(0, alloc_rx_fragment.allocated_fragments);
     TEST_ASSERT_EQUAL(0, alloc_rx_payload.allocated_fragments);
-    const UdpardTxItem* tx_item = udpardTxPeek(&tx);
+    UdpardTxItem* tx_item = udpardTxPeek(&tx);
     TEST_ASSERT_NOT_NULL(tx_item);
     TEST_ASSERT_EQUAL(sub.at(1).udp_ip_endpoint.ip_address, tx_item->destination.ip_address);
     TEST_ASSERT_NULL(tx_item->next_in_transfer);
@@ -212,7 +215,7 @@ void testPubSub()
     TEST_ASSERT_EQUAL(0, alloc_rx_payload.allocated_fragments);
     // Free the TX item.
     udpardTxFree(mem_tx, udpardTxPop(&tx, tx_item));
-    TEST_ASSERT_EQUAL(6, alloc_tx.allocated_fragments);
+    TEST_ASSERT_EQUAL(6 * 2ULL, alloc_tx.allocated_fragments);
 
     // Second transfer.
     tx_item = udpardTxPeek(&tx);
@@ -247,7 +250,7 @@ void testPubSub()
     TEST_ASSERT_EQUAL(0, alloc_rx_payload.allocated_fragments);
     // Free the TX item.
     udpardTxFree(mem_tx, udpardTxPop(&tx, tx_item));
-    TEST_ASSERT_EQUAL(5, alloc_tx.allocated_fragments);
+    TEST_ASSERT_EQUAL(5 * 2ULL, alloc_tx.allocated_fragments);
 
     // Third transfer. This one is anonymous.
     tx_item = udpardTxPeek(&tx);
@@ -282,7 +285,7 @@ void testPubSub()
     TEST_ASSERT_EQUAL(0, alloc_rx_payload.allocated_fragments);
     // Free the TX item.
     udpardTxFree(mem_tx, udpardTxPop(&tx, tx_item));
-    TEST_ASSERT_EQUAL(4, alloc_tx.allocated_fragments);
+    TEST_ASSERT_EQUAL(4 * 2ULL, alloc_tx.allocated_fragments);
 
     // Fourth transfer. This one contains multiple frames. We process them one-by-one.
     // Frame #0.
@@ -305,7 +308,7 @@ void testPubSub()
     TEST_ASSERT_EQUAL(1, alloc_rx_payload.allocated_fragments);
     // Free the TX item.
     udpardTxFree(mem_tx, udpardTxPop(&tx, tx_item));
-    TEST_ASSERT_EQUAL(3, alloc_tx.allocated_fragments);
+    TEST_ASSERT_EQUAL(3 * 2ULL, alloc_tx.allocated_fragments);
     // Frame #1.
     tx_item = udpardTxPeek(&tx);
     TEST_ASSERT_NOT_NULL(tx_item);
@@ -327,7 +330,7 @@ void testPubSub()
     TEST_ASSERT_EQUAL(2, alloc_rx_payload.allocated_fragments);
     // Free the TX item.
     udpardTxFree(mem_tx, udpardTxPop(&tx, tx_item));
-    TEST_ASSERT_EQUAL(2, alloc_tx.allocated_fragments);
+    TEST_ASSERT_EQUAL(2 * 2ULL, alloc_tx.allocated_fragments);
     // Frame #2.
     tx_item = udpardTxPeek(&tx);
     TEST_ASSERT_NOT_NULL(tx_item);
@@ -349,7 +352,7 @@ void testPubSub()
     TEST_ASSERT_EQUAL(3, alloc_rx_payload.allocated_fragments);
     // Free the TX item.
     udpardTxFree(mem_tx, udpardTxPop(&tx, tx_item));
-    TEST_ASSERT_EQUAL(1, alloc_tx.allocated_fragments);
+    TEST_ASSERT_EQUAL(1 * 2ULL, alloc_tx.allocated_fragments);
     // Frame #3. This is the last frame of the transfer. The payload is truncated, see the extent.
     tx_item = udpardTxPeek(&tx);
     TEST_ASSERT_NOT_NULL(tx_item);
@@ -410,7 +413,10 @@ void testRPC()
     instrumentedAllocatorNew(&alloc_rx_session);
     instrumentedAllocatorNew(&alloc_rx_fragment);
     instrumentedAllocatorNew(&alloc_rx_payload);
-    const auto                    mem_tx = instrumentedAllocatorMakeMemoryResource(&alloc_tx);
+    const UdpardTxMemoryResources mem_tx{
+        .fragment = instrumentedAllocatorMakeMemoryResource(&alloc_tx),
+        .payload  = instrumentedAllocatorMakeMemoryResource(&alloc_tx),
+    };
     const UdpardRxMemoryResources mem_rx{
         .session  = instrumentedAllocatorMakeMemoryResource(&alloc_rx_session),
         .fragment = instrumentedAllocatorMakeMemoryResource(&alloc_rx_fragment),
@@ -472,7 +478,7 @@ void testRPC()
     TEST_ASSERT_EQUAL(0, alloc_rx_session.allocated_fragments);
     TEST_ASSERT_EQUAL(0, alloc_rx_fragment.allocated_fragments);
     TEST_ASSERT_EQUAL(0, alloc_rx_payload.allocated_fragments);
-    const UdpardTxItem* tx_item = udpardTxPeek(&tx);
+    UdpardTxItem* tx_item = udpardTxPeek(&tx);
     TEST_ASSERT_NOT_NULL(tx_item);
     TEST_ASSERT_EQUAL(udp_ip_endpoint.ip_address, tx_item->destination.ip_address);
     TEST_ASSERT_NULL(tx_item->next_in_transfer);
@@ -529,7 +535,7 @@ void testRPC()
     TEST_ASSERT_EQUAL(0, alloc_rx_payload.allocated_fragments);
     // Free the TX item.
     udpardTxFree(mem_tx, udpardTxPop(&tx, tx_item));
-    TEST_ASSERT_EQUAL(1, alloc_tx.allocated_fragments);
+    TEST_ASSERT_EQUAL(1 * 2ULL, alloc_tx.allocated_fragments);
 
     // Second transfer.
     tx_item = udpardTxPeek(&tx);

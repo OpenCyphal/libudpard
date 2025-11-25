@@ -51,8 +51,8 @@ static RxFragment* makeRxFragmentString(const RxMemory            memory,
     const size_t sz = strlen(payload);
     return makeRxFragment(memory,
                           frame_index,
-                          (struct UdpardPayload){.data = payload, .size = sz},
-                          (struct UdpardMutablePayload){.data = (void*) payload, .size = sz},
+                          (struct UdpardPayload) {.data = payload, .size = sz},
+                          (struct UdpardMutablePayload) {.data = (void*) payload, .size = sz},
                           parent);
 }
 
@@ -103,8 +103,8 @@ static RxFrameBase makeRxFrameBaseString(InstrumentedAllocator* const memory,
     return makeRxFrameBase(memory,
                            frame_index,
                            end_of_transfer,
-                           (struct UdpardPayload){.data = payload, .size = strlen(payload)},
-                           (struct UdpardMutablePayload){.data = (void*) payload, .size = strlen(payload)});
+                           (struct UdpardPayload) {.data = payload, .size = strlen(payload)},
+                           (struct UdpardMutablePayload) {.data = (void*) payload, .size = strlen(payload)});
 }
 
 static RxFrame makeRxFrameString(InstrumentedAllocator* const memory,
@@ -113,13 +113,13 @@ static RxFrame makeRxFrameString(InstrumentedAllocator* const memory,
                                  const bool                   end_of_transfer,
                                  const char* const            payload)
 {
-    return (RxFrame){.base = makeRxFrameBaseString(memory, frame_index, end_of_transfer, payload), .meta = meta};
+    return (RxFrame) {.base = makeRxFrameBaseString(memory, frame_index, end_of_transfer, payload), .meta = meta};
 }
 
 static RxMemory makeRxMemory(InstrumentedAllocator* const fragment, InstrumentedAllocator* const payload)
 {
-    return (RxMemory){.fragment = instrumentedAllocatorMakeMemoryResource(fragment),
-                      .payload  = instrumentedAllocatorMakeMemoryDeleter(payload)};
+    return (RxMemory) {.fragment = instrumentedAllocatorMakeMemoryResource(fragment),
+                       .payload  = instrumentedAllocatorMakeMemoryDeleter(payload)};
 }
 
 static struct UdpardMutablePayload makeDatagramPayload(InstrumentedAllocator* const memory,
@@ -151,7 +151,7 @@ static struct UdpardMutablePayload makeDatagramPayloadString(InstrumentedAllocat
                                meta,
                                frame_index,
                                end_of_transfer,
-                               (struct UdpardPayload){.data = string, .size = strlen(string)});
+                               (struct UdpardPayload) {.data = string, .size = strlen(string)});
 }
 
 static struct UdpardMutablePayload makeDatagramPayloadSingleFrame(InstrumentedAllocator* const memory,
@@ -163,8 +163,8 @@ static struct UdpardMutablePayload makeDatagramPayloadSingleFrame(InstrumentedAl
                             meta,
                             0,
                             true,
-                            (struct UdpardPayload){.data = payload.data,
-                                                   .size = payload.size + TRANSFER_CRC_SIZE_BYTES});
+                            (struct UdpardPayload) {.data = payload.data,
+                                                    .size = payload.size + TRANSFER_CRC_SIZE_BYTES});
     TEST_PANIC_UNLESS(pld.size == (payload.size + HEADER_SIZE_BYTES + TRANSFER_CRC_SIZE_BYTES));
     txSerializeU32(((byte_t*) pld.data) + HEADER_SIZE_BYTES + payload.size,
                    transferCRCCompute(payload.size, payload.data));
@@ -177,7 +177,7 @@ static struct UdpardMutablePayload makeDatagramPayloadSingleFrameString(Instrume
 {
     return makeDatagramPayloadSingleFrame(memory,
                                           meta,
-                                          (struct UdpardPayload){.data = payload, .size = strlen(payload)});
+                                          (struct UdpardPayload) {.data = payload, .size = strlen(payload)});
 }
 
 // --------------------------------------------------  MISC  --------------------------------------------------
@@ -212,7 +212,7 @@ static void testParseFrameValidMessage(void)
                       254, 15,  220, 186, 57,  48,  0,   0,  0,  0,   30,  179,  //
                       'a', 'b', 'c'};
     RxFrame rxf    = {0};
-    TEST_ASSERT(rxParseFrame((struct UdpardMutablePayload){.data = data, .size = sizeof(data)}, &rxf));
+    TEST_ASSERT(rxParseFrame((struct UdpardMutablePayload) {.data = data, .size = sizeof(data)}, &rxf));
     TEST_ASSERT_EQUAL_UINT64(UdpardPriorityFast, rxf.meta.priority);
     TEST_ASSERT_EQUAL_UINT64(2345, rxf.meta.src_node_id);
     TEST_ASSERT_EQUAL_UINT64(UDPARD_NODE_ID_UNSET, rxf.meta.dst_node_id);
@@ -235,7 +235,7 @@ static void testParseFrameValidRPCService(void)
                       254, 15,  220, 186, 254, 25, 0,   0,   0,  0,   173, 122,  //
                       'a', 'b', 'c'};
     RxFrame rxf    = {0};
-    TEST_ASSERT(rxParseFrame((struct UdpardMutablePayload){.data = data, .size = sizeof(data)}, &rxf));
+    TEST_ASSERT(rxParseFrame((struct UdpardMutablePayload) {.data = data, .size = sizeof(data)}, &rxf));
     TEST_ASSERT_EQUAL_UINT64(UdpardPriorityFast, rxf.meta.priority);
     TEST_ASSERT_EQUAL_UINT64(2345, rxf.meta.src_node_id);
     TEST_ASSERT_EQUAL_UINT64(4567, rxf.meta.dst_node_id);
@@ -257,7 +257,7 @@ static void testParseFrameValidMessageAnonymous(void)
                       254, 15,  220, 186, 0,   0,   0,   128, 0,  0,   168, 92,  //
                       'a', 'b', 'c'};
     RxFrame rxf    = {0};
-    TEST_ASSERT(rxParseFrame((struct UdpardMutablePayload){.data = data, .size = sizeof(data)}, &rxf));
+    TEST_ASSERT(rxParseFrame((struct UdpardMutablePayload) {.data = data, .size = sizeof(data)}, &rxf));
     TEST_ASSERT_EQUAL_UINT64(UdpardPriorityFast, rxf.meta.priority);
     TEST_ASSERT_EQUAL_UINT64(UDPARD_NODE_ID_UNSET, rxf.meta.src_node_id);
     TEST_ASSERT_EQUAL_UINT64(UDPARD_NODE_ID_UNSET, rxf.meta.dst_node_id);
@@ -277,7 +277,7 @@ static void testParseFrameRPCServiceAnonymous(void)
                       254, 15,  220, 186, 254, 25, 0,   0,   0,  0,   75,  79,  //
                       'a', 'b', 'c'};
     RxFrame rxf    = {0};
-    TEST_ASSERT_FALSE(rxParseFrame((struct UdpardMutablePayload){.data = data, .size = sizeof(data)}, &rxf));
+    TEST_ASSERT_FALSE(rxParseFrame((struct UdpardMutablePayload) {.data = data, .size = sizeof(data)}, &rxf));
 }
 
 static void testParseFrameRPCServiceBroadcast(void)
@@ -286,7 +286,7 @@ static void testParseFrameRPCServiceBroadcast(void)
                       254, 15,  220, 186, 254, 25,  0,   0,   0,  0,   248, 152,  //
                       'a', 'b', 'c'};
     RxFrame rxf    = {0};
-    TEST_ASSERT_FALSE(rxParseFrame((struct UdpardMutablePayload){.data = data, .size = sizeof(data)}, &rxf));
+    TEST_ASSERT_FALSE(rxParseFrame((struct UdpardMutablePayload) {.data = data, .size = sizeof(data)}, &rxf));
 }
 
 static void testParseFrameAnonymousNonSingleFrame(void)
@@ -295,7 +295,7 @@ static void testParseFrameAnonymousNonSingleFrame(void)
                       254, 15,  220, 186, 0,   0,   0,   0,  0,  0,   147, 6,  //
                       'a', 'b', 'c'};
     RxFrame rxf    = {0};
-    TEST_ASSERT_FALSE(rxParseFrame((struct UdpardMutablePayload){.data = data, .size = sizeof(data)}, &rxf));
+    TEST_ASSERT_FALSE(rxParseFrame((struct UdpardMutablePayload) {.data = data, .size = sizeof(data)}, &rxf));
 }
 
 static void testParseFrameBadHeaderCRC(void)
@@ -304,7 +304,7 @@ static void testParseFrameBadHeaderCRC(void)
                       254, 15,  220, 186, 57,  48,  0,   0,  0,  0,   30,  180,  //
                       'a', 'b', 'c'};
     RxFrame rxf    = {0};
-    TEST_ASSERT_FALSE(rxParseFrame((struct UdpardMutablePayload){.data = data, .size = sizeof(data)}, &rxf));
+    TEST_ASSERT_FALSE(rxParseFrame((struct UdpardMutablePayload) {.data = data, .size = sizeof(data)}, &rxf));
 }
 
 static void testParseFrameUnknownHeaderVersion(void)
@@ -316,20 +316,20 @@ static void testParseFrameUnknownHeaderVersion(void)
                       254, 15,  220, 186, 57, 48, 0,   0,  0,  0,   141, 228,  //
                       'a', 'b', 'c'};
     RxFrame rxf    = {0};
-    TEST_ASSERT_FALSE(rxParseFrame((struct UdpardMutablePayload){.data = data, .size = sizeof(data)}, &rxf));
+    TEST_ASSERT_FALSE(rxParseFrame((struct UdpardMutablePayload) {.data = data, .size = sizeof(data)}, &rxf));
 }
 
 static void testParseFrameHeaderWithoutPayload(void)
 {
     byte_t data[] = {1, 2, 41, 9, 255, 255, 230, 29, 13, 240, 221, 224, 254, 15, 220, 186, 57, 48, 0, 0, 0, 0, 30, 179};
     RxFrame rxf   = {0};
-    TEST_ASSERT_FALSE(rxParseFrame((struct UdpardMutablePayload){.data = data, .size = sizeof(data)}, &rxf));
+    TEST_ASSERT_FALSE(rxParseFrame((struct UdpardMutablePayload) {.data = data, .size = sizeof(data)}, &rxf));
 }
 
 static void testParseFrameEmpty(void)
 {
     RxFrame rxf = {0};
-    TEST_ASSERT_FALSE(rxParseFrame((struct UdpardMutablePayload){.data = "", .size = 0}, &rxf));
+    TEST_ASSERT_FALSE(rxParseFrame((struct UdpardMutablePayload) {.data = "", .size = 0}, &rxf));
 }
 
 static void testParseFrameInvalidTransferID(void)
@@ -339,7 +339,7 @@ static void testParseFrameInvalidTransferID(void)
                       255, 255, 255, 255, 57, 48, 0,   0,  0,   0,   42,  107,  //
                       'a', 'b', 'c'};
     RxFrame rxf    = {0};
-    TEST_ASSERT_FALSE(rxParseFrame((struct UdpardMutablePayload){.data = data, .size = sizeof(data)}, &rxf));
+    TEST_ASSERT_FALSE(rxParseFrame((struct UdpardMutablePayload) {.data = data, .size = sizeof(data)}, &rxf));
 }
 
 // --------------------------------------------------  SLOT  --------------------------------------------------
@@ -385,21 +385,21 @@ static void testSlotRestartNonEmpty(void)
         //
         .fragments = &makeRxFragment(mem,
                                      1,
-                                     (struct UdpardPayload){.data = &data[2], .size = 2},
-                                     (struct UdpardMutablePayload){.data = data, .size = sizeof(data)},
+                                     (struct UdpardPayload) {.data = &data[2], .size = 2},
+                                     (struct UdpardMutablePayload) {.data = data, .size = sizeof(data)},
                                      NULL)
                           ->tree,
     };
     slot.fragments->base.lr[0] = &makeRxFragment(mem,
                                                  0,
-                                                 (struct UdpardPayload){.data = &data[1], .size = 1},
-                                                 (struct UdpardMutablePayload){.data = data, .size = sizeof(data)},
+                                                 (struct UdpardPayload) {.data = &data[1], .size = 1},
+                                                 (struct UdpardMutablePayload) {.data = data, .size = sizeof(data)},
                                                  slot.fragments)
                                       ->tree.base;
     slot.fragments->base.lr[1] = &makeRxFragment(mem,
                                                  2,
-                                                 (struct UdpardPayload){.data = &data[3], .size = 3},
-                                                 (struct UdpardMutablePayload){.data = data, .size = sizeof(data)},
+                                                 (struct UdpardPayload) {.data = &data[3], .size = 3},
+                                                 (struct UdpardMutablePayload) {.data = data, .size = sizeof(data)},
                                                  slot.fragments)
                                       ->tree.base;
     // Initialization done, ensure the memory utilization is as we expect.
@@ -1206,11 +1206,11 @@ static void testIfaceAcceptA(void)
                       rxIfaceAccept(&iface,
                                     1234567890,
                                     makeRxFrameString(&mem_payload,  //
-                                                      (TransferMetadata){.priority       = UdpardPriorityHigh,
-                                                                         .src_node_id    = 1234,
-                                                                         .dst_node_id    = UDPARD_NODE_ID_UNSET,
-                                                                         .data_specifier = 0x1234,
-                                                                         .transfer_id    = 0x1122334455667788U},
+                                                      (TransferMetadata) {.priority       = UdpardPriorityHigh,
+                                                                          .src_node_id    = 1234,
+                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                                                                          .data_specifier = 0x1234,
+                                                                          .transfer_id    = 0x1122334455667788U},
                                                       0,
                                                       true,
                                                       "I am a tomb."
@@ -1242,11 +1242,11 @@ static void testIfaceAcceptA(void)
                       rxIfaceAccept(&iface,
                                     1234567891,                      // different timestamp but ignored anyway
                                     makeRxFrameString(&mem_payload,  //
-                                                      (TransferMetadata){.priority       = UdpardPriorityHigh,
-                                                                         .src_node_id    = 1234,
-                                                                         .dst_node_id    = UDPARD_NODE_ID_UNSET,
-                                                                         .data_specifier = 0x1234,
-                                                                         .transfer_id    = 0x1122334455667788U},
+                                                      (TransferMetadata) {.priority       = UdpardPriorityHigh,
+                                                                          .src_node_id    = 1234,
+                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                                                                          .data_specifier = 0x1234,
+                                                                          .transfer_id    = 0x1122334455667788U},
                                                       0,
                                                       true,
                                                       "I am a tomb."
@@ -1268,11 +1268,11 @@ static void testIfaceAcceptA(void)
                       rxIfaceAccept(&iface,
                                     1234567892,                      // different timestamp but ignored anyway
                                     makeRxFrameString(&mem_payload,  //
-                                                      (TransferMetadata){.priority       = UdpardPriorityHigh,
-                                                                         .src_node_id    = 1234,
-                                                                         .dst_node_id    = UDPARD_NODE_ID_UNSET,
-                                                                         .data_specifier = 0x1234,
-                                                                         .transfer_id    = 0x1122334455667789U},
+                                                      (TransferMetadata) {.priority       = UdpardPriorityHigh,
+                                                                          .src_node_id    = 1234,
+                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                                                                          .data_specifier = 0x1234,
+                                                                          .transfer_id    = 0x1122334455667789U},
                                                       0,
                                                       true,
                                                       "I am a tomb."
@@ -1295,11 +1295,11 @@ static void testIfaceAcceptA(void)
                       rxIfaceAccept(&iface,
                                     1234567893,                      // different timestamp but ignored anyway
                                     makeRxFrameString(&mem_payload,  //
-                                                      (TransferMetadata){.priority       = UdpardPriorityHigh,
-                                                                         .src_node_id    = 1234,
-                                                                         .dst_node_id    = UDPARD_NODE_ID_UNSET,
-                                                                         .data_specifier = 0x1234,
-                                                                         .transfer_id    = 0x1122334455667790U},
+                                                      (TransferMetadata) {.priority       = UdpardPriorityHigh,
+                                                                          .src_node_id    = 1234,
+                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                                                                          .data_specifier = 0x1234,
+                                                                          .transfer_id    = 0x1122334455667790U},
                                                       0,
                                                       true,
                                                       "I am a tomb."
@@ -1325,11 +1325,11 @@ static void testIfaceAcceptA(void)
                       rxIfaceAccept(&iface,
                                     2000000020,
                                     makeRxFrameString(&mem_payload,  //
-                                                      (TransferMetadata){.priority       = UdpardPriorityHigh,
-                                                                         .src_node_id    = 1111,
-                                                                         .dst_node_id    = UDPARD_NODE_ID_UNSET,
-                                                                         .data_specifier = 0x1111,
-                                                                         .transfer_id    = 1000U},
+                                                      (TransferMetadata) {.priority       = UdpardPriorityHigh,
+                                                                          .src_node_id    = 1111,
+                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                                                                          .data_specifier = 0x1111,
+                                                                          .transfer_id    = 1000U},
                                                       2,
                                                       true,
                                                       "A2"
@@ -1348,11 +1348,11 @@ static void testIfaceAcceptA(void)
                       rxIfaceAccept(&iface,
                                     2000000010,                      // Transfer-ID timeout.
                                     makeRxFrameString(&mem_payload,  //
-                                                      (TransferMetadata){.priority       = UdpardPrioritySlow,
-                                                                         .src_node_id    = 2222,
-                                                                         .dst_node_id    = UDPARD_NODE_ID_UNSET,
-                                                                         .data_specifier = 0x2222,
-                                                                         .transfer_id    = 1001U},
+                                                      (TransferMetadata) {.priority       = UdpardPrioritySlow,
+                                                                          .src_node_id    = 2222,
+                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                                                                          .data_specifier = 0x2222,
+                                                                          .transfer_id    = 1001U},
                                                       1,
                                                       true,
                                                       "B1"
@@ -1371,11 +1371,11 @@ static void testIfaceAcceptA(void)
                       rxIfaceAccept(&iface,
                                     2000000030,
                                     makeRxFrameString(&mem_payload,  //
-                                                      (TransferMetadata){.priority       = UdpardPriorityHigh,
-                                                                         .src_node_id    = 1111,
-                                                                         .dst_node_id    = UDPARD_NODE_ID_UNSET,
-                                                                         .data_specifier = 0x1111,
-                                                                         .transfer_id    = 1000U},
+                                                      (TransferMetadata) {.priority       = UdpardPriorityHigh,
+                                                                          .src_node_id    = 1111,
+                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                                                                          .data_specifier = 0x1111,
+                                                                          .transfer_id    = 1000U},
                                                       0,
                                                       false,
                                                       "A0"),
@@ -1393,11 +1393,11 @@ static void testIfaceAcceptA(void)
                       rxIfaceAccept(&iface,
                                     2000000040,
                                     makeRxFrameString(&mem_payload,  //
-                                                      (TransferMetadata){.priority       = UdpardPrioritySlow,
-                                                                         .src_node_id    = 2222,
-                                                                         .dst_node_id    = UDPARD_NODE_ID_UNSET,
-                                                                         .data_specifier = 0x2222,
-                                                                         .transfer_id    = 1001U},
+                                                      (TransferMetadata) {.priority       = UdpardPrioritySlow,
+                                                                          .src_node_id    = 2222,
+                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                                                                          .data_specifier = 0x2222,
+                                                                          .transfer_id    = 1001U},
                                                       0,
                                                       false,
                                                       "B0"),
@@ -1429,11 +1429,11 @@ static void testIfaceAcceptA(void)
                       rxIfaceAccept(&iface,
                                     2000000050,
                                     makeRxFrameString(&mem_payload,  //
-                                                      (TransferMetadata){.priority       = UdpardPriorityHigh,
-                                                                         .src_node_id    = 1111,
-                                                                         .dst_node_id    = UDPARD_NODE_ID_UNSET,
-                                                                         .data_specifier = 0x1111,
-                                                                         .transfer_id    = 1000U},
+                                                      (TransferMetadata) {.priority       = UdpardPriorityHigh,
+                                                                          .src_node_id    = 1111,
+                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                                                                          .data_specifier = 0x1111,
+                                                                          .transfer_id    = 1000U},
                                                       1,
                                                       false,
                                                       "A1"),
@@ -1496,11 +1496,11 @@ static void testIfaceAcceptB(void)
                       rxIfaceAccept(&iface,
                                     2000000020,
                                     makeRxFrameString(&mem_payload,  //
-                                                      (TransferMetadata){.priority       = UdpardPriorityHigh,
-                                                                         .src_node_id    = 1111,
-                                                                         .dst_node_id    = UDPARD_NODE_ID_UNSET,
-                                                                         .data_specifier = 0x1111,
-                                                                         .transfer_id    = 1000U},
+                                                      (TransferMetadata) {.priority       = UdpardPriorityHigh,
+                                                                          .src_node_id    = 1111,
+                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                                                                          .data_specifier = 0x1111,
+                                                                          .transfer_id    = 1000U},
                                                       2,
                                                       true,
                                                       "A2"
@@ -1519,11 +1519,11 @@ static void testIfaceAcceptB(void)
                       rxIfaceAccept(&iface,
                                     2000000010,                      // TIME REORDERING -- lower than previous.
                                     makeRxFrameString(&mem_payload,  //
-                                                      (TransferMetadata){.priority       = UdpardPrioritySlow,
-                                                                         .src_node_id    = 2222,
-                                                                         .dst_node_id    = UDPARD_NODE_ID_UNSET,
-                                                                         .data_specifier = 0x2222,
-                                                                         .transfer_id    = 1001U},
+                                                      (TransferMetadata) {.priority       = UdpardPrioritySlow,
+                                                                          .src_node_id    = 2222,
+                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                                                                          .data_specifier = 0x2222,
+                                                                          .transfer_id    = 1001U},
                                                       1,
                                                       true,
                                                       "B1"
@@ -1542,11 +1542,11 @@ static void testIfaceAcceptB(void)
                       rxIfaceAccept(&iface,
                                     2000000030,
                                     makeRxFrameString(&mem_payload,  //
-                                                      (TransferMetadata){.priority       = UdpardPriorityHigh,
-                                                                         .src_node_id    = 1111,
-                                                                         .dst_node_id    = UDPARD_NODE_ID_UNSET,
-                                                                         .data_specifier = 0x1111,
-                                                                         .transfer_id    = 1000U},
+                                                      (TransferMetadata) {.priority       = UdpardPriorityHigh,
+                                                                          .src_node_id    = 1111,
+                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                                                                          .data_specifier = 0x1111,
+                                                                          .transfer_id    = 1000U},
                                                       0,
                                                       false,
                                                       "A0"),
@@ -1564,11 +1564,11 @@ static void testIfaceAcceptB(void)
                       rxIfaceAccept(&iface,
                                     2000000040,
                                     makeRxFrameString(&mem_payload,  //
-                                                      (TransferMetadata){.priority       = UdpardPriorityHigh,
-                                                                         .src_node_id    = 3333,
-                                                                         .dst_node_id    = UDPARD_NODE_ID_UNSET,
-                                                                         .data_specifier = 0x3333,
-                                                                         .transfer_id    = 1002U},
+                                                      (TransferMetadata) {.priority       = UdpardPriorityHigh,
+                                                                          .src_node_id    = 3333,
+                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                                                                          .data_specifier = 0x3333,
+                                                                          .transfer_id    = 1002U},
                                                       0,
                                                       false,
                                                       "C0"),
@@ -1586,11 +1586,11 @@ static void testIfaceAcceptB(void)
                       rxIfaceAccept(&iface,
                                     2000000050,
                                     makeRxFrameString(&mem_payload,  //
-                                                      (TransferMetadata){.priority       = UdpardPrioritySlow,
-                                                                         .src_node_id    = 2222,
-                                                                         .dst_node_id    = UDPARD_NODE_ID_UNSET,
-                                                                         .data_specifier = 0x2222,
-                                                                         .transfer_id    = 1001U},
+                                                      (TransferMetadata) {.priority       = UdpardPrioritySlow,
+                                                                          .src_node_id    = 2222,
+                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                                                                          .data_specifier = 0x2222,
+                                                                          .transfer_id    = 1001U},
                                                       0,
                                                       false,
                                                       "B0"),
@@ -1608,11 +1608,11 @@ static void testIfaceAcceptB(void)
                       rxIfaceAccept(&iface,
                                     2000000050,
                                     makeRxFrameString(&mem_payload,  //
-                                                      (TransferMetadata){.priority       = UdpardPriorityHigh,
-                                                                         .src_node_id    = 1111,
-                                                                         .dst_node_id    = UDPARD_NODE_ID_UNSET,
-                                                                         .data_specifier = 0x1111,
-                                                                         .transfer_id    = 1000U},
+                                                      (TransferMetadata) {.priority       = UdpardPriorityHigh,
+                                                                          .src_node_id    = 1111,
+                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                                                                          .data_specifier = 0x1111,
+                                                                          .transfer_id    = 1000U},
                                                       1,
                                                       false,
                                                       "A1"),
@@ -1644,11 +1644,11 @@ static void testIfaceAcceptB(void)
                       rxIfaceAccept(&iface,
                                     2000000060,
                                     makeRxFrameString(&mem_payload,  //
-                                                      (TransferMetadata){.priority       = UdpardPriorityHigh,
-                                                                         .src_node_id    = 3333,
-                                                                         .dst_node_id    = UDPARD_NODE_ID_UNSET,
-                                                                         .data_specifier = 0x3333,
-                                                                         .transfer_id    = 1002U},
+                                                      (TransferMetadata) {.priority       = UdpardPriorityHigh,
+                                                                          .src_node_id    = 3333,
+                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                                                                          .data_specifier = 0x3333,
+                                                                          .transfer_id    = 1002U},
                                                       0,
                                                       false,
                                                       "C0 DUPLICATE"),
@@ -1666,11 +1666,11 @@ static void testIfaceAcceptB(void)
                       rxIfaceAccept(&iface,
                                     2000000070,
                                     makeRxFrameString(&mem_payload,  //
-                                                      (TransferMetadata){.priority       = UdpardPriorityHigh,
-                                                                         .src_node_id    = 3333,
-                                                                         .dst_node_id    = UDPARD_NODE_ID_UNSET,
-                                                                         .data_specifier = 0x3333,
-                                                                         .transfer_id    = 1002U},
+                                                      (TransferMetadata) {.priority       = UdpardPriorityHigh,
+                                                                          .src_node_id    = 3333,
+                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                                                                          .data_specifier = 0x3333,
+                                                                          .transfer_id    = 1002U},
                                                       1,
                                                       true,
                                                       "C1"
@@ -1734,11 +1734,11 @@ static void testIfaceAcceptC(void)
                       rxIfaceAccept(&iface,
                                     2000000010,
                                     makeRxFrameString(&mem_payload,  //
-                                                      (TransferMetadata){.priority       = UdpardPriorityOptional,
-                                                                         .src_node_id    = 1111,
-                                                                         .dst_node_id    = UDPARD_NODE_ID_UNSET,
-                                                                         .data_specifier = 0,
-                                                                         .transfer_id    = 0xA},
+                                                      (TransferMetadata) {.priority       = UdpardPriorityOptional,
+                                                                          .src_node_id    = 1111,
+                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                                                                          .data_specifier = 0,
+                                                                          .transfer_id    = 0xA},
                                                       0,
                                                       false,
                                                       "A0"),
@@ -1756,11 +1756,11 @@ static void testIfaceAcceptC(void)
                       rxIfaceAccept(&iface,
                                     2000000020,
                                     makeRxFrameString(&mem_payload,  //
-                                                      (TransferMetadata){.priority       = UdpardPriorityExceptional,
-                                                                         .src_node_id    = 2222,
-                                                                         .dst_node_id    = UDPARD_NODE_ID_UNSET,
-                                                                         .data_specifier = 0,
-                                                                         .transfer_id    = 0xB},
+                                                      (TransferMetadata) {.priority       = UdpardPriorityExceptional,
+                                                                          .src_node_id    = 2222,
+                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                                                                          .data_specifier = 0,
+                                                                          .transfer_id    = 0xB},
                                                       0,
                                                       false,
                                                       "B0"),
@@ -1778,11 +1778,11 @@ static void testIfaceAcceptC(void)
                       rxIfaceAccept(&iface,
                                     2000000030,
                                     makeRxFrameString(&mem_payload,  //
-                                                      (TransferMetadata){.priority       = UdpardPriorityOptional,
-                                                                         .src_node_id    = 1111,
-                                                                         .dst_node_id    = UDPARD_NODE_ID_UNSET,
-                                                                         .data_specifier = 0,
-                                                                         .transfer_id    = 0xA},
+                                                      (TransferMetadata) {.priority       = UdpardPriorityOptional,
+                                                                          .src_node_id    = 1111,
+                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                                                                          .data_specifier = 0,
+                                                                          .transfer_id    = 0xA},
                                                       1,
                                                       true,
                                                       "A1"
@@ -1811,11 +1811,11 @@ static void testIfaceAcceptC(void)
                       rxIfaceAccept(&iface,
                                     2000000040,
                                     makeRxFrameString(&mem_payload,  //
-                                                      (TransferMetadata){.priority       = UdpardPriorityExceptional,
-                                                                         .src_node_id    = 3333,
-                                                                         .dst_node_id    = UDPARD_NODE_ID_UNSET,
-                                                                         .data_specifier = 0,
-                                                                         .transfer_id    = 0xC},
+                                                      (TransferMetadata) {.priority       = UdpardPriorityExceptional,
+                                                                          .src_node_id    = 3333,
+                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                                                                          .data_specifier = 0,
+                                                                          .transfer_id    = 0xC},
                                                       0,
                                                       false,
                                                       "C0"),
@@ -1833,11 +1833,11 @@ static void testIfaceAcceptC(void)
                       rxIfaceAccept(&iface,
                                     2000000050,
                                     makeRxFrameString(&mem_payload,  //
-                                                      (TransferMetadata){.priority       = UdpardPriorityExceptional,
-                                                                         .src_node_id    = 2222,
-                                                                         .dst_node_id    = UDPARD_NODE_ID_UNSET,
-                                                                         .data_specifier = 0,
-                                                                         .transfer_id    = 0xB},
+                                                      (TransferMetadata) {.priority       = UdpardPriorityExceptional,
+                                                                          .src_node_id    = 2222,
+                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                                                                          .data_specifier = 0,
+                                                                          .transfer_id    = 0xB},
                                                       1,
                                                       true,
                                                       "B1"
@@ -1868,11 +1868,11 @@ static void testIfaceAcceptC(void)
                       rxIfaceAccept(&iface,
                                     2000000060,
                                     makeRxFrameString(&mem_payload,  //
-                                                      (TransferMetadata){.priority       = UdpardPriorityExceptional,
-                                                                         .src_node_id    = 3333,
-                                                                         .dst_node_id    = UDPARD_NODE_ID_UNSET,
-                                                                         .data_specifier = 0,
-                                                                         .transfer_id    = 0xC},
+                                                      (TransferMetadata) {.priority       = UdpardPriorityExceptional,
+                                                                          .src_node_id    = 3333,
+                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                                                                          .data_specifier = 0,
+                                                                          .transfer_id    = 0xC},
                                                       1,
                                                       true,
                                                       "C1"
@@ -1902,11 +1902,11 @@ static void testIfaceAcceptC(void)
                       rxIfaceAccept(&iface,
                                     2000000070,
                                     makeRxFrameString(&mem_payload,  //
-                                                      (TransferMetadata){.priority       = UdpardPriorityExceptional,
-                                                                         .src_node_id    = 2222,
-                                                                         .dst_node_id    = UDPARD_NODE_ID_UNSET,
-                                                                         .data_specifier = 0,
-                                                                         .transfer_id    = 0xB},
+                                                      (TransferMetadata) {.priority       = UdpardPriorityExceptional,
+                                                                          .src_node_id    = 2222,
+                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                                                                          .data_specifier = 0,
+                                                                          .transfer_id    = 0xB},
                                                       0,
                                                       false,
                                                       "B0"),
@@ -1921,11 +1921,11 @@ static void testIfaceAcceptC(void)
                       rxIfaceAccept(&iface,
                                     2000000080,
                                     makeRxFrameString(&mem_payload,  //
-                                                      (TransferMetadata){.priority       = UdpardPriorityExceptional,
-                                                                         .src_node_id    = 2222,
-                                                                         .dst_node_id    = UDPARD_NODE_ID_UNSET,
-                                                                         .data_specifier = 0,
-                                                                         .transfer_id    = 0xB},
+                                                      (TransferMetadata) {.priority       = UdpardPriorityExceptional,
+                                                                          .src_node_id    = 2222,
+                                                                          .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                                                                          .data_specifier = 0,
+                                                                          .transfer_id    = 0xB},
                                                       0,
                                                       true,
                                                       "B0"
@@ -2051,11 +2051,11 @@ static void testSessionAcceptA(void)
                                       1,
                                       10000000,
                                       makeRxFrameString(&mem_payload,  //
-                                                        (TransferMetadata){.priority       = UdpardPriorityExceptional,
-                                                                           .src_node_id    = 2222,
-                                                                           .dst_node_id    = UDPARD_NODE_ID_UNSET,
-                                                                           .data_specifier = 0,
-                                                                           .transfer_id    = 0xB},
+                                                        (TransferMetadata) {.priority       = UdpardPriorityExceptional,
+                                                                            .src_node_id    = 2222,
+                                                                            .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                                                                            .data_specifier = 0,
+                                                                            .transfer_id    = 0xB},
                                                         0,
                                                         true,
                                                         "Z\xBA\xA1\xBAh"),
@@ -2075,11 +2075,11 @@ static void testSessionAcceptA(void)
                                       0,
                                       10000010,
                                       makeRxFrameString(&mem_payload,  //
-                                                        (TransferMetadata){.priority       = UdpardPriorityExceptional,
-                                                                           .src_node_id    = 2222,
-                                                                           .dst_node_id    = UDPARD_NODE_ID_UNSET,
-                                                                           .data_specifier = 0,
-                                                                           .transfer_id    = 0xB},
+                                                        (TransferMetadata) {.priority       = UdpardPriorityExceptional,
+                                                                            .src_node_id    = 2222,
+                                                                            .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                                                                            .data_specifier = 0,
+                                                                            .transfer_id    = 0xB},
                                                         0,
                                                         true,
                                                         "Z\xBA\xA1\xBAh"),
@@ -2096,11 +2096,11 @@ static void testSessionAcceptA(void)
                                       2,
                                       12000020,
                                       makeRxFrameString(&mem_payload,  //
-                                                        (TransferMetadata){.priority       = UdpardPriorityExceptional,
-                                                                           .src_node_id    = 2222,
-                                                                           .dst_node_id    = UDPARD_NODE_ID_UNSET,
-                                                                           .data_specifier = 0,
-                                                                           .transfer_id    = 0xC},
+                                                        (TransferMetadata) {.priority       = UdpardPriorityExceptional,
+                                                                            .src_node_id    = 2222,
+                                                                            .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                                                                            .data_specifier = 0,
+                                                                            .transfer_id    = 0xC},
                                                         0,
                                                         true,
                                                         "Z\xBA\xA1\xBAh"),
@@ -2140,11 +2140,11 @@ static inline void testPortAcceptFrameA(void)
                           1,
                           10000000,
                           makeDatagramPayloadSingleFrameString(&mem_payload,  //
-                                                               (TransferMetadata){.priority = UdpardPriorityImmediate,
-                                                                                  .src_node_id = 2222,
-                                                                                  .dst_node_id = UDPARD_NODE_ID_UNSET,
-                                                                                  .data_specifier = 0,
-                                                                                  .transfer_id    = 0xB},
+                                                               (TransferMetadata) {.priority = UdpardPriorityImmediate,
+                                                                                   .src_node_id = 2222,
+                                                                                   .dst_node_id = UDPARD_NODE_ID_UNSET,
+                                                                                   .data_specifier = 0,
+                                                                                   .transfer_id    = 0xB},
                                                                "When will the collapse of space in the vicinity of the "
                                                                "Solar System into two dimensions cease?"),
                           mem,
@@ -2174,11 +2174,11 @@ static inline void testPortAcceptFrameA(void)
                           0,
                           10000010,
                           makeDatagramPayloadSingleFrameString(&mem_payload,  //
-                                                               (TransferMetadata){.priority = UdpardPriorityImmediate,
-                                                                                  .src_node_id = 3333,
-                                                                                  .dst_node_id = UDPARD_NODE_ID_UNSET,
-                                                                                  .data_specifier = 0,
-                                                                                  .transfer_id    = 0xC},
+                                                               (TransferMetadata) {.priority = UdpardPriorityImmediate,
+                                                                                   .src_node_id = 3333,
+                                                                                   .dst_node_id = UDPARD_NODE_ID_UNSET,
+                                                                                   .data_specifier = 0,
+                                                                                   .transfer_id    = 0xC},
                                                                "It will never cease."),
                           mem,
                           &transfer));
@@ -2206,11 +2206,11 @@ static inline void testPortAcceptFrameA(void)
                           2,
                           10000020,
                           makeDatagramPayloadSingleFrameString(&mem_payload,  //
-                                                               (TransferMetadata){.priority = UdpardPriorityImmediate,
-                                                                                  .src_node_id = 4444,
-                                                                                  .dst_node_id = UDPARD_NODE_ID_UNSET,
-                                                                                  .data_specifier = 0,
-                                                                                  .transfer_id    = 0xD},
+                                                               (TransferMetadata) {.priority = UdpardPriorityImmediate,
+                                                                                   .src_node_id = 4444,
+                                                                                   .dst_node_id = UDPARD_NODE_ID_UNSET,
+                                                                                   .data_specifier = 0,
+                                                                                   .transfer_id    = 0xD},
                                                                "Cheng Xin shuddered."),
                           mem,
                           &transfer));
@@ -2226,11 +2226,11 @@ static inline void testPortAcceptFrameA(void)
                           2,
                           10000030,
                           makeDatagramPayloadSingleFrameString(&mem_payload,  //
-                                                               (TransferMetadata){.priority = UdpardPriorityImmediate,
-                                                                                  .src_node_id = UDPARD_NODE_ID_UNSET,
-                                                                                  .dst_node_id = UDPARD_NODE_ID_UNSET,
-                                                                                  .data_specifier = 0,
-                                                                                  .transfer_id    = 0xD},
+                                                               (TransferMetadata) {.priority = UdpardPriorityImmediate,
+                                                                                   .src_node_id = UDPARD_NODE_ID_UNSET,
+                                                                                   .dst_node_id = UDPARD_NODE_ID_UNSET,
+                                                                                   .data_specifier = 0,
+                                                                                   .transfer_id    = 0xD},
                                                                "Cheng Xin shuddered."),
                           mem,
                           &transfer));
@@ -2254,11 +2254,11 @@ static inline void testPortAcceptFrameA(void)
     {  // Bad CRC.
         struct UdpardMutablePayload datagram =
             makeDatagramPayloadSingleFrameString(&mem_payload,  //
-                                                 (TransferMetadata){.priority       = UdpardPriorityImmediate,
-                                                                    .src_node_id    = UDPARD_NODE_ID_UNSET,
-                                                                    .dst_node_id    = UDPARD_NODE_ID_UNSET,
-                                                                    .data_specifier = 0,
-                                                                    .transfer_id    = 0xE},
+                                                 (TransferMetadata) {.priority       = UdpardPriorityImmediate,
+                                                                     .src_node_id    = UDPARD_NODE_ID_UNSET,
+                                                                     .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                                                                     .data_specifier = 0,
+                                                                     .transfer_id    = 0xE},
                                                  "You are scared? Do you think that in this galaxy, in this universe, "
                                                  "only the Solar System is collapsing into two dimensions? Haha...");
         *(((byte_t*) datagram.data) + HEADER_SIZE_BYTES) = 0x00;  // Corrupt the payload, CRC invalid.
@@ -2270,18 +2270,18 @@ static inline void testPortAcceptFrameA(void)
     {  // No payload (transfer CRC is always required).
         byte_t* const payload = instrumentedAllocatorAllocate(&mem_payload, HEADER_SIZE_BYTES);
         (void) txSerializeHeader(payload,
-                                 (TransferMetadata){.priority       = UdpardPriorityImmediate,
-                                                    .src_node_id    = UDPARD_NODE_ID_UNSET,
-                                                    .dst_node_id    = UDPARD_NODE_ID_UNSET,
-                                                    .data_specifier = 0,
-                                                    .transfer_id    = 0xE},
+                                 (TransferMetadata) {.priority       = UdpardPriorityImmediate,
+                                                     .src_node_id    = UDPARD_NODE_ID_UNSET,
+                                                     .dst_node_id    = UDPARD_NODE_ID_UNSET,
+                                                     .data_specifier = 0,
+                                                     .transfer_id    = 0xE},
                                  0,
                                  true);
         TEST_ASSERT_EQUAL(0,
                           rxPortAcceptFrame(&port,
                                             0,
                                             10000050,
-                                            (struct UdpardMutablePayload){.size = HEADER_SIZE_BYTES, .data = payload},
+                                            (struct UdpardMutablePayload) {.size = HEADER_SIZE_BYTES, .data = payload},
                                             mem,
                                             &transfer));
         TEST_ASSERT_EQUAL(2, mem_session.allocated_fragments);
@@ -2295,10 +2295,10 @@ static inline void testPortAcceptFrameA(void)
                                         0,
                                         10000060,
                                         (struct
-                                         UdpardMutablePayload){.size = HEADER_SIZE_BYTES,
-                                                               .data =
-                                                                   instrumentedAllocatorAllocate(&mem_payload,
-                                                                                                 HEADER_SIZE_BYTES)},
+                                         UdpardMutablePayload) {.size = HEADER_SIZE_BYTES,
+                                                                .data =
+                                                                    instrumentedAllocatorAllocate(&mem_payload,
+                                                                                                  HEADER_SIZE_BYTES)},
                                         mem,
                                         &transfer));
     TEST_ASSERT_EQUAL(2, mem_session.allocated_fragments);   // Not increased.
@@ -2312,7 +2312,7 @@ static inline void testPortAcceptFrameA(void)
                                         0,
                                         10000070,
                                         makeDatagramPayloadString(&mem_payload,  //
-                                                                  (TransferMetadata){
+                                                                  (TransferMetadata) {
                                                                       .priority       = UdpardPriorityImmediate,
                                                                       .src_node_id    = 10000,
                                                                       .dst_node_id    = UDPARD_NODE_ID_UNSET,
@@ -2334,7 +2334,7 @@ static inline void testPortAcceptFrameA(void)
                                         0,
                                         10000080,
                                         makeDatagramPayloadString(&mem_payload,  //
-                                                                  (TransferMetadata){
+                                                                  (TransferMetadata) {
                                                                       .priority       = UdpardPriorityImmediate,
                                                                       .src_node_id    = 10000,
                                                                       .dst_node_id    = UDPARD_NODE_ID_UNSET,
@@ -2358,7 +2358,7 @@ static inline void testPortAcceptFrameA(void)
                                         2,
                                         10000090,
                                         makeDatagramPayloadString(&mem_payload,  //
-                                                                  (TransferMetadata){
+                                                                  (TransferMetadata) {
                                                                       .priority       = UdpardPriorityImmediate,
                                                                       .src_node_id    = 10001,
                                                                       .dst_node_id    = UDPARD_NODE_ID_UNSET,
