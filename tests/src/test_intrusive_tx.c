@@ -88,7 +88,7 @@ static void testMakeChainEmpty(void)
 {
     InstrumentedAllocator alloc;
     instrumentedAllocatorNew(&alloc);
-    const struct UdpardTxMemoryResources mem = {
+    const UdpardTxMemoryResources mem = {
         .fragment = instrumentedAllocatorMakeMemoryResource(&alloc),
         .payload  = instrumentedAllocatorMakeMemoryResource(&alloc),
     };
@@ -109,7 +109,7 @@ static void testMakeChainEmpty(void)
                                       (UdpardPayload) {.size = 0, .data = ""},
                                       &user_transfer_referent);
     TEST_ASSERT_EQUAL(1 * 2ULL, alloc.allocated_fragments);
-    TEST_ASSERT_EQUAL(sizeof(struct UdpardTxItem) + HEADER_SIZE_BYTES + 4, alloc.allocated_bytes);
+    TEST_ASSERT_EQUAL(sizeof(UdpardTxItem) + HEADER_SIZE_BYTES + 4, alloc.allocated_bytes);
     TEST_ASSERT_EQUAL(1, chain.count);
     TEST_ASSERT_EQUAL(chain.head, chain.tail);
     TEST_ASSERT_EQUAL(NULL, chain.head->next_in_transfer);
@@ -132,7 +132,7 @@ static void testMakeChainSingleMaxMTU(void)
 {
     InstrumentedAllocator alloc;
     instrumentedAllocatorNew(&alloc);
-    const struct UdpardTxMemoryResources mem = {
+    const UdpardTxMemoryResources mem = {
         .fragment = instrumentedAllocatorMakeMemoryResource(&alloc),
         .payload  = instrumentedAllocatorMakeMemoryResource(&alloc),
     };
@@ -153,7 +153,7 @@ static void testMakeChainSingleMaxMTU(void)
                                       (UdpardPayload) {.size = DetailOfTheCosmosSize, .data = DetailOfTheCosmos},
                                       &user_transfer_referent);
     TEST_ASSERT_EQUAL(1 * 2ULL, alloc.allocated_fragments);
-    TEST_ASSERT_EQUAL(sizeof(struct UdpardTxItem) + HEADER_SIZE_BYTES + DetailOfTheCosmosSize + TRANSFER_CRC_SIZE_BYTES,
+    TEST_ASSERT_EQUAL(sizeof(UdpardTxItem) + HEADER_SIZE_BYTES + DetailOfTheCosmosSize + TRANSFER_CRC_SIZE_BYTES,
                       alloc.allocated_bytes);
     TEST_ASSERT_EQUAL(1, chain.count);
     TEST_ASSERT_EQUAL(chain.head, chain.tail);
@@ -182,7 +182,7 @@ static void testMakeChainSingleFrameDefaultMTU(void)
 {
     InstrumentedAllocator alloc;
     instrumentedAllocatorNew(&alloc);
-    const struct UdpardTxMemoryResources mem = {
+    const UdpardTxMemoryResources mem = {
         .fragment = instrumentedAllocatorMakeMemoryResource(&alloc),
         .payload  = instrumentedAllocatorMakeMemoryResource(&alloc),
     };
@@ -202,7 +202,7 @@ static void testMakeChainSingleFrameDefaultMTU(void)
                         (UdpardPayload) {.size = UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME, .data = payload},
                         NULL);
         TEST_ASSERT_EQUAL(1 * 2ULL, alloc.allocated_fragments);
-        TEST_ASSERT_EQUAL(sizeof(struct UdpardTxItem) + HEADER_SIZE_BYTES + UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME +
+        TEST_ASSERT_EQUAL(sizeof(UdpardTxItem) + HEADER_SIZE_BYTES + UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME +
                               TRANSFER_CRC_SIZE_BYTES,
                           alloc.allocated_bytes);
         TEST_ASSERT_EQUAL(1, chain.count);
@@ -226,8 +226,8 @@ static void testMakeChainSingleFrameDefaultMTU(void)
                         (UdpardPayload) {.size = UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME + 1, .data = payload},
                         NULL);
         TEST_ASSERT_EQUAL(2 * 2ULL, alloc.allocated_fragments);
-        TEST_ASSERT_EQUAL((sizeof(struct UdpardTxItem) + HEADER_SIZE_BYTES) * 2 + UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME +
-                              1 + TRANSFER_CRC_SIZE_BYTES,
+        TEST_ASSERT_EQUAL((sizeof(UdpardTxItem) + HEADER_SIZE_BYTES) * 2 + UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME + 1 +
+                              TRANSFER_CRC_SIZE_BYTES,
                           alloc.allocated_bytes);
         TEST_ASSERT_EQUAL(2, chain.count);
         TEST_ASSERT_NOT_EQUAL(chain.head, chain.tail);
@@ -243,7 +243,7 @@ static void testMakeChainThreeFrames(void)
 {
     InstrumentedAllocator alloc;
     instrumentedAllocatorNew(&alloc);
-    const struct UdpardTxMemoryResources mem = {
+    const UdpardTxMemoryResources mem = {
         .fragment = instrumentedAllocatorMakeMemoryResource(&alloc),
         .payload  = instrumentedAllocatorMakeMemoryResource(&alloc),
     };
@@ -265,7 +265,7 @@ static void testMakeChainThreeFrames(void)
                                       (UdpardPayload) {.size = EtherealStrengthSize, .data = EtherealStrength},
                                       &user_transfer_referent);
     TEST_ASSERT_EQUAL(3 * 2ULL, alloc.allocated_fragments);
-    TEST_ASSERT_EQUAL(3 * (sizeof(struct UdpardTxItem) + HEADER_SIZE_BYTES) + EtherealStrengthSize + 4U,
+    TEST_ASSERT_EQUAL(3 * (sizeof(UdpardTxItem) + HEADER_SIZE_BYTES) + EtherealStrengthSize + 4U,
                       alloc.allocated_bytes);
     TEST_ASSERT_EQUAL(3, chain.count);
     UdpardTxItem* const first = chain.head;
@@ -329,7 +329,7 @@ static void testMakeChainCRCSpill1(void)
 {
     InstrumentedAllocator alloc;
     instrumentedAllocatorNew(&alloc);
-    const struct UdpardTxMemoryResources mem = {
+    const UdpardTxMemoryResources mem = {
         .fragment = instrumentedAllocatorMakeMemoryResource(&alloc),
         .payload  = instrumentedAllocatorMakeMemoryResource(&alloc),
     };
@@ -351,8 +351,7 @@ static void testMakeChainCRCSpill1(void)
                                       (UdpardPayload) {.size = InterstellarWarSize, .data = InterstellarWar},
                                       &user_transfer_referent);
     TEST_ASSERT_EQUAL(2 * 2ULL, alloc.allocated_fragments);
-    TEST_ASSERT_EQUAL(2 * (sizeof(struct UdpardTxItem) + HEADER_SIZE_BYTES) + InterstellarWarSize + 4U,
-                      alloc.allocated_bytes);
+    TEST_ASSERT_EQUAL(2 * (sizeof(UdpardTxItem) + HEADER_SIZE_BYTES) + InterstellarWarSize + 4U, alloc.allocated_bytes);
     TEST_ASSERT_EQUAL(2, chain.count);
     TEST_ASSERT_NOT_EQUAL(chain.head, chain.tail);
     TEST_ASSERT_EQUAL((UdpardTxItem*) chain.tail, chain.head->next_in_transfer);
@@ -398,7 +397,7 @@ static void testMakeChainCRCSpill2(void)
 {
     InstrumentedAllocator alloc;
     instrumentedAllocatorNew(&alloc);
-    const struct UdpardTxMemoryResources mem = {
+    const UdpardTxMemoryResources mem = {
         .fragment = instrumentedAllocatorMakeMemoryResource(&alloc),
         .payload  = instrumentedAllocatorMakeMemoryResource(&alloc),
     };
@@ -420,8 +419,7 @@ static void testMakeChainCRCSpill2(void)
                                       (UdpardPayload) {.size = InterstellarWarSize, .data = InterstellarWar},
                                       &user_transfer_referent);
     TEST_ASSERT_EQUAL(2 * 2ULL, alloc.allocated_fragments);
-    TEST_ASSERT_EQUAL(2 * (sizeof(struct UdpardTxItem) + HEADER_SIZE_BYTES) + InterstellarWarSize + 4U,
-                      alloc.allocated_bytes);
+    TEST_ASSERT_EQUAL(2 * (sizeof(UdpardTxItem) + HEADER_SIZE_BYTES) + InterstellarWarSize + 4U, alloc.allocated_bytes);
     TEST_ASSERT_EQUAL(2, chain.count);
     TEST_ASSERT_NOT_EQUAL(chain.head, chain.tail);
     TEST_ASSERT_EQUAL((UdpardTxItem*) chain.tail, chain.head->next_in_transfer);
@@ -467,7 +465,7 @@ static void testMakeChainCRCSpill3(void)
 {
     InstrumentedAllocator alloc;
     instrumentedAllocatorNew(&alloc);
-    const struct UdpardTxMemoryResources mem = {
+    const UdpardTxMemoryResources mem = {
         .fragment = instrumentedAllocatorMakeMemoryResource(&alloc),
         .payload  = instrumentedAllocatorMakeMemoryResource(&alloc),
     };
@@ -489,8 +487,7 @@ static void testMakeChainCRCSpill3(void)
                                       (UdpardPayload) {.size = InterstellarWarSize, .data = InterstellarWar},
                                       &user_transfer_referent);
     TEST_ASSERT_EQUAL(2 * 2ULL, alloc.allocated_fragments);
-    TEST_ASSERT_EQUAL(2 * (sizeof(struct UdpardTxItem) + HEADER_SIZE_BYTES) + InterstellarWarSize + 4U,
-                      alloc.allocated_bytes);
+    TEST_ASSERT_EQUAL(2 * (sizeof(UdpardTxItem) + HEADER_SIZE_BYTES) + InterstellarWarSize + 4U, alloc.allocated_bytes);
     TEST_ASSERT_EQUAL(2, chain.count);
     TEST_ASSERT_NOT_EQUAL(chain.head, chain.tail);
     TEST_ASSERT_EQUAL((UdpardTxItem*) chain.tail, chain.head->next_in_transfer);
@@ -536,7 +533,7 @@ static void testMakeChainCRCSpillFull(void)
 {
     InstrumentedAllocator alloc;
     instrumentedAllocatorNew(&alloc);
-    const struct UdpardTxMemoryResources mem = {
+    const UdpardTxMemoryResources mem = {
         .fragment = instrumentedAllocatorMakeMemoryResource(&alloc),
         .payload  = instrumentedAllocatorMakeMemoryResource(&alloc),
     };
@@ -558,8 +555,7 @@ static void testMakeChainCRCSpillFull(void)
                                       (UdpardPayload) {.size = InterstellarWarSize, .data = InterstellarWar},
                                       &user_transfer_referent);
     TEST_ASSERT_EQUAL(2 * 2ULL, alloc.allocated_fragments);
-    TEST_ASSERT_EQUAL(2 * (sizeof(struct UdpardTxItem) + HEADER_SIZE_BYTES) + InterstellarWarSize + 4U,
-                      alloc.allocated_bytes);
+    TEST_ASSERT_EQUAL(2 * (sizeof(UdpardTxItem) + HEADER_SIZE_BYTES) + InterstellarWarSize + 4U, alloc.allocated_bytes);
     TEST_ASSERT_EQUAL(2, chain.count);
     TEST_ASSERT_NOT_EQUAL(chain.head, chain.tail);
     TEST_ASSERT_EQUAL((UdpardTxItem*) chain.tail, chain.head->next_in_transfer);
@@ -602,7 +598,7 @@ static void testPushPeekPopFree(void)
 {
     InstrumentedAllocator alloc;
     instrumentedAllocatorNew(&alloc);
-    const struct UdpardTxMemoryResources mem = {
+    const UdpardTxMemoryResources mem = {
         .fragment = instrumentedAllocatorMakeMemoryResource(&alloc),
         .payload  = instrumentedAllocatorMakeMemoryResource(&alloc),
     };
@@ -633,7 +629,7 @@ static void testPushPeekPopFree(void)
                              (UdpardPayload) {.size = EtherealStrengthSize, .data = EtherealStrength},
                              &user_transfer_referent));
     TEST_ASSERT_EQUAL(3 * 2ULL, alloc.allocated_fragments);
-    TEST_ASSERT_EQUAL(3 * (sizeof(struct UdpardTxItem) + HEADER_SIZE_BYTES) + EtherealStrengthSize + 4U,
+    TEST_ASSERT_EQUAL(3 * (sizeof(UdpardTxItem) + HEADER_SIZE_BYTES) + EtherealStrengthSize + 4U,
                       alloc.allocated_bytes);
     TEST_ASSERT_EQUAL(3, tx.queue_size);
 
@@ -685,7 +681,7 @@ static void testPushPrioritization(void)
 {
     InstrumentedAllocator alloc;
     instrumentedAllocatorNew(&alloc);
-    const struct UdpardTxMemoryResources mem = {
+    const UdpardTxMemoryResources mem = {
         .fragment = instrumentedAllocatorMakeMemoryResource(&alloc),
         .payload  = instrumentedAllocatorMakeMemoryResource(&alloc),
     };
@@ -859,7 +855,7 @@ static void testPushCapacityLimit(void)
 {
     InstrumentedAllocator alloc;
     instrumentedAllocatorNew(&alloc);
-    const struct UdpardTxMemoryResources mem = {
+    const UdpardTxMemoryResources mem = {
         .fragment = instrumentedAllocatorMakeMemoryResource(&alloc),
         .payload  = instrumentedAllocatorMakeMemoryResource(&alloc),
     };
@@ -897,7 +893,7 @@ static void testPushOOM(void)
 {
     InstrumentedAllocator alloc;
     instrumentedAllocatorNew(&alloc);
-    const struct UdpardTxMemoryResources mem = {
+    const UdpardTxMemoryResources mem = {
         .fragment = instrumentedAllocatorMakeMemoryResource(&alloc),
         .payload  = instrumentedAllocatorMakeMemoryResource(&alloc),
     };
@@ -936,7 +932,7 @@ static void testPushPayloadOOM(void)
 {
     InstrumentedAllocator alloc;
     instrumentedAllocatorNew(&alloc);
-    const struct UdpardTxMemoryResources mem = {
+    const UdpardTxMemoryResources mem = {
         .fragment = instrumentedAllocatorMakeMemoryResource(&alloc),
         .payload  = instrumentedAllocatorMakeMemoryResource(&alloc),
     };
@@ -976,7 +972,7 @@ static void testPushAnonymousMultiFrame(void)
 {
     InstrumentedAllocator alloc;
     instrumentedAllocatorNew(&alloc);
-    const struct UdpardTxMemoryResources mem = {
+    const UdpardTxMemoryResources mem = {
         .fragment = instrumentedAllocatorMakeMemoryResource(&alloc),
         .payload  = instrumentedAllocatorMakeMemoryResource(&alloc),
     };
@@ -1014,7 +1010,7 @@ static void testPushAnonymousService(void)
 {
     InstrumentedAllocator alloc;
     instrumentedAllocatorNew(&alloc);
-    const struct UdpardTxMemoryResources mem = {
+    const UdpardTxMemoryResources mem = {
         .fragment = instrumentedAllocatorMakeMemoryResource(&alloc),
         .payload  = instrumentedAllocatorMakeMemoryResource(&alloc),
     };

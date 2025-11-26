@@ -58,9 +58,6 @@
 ///         - subscriptions -- for subscribing to subjects (aka topics);
 ///         - service dispatcher -- for receiving service requests and responses; both clients and servers need this.
 ///
-/// As these components share no resources within the library, they can be used in different threads,
-/// provided that there are no thread-unsafe resources shared between them in the application (such as heaps).
-///
 /// The library supports at most UDPARD_NETWORK_INTERFACE_COUNT_MAX redundant network interfaces.
 /// Transfers received from each interface are reassembled independently and the first interface to complete a
 /// transfer is always chosen to deliver the transfer to the application, while the transfers from the slower
@@ -110,8 +107,6 @@
 ///
 /// The reception pipelines are used to subscribe to subjects (aka topics) and to receive P2P transfers.
 /// The former are handled by "subscriptions" and the latter two are managed by a "service dispatcher".
-/// Said pipelines are entirely independent from each other and can be operated from different threads,
-/// as they share no resources.
 ///
 /// The reception pipeline is able to accept datagrams with arbitrary MTU, frames delivered out-of-order (OOO) with
 /// arbitrary duplication, including duplication of non-adjacent frames, and/or frames interleaved between adjacent

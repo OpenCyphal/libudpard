@@ -11,11 +11,11 @@
 
 /// Moves the payload from the origin into a new buffer and attaches is to the newly allocated fragment.
 /// This function performs two allocations. This function is infallible.
-static RxFragment* makeRxFragment(const RxMemory                    memory,
-                                  const uint32_t                    frame_index,
-                                  const struct UdpardPayload        view,
-                                  const struct UdpardMutablePayload origin,
-                                  RxFragmentTreeNode* const         parent)
+static RxFragment* makeRxFragment(const RxMemory             memory,
+                                  const uint32_t             frame_index,
+                                  const UdpardPayload        view,
+                                  const UdpardMutablePayload origin,
+                                  RxFragmentTreeNode* const  parent)
 {
     TEST_PANIC_UNLESS((view.data >= origin.data) && (view.size <= origin.size));
     TEST_PANIC_UNLESS((((const byte_t*) view.data) + view.size) <= (((const byte_t*) origin.data) + origin.size));
@@ -51,8 +51,8 @@ static RxFragment* makeRxFragmentString(const RxMemory            memory,
     const size_t sz = strlen(payload);
     return makeRxFragment(memory,
                           frame_index,
-                          (struct UdpardPayload) {.data = payload, .size = sz},
-                          (struct UdpardMutablePayload) {.data = (void*) payload, .size = sz},
+                          (UdpardPayload) {.data = payload, .size = sz},
+                          (UdpardMutablePayload) {.data = (void*) payload, .size = sz},
                           parent);
 }
 
@@ -63,16 +63,16 @@ static bool compareMemory(const size_t      expected_size,
 {
     return (expected_size == actual_size) && (memcmp(expected, actual, expected_size) == 0);
 }
-static bool compareStringWithPayload(const char* const expected, const struct UdpardPayload payload)
+static bool compareStringWithPayload(const char* const expected, const UdpardPayload payload)
 {
     return compareMemory(strlen(expected), expected, payload.size, payload.data);
 }
 
-static RxFrameBase makeRxFrameBase(InstrumentedAllocator* const      memory_payload,
-                                   const uint32_t                    frame_index,
-                                   const bool                        end_of_transfer,
-                                   const struct UdpardPayload        view,
-                                   const struct UdpardMutablePayload origin)
+static RxFrameBase makeRxFrameBase(InstrumentedAllocator* const memory_payload,
+                                   const uint32_t               frame_index,
+                                   const bool                   end_of_transfer,
+                                   const UdpardPayload          view,
+                                   const UdpardMutablePayload   origin)
 {
     TEST_PANIC_UNLESS((view.data >= origin.data) && (view.size <= origin.size));
     TEST_PANIC_UNLESS((((const byte_t*) view.data) + view.size) <= (((const byte_t*) origin.data) + origin.size));
@@ -103,8 +103,8 @@ static RxFrameBase makeRxFrameBaseString(InstrumentedAllocator* const memory,
     return makeRxFrameBase(memory,
                            frame_index,
                            end_of_transfer,
-                           (struct UdpardPayload) {.data = payload, .size = strlen(payload)},
-                           (struct UdpardMutablePayload) {.data = (void*) payload, .size = strlen(payload)});
+                           (UdpardPayload) {.data = payload, .size = strlen(payload)},
+                           (UdpardMutablePayload) {.data = (void*) payload, .size = strlen(payload)});
 }
 
 static RxFrame makeRxFrameString(InstrumentedAllocator* const memory,
@@ -122,14 +122,14 @@ static RxMemory makeRxMemory(InstrumentedAllocator* const fragment, Instrumented
                        .payload  = instrumentedAllocatorMakeMemoryDeleter(payload)};
 }
 
-static struct UdpardMutablePayload makeDatagramPayload(InstrumentedAllocator* const memory,
-                                                       const TransferMetadata       meta,
-                                                       const uint32_t               frame_index,
-                                                       const bool                   end_of_transfer,
-                                                       const struct UdpardPayload   payload)
+static UdpardMutablePayload makeDatagramPayload(InstrumentedAllocator* const memory,
+                                                const TransferMetadata       meta,
+                                                const uint32_t               frame_index,
+                                                const bool                   end_of_transfer,
+                                                const UdpardPayload          payload)
 {
-    struct UdpardMutablePayload pld = {.size = payload.size + HEADER_SIZE_BYTES};
-    pld.data                        = instrumentedAllocatorAllocate(memory, pld.size);
+    UdpardMutablePayload pld = {.size = payload.size + HEADER_SIZE_BYTES};
+    pld.data                 = instrumentedAllocatorAllocate(memory, pld.size);
     if (pld.data != NULL)
     {
         (void) memcpy(txSerializeHeader(pld.data, meta, frame_index, end_of_transfer), payload.data, payload.size);
@@ -141,43 +141,40 @@ static struct UdpardMutablePayload makeDatagramPayload(InstrumentedAllocator* co
     return pld;
 }
 
-static struct UdpardMutablePayload makeDatagramPayloadString(InstrumentedAllocator* const memory,
-                                                             const TransferMetadata       meta,
-                                                             const uint32_t               frame_index,
-                                                             const bool                   end_of_transfer,
-                                                             const char* const            string)
+static UdpardMutablePayload makeDatagramPayloadString(InstrumentedAllocator* const memory,
+                                                      const TransferMetadata       meta,
+                                                      const uint32_t               frame_index,
+                                                      const bool                   end_of_transfer,
+                                                      const char* const            string)
 {
     return makeDatagramPayload(memory,
                                meta,
                                frame_index,
                                end_of_transfer,
-                               (struct UdpardPayload) {.data = string, .size = strlen(string)});
+                               (UdpardPayload) {.data = string, .size = strlen(string)});
 }
 
-static struct UdpardMutablePayload makeDatagramPayloadSingleFrame(InstrumentedAllocator* const memory,
-                                                                  const TransferMetadata       meta,
-                                                                  const struct UdpardPayload   payload)
+static UdpardMutablePayload makeDatagramPayloadSingleFrame(InstrumentedAllocator* const memory,
+                                                           const TransferMetadata       meta,
+                                                           const UdpardPayload          payload)
 {
-    struct UdpardMutablePayload pld =
+    UdpardMutablePayload pld =
         makeDatagramPayload(memory,
                             meta,
                             0,
                             true,
-                            (struct UdpardPayload) {.data = payload.data,
-                                                    .size = payload.size + TRANSFER_CRC_SIZE_BYTES});
+                            (UdpardPayload) {.data = payload.data, .size = payload.size + TRANSFER_CRC_SIZE_BYTES});
     TEST_PANIC_UNLESS(pld.size == (payload.size + HEADER_SIZE_BYTES + TRANSFER_CRC_SIZE_BYTES));
     txSerializeU32(((byte_t*) pld.data) + HEADER_SIZE_BYTES + payload.size,
                    transferCRCCompute(payload.size, payload.data));
     return pld;
 }
 
-static struct UdpardMutablePayload makeDatagramPayloadSingleFrameString(InstrumentedAllocator* const memory,
-                                                                        const TransferMetadata       meta,
-                                                                        const char* const            payload)
+static UdpardMutablePayload makeDatagramPayloadSingleFrameString(InstrumentedAllocator* const memory,
+                                                                 const TransferMetadata       meta,
+                                                                 const char* const            payload)
 {
-    return makeDatagramPayloadSingleFrame(memory,
-                                          meta,
-                                          (struct UdpardPayload) {.data = payload, .size = strlen(payload)});
+    return makeDatagramPayloadSingleFrame(memory, meta, (UdpardPayload) {.data = payload, .size = strlen(payload)});
 }
 
 // --------------------------------------------------  MISC  --------------------------------------------------
@@ -212,7 +209,7 @@ static void testParseFrameValidMessage(void)
                       254, 15,  220, 186, 57,  48,  0,   0,  0,  0,   30,  179,  //
                       'a', 'b', 'c'};
     RxFrame rxf    = {0};
-    TEST_ASSERT(rxParseFrame((struct UdpardMutablePayload) {.data = data, .size = sizeof(data)}, &rxf));
+    TEST_ASSERT(rxParseFrame((UdpardMutablePayload) {.data = data, .size = sizeof(data)}, &rxf));
     TEST_ASSERT_EQUAL_UINT64(UdpardPriorityFast, rxf.meta.priority);
     TEST_ASSERT_EQUAL_UINT64(2345, rxf.meta.src_node_id);
     TEST_ASSERT_EQUAL_UINT64(UDPARD_NODE_ID_UNSET, rxf.meta.dst_node_id);
@@ -235,7 +232,7 @@ static void testParseFrameValidRPCService(void)
                       254, 15,  220, 186, 254, 25, 0,   0,   0,  0,   173, 122,  //
                       'a', 'b', 'c'};
     RxFrame rxf    = {0};
-    TEST_ASSERT(rxParseFrame((struct UdpardMutablePayload) {.data = data, .size = sizeof(data)}, &rxf));
+    TEST_ASSERT(rxParseFrame((UdpardMutablePayload) {.data = data, .size = sizeof(data)}, &rxf));
     TEST_ASSERT_EQUAL_UINT64(UdpardPriorityFast, rxf.meta.priority);
     TEST_ASSERT_EQUAL_UINT64(2345, rxf.meta.src_node_id);
     TEST_ASSERT_EQUAL_UINT64(4567, rxf.meta.dst_node_id);
@@ -257,7 +254,7 @@ static void testParseFrameValidMessageAnonymous(void)
                       254, 15,  220, 186, 0,   0,   0,   128, 0,  0,   168, 92,  //
                       'a', 'b', 'c'};
     RxFrame rxf    = {0};
-    TEST_ASSERT(rxParseFrame((struct UdpardMutablePayload) {.data = data, .size = sizeof(data)}, &rxf));
+    TEST_ASSERT(rxParseFrame((UdpardMutablePayload) {.data = data, .size = sizeof(data)}, &rxf));
     TEST_ASSERT_EQUAL_UINT64(UdpardPriorityFast, rxf.meta.priority);
     TEST_ASSERT_EQUAL_UINT64(UDPARD_NODE_ID_UNSET, rxf.meta.src_node_id);
     TEST_ASSERT_EQUAL_UINT64(UDPARD_NODE_ID_UNSET, rxf.meta.dst_node_id);
@@ -277,7 +274,7 @@ static void testParseFrameRPCServiceAnonymous(void)
                       254, 15,  220, 186, 254, 25, 0,   0,   0,  0,   75,  79,  //
                       'a', 'b', 'c'};
     RxFrame rxf    = {0};
-    TEST_ASSERT_FALSE(rxParseFrame((struct UdpardMutablePayload) {.data = data, .size = sizeof(data)}, &rxf));
+    TEST_ASSERT_FALSE(rxParseFrame((UdpardMutablePayload) {.data = data, .size = sizeof(data)}, &rxf));
 }
 
 static void testParseFrameRPCServiceBroadcast(void)
@@ -286,7 +283,7 @@ static void testParseFrameRPCServiceBroadcast(void)
                       254, 15,  220, 186, 254, 25,  0,   0,   0,  0,   248, 152,  //
                       'a', 'b', 'c'};
     RxFrame rxf    = {0};
-    TEST_ASSERT_FALSE(rxParseFrame((struct UdpardMutablePayload) {.data = data, .size = sizeof(data)}, &rxf));
+    TEST_ASSERT_FALSE(rxParseFrame((UdpardMutablePayload) {.data = data, .size = sizeof(data)}, &rxf));
 }
 
 static void testParseFrameAnonymousNonSingleFrame(void)
@@ -295,7 +292,7 @@ static void testParseFrameAnonymousNonSingleFrame(void)
                       254, 15,  220, 186, 0,   0,   0,   0,  0,  0,   147, 6,  //
                       'a', 'b', 'c'};
     RxFrame rxf    = {0};
-    TEST_ASSERT_FALSE(rxParseFrame((struct UdpardMutablePayload) {.data = data, .size = sizeof(data)}, &rxf));
+    TEST_ASSERT_FALSE(rxParseFrame((UdpardMutablePayload) {.data = data, .size = sizeof(data)}, &rxf));
 }
 
 static void testParseFrameBadHeaderCRC(void)
@@ -304,7 +301,7 @@ static void testParseFrameBadHeaderCRC(void)
                       254, 15,  220, 186, 57,  48,  0,   0,  0,  0,   30,  180,  //
                       'a', 'b', 'c'};
     RxFrame rxf    = {0};
-    TEST_ASSERT_FALSE(rxParseFrame((struct UdpardMutablePayload) {.data = data, .size = sizeof(data)}, &rxf));
+    TEST_ASSERT_FALSE(rxParseFrame((UdpardMutablePayload) {.data = data, .size = sizeof(data)}, &rxf));
 }
 
 static void testParseFrameUnknownHeaderVersion(void)
@@ -316,20 +313,20 @@ static void testParseFrameUnknownHeaderVersion(void)
                       254, 15,  220, 186, 57, 48, 0,   0,  0,  0,   141, 228,  //
                       'a', 'b', 'c'};
     RxFrame rxf    = {0};
-    TEST_ASSERT_FALSE(rxParseFrame((struct UdpardMutablePayload) {.data = data, .size = sizeof(data)}, &rxf));
+    TEST_ASSERT_FALSE(rxParseFrame((UdpardMutablePayload) {.data = data, .size = sizeof(data)}, &rxf));
 }
 
 static void testParseFrameHeaderWithoutPayload(void)
 {
     byte_t data[] = {1, 2, 41, 9, 255, 255, 230, 29, 13, 240, 221, 224, 254, 15, 220, 186, 57, 48, 0, 0, 0, 0, 30, 179};
     RxFrame rxf   = {0};
-    TEST_ASSERT_FALSE(rxParseFrame((struct UdpardMutablePayload) {.data = data, .size = sizeof(data)}, &rxf));
+    TEST_ASSERT_FALSE(rxParseFrame((UdpardMutablePayload) {.data = data, .size = sizeof(data)}, &rxf));
 }
 
 static void testParseFrameEmpty(void)
 {
     RxFrame rxf = {0};
-    TEST_ASSERT_FALSE(rxParseFrame((struct UdpardMutablePayload) {.data = "", .size = 0}, &rxf));
+    TEST_ASSERT_FALSE(rxParseFrame((UdpardMutablePayload) {.data = "", .size = 0}, &rxf));
 }
 
 static void testParseFrameInvalidTransferID(void)
@@ -339,7 +336,7 @@ static void testParseFrameInvalidTransferID(void)
                       255, 255, 255, 255, 57, 48, 0,   0,  0,   0,   42,  107,  //
                       'a', 'b', 'c'};
     RxFrame rxf    = {0};
-    TEST_ASSERT_FALSE(rxParseFrame((struct UdpardMutablePayload) {.data = data, .size = sizeof(data)}, &rxf));
+    TEST_ASSERT_FALSE(rxParseFrame((UdpardMutablePayload) {.data = data, .size = sizeof(data)}, &rxf));
 }
 
 // --------------------------------------------------  SLOT  --------------------------------------------------
@@ -385,21 +382,21 @@ static void testSlotRestartNonEmpty(void)
         //
         .fragments = &makeRxFragment(mem,
                                      1,
-                                     (struct UdpardPayload) {.data = &data[2], .size = 2},
-                                     (struct UdpardMutablePayload) {.data = data, .size = sizeof(data)},
+                                     (UdpardPayload) {.data = &data[2], .size = 2},
+                                     (UdpardMutablePayload) {.data = data, .size = sizeof(data)},
                                      NULL)
                           ->tree,
     };
     slot.fragments->base.lr[0] = &makeRxFragment(mem,
                                                  0,
-                                                 (struct UdpardPayload) {.data = &data[1], .size = 1},
-                                                 (struct UdpardMutablePayload) {.data = data, .size = sizeof(data)},
+                                                 (UdpardPayload) {.data = &data[1], .size = 1},
+                                                 (UdpardMutablePayload) {.data = data, .size = sizeof(data)},
                                                  slot.fragments)
                                       ->tree.base;
     slot.fragments->base.lr[1] = &makeRxFragment(mem,
                                                  2,
-                                                 (struct UdpardPayload) {.data = &data[3], .size = 3},
-                                                 (struct UdpardMutablePayload) {.data = data, .size = sizeof(data)},
+                                                 (UdpardPayload) {.data = &data[3], .size = 3},
+                                                 (UdpardMutablePayload) {.data = data, .size = sizeof(data)},
                                                  slot.fragments)
                                       ->tree.base;
     // Initialization done, ensure the memory utilization is as we expect.
@@ -457,8 +454,8 @@ static void testSlotEjectValidLarge(void)
     TEST_ASSERT_EQUAL(4, mem_fragment.allocated_fragments);
     TEST_ASSERT_EQUAL(sizeof(RxFragment) * 4, mem_fragment.allocated_bytes);
     // Eject and verify the payload.
-    size_t                payload_size = 0;
-    struct UdpardFragment payload      = {0};
+    size_t         payload_size = 0;
+    UdpardFragment payload      = {0};
     TEST_ASSERT(rxSlotEject(&payload_size,
                             &payload,
                             &root->tree,
@@ -528,8 +525,8 @@ static void testSlotEjectValidSmall(void)
     TEST_ASSERT_EQUAL(5, mem_fragment.allocated_fragments);
     TEST_ASSERT_EQUAL(sizeof(RxFragment) * 5, mem_fragment.allocated_bytes);
     // Eject and verify the payload. Use a small extent and ensure the excess is dropped.
-    size_t                payload_size = 0;
-    struct UdpardFragment payload      = {0};
+    size_t         payload_size = 0;
+    UdpardFragment payload      = {0};
     TEST_ASSERT(rxSlotEject(&payload_size,
                             &payload,
                             &root->tree,
@@ -578,8 +575,8 @@ static void testSlotEjectValidEmpty(void)
     TEST_ASSERT_EQUAL(3, mem_fragment.allocated_fragments);
     TEST_ASSERT_EQUAL(sizeof(RxFragment) * 3, mem_fragment.allocated_bytes);
     // Eject and verify the payload. The extent is zero, so all payload is removed.
-    size_t                payload_size = 0;
-    struct UdpardFragment payload      = {0};
+    size_t         payload_size = 0;
+    UdpardFragment payload      = {0};
     TEST_ASSERT(rxSlotEject(&payload_size,
                             &payload,
                             &root->tree,
@@ -623,8 +620,8 @@ static void testSlotEjectInvalid(void)
     TEST_ASSERT_EQUAL(3, mem_fragment.allocated_fragments);
     TEST_ASSERT_EQUAL(sizeof(RxFragment) * 3, mem_fragment.allocated_bytes);
     // Eject and verify the payload.
-    size_t                payload_size = 0;
-    struct UdpardFragment payload      = {0};
+    size_t         payload_size = 0;
+    UdpardFragment payload      = {0};
     TEST_ASSERT_FALSE(rxSlotEject(&payload_size,
                                   &payload,
                                   &root->tree,
@@ -655,8 +652,8 @@ static void testSlotAcceptA(void)
         .payload_size    = 0,
         .fragments       = NULL,
     };
-    size_t                payload_size = 0;
-    struct UdpardFragment payload      = {0};
+    size_t         payload_size = 0;
+    UdpardFragment payload      = {0};
 
     // === TRANSFER ===
     // Accept a single-frame transfer. Ownership transferred to the payload object.
@@ -1198,7 +1195,7 @@ static void testIfaceAcceptA(void)
         TEST_ASSERT_EQUAL(0, iface.slots[i].payload_size);
         TEST_ASSERT_NULL(iface.slots[i].fragments);
     }
-    struct UdpardRxTransfer transfer = {0};
+    UdpardRxTransfer transfer = {0};
 
     // === TRANSFER ===
     // A simple single-frame transfer successfully accepted.
@@ -1482,7 +1479,7 @@ static void testIfaceAcceptB(void)
         TEST_ASSERT_EQUAL(0, iface.slots[i].payload_size);
         TEST_ASSERT_NULL(iface.slots[i].fragments);
     }
-    struct UdpardRxTransfer transfer = {0};
+    UdpardRxTransfer transfer = {0};
     // === TRANSFER === (x3)
     // Send three interleaving multi-frame out-of-order transfers (primes for duplicates):
     //  A2 B1 A0 C0 B0 A1 C0' C1
@@ -1720,7 +1717,7 @@ static void testIfaceAcceptC(void)
         TEST_ASSERT_EQUAL(0, iface.slots[i].payload_size);
         TEST_ASSERT_NULL(iface.slots[i].fragments);
     }
-    struct UdpardRxTransfer transfer = {0};
+    UdpardRxTransfer transfer = {0};
     // === TRANSFER ===
     // Send interleaving multi-frame transfers such that in the end slots have the same transfer-ID value
     // (primes for duplicates):
@@ -1946,18 +1943,18 @@ static void testSessionDeduplicate(void)
     InstrumentedAllocator mem_payload  = {0};
     instrumentedAllocatorNew(&mem_fragment);
     instrumentedAllocatorNew(&mem_payload);
-    const RxMemory                 mem     = makeRxMemory(&mem_fragment, &mem_payload);
-    struct UdpardInternalRxSession session = {0};
+    const RxMemory          mem     = makeRxMemory(&mem_fragment, &mem_payload);
+    UdpardInternalRxSession session = {0};
     rxSessionInit(&session, mem);
     TEST_ASSERT_EQUAL(TIMESTAMP_UNSET, session.last_ts_usec);
     TEST_ASSERT_EQUAL(TRANSFER_ID_UNSET, session.last_transfer_id);
     {
-        struct UdpardFragment* const head = &makeRxFragmentString(mem, 0, "ABC", NULL)->base;
-        head->next                        = &makeRxFragmentString(mem, 1, "DEF", NULL)->base;
-        struct UdpardRxTransfer transfer  = {.timestamp_usec = 10000000,
-                                             .transfer_id    = 0x0DDC0FFEEBADF00D,
-                                             .payload_size   = 6,
-                                             .payload        = *head};
+        UdpardFragment* const head = &makeRxFragmentString(mem, 0, "ABC", NULL)->base;
+        head->next                 = &makeRxFragmentString(mem, 1, "DEF", NULL)->base;
+        UdpardRxTransfer transfer  = {.timestamp_usec = 10000000,
+                                      .transfer_id    = 0x0DDC0FFEEBADF00D,
+                                      .payload_size   = 6,
+                                      .payload        = *head};
         memFree(mem.fragment, sizeof(RxFragment), head);  // Cloned, no longer needed.
         TEST_ASSERT_EQUAL(2, mem_payload.allocated_fragments);
         TEST_ASSERT_EQUAL(1, mem_fragment.allocated_fragments);
@@ -1979,12 +1976,12 @@ static void testSessionDeduplicate(void)
     }
     {
         // Emit a duplicate but after the transfer-ID timeout has occurred. Ensure it is accepted.
-        struct UdpardFragment* const head = &makeRxFragmentString(mem, 0, "ABC", NULL)->base;
-        head->next                        = &makeRxFragmentString(mem, 1, "DEF", NULL)->base;
-        struct UdpardRxTransfer transfer  = {.timestamp_usec = 12000000,            // TID timeout.
-                                             .transfer_id    = 0x0DDC0FFEEBADF000,  // transfer-ID reduced.
-                                             .payload_size   = 6,
-                                             .payload        = *head};
+        UdpardFragment* const head = &makeRxFragmentString(mem, 0, "ABC", NULL)->base;
+        head->next                 = &makeRxFragmentString(mem, 1, "DEF", NULL)->base;
+        UdpardRxTransfer transfer  = {.timestamp_usec = 12000000,            // TID timeout.
+                                      .transfer_id    = 0x0DDC0FFEEBADF000,  // transfer-ID reduced.
+                                      .payload_size   = 6,
+                                      .payload        = *head};
         memFree(mem.fragment, sizeof(RxFragment), head);  // Cloned, no longer needed.
         TEST_ASSERT_EQUAL(2, mem_payload.allocated_fragments);
         TEST_ASSERT_EQUAL(1, mem_fragment.allocated_fragments);
@@ -2006,12 +2003,12 @@ static void testSessionDeduplicate(void)
     }
     {
         // Ensure another transfer with a greater transfer-ID is accepted immediately.
-        struct UdpardFragment* const head = &makeRxFragmentString(mem, 0, "ABC", NULL)->base;
-        head->next                        = &makeRxFragmentString(mem, 1, "DEF", NULL)->base;
-        struct UdpardRxTransfer transfer  = {.timestamp_usec = 11000000,            // Simulate clock jitter.
-                                             .transfer_id    = 0x0DDC0FFEEBADF001,  // Incremented.
-                                             .payload_size   = 6,
-                                             .payload        = *head};
+        UdpardFragment* const head = &makeRxFragmentString(mem, 0, "ABC", NULL)->base;
+        head->next                 = &makeRxFragmentString(mem, 1, "DEF", NULL)->base;
+        UdpardRxTransfer transfer  = {.timestamp_usec = 11000000,            // Simulate clock jitter.
+                                      .transfer_id    = 0x0DDC0FFEEBADF001,  // Incremented.
+                                      .payload_size   = 6,
+                                      .payload        = *head};
         memFree(mem.fragment, sizeof(RxFragment), head);  // Cloned, no longer needed.
         TEST_ASSERT_EQUAL(2, mem_payload.allocated_fragments);
         TEST_ASSERT_EQUAL(1, mem_fragment.allocated_fragments);
@@ -2039,12 +2036,12 @@ static void testSessionAcceptA(void)
     InstrumentedAllocator mem_payload  = {0};
     instrumentedAllocatorNew(&mem_fragment);
     instrumentedAllocatorNew(&mem_payload);
-    const RxMemory                 mem     = makeRxMemory(&mem_fragment, &mem_payload);
-    struct UdpardInternalRxSession session = {0};
+    const RxMemory          mem     = makeRxMemory(&mem_fragment, &mem_payload);
+    UdpardInternalRxSession session = {0};
     rxSessionInit(&session, mem);
     TEST_ASSERT_EQUAL(TIMESTAMP_UNSET, session.last_ts_usec);
     TEST_ASSERT_EQUAL(TRANSFER_ID_UNSET, session.last_transfer_id);
-    struct UdpardRxTransfer transfer = {0};
+    UdpardRxTransfer transfer = {0};
     // Accept a simple transfer through iface #1.
     TEST_ASSERT_EQUAL(1,
                       rxSessionAccept(&session,
@@ -2122,12 +2119,12 @@ static inline void testPortAcceptFrameA(void)
     instrumentedAllocatorNew(&mem_session);
     instrumentedAllocatorNew(&mem_fragment);
     instrumentedAllocatorNew(&mem_payload);
-    const struct UdpardRxMemoryResources mem = {.session  = instrumentedAllocatorMakeMemoryResource(&mem_session),  //
-                                                .fragment = instrumentedAllocatorMakeMemoryResource(&mem_fragment),
-                                                .payload  = instrumentedAllocatorMakeMemoryDeleter(&mem_payload)};
-    struct UdpardRxTransfer              transfer = {0};
+    const UdpardRxMemoryResources mem      = {.session  = instrumentedAllocatorMakeMemoryResource(&mem_session),  //
+                                              .fragment = instrumentedAllocatorMakeMemoryResource(&mem_fragment),
+                                              .payload  = instrumentedAllocatorMakeMemoryDeleter(&mem_payload)};
+    UdpardRxTransfer              transfer = {0};
     // Initialize the port.
-    struct UdpardRxPort port;
+    UdpardRxPort port;
     rxPortInit(&port);
     TEST_ASSERT_EQUAL(SIZE_MAX, port.extent);
     TEST_ASSERT_EQUAL(UDPARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC, port.transfer_id_timeout_usec);
@@ -2252,7 +2249,7 @@ static inline void testPortAcceptFrameA(void)
 
     // Send invalid anonymous transfers and see them fail.
     {  // Bad CRC.
-        struct UdpardMutablePayload datagram =
+        UdpardMutablePayload datagram =
             makeDatagramPayloadSingleFrameString(&mem_payload,  //
                                                  (TransferMetadata) {.priority       = UdpardPriorityImmediate,
                                                                      .src_node_id    = UDPARD_NODE_ID_UNSET,
@@ -2281,7 +2278,7 @@ static inline void testPortAcceptFrameA(void)
                           rxPortAcceptFrame(&port,
                                             0,
                                             10000050,
-                                            (struct UdpardMutablePayload) {.size = HEADER_SIZE_BYTES, .data = payload},
+                                            (UdpardMutablePayload) {.size = HEADER_SIZE_BYTES, .data = payload},
                                             mem,
                                             &transfer));
         TEST_ASSERT_EQUAL(2, mem_session.allocated_fragments);
@@ -2373,7 +2370,7 @@ static inline void testPortAcceptFrameA(void)
     TEST_ASSERT_EQUAL(4, mem_session.allocated_fragments);  // New source.
     TEST_ASSERT_EQUAL(3, mem_fragment.allocated_fragments);
     TEST_ASSERT_EQUAL(3, mem_payload.allocated_fragments);
-    TEST_ASSERT_EQUAL(4 * sizeof(struct UdpardInternalRxSession), mem_session.allocated_bytes);
+    TEST_ASSERT_EQUAL(4 * sizeof(UdpardInternalRxSession), mem_session.allocated_bytes);
     TEST_ASSERT_EQUAL(3 * sizeof(RxFragment), mem_fragment.allocated_bytes);
 
     // Free the port instance and ensure all ifaces and sessions are cleaned up.
