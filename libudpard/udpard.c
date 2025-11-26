@@ -43,11 +43,11 @@ static const byte_t       ByteMask  = 0xFFU;
 
 typedef struct
 {
-    enum UdpardPriority priority;
-    UdpardNodeID        src_node_id;
-    UdpardNodeID        dst_node_id;
-    uint16_t            data_specifier;
-    UdpardTransferID    transfer_id;
+    UdpardPriority   priority;
+    UdpardNodeID     src_node_id;
+    UdpardNodeID     dst_node_id;
+    uint16_t         data_specifier;
+    UdpardTransferID transfer_id;
 } TransferMetadata;
 
 #define DATA_SPECIFIER_SERVICE_NOT_MESSAGE_MASK 0x8000U
@@ -73,27 +73,16 @@ static uint32_t makeSubjectIPGroupAddress(const UdpardPortID subject_id)
     return SUBJECT_MULTICAST_GROUP_ADDRESS_MASK | ((uint32_t) subject_id);
 }
 
-static uint32_t makeServiceIPGroupAddress(const UdpardNodeID destination_node_id)
+static UdpardUDPIPEndpoint makeSubjectUDPIPEndpoint(const UdpardPortID subject_id)
 {
-    return SERVICE_MULTICAST_GROUP_ADDRESS_MASK | ((uint32_t) destination_node_id);
-}
-
-static struct UdpardUDPIPEndpoint makeSubjectUDPIPEndpoint(const UdpardPortID subject_id)
-{
-    return (struct UdpardUDPIPEndpoint) {.ip_address = makeSubjectIPGroupAddress(subject_id),  //
-                                         .udp_port   = UDP_PORT};
-}
-
-static struct UdpardUDPIPEndpoint makeServiceUDPIPEndpoint(const UdpardNodeID destination_node_id)
-{
-    return (struct UdpardUDPIPEndpoint) {.ip_address = makeServiceIPGroupAddress(destination_node_id),
-                                         .udp_port   = UDP_PORT};
+    return (UdpardUDPIPEndpoint) {.ip_address = makeSubjectIPGroupAddress(subject_id),  //
+                                  .udp_port   = UDP_PORT};
 }
 
 /// Used for inserting new items into AVL trees. Refer to the documentation for cavlSearch() for details.
-static struct UdpardTreeNode* avlTrivialFactory(void* const user_reference)
+static UdpardTreeNode* avlTrivialFactory(void* const user_reference)
 {
-    return (struct UdpardTreeNode*) user_reference;
+    return (UdpardTreeNode*) user_reference;
 }
 
 static size_t smaller(const size_t a, const size_t b)
@@ -126,19 +115,19 @@ static int_fast8_t compare32(const uint32_t a, const uint32_t b)
     return result;
 }
 
-static void* memAlloc(const struct UdpardMemoryResource memory, const size_t size)
+static void* memAlloc(const UdpardMemoryResource memory, const size_t size)
 {
     UDPARD_ASSERT(memory.allocate != NULL);
     return memory.allocate(memory.user_reference, size);
 }
 
-static void memFree(const struct UdpardMemoryResource memory, const size_t size, void* const data)
+static void memFree(const UdpardMemoryResource memory, const size_t size, void* const data)
 {
     UDPARD_ASSERT(memory.deallocate != NULL);
     memory.deallocate(memory.user_reference, size, data);
 }
 
-static void memFreePayload(const struct UdpardMemoryDeleter memory, const struct UdpardMutablePayload payload)
+static void memFreePayload(const UdpardMemoryDeleter memory, const UdpardMutablePayload payload)
 {
     UDPARD_ASSERT(memory.deallocate != NULL);
     if (payload.data != NULL)
@@ -275,26 +264,26 @@ static uint32_t transferCRCCompute(const size_t size, const void* const data)
 /// Chain of TX frames prepared for insertion into a TX queue.
 typedef struct
 {
-    struct UdpardTxItem* head;
-    struct UdpardTxItem* tail;
-    size_t               count;
+    UdpardTxItem* head;
+    UdpardTxItem* tail;
+    size_t        count;
 } TxChain;
 
-static bool txValidateMemoryResources(const struct UdpardTxMemoryResources memory)
+static bool txValidateMemoryResources(const UdpardTxMemoryResources memory)
 {
     return (memory.fragment.allocate != NULL) && (memory.fragment.deallocate != NULL) &&
            (memory.payload.allocate != NULL) && (memory.payload.deallocate != NULL);
 }
 
-static struct UdpardTxItem* txNewItem(const struct UdpardTxMemoryResources memory,
-                                      const uint_least8_t       dscp_value_per_priority[UDPARD_PRIORITY_MAX + 1U],
-                                      const UdpardMicrosecond   deadline_usec,
-                                      const enum UdpardPriority priority,
-                                      const struct UdpardUDPIPEndpoint endpoint,
-                                      const size_t                     datagram_payload_size,
-                                      void* const                      user_transfer_reference)
+static UdpardTxItem* txNewItem(const UdpardTxMemoryResources memory,
+                               const uint_least8_t           dscp_value_per_priority[UDPARD_PRIORITY_MAX + 1U],
+                               const UdpardMicrosecond       deadline_usec,
+                               const UdpardPriority          priority,
+                               const UdpardUDPIPEndpoint     endpoint,
+                               const size_t                  datagram_payload_size,
+                               void* const                   user_transfer_reference)
 {
-    struct UdpardTxItem* out = memAlloc(memory.fragment, sizeof(struct UdpardTxItem));
+    UdpardTxItem* out = memAlloc(memory.fragment, sizeof(UdpardTxItem));
     if (out != NULL)
     {
         // No tree linkage by default.
@@ -319,7 +308,7 @@ static struct UdpardTxItem* txNewItem(const struct UdpardTxMemoryResources memor
         }
         else
         {
-            memFree(memory.fragment, sizeof(struct UdpardTxItem), out);
+            memFree(memory.fragment, sizeof(UdpardTxItem), out);
             out = NULL;
         }
     }
@@ -329,10 +318,10 @@ static struct UdpardTxItem* txNewItem(const struct UdpardTxMemoryResources memor
 /// Frames with identical weight are processed in the FIFO order.
 /// Frames with higher weight compare smaller (i.e., put on the left side of the tree).
 static int_fast8_t txAVLPredicate(void* const user_reference,  // NOSONAR Cavl API requires pointer to non-const.
-                                  const struct UdpardTreeNode* const node)
+                                  const UdpardTreeNode* const node)
 {
-    const struct UdpardTxItem* const target = (const struct UdpardTxItem*) user_reference;
-    const struct UdpardTxItem* const other  = (const struct UdpardTxItem*) (const void*) node;
+    const UdpardTxItem* const target = (const UdpardTxItem*) user_reference;
+    const UdpardTxItem* const other  = (const UdpardTxItem*) (const void*) node;
     UDPARD_ASSERT((target != NULL) && (other != NULL));
     return (target->priority >= other->priority) ? +1 : -1;
 }
@@ -392,14 +381,14 @@ static byte_t* txSerializeHeader(byte_t* const          destination_buffer,
 
 /// Produces a chain of Tx queue items for later insertion into the Tx queue. The tail is NULL if OOM.
 /// The caller is responsible for freeing the memory allocated for the chain.
-static TxChain txMakeChain(const struct UdpardTxMemoryResources memory,
-                           const uint_least8_t                  dscp_value_per_priority[UDPARD_PRIORITY_MAX + 1U],
-                           const size_t                         mtu,
-                           const UdpardMicrosecond              deadline_usec,
-                           const TransferMetadata               meta,
-                           const struct UdpardUDPIPEndpoint     endpoint,
-                           const struct UdpardPayload           payload,
-                           void* const                          user_transfer_reference)
+static TxChain txMakeChain(const UdpardTxMemoryResources memory,
+                           const uint_least8_t           dscp_value_per_priority[UDPARD_PRIORITY_MAX + 1U],
+                           const size_t                  mtu,
+                           const UdpardMicrosecond       deadline_usec,
+                           const TransferMetadata        meta,
+                           const UdpardUDPIPEndpoint     endpoint,
+                           const UdpardPayload           payload,
+                           void* const                   user_transfer_reference)
 {
     UDPARD_ASSERT(mtu > 0);
     UDPARD_ASSERT((payload.data != NULL) || (payload.size == 0U));
@@ -410,13 +399,13 @@ static TxChain txMakeChain(const struct UdpardTxMemoryResources memory,
     size_t  offset = 0U;
     while (offset < payload_size_with_crc)
     {
-        struct UdpardTxItem* const item = txNewItem(memory,
-                                                    dscp_value_per_priority,
-                                                    deadline_usec,
-                                                    meta.priority,
-                                                    endpoint,
-                                                    smaller(payload_size_with_crc - offset, mtu) + HEADER_SIZE_BYTES,
-                                                    user_transfer_reference);
+        UdpardTxItem* const item = txNewItem(memory,
+                                             dscp_value_per_priority,
+                                             deadline_usec,
+                                             meta.priority,
+                                             endpoint,
+                                             smaller(payload_size_with_crc - offset, mtu) + HEADER_SIZE_BYTES,
+                                             user_transfer_reference);
         if (NULL == out.head)
         {
             out.head = item;
@@ -463,12 +452,12 @@ static TxChain txMakeChain(const struct UdpardTxMemoryResources memory,
     return out;
 }
 
-static int32_t txPush(struct UdpardTx* const           tx,
-                      const UdpardMicrosecond          deadline_usec,
-                      const TransferMetadata           meta,
-                      const struct UdpardUDPIPEndpoint endpoint,
-                      const struct UdpardPayload       payload,
-                      void* const                      user_transfer_reference)
+static int32_t txPush(UdpardTx* const           tx,
+                      const UdpardMicrosecond   deadline_usec,
+                      const TransferMetadata    meta,
+                      const UdpardUDPIPEndpoint endpoint,
+                      const UdpardPayload       payload,
+                      void* const               user_transfer_reference)
 {
     UDPARD_ASSERT(tx != NULL);
     int32_t      out         = 0;  // The number of frames enqueued or negated error.
@@ -498,10 +487,10 @@ static int32_t txPush(struct UdpardTx* const           tx,
         if (chain.tail != NULL)
         {
             UDPARD_ASSERT(frame_count == chain.count);
-            struct UdpardTxItem* next = chain.head;
+            UdpardTxItem* next = chain.head;
             do
             {
-                const struct UdpardTreeNode* const res =
+                const UdpardTreeNode* const res =
                     cavlSearch(&tx->root, &next->base, &txAVLPredicate, &avlTrivialFactory);
                 (void) res;
                 UDPARD_ASSERT(res == &next->base);
@@ -515,11 +504,11 @@ static int32_t txPush(struct UdpardTx* const           tx,
         }
         else  // The queue is large enough but we ran out of heap memory, so we have to unwind the chain.
         {
-            out                       = -UDPARD_ERROR_MEMORY;
-            struct UdpardTxItem* head = chain.head;
+            out                = -UDPARD_ERROR_MEMORY;
+            UdpardTxItem* head = chain.head;
             while (head != NULL)
             {
-                struct UdpardTxItem* const next = head->next_in_transfer;
+                UdpardTxItem* const next = head->next_in_transfer;
                 udpardTxFree(tx->memory, head);
                 head = next;
             }
@@ -529,10 +518,10 @@ static int32_t txPush(struct UdpardTx* const           tx,
     return out;
 }
 
-int_fast8_t udpardTxInit(struct UdpardTx* const               self,
-                         const UdpardNodeID* const            local_node_id,
-                         const size_t                         queue_capacity,
-                         const struct UdpardTxMemoryResources memory)
+int_fast8_t udpardTxInit(UdpardTx* const               self,
+                         const UdpardNodeID* const     local_node_id,
+                         const size_t                  queue_capacity,
+                         const UdpardTxMemoryResources memory)
 {
     int_fast8_t ret = -UDPARD_ERROR_ARGUMENT;
     if ((NULL != self) && (NULL != local_node_id) && txValidateMemoryResources(memory))
@@ -550,13 +539,13 @@ int_fast8_t udpardTxInit(struct UdpardTx* const               self,
     return ret;
 }
 
-int32_t udpardTxPublish(struct UdpardTx* const     self,
-                        const UdpardMicrosecond    deadline_usec,
-                        const enum UdpardPriority  priority,
-                        const UdpardPortID         subject_id,
-                        const UdpardTransferID     transfer_id,
-                        const struct UdpardPayload payload,
-                        void* const                user_transfer_reference)
+int32_t udpardTxPublish(UdpardTx* const         self,
+                        const UdpardMicrosecond deadline_usec,
+                        const UdpardPriority    priority,
+                        const UdpardPortID      subject_id,
+                        const UdpardTransferID  transfer_id,
+                        const UdpardPayload     payload,
+                        void* const             user_transfer_reference)
 {
     int32_t    out     = -UDPARD_ERROR_ARGUMENT;
     const bool args_ok = (self != NULL) && (self->local_node_id != NULL) && (priority <= UDPARD_PRIORITY_MAX) &&
@@ -579,82 +568,19 @@ int32_t udpardTxPublish(struct UdpardTx* const     self,
     return out;
 }
 
-int32_t udpardTxRequest(struct UdpardTx* const     self,
-                        const UdpardMicrosecond    deadline_usec,
-                        const enum UdpardPriority  priority,
-                        const UdpardPortID         service_id,
-                        const UdpardNodeID         server_node_id,
-                        const UdpardTransferID     transfer_id,
-                        const struct UdpardPayload payload,
-                        void* const                user_transfer_reference)
+UdpardTxItem* udpardTxPeek(const UdpardTx* const self)
 {
-    int32_t    out     = -UDPARD_ERROR_ARGUMENT;
-    const bool args_ok = (self != NULL) && (self->local_node_id != NULL) && (priority <= UDPARD_PRIORITY_MAX) &&
-                         (service_id <= UDPARD_SERVICE_ID_MAX) && (server_node_id <= UDPARD_NODE_ID_MAX) &&
-                         ((payload.data != NULL) || (payload.size == 0U));
-    if (args_ok)
-    {
-        out = txPush(self,
-                     deadline_usec,
-                     (TransferMetadata) {
-                         .priority       = priority,
-                         .src_node_id    = *self->local_node_id,
-                         .dst_node_id    = server_node_id,
-                         .transfer_id    = transfer_id,
-                         .data_specifier = DATA_SPECIFIER_SERVICE_NOT_MESSAGE_MASK |
-                                           DATA_SPECIFIER_SERVICE_REQUEST_NOT_RESPONSE_MASK | service_id,
-                     },
-                     makeServiceUDPIPEndpoint(server_node_id),
-                     payload,
-                     user_transfer_reference);
-    }
-    return out;
-}
-
-int32_t udpardTxRespond(struct UdpardTx* const     self,
-                        const UdpardMicrosecond    deadline_usec,
-                        const enum UdpardPriority  priority,
-                        const UdpardPortID         service_id,
-                        const UdpardNodeID         client_node_id,
-                        const UdpardTransferID     transfer_id,
-                        const struct UdpardPayload payload,
-                        void* const                user_transfer_reference)
-{
-    int32_t    out     = -UDPARD_ERROR_ARGUMENT;
-    const bool args_ok = (self != NULL) && (self->local_node_id != NULL) && (priority <= UDPARD_PRIORITY_MAX) &&
-                         (service_id <= UDPARD_SERVICE_ID_MAX) && (client_node_id <= UDPARD_NODE_ID_MAX) &&
-                         ((payload.data != NULL) || (payload.size == 0U));
-    if (args_ok)
-    {
-        out = txPush(self,
-                     deadline_usec,
-                     (TransferMetadata) {
-                         .priority       = priority,
-                         .src_node_id    = *self->local_node_id,
-                         .dst_node_id    = client_node_id,
-                         .transfer_id    = transfer_id,
-                         .data_specifier = DATA_SPECIFIER_SERVICE_NOT_MESSAGE_MASK | service_id,
-                     },
-                     makeServiceUDPIPEndpoint(client_node_id),
-                     payload,
-                     user_transfer_reference);
-    }
-    return out;
-}
-
-struct UdpardTxItem* udpardTxPeek(const struct UdpardTx* const self)
-{
-    struct UdpardTxItem* out = NULL;
+    UdpardTxItem* out = NULL;
     if (self != NULL)
     {
         // Paragraph 6.7.2.1.15 of the C standard says:
         //     A pointer to a structure object, suitably converted, points to its initial member, and vice versa.
-        out = (struct UdpardTxItem*) (void*) cavlFindExtremum(self->root, false);
+        out = (UdpardTxItem*) (void*) cavlFindExtremum(self->root, false);
     }
     return out;
 }
 
-struct UdpardTxItem* udpardTxPop(struct UdpardTx* const self, struct UdpardTxItem* const item)
+UdpardTxItem* udpardTxPop(UdpardTx* const self, UdpardTxItem* const item)
 {
     if ((self != NULL) && (item != NULL))
     {
@@ -669,7 +595,7 @@ struct UdpardTxItem* udpardTxPop(struct UdpardTx* const self, struct UdpardTxIte
     return item;
 }
 
-void udpardTxFree(const struct UdpardTxMemoryResources memory, struct UdpardTxItem* const item)
+void udpardTxFree(const UdpardTxMemoryResources memory, UdpardTxItem* const item)
 {
     if (item != NULL)
     {
@@ -678,7 +604,7 @@ void udpardTxFree(const struct UdpardTxMemoryResources memory, struct UdpardTxIt
             memFree(memory.payload, item->datagram_payload.size, item->datagram_payload.data);
         }
 
-        memFree(memory.fragment, sizeof(struct UdpardTxItem), item);
+        memFree(memory.fragment, sizeof(UdpardTxItem), item);
     }
 }
 
@@ -689,10 +615,10 @@ void udpardTxFree(const struct UdpardTxMemoryResources memory, struct UdpardTxIt
 /// All but the transfer metadata.
 typedef struct
 {
-    uint32_t                    index;
-    bool                        end_of_transfer;
-    struct UdpardPayload        payload;  ///< Also contains the transfer CRC (but not the header CRC).
-    struct UdpardMutablePayload origin;   ///< The entirety of the free-able buffer passed from the application.
+    uint32_t             index;
+    bool                 end_of_transfer;
+    UdpardPayload        payload;  ///< Also contains the transfer CRC (but not the header CRC).
+    UdpardMutablePayload origin;   ///< The entirety of the free-able buffer passed from the application.
 } RxFrameBase;
 
 /// Full frame state.
@@ -741,7 +667,7 @@ static const byte_t* txDeserializeU64(const byte_t* const source_buffer, uint64_
 }
 
 /// This is roughly the inverse of the txSerializeHeader function, but it also handles the frame payload.
-static bool rxParseFrame(const struct UdpardMutablePayload datagram_payload, RxFrame* const out)
+static bool rxParseFrame(const UdpardMutablePayload datagram_payload, RxFrame* const out)
 {
     UDPARD_ASSERT((out != NULL) && (datagram_payload.data != NULL));
     out->base.origin = datagram_payload;
@@ -757,7 +683,7 @@ static bool rxParseFrame(const struct UdpardMutablePayload datagram_payload, RxF
             const uint_fast8_t priority = *ptr++;
             if (priority <= UDPARD_PRIORITY_MAX)
             {
-                out->meta.priority        = (enum UdpardPriority) priority;
+                out->meta.priority        = (UdpardPriority) priority;
                 ptr                       = txDeserializeU16(ptr, &out->meta.src_node_id);
                 ptr                       = txDeserializeU16(ptr, &out->meta.dst_node_id);
                 ptr                       = txDeserializeU16(ptr, &out->meta.data_specifier);
@@ -790,7 +716,7 @@ static bool rxParseFrame(const struct UdpardMutablePayload datagram_payload, RxF
     return ok;
 }
 
-static bool rxValidateMemoryResources(const struct UdpardRxMemoryResources memory)
+static bool rxValidateMemoryResources(const UdpardRxMemoryResources memory)
 {
     return (memory.session.allocate != NULL) && (memory.session.deallocate != NULL) &&
            (memory.fragment.allocate != NULL) && (memory.fragment.deallocate != NULL) &&
@@ -801,13 +727,13 @@ static bool rxValidateMemoryResources(const struct UdpardRxMemoryResources memor
 /// as they almost always go side by side.
 typedef struct
 {
-    struct UdpardMemoryResource fragment;
-    struct UdpardMemoryDeleter  payload;
+    UdpardMemoryResource fragment;
+    UdpardMemoryDeleter  payload;
 } RxMemory;
 
 typedef struct
 {
-    struct UdpardTreeNode base;
+    UdpardTreeNode base;
     struct RxFragment* this;  // This is needed to avoid pointer arithmetic with multiple inheritance.
 } RxFragmentTreeNode;
 
@@ -815,17 +741,16 @@ typedef struct
 /// given a linked list of these objects represented as a list of UdpardFragment.
 typedef struct RxFragment
 {
-    struct UdpardFragment base;
-    RxFragmentTreeNode    tree;
-    uint32_t              frame_index;
+    UdpardFragment     base;
+    RxFragmentTreeNode tree;
+    uint32_t           frame_index;
 } RxFragment;
 
 /// Internally, the RX pipeline is arranged as follows:
 ///
-/// - There is one port per subscription or an RPC-service listener. Within the port, there are N sessions,
-///   one session per remote node emitting transfers on this port (i.e., on this subject, or sending
-///   request/response of this service). Sessions are constructed dynamically in memory provided by
-///   UdpardMemoryResource.
+/// - There is one port per subscription. Within the port, there are N sessions,
+///   one session per remote node emitting transfers on this port (i.e., on this subject).
+///   Sessions are constructed dynamically in memory provided by UdpardMemoryResource.
 ///
 /// - Per session, there are UDPARD_NETWORK_INTERFACE_COUNT_MAX interface states to support interface redundancy.
 ///
@@ -872,9 +797,9 @@ typedef struct
 /// This type is forward-declared externally, hence why it has such a long name with the "udpard" prefix.
 /// Keep in mind that we have a dedicated session object per remote node per port; this means that the states
 /// kept here -- the timestamp and the transfer-ID -- are specific per remote node, as it should be.
-struct UdpardInternalRxSession
+typedef struct UdpardInternalRxSession
 {
-    struct UdpardTreeNode base;
+    UdpardTreeNode base;
     /// The remote node-ID is needed here as this is the ordering/search key.
     UdpardNodeID remote_node_id;
     /// This shared state is used for redundant transfer deduplication.
@@ -886,7 +811,7 @@ struct UdpardInternalRxSession
     /// The first interface to receive a transfer takes precedence, thus the redundant group always operates
     /// at the speed of the fastest interface. Duplicate transfers delivered by the slower interfaces are discarded.
     RxIface ifaces[UDPARD_NETWORK_INTERFACE_COUNT_MAX];
-};
+} UdpardInternalRxSession;
 
 // --------------------------------------------------  RX FRAGMENT  --------------------------------------------------
 
@@ -900,7 +825,7 @@ static void rxFragmentDestroyTree(RxFragment* const self, const RxMemory memory)
     memFreePayload(memory.payload, self->base.origin);
     for (uint_fast8_t i = 0; i < 2; i++)
     {
-        RxFragmentTreeNode* const child = (RxFragmentTreeNode*) self->tree.base.lr[i];
+        const RxFragmentTreeNode* const child = (RxFragmentTreeNode*) self->tree.base.lr[i];
         if (child != NULL)
         {
             UDPARD_ASSERT(child->base.up == &self->tree.base);
@@ -914,12 +839,12 @@ static void rxFragmentDestroyTree(RxFragment* const self, const RxMemory memory)
 /// This is meant to be invoked on the head of the list.
 /// This function is needed because when a fragment tree is transformed into a list, the tree structure itself
 /// is invalidated and cannot be used to free the fragments anymore.
-static void rxFragmentDestroyList(struct UdpardFragment* const head, const RxMemory memory)
+static void rxFragmentDestroyList(UdpardFragment* const head, const RxMemory memory)
 {
-    struct UdpardFragment* handle = head;
+    UdpardFragment* handle = head;
     while (handle != NULL)
     {
-        struct UdpardFragment* const next = handle->next;
+        UdpardFragment* const next = handle->next;
         memFreePayload(memory.payload, handle->origin);  // May be NULL, is okay.
         memFree(memory.fragment, sizeof(RxFragment), handle);
         handle = next;
@@ -959,26 +884,26 @@ static void rxSlotRestartAdvance(RxSlot* const self, const RxMemory memory)
 
 typedef struct
 {
-    uint32_t                    frame_index;
-    bool                        accepted;
-    struct UdpardMemoryResource memory_fragment;
+    uint32_t             frame_index;
+    bool                 accepted;
+    UdpardMemoryResource memory_fragment;
 } RxSlotUpdateContext;
 
-static int_fast8_t rxSlotFragmentSearch(void* const user_reference,  // NOSONAR Cavl API requires non-const.
-                                        const struct UdpardTreeNode* node)
+static int_fast8_t rxSlotFragmentSearch(void* const           user_reference,  // NOSONAR Cavl API requires non-const.
+                                        const UdpardTreeNode* node)
 {
     UDPARD_ASSERT((user_reference != NULL) && (node != NULL));
     return compare32(((const RxSlotUpdateContext*) user_reference)->frame_index,
                      ((const RxFragmentTreeNode*) node)->this->frame_index);
 }
 
-static struct UdpardTreeNode* rxSlotFragmentFactory(void* const user_reference)
+static UdpardTreeNode* rxSlotFragmentFactory(void* const user_reference)
 {
     RxSlotUpdateContext* const ctx = (RxSlotUpdateContext*) user_reference;
     UDPARD_ASSERT((ctx != NULL) && (ctx->memory_fragment.allocate != NULL) &&
                   (ctx->memory_fragment.deallocate != NULL));
-    struct UdpardTreeNode* out  = NULL;
-    RxFragment* const      frag = memAlloc(ctx->memory_fragment, sizeof(RxFragment));
+    UdpardTreeNode*   out  = NULL;
+    RxFragment* const frag = memAlloc(ctx->memory_fragment, sizeof(RxFragment));
     if (frag != NULL)
     {
         memZero(sizeof(RxFragment), frag);
@@ -993,12 +918,12 @@ static struct UdpardTreeNode* rxSlotFragmentFactory(void* const user_reference)
 /// States outliving each level of recursion while ejecting the transfer from the fragment tree.
 typedef struct
 {
-    struct UdpardFragment* head;  // Points to the first fragment in the list.
-    struct UdpardFragment* predecessor;
-    uint32_t               crc;
-    size_t                 retain_size;
-    size_t                 offset;
-    RxMemory               memory;
+    UdpardFragment* head;  // Points to the first fragment in the list.
+    UdpardFragment* predecessor;
+    uint32_t        crc;
+    size_t          retain_size;
+    size_t          offset;
+    RxMemory        memory;
 } RxSlotEjectContext;
 
 /// See rxSlotEject() for details.
@@ -1063,12 +988,12 @@ static void rxSlotEjectFragment(RxFragment* const frag, RxSlotEjectContext* cons
 /// There shall be at least one fragment (because a Cyphal transfer contains at least one frame).
 ///
 /// The return value indicates whether the transfer is valid (CRC is correct).
-static bool rxSlotEject(size_t* const                out_payload_size,
-                        struct UdpardFragment* const out_payload_head,
-                        RxFragmentTreeNode* const    fragment_tree,
-                        const size_t                 received_total_size,  // With CRC.
-                        const size_t                 extent,
-                        const RxMemory               memory)
+static bool rxSlotEject(size_t* const             out_payload_size,
+                        UdpardFragment* const     out_payload_head,
+                        RxFragmentTreeNode* const fragment_tree,
+                        const size_t              received_total_size,  // With CRC.
+                        const size_t              extent,
+                        const RxMemory            memory)
 {
     UDPARD_ASSERT((received_total_size >= TRANSFER_CRC_SIZE_BYTES) && (fragment_tree != NULL) &&
                   (out_payload_size != NULL) && (out_payload_head != NULL));
@@ -1097,7 +1022,7 @@ static bool rxSlotEject(size_t* const                out_payload_size,
         }
         else
         {
-            *out_payload_head = (struct UdpardFragment) {.next = NULL, .view = {0, NULL}, .origin = {0, NULL}};
+            *out_payload_head = (UdpardFragment) {.next = NULL, .view = {0, NULL}, .origin = {0, NULL}};
         }
     }
     else  // The transfer turned out to be invalid. We have to free the fragments. Can't use the tree anymore.
@@ -1140,11 +1065,11 @@ static int_fast8_t rxSlotAccept_InsertFragment(RxSlot* const self, const RxFrame
     RxSlotUpdateContext       update_ctx = {.frame_index     = frame.index,
                                             .accepted        = false,
                                             .memory_fragment = memory.fragment};
-    RxFragmentTreeNode* const frag   = (RxFragmentTreeNode*) cavlSearch((struct UdpardTreeNode**) &self->fragments,  //
+    RxFragmentTreeNode* const frag       = (RxFragmentTreeNode*) cavlSearch((UdpardTreeNode**) &self->fragments,  //
                                                                       &update_ctx,
                                                                       &rxSlotFragmentSearch,
                                                                       &rxSlotFragmentFactory);
-    int_fast8_t               result = update_ctx.accepted ? 1 : 0;
+    int_fast8_t               result     = update_ctx.accepted ? 1 : 0;
     if (frag == NULL)
     {
         UDPARD_ASSERT(!update_ctx.accepted);
@@ -1165,11 +1090,11 @@ static int_fast8_t rxSlotAccept_InsertFragment(RxSlot* const self, const RxFrame
 
 /// Detect transfer completion. If complete, eject the payload from the fragment tree and check its CRC.
 /// The return value is passed over from rxSlotEject.
-static int_fast8_t rxSlotAccept_FinalizeMaybe(RxSlot* const                self,
-                                              size_t* const                out_transfer_payload_size,
-                                              struct UdpardFragment* const out_transfer_payload_head,
-                                              const size_t                 extent,
-                                              const RxMemory               memory)
+static int_fast8_t rxSlotAccept_FinalizeMaybe(RxSlot* const         self,
+                                              size_t* const         out_transfer_payload_size,
+                                              UdpardFragment* const out_transfer_payload_head,
+                                              const size_t          extent,
+                                              const RxMemory        memory)
 {
     UDPARD_ASSERT((self != NULL) && (out_transfer_payload_size != NULL) && (out_transfer_payload_head != NULL) &&
                   (self->fragments != NULL));
@@ -1197,12 +1122,12 @@ static int_fast8_t rxSlotAccept_FinalizeMaybe(RxSlot* const                self,
 /// This function will either move the frame payload into the session, or free it if it can't be used.
 /// Upon return, certain state fields may be overwritten, so the caller should not rely on them.
 /// Returns: 1 -- transfer available, payload written; 0 -- transfer not yet available; <0 -- error.
-static int_fast8_t rxSlotAccept(RxSlot* const                self,
-                                size_t* const                out_transfer_payload_size,
-                                struct UdpardFragment* const out_transfer_payload_head,
-                                const RxFrameBase            frame,
-                                const size_t                 extent,
-                                const RxMemory               memory)
+static int_fast8_t rxSlotAccept(RxSlot* const         self,
+                                size_t* const         out_transfer_payload_size,
+                                UdpardFragment* const out_transfer_payload_head,
+                                const RxFrameBase     frame,
+                                const size_t          extent,
+                                const RxMemory        memory)
 {
     UDPARD_ASSERT((self != NULL) && (frame.payload.size > 0) && (out_transfer_payload_size != NULL) &&
                   (out_transfer_payload_head != NULL));
@@ -1304,13 +1229,13 @@ static RxSlot* rxIfaceFindMatchingSlot(RxSlot slots[RX_SLOT_COUNT], const Udpard
 /// This function is invoked when a new datagram pertaining to a certain session is received on an interface.
 /// This function will either move the frame payload into the session, or free it if it cannot be made use of.
 /// Returns: 1 -- transfer available; 0 -- transfer not yet available; <0 -- error.
-static int_fast8_t rxIfaceAccept(RxIface* const                 self,
-                                 const UdpardMicrosecond        ts_usec,
-                                 const RxFrame                  frame,
-                                 const size_t                   extent,
-                                 const UdpardMicrosecond        transfer_id_timeout_usec,
-                                 const RxMemory                 memory,
-                                 struct UdpardRxTransfer* const out_transfer)
+static int_fast8_t rxIfaceAccept(RxIface* const          self,
+                                 const UdpardMicrosecond ts_usec,
+                                 const RxFrame           frame,
+                                 const size_t            extent,
+                                 const UdpardMicrosecond transfer_id_timeout_usec,
+                                 const RxMemory          memory,
+                                 UdpardRxTransfer* const out_transfer)
 {
     UDPARD_ASSERT((self != NULL) && (frame.base.payload.size > 0) && (out_transfer != NULL));
     RxSlot* slot = rxIfaceFindMatchingSlot(self->slots, frame.meta.transfer_id);
@@ -1398,10 +1323,10 @@ static void rxIfaceFree(RxIface* const self, const RxMemory memory)
 
 /// Checks if the given transfer should be accepted. If not, the transfer is freed.
 /// Internal states are updated.
-static bool rxSessionDeduplicate(struct UdpardInternalRxSession* const self,
-                                 const UdpardMicrosecond               transfer_id_timeout_usec,
-                                 struct UdpardRxTransfer* const        transfer,
-                                 const RxMemory                        memory)
+static bool rxSessionDeduplicate(UdpardInternalRxSession* const self,
+                                 const UdpardMicrosecond        transfer_id_timeout_usec,
+                                 UdpardRxTransfer* const        transfer,
+                                 const RxMemory                 memory)
 {
     UDPARD_ASSERT((self != NULL) && (transfer != NULL));
     const bool future_tid = (self->last_transfer_id == TRANSFER_ID_UNSET) ||  //
@@ -1420,22 +1345,21 @@ static bool rxSessionDeduplicate(struct UdpardInternalRxSession* const self,
         memFreePayload(memory.payload, transfer->payload.origin);
         rxFragmentDestroyList(transfer->payload.next, memory);
         transfer->payload_size = 0;
-        transfer->payload      = (struct UdpardFragment) {.next   = NULL,
-                                                          .view   = {.size = 0, .data = NULL},
-                                                          .origin = {.size = 0, .data = NULL}};
+        transfer->payload =
+            (UdpardFragment) {.next = NULL, .view = {.size = 0, .data = NULL}, .origin = {.size = 0, .data = NULL}};
     }
     return accept;
 }
 
 /// Takes ownership of the frame payload buffer.
-static int_fast8_t rxSessionAccept(struct UdpardInternalRxSession* const self,
-                                   const uint_fast8_t                    redundant_iface_index,
-                                   const UdpardMicrosecond               ts_usec,
-                                   const RxFrame                         frame,
-                                   const size_t                          extent,
-                                   const UdpardMicrosecond               transfer_id_timeout_usec,
-                                   const RxMemory                        memory,
-                                   struct UdpardRxTransfer* const        out_transfer)
+static int_fast8_t rxSessionAccept(UdpardInternalRxSession* const self,
+                                   const uint_fast8_t             redundant_iface_index,
+                                   const UdpardMicrosecond        ts_usec,
+                                   const RxFrame                  frame,
+                                   const size_t                   extent,
+                                   const UdpardMicrosecond        transfer_id_timeout_usec,
+                                   const RxMemory                 memory,
+                                   UdpardRxTransfer* const        out_transfer)
 {
     UDPARD_ASSERT((self != NULL) && (redundant_iface_index < UDPARD_NETWORK_INTERFACE_COUNT_MAX) &&
                   (out_transfer != NULL));
@@ -1454,7 +1378,7 @@ static int_fast8_t rxSessionAccept(struct UdpardInternalRxSession* const self,
     return result;
 }
 
-static void rxSessionInit(struct UdpardInternalRxSession* const self, const RxMemory memory)
+static void rxSessionInit(UdpardInternalRxSession* const self, const RxMemory memory)
 {
     UDPARD_ASSERT(self != NULL);
     memZero(sizeof(*self), self);
@@ -1470,8 +1394,7 @@ static void rxSessionInit(struct UdpardInternalRxSession* const self, const RxMe
 /// Frees all ifaces in the session, all children in the session tree recursively, and destroys the session itself.
 /// The maximum recursion depth is ceil(1.44*log2(UDPARD_NODE_ID_MAX+1)-0.328) = 23 levels.
 // NOLINTNEXTLINE(*-no-recursion) MISRA C:2012 rule 17.2
-static void rxSessionDestroyTree(struct UdpardInternalRxSession* const self,
-                                 const struct UdpardRxMemoryResources  memory)
+static void rxSessionDestroyTree(UdpardInternalRxSession* const self, const UdpardRxMemoryResources memory)
 {
     if (self != NULL)
     {
@@ -1481,14 +1404,14 @@ static void rxSessionDestroyTree(struct UdpardInternalRxSession* const self,
         }
         for (uint_fast8_t i = 0; i < 2; i++)
         {
-            struct UdpardInternalRxSession* const child = (struct UdpardInternalRxSession*) (void*) self->base.lr[i];
+            UdpardInternalRxSession* const child = (UdpardInternalRxSession*) (void*) self->base.lr[i];
             if (child != NULL)
             {
                 UDPARD_ASSERT(child->base.up == &self->base);
                 rxSessionDestroyTree(child, memory);  // NOSONAR recursion
             }
         }
-        memFree(memory.session, sizeof(struct UdpardInternalRxSession), self);
+        memFree(memory.session, sizeof(UdpardInternalRxSession), self);
     }
 }
 
@@ -1496,25 +1419,24 @@ static void rxSessionDestroyTree(struct UdpardInternalRxSession* const self,
 
 typedef struct
 {
-    UdpardNodeID                   remote_node_id;
-    struct UdpardRxMemoryResources memory;
+    UdpardNodeID            remote_node_id;
+    UdpardRxMemoryResources memory;
 } RxPortSessionSearchContext;
 
-static int_fast8_t rxPortSessionSearch(void* const                  user_reference,  // NOSONAR non-const API
-                                       const struct UdpardTreeNode* node)
+static int_fast8_t rxPortSessionSearch(void* const           user_reference,  // NOSONAR non-const API
+                                       const UdpardTreeNode* node)
 {
     UDPARD_ASSERT((user_reference != NULL) && (node != NULL));
     return compare32(((const RxPortSessionSearchContext*) user_reference)->remote_node_id,
-                     ((const struct UdpardInternalRxSession*) (const void*) node)->remote_node_id);
+                     ((const UdpardInternalRxSession*) (const void*) node)->remote_node_id);
 }
 
-static struct UdpardTreeNode* rxPortSessionFactory(void* const user_reference)  // NOSONAR non-const API
+static UdpardTreeNode* rxPortSessionFactory(void* const user_reference)  // NOSONAR non-const API
 {
     const RxPortSessionSearchContext* const ctx = (const RxPortSessionSearchContext*) user_reference;
     UDPARD_ASSERT((ctx != NULL) && (ctx->remote_node_id <= UDPARD_NODE_ID_MAX));
-    struct UdpardTreeNode*                out = NULL;
-    struct UdpardInternalRxSession* const session =
-        memAlloc(ctx->memory.session, sizeof(struct UdpardInternalRxSession));
+    UdpardTreeNode*                out     = NULL;
+    UdpardInternalRxSession* const session = memAlloc(ctx->memory.session, sizeof(UdpardInternalRxSession));
     if (session != NULL)
     {
         rxSessionInit(session, (RxMemory) {.payload = ctx->memory.payload, .fragment = ctx->memory.fragment});
@@ -1526,18 +1448,18 @@ static struct UdpardTreeNode* rxPortSessionFactory(void* const user_reference)  
 
 /// Accepts a frame into a port, possibly creating a new session along the way.
 /// The frame shall not be anonymous. Takes ownership of the frame payload buffer.
-static int_fast8_t rxPortAccept(struct UdpardRxPort* const           self,
-                                const uint_fast8_t                   redundant_iface_index,
-                                const UdpardMicrosecond              ts_usec,
-                                const RxFrame                        frame,
-                                const struct UdpardRxMemoryResources memory,
-                                struct UdpardRxTransfer* const       out_transfer)
+static int_fast8_t rxPortAccept(UdpardRxPort* const           self,
+                                const uint_fast8_t            redundant_iface_index,
+                                const UdpardMicrosecond       ts_usec,
+                                const RxFrame                 frame,
+                                const UdpardRxMemoryResources memory,
+                                UdpardRxTransfer* const       out_transfer)
 {
     UDPARD_ASSERT((self != NULL) && (redundant_iface_index < UDPARD_NETWORK_INTERFACE_COUNT_MAX) &&
                   (out_transfer != NULL) && (frame.meta.src_node_id != UDPARD_NODE_ID_UNSET));
-    int_fast8_t                           result  = 0;
-    struct UdpardInternalRxSession* const session = (struct UdpardInternalRxSession*) (void*)
-        cavlSearch((struct UdpardTreeNode**) &self->sessions,
+    int_fast8_t                    result  = 0;
+    UdpardInternalRxSession* const session = (UdpardInternalRxSession*) (void*)
+        cavlSearch((UdpardTreeNode**) &self->sessions,
                    &(RxPortSessionSearchContext) {.remote_node_id = frame.meta.src_node_id, .memory = memory},
                    &rxPortSessionSearch,
                    &rxPortSessionFactory);
@@ -1563,10 +1485,10 @@ static int_fast8_t rxPortAccept(struct UdpardRxPort* const           self,
 
 /// A special case of rxPortAccept() for anonymous transfers. Accepts all transfers unconditionally.
 /// Does not allocate new memory. Takes ownership of the frame payload buffer.
-static int_fast8_t rxPortAcceptAnonymous(const UdpardMicrosecond          ts_usec,
-                                         const RxFrame                    frame,
-                                         const struct UdpardMemoryDeleter memory,
-                                         struct UdpardRxTransfer* const   out_transfer)
+static int_fast8_t rxPortAcceptAnonymous(const UdpardMicrosecond   ts_usec,
+                                         const RxFrame             frame,
+                                         const UdpardMemoryDeleter memory,
+                                         UdpardRxTransfer* const   out_transfer)
 {
     UDPARD_ASSERT((out_transfer != NULL) && (frame.meta.src_node_id == UDPARD_NODE_ID_UNSET));
     int_fast8_t result  = 0;
@@ -1598,12 +1520,12 @@ static int_fast8_t rxPortAcceptAnonymous(const UdpardMicrosecond          ts_use
 
 /// Accepts a raw frame and, if valid, passes it on to rxPortAccept() for further processing.
 /// Takes ownership of the frame payload buffer.
-static int_fast8_t rxPortAcceptFrame(struct UdpardRxPort* const           self,
-                                     const uint_fast8_t                   redundant_iface_index,
-                                     const UdpardMicrosecond              ts_usec,
-                                     const struct UdpardMutablePayload    datagram_payload,
-                                     const struct UdpardRxMemoryResources memory,
-                                     struct UdpardRxTransfer* const       out_transfer)
+static int_fast8_t rxPortAcceptFrame(UdpardRxPort* const           self,
+                                     const uint_fast8_t            redundant_iface_index,
+                                     const UdpardMicrosecond       ts_usec,
+                                     const UdpardMutablePayload    datagram_payload,
+                                     const UdpardRxMemoryResources memory,
+                                     UdpardRxTransfer* const       out_transfer)
 {
     int_fast8_t result = 0;
     RxFrame     frame  = {0};
@@ -1625,7 +1547,7 @@ static int_fast8_t rxPortAcceptFrame(struct UdpardRxPort* const           self,
     return result;
 }
 
-static void rxPortInit(struct UdpardRxPort* const self)
+static void rxPortInit(UdpardRxPort* const self)
 {
     memZero(sizeof(*self), self);
     self->extent                   = SIZE_MAX;  // Unlimited extent by default.
@@ -1633,7 +1555,7 @@ static void rxPortInit(struct UdpardRxPort* const self)
     self->sessions                 = NULL;
 }
 
-static void rxPortFree(struct UdpardRxPort* const self, const struct UdpardRxMemoryResources memory)
+static void rxPortFree(UdpardRxPort* const self, const UdpardRxMemoryResources memory)
 {
     rxSessionDestroyTree(self->sessions, memory);
     self->sessions = NULL;
@@ -1641,19 +1563,19 @@ static void rxPortFree(struct UdpardRxPort* const self, const struct UdpardRxMem
 
 // --------------------------------------------------  RX API  --------------------------------------------------
 
-void udpardRxFragmentFree(const struct UdpardFragment       head,
-                          const struct UdpardMemoryResource memory_fragment,
-                          const struct UdpardMemoryDeleter  memory_payload)
+void udpardRxFragmentFree(const UdpardFragment       head,
+                          const UdpardMemoryResource memory_fragment,
+                          const UdpardMemoryDeleter  memory_payload)
 {
     // The head is not heap-allocated so not freed.
     memFreePayload(memory_payload, head.origin);  // May be NULL, is okay.
     rxFragmentDestroyList(head.next, (RxMemory) {.fragment = memory_fragment, .payload = memory_payload});
 }
 
-int_fast8_t udpardRxSubscriptionInit(struct UdpardRxSubscription* const   self,
-                                     const UdpardPortID                   subject_id,
-                                     const size_t                         extent,
-                                     const struct UdpardRxMemoryResources memory)
+int_fast8_t udpardRxSubscriptionInit(UdpardRxSubscription* const   self,
+                                     const UdpardPortID            subject_id,
+                                     const size_t                  extent,
+                                     const UdpardRxMemoryResources memory)
 {
     int_fast8_t result = -UDPARD_ERROR_ARGUMENT;
     if ((self != NULL) && (subject_id <= UDPARD_SUBJECT_ID_MAX) && rxValidateMemoryResources(memory))
@@ -1668,7 +1590,7 @@ int_fast8_t udpardRxSubscriptionInit(struct UdpardRxSubscription* const   self,
     return result;
 }
 
-void udpardRxSubscriptionFree(struct UdpardRxSubscription* const self)
+void udpardRxSubscriptionFree(UdpardRxSubscription* const self)
 {
     if (self != NULL)
     {
@@ -1676,11 +1598,11 @@ void udpardRxSubscriptionFree(struct UdpardRxSubscription* const self)
     }
 }
 
-int_fast8_t udpardRxSubscriptionReceive(struct UdpardRxSubscription* const self,
-                                        const UdpardMicrosecond            timestamp_usec,
-                                        const struct UdpardMutablePayload  datagram_payload,
-                                        const uint_fast8_t                 redundant_iface_index,
-                                        struct UdpardRxTransfer* const     out_transfer)
+int_fast8_t udpardRxSubscriptionReceive(UdpardRxSubscription* const self,
+                                        const UdpardMicrosecond     timestamp_usec,
+                                        const UdpardMutablePayload  datagram_payload,
+                                        const uint_fast8_t          redundant_iface_index,
+                                        UdpardRxTransfer* const     out_transfer)
 {
     int_fast8_t result = -UDPARD_ERROR_ARGUMENT;
     if ((self != NULL) && (timestamp_usec != TIMESTAMP_UNSET) && (datagram_payload.data != NULL) &&
@@ -1708,12 +1630,12 @@ int_fast8_t udpardRxSubscriptionReceive(struct UdpardRxSubscription* const self,
 // ====================================================    MISC    =====================================================
 // =====================================================================================================================
 
-size_t udpardGather(const struct UdpardFragment head, const size_t destination_size_bytes, void* const destination)
+size_t udpardGather(const UdpardFragment head, const size_t destination_size_bytes, void* const destination)
 {
     size_t offset = 0;
     if (NULL != destination)
     {
-        const struct UdpardFragment* frag = &head;
+        const UdpardFragment* frag = &head;
         while ((frag != NULL) && (offset < destination_size_bytes))
         {
             UDPARD_ASSERT(frag->view.data != NULL);
