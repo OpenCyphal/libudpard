@@ -164,32 +164,6 @@ typedef struct udpard_bytes_t
     const void* data;
 } udpard_bytes_t;
 
-/// This type represents payload as an ordered sequence of its fragments to eliminate data copying.
-/// To free a fragmented payload buffer, the application needs to traverse the list and free each fragment's payload
-/// as well as the payload structure itself, assuming that it is also heap-allocated.
-/// The model is as follows:
-///
-///     (payload header) ---> udpard_fragment_t:
-///                               next   ---> udpard_fragment_t...
-///                               origin ---> (the free()able payload data buffer)
-///                               view   ---> (somewhere inside the payload data buffer)
-///
-/// Payloads of received transfers are represented using this type, where each fragment corresponds to a frame.
-/// The application can either consume them directly or to copy the data into a contiguous buffer beforehand
-/// at the expense of extra time and memory utilization.
-typedef struct udpard_fragment_t
-{
-    struct udpard_fragment_t* next; ///< Next in the fragmented payload buffer chain; NULL in the last entry.
-
-    /// Contains the actual data to be used by the application.
-    /// The memory pointed to by this fragment shall not be freed by the application.
-    udpard_bytes_t view;
-
-    /// Points to the base buffer that contains this fragment.
-    /// The application can use this pointer to free the outer buffer after the payload has been consumed.
-    udpard_bytes_mut_t origin;
-} udpard_fragment_t;
-
 /// Zeros if invalid/unset/unavailable.
 typedef struct udpard_udpip_ep_t
 {
@@ -207,10 +181,6 @@ typedef struct udpard_remote_t
     uint64_t          source_uid;
     udpard_udpip_ep_t origin[UDPARD_NETWORK_INTERFACE_COUNT_MAX]; ///< Zeros in unavailable ifaces.
 } udpard_remote_t;
-
-// =====================================================================================================================
-// =================================================  MEMORY RESOURCE  =================================================
-// =====================================================================================================================
 
 /// The semantics are similar to malloc/free.
 /// Consider using O1Heap: https://github.com/pavel-kirienko/o1heap. Alternatively, some applications may prefer to
@@ -237,6 +207,38 @@ typedef struct udpard_mem_resource_t
     udpard_mem_free_t  free;
     udpard_mem_alloc_t alloc;
 } udpard_mem_resource_t;
+
+/// This type represents payload as an ordered sequence of its fragments to eliminate data copying.
+/// To free a fragmented payload buffer, the application needs to traverse the list and free each fragment's payload
+/// as well as the payload structure itself, assuming that it is also heap-allocated.
+/// The model is as follows:
+///
+///     (payload header) ---> udpard_fragment_t:
+///                               next   ---> udpard_fragment_t...
+///                               origin ---> (the free()able payload data buffer)
+///                               view   ---> (somewhere inside the payload data buffer)
+///
+/// Payloads of received transfers are represented using this type, where each fragment corresponds to a frame.
+/// The application can either consume them directly or to copy the data into a contiguous buffer beforehand
+/// at the expense of extra time and memory utilization.
+typedef struct udpard_fragment_t
+{
+    struct udpard_fragment_t* next; ///< Next in the fragmented payload buffer chain; NULL in the last entry.
+
+    /// Contains the actual data to be used by the application.
+    /// The memory pointed to by this fragment shall not be freed by the application.
+    udpard_bytes_t view;
+
+    /// Points to the base buffer that contains this fragment.
+    /// The application can use this pointer to free the outer buffer after the payload has been consumed.
+    udpard_bytes_mut_t origin;
+
+    /// When the fragment is no longer needed, this deleter shall be used to free the origin buffer.
+    /// We provide a dedicated deleter per fragment to allow NIC drivers to manage the memory directly,
+    /// which allows DMA access to the fragment data without copying.
+    /// See https://github.com/OpenCyphal-Garage/libcyphal/issues/352#issuecomment-2163056622
+    udpard_mem_deleter_t payload_deleter;
+} udpard_fragment_t;
 
 // =====================================================================================================================
 // =================================================    TX PIPELINE    =================================================
@@ -460,12 +462,6 @@ typedef struct udpard_rx_memory_resources_t
     /// The fragment handles are allocated per payload fragment; each handle contains a pointer to its fragment.
     /// Each instance is of a very small fixed size, so a trivial zero-fragmentation block allocator is sufficient.
     udpard_mem_resource_t fragment;
-
-    /// The library never allocates payload buffers itself, as they are handed over by the application via
-    /// udpard_rx_...(). Once a buffer is handed over, the library may choose to keep it if it is deemed to be
-    /// necessary to complete a transfer reassembly, or to discard it if it is deemed to be unnecessary.
-    /// Discarded payload buffers are freed using this resource.
-    udpard_mem_deleter_t payload;
 } udpard_rx_memory_resources_t;
 
 /// This type represents an open input port, such as a subscription to a topic.
@@ -569,7 +565,7 @@ typedef struct udpard_rx_transfer_t
 /// Emitted when the stack detects the need to send a reception acknowledgment back to the remote node.
 typedef struct udpard_rx_ack_mandate_t
 {
-    udpard_remote_t origin;
+    udpard_remote_t remote;
     udpard_prio_t   priority;
     uint64_t        transfer_id;
     udpard_bytes_t  payload_head; ///< View of the first <=MTU bytes of the transfer payload that is being confirmed.
@@ -699,6 +695,7 @@ bool udpard_rx_subscription_receive(udpard_rx_t* const              rx,
                                     const udpard_microsecond_t      timestamp_usec,
                                     const udpard_udpip_ep_t         source_endpoint,
                                     const udpard_bytes_mut_t        datagram_payload,
+                                    const udpard_mem_deleter_t      payload_deleter,
                                     const uint_fast8_t              redundant_iface_index);
 
 /// Like the above but for P2P unicast transfers exchanged between specific nodes.
@@ -706,6 +703,7 @@ bool udpard_rx_p2p_receive(udpard_rx_subscription_t* const rx,
                            const udpard_microsecond_t      timestamp_usec,
                            const udpard_udpip_ep_t         source_endpoint,
                            const udpard_bytes_mut_t        datagram_payload,
+                           const udpard_mem_deleter_t      payload_deleter,
                            const uint_fast8_t              redundant_iface_index);
 
 #ifdef __cplusplus
