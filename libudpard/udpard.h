@@ -240,6 +240,14 @@ typedef struct udpard_fragment_t
     udpard_mem_deleter_t payload_deleter;
 } udpard_fragment_t;
 
+/// Frees the memory allocated for the payload and its fragment headers using the correct memory resources.
+/// The application can do the same thing manually if it has access to the required context to compute the size,
+/// or if the memory resource implementation does not require deallocation size.
+/// The head of the fragment list is passed by value so it is not freed. This is in line with the udpard_rx_transfer_t
+/// design, where the head is stored by value to reduce indirection in small transfers. We call it Scott's Head.
+/// If any of the arguments are NULL, the function has no effect.
+void udpard_fragment_free(const udpard_fragment_t head, const udpard_mem_resource_t memory_fragment);
+
 // =====================================================================================================================
 // =================================================    TX PIPELINE    =================================================
 // =====================================================================================================================
@@ -620,16 +628,6 @@ bool udpard_rx_new(udpard_rx_t* const                 self,
 /// reception, then this function should be invoked after the reception handling.
 /// The time complexity is logarithmic in the number of living sessions.
 void udpard_rx_poll(udpard_rx_t* const self, const udpard_microsecond_t now);
-
-/// Frees the memory allocated for the payload and its fragment headers using the correct memory resources.
-/// The application can do the same thing manually if it has access to the required context to compute the size,
-/// or if the memory resource implementation does not require deallocation size.
-/// The head of the fragment list is passed by value so it is not freed. This is in line with the UdpardRxTransfer
-/// design, where the head is stored by value to reduce indirection in small transfers. We call it Scott's Head.
-/// If any of the arguments are NULL, the function has no effect.
-void udpard_rx_fragment_free(const udpard_fragment_t     head,
-                             const udpard_mem_resource_t memory_fragment,
-                             const udpard_mem_deleter_t  memory_payload);
 
 /// To subscribe to a subject, the application should do this:
 ///     1. Create a new udpard_rx_subscription_t instance using udpard_rx_subscription_new().

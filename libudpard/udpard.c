@@ -129,16 +129,15 @@ static uint32_t crc_add_byte(const uint32_t crc, const byte_t byte)
 }
 
 /// Do not forget to apply the output XOR when done, or use crc_compute().
-static uint32_t crc_add(const uint32_t crc, const size_t size, const void* const data)
+static uint32_t crc_add(uint32_t crc, const size_t size, const void* const data)
 {
     UDPARD_ASSERT((data != NULL) || (size == 0U));
-    uint32_t      out = crc;
-    const byte_t* p   = (const byte_t*)data;
+    const byte_t* p = (const byte_t*)data;
     for (size_t i = 0; i < size; i++) {
-        out = crc_add_byte(out, *p);
+        crc = crc_add_byte(crc, *p);
         ++p;
     }
-    return out;
+    return crc;
 }
 
 static uint32_t crc_compute(const size_t size, const void* const data)
