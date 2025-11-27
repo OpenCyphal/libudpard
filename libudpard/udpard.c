@@ -155,17 +155,13 @@ static uint32_t crc_compute(const size_t size, const void* const data)
 
 typedef struct
 {
-    uint_fast8_t  version;
     udpard_prio_t priority;
-    bool          flag_eot;
     bool          flag_ack;
-    uint32_t      frame_index;
-    uint32_t      frame_payload_offset;
     uint32_t      transfer_payload_size;
     uint64_t      transfer_id;
     uint64_t      sender_uid;
     uint64_t      topic_hash;
-} header_t;
+} meta_t;
 
 static byte_t* serialize_u32(byte_t* ptr, const uint32_t value)
 {
@@ -205,59 +201,323 @@ static const byte_t* deserialize_u64(const byte_t* ptr, uint64_t* const out_valu
     return ptr;
 }
 
-static void header_serialize(byte_t* const buffer, const header_t hdr)
+static byte_t* header_serialize(byte_t* const  buffer,
+                                const meta_t   meta,
+                                const bool     flag_eot,
+                                const uint32_t frame_index,
+                                const uint32_t frame_payload_offset)
 {
     byte_t* ptr   = buffer;
     byte_t  flags = 0;
-    if (hdr.flag_eot) {
+    if (flag_eot) {
         flags |= HEADER_FLAG_EOT;
     }
-    if (hdr.flag_ack) {
+    if (meta.flag_ack) {
         flags |= HEADER_FLAG_ACK;
     }
-    *ptr++ = (byte_t)(HEADER_VERSION | (hdr.priority << 5U));
+    *ptr++ = (byte_t)(HEADER_VERSION | (meta.priority << 5U));
     *ptr++ = flags;
     *ptr++ = 0;
     *ptr++ = 0;
-    ptr    = serialize_u32(ptr, hdr.frame_index);
-    ptr    = serialize_u32(ptr, hdr.frame_payload_offset);
-    ptr    = serialize_u32(ptr, hdr.transfer_payload_size);
-    ptr    = serialize_u64(ptr, hdr.transfer_id);
-    ptr    = serialize_u64(ptr, hdr.sender_uid);
-    ptr    = serialize_u64(ptr, hdr.topic_hash);
+    ptr    = serialize_u32(ptr, frame_index);
+    ptr    = serialize_u32(ptr, frame_payload_offset);
+    ptr    = serialize_u32(ptr, meta.transfer_payload_size);
+    ptr    = serialize_u64(ptr, meta.transfer_id);
+    ptr    = serialize_u64(ptr, meta.sender_uid);
+    ptr    = serialize_u64(ptr, meta.topic_hash);
     ptr    = serialize_u32(ptr, 0);
     ptr    = serialize_u32(ptr, crc_compute(HEADER_SIZE_BYTES - CRC_SIZE_BYTES, buffer));
     UDPARD_ASSERT((size_t)(ptr - buffer) == HEADER_SIZE_BYTES);
+    return ptr;
 }
 
 static bool header_deserialize(const udpard_bytes_mut_t  dgram_payload,
-                               header_t* const           out_hdr,
+                               meta_t* const             out_meta,
+                               bool* const               flag_eot,
+                               uint32_t* const           frame_index,
+                               uint32_t* const           frame_payload_offset,
                                udpard_bytes_mut_t* const out_payload)
 {
     UDPARD_ASSERT(out_payload != NULL);
-    const bool ok = (dgram_payload.size >= HEADER_SIZE_BYTES) && (dgram_payload.data != NULL) && //
-                    (crc_compute(HEADER_SIZE_BYTES, dgram_payload.data) == CRC_RESIDUE_AFTER_OUTPUT_XOR);
+    bool ok = (dgram_payload.size >= HEADER_SIZE_BYTES) && (dgram_payload.data != NULL) && //
+              (crc_compute(HEADER_SIZE_BYTES, dgram_payload.data) == CRC_RESIDUE_AFTER_OUTPUT_XOR);
     if (ok) {
-        const byte_t* ptr  = dgram_payload.data;
-        const byte_t  vp   = *ptr++;
-        out_hdr->version   = vp & 0x1FU;
-        out_hdr->priority  = (udpard_prio_t)((byte_t)(vp >> 5U) & 0x07U);
-        const byte_t flags = *ptr++;
-        out_hdr->flag_eot  = (flags & HEADER_FLAG_EOT) != 0U;
-        out_hdr->flag_ack  = (flags & HEADER_FLAG_ACK) != 0U;
-        ptr += 2U;
-        ptr = deserialize_u32(ptr, &out_hdr->frame_index);
-        ptr = deserialize_u32(ptr, &out_hdr->frame_payload_offset);
-        ptr = deserialize_u32(ptr, &out_hdr->transfer_payload_size);
-        ptr = deserialize_u64(ptr, &out_hdr->transfer_id);
-        ptr = deserialize_u64(ptr, &out_hdr->sender_uid);
-        ptr = deserialize_u64(ptr, &out_hdr->topic_hash);
-        (void)ptr;
-        // Set up the output payload view.
-        out_payload->size = dgram_payload.size - HEADER_SIZE_BYTES;
-        out_payload->data = (byte_t*)dgram_payload.data + HEADER_SIZE_BYTES;
+        const byte_t* ptr     = dgram_payload.data;
+        const byte_t  head    = *ptr++;
+        const byte_t  version = head & 0x1FU;
+        if (version == HEADER_VERSION) {
+            out_meta->priority = (udpard_prio_t)((byte_t)(head >> 5U) & 0x07U);
+            const byte_t flags = *ptr++;
+            *flag_eot          = (flags & HEADER_FLAG_EOT) != 0U;
+            out_meta->flag_ack = (flags & HEADER_FLAG_ACK) != 0U;
+            ptr += 2U;
+            ptr = deserialize_u32(ptr, frame_index);
+            ptr = deserialize_u32(ptr, frame_payload_offset);
+            ptr = deserialize_u32(ptr, &out_meta->transfer_payload_size);
+            ptr = deserialize_u64(ptr, &out_meta->transfer_id);
+            ptr = deserialize_u64(ptr, &out_meta->sender_uid);
+            ptr = deserialize_u64(ptr, &out_meta->topic_hash);
+            (void)ptr;
+            // Set up the output payload view.
+            out_payload->size = dgram_payload.size - HEADER_SIZE_BYTES;
+            out_payload->data = (byte_t*)dgram_payload.data + HEADER_SIZE_BYTES;
+        } else {
+            ok = false;
+        }
     }
     return ok;
 }
 
 // ---------------------------------------------  TX PIPELINE  ---------------------------------------------
+
+typedef struct
+{
+    udpard_tx_item_t* head;
+    udpard_tx_item_t* tail;
+    size_t            count;
+} tx_chain_t;
+
+static bool tx_validate_mem_resources(const udpard_tx_mem_resources_t memory)
+{
+    return (memory.fragment.alloc != NULL) && (memory.fragment.free != NULL) && //
+           (memory.payload.alloc != NULL) && (memory.payload.free != NULL);
+}
+
+/// Frames with identical weight are processed in the FIFO order.
+/// Frames with higher weight compare smaller (i.e., put on the left side of the tree).
+static int64_t tx_cavl_compare_prio(const void* const user, const udpard_tree_t* const node)
+{
+    return ((int)*(const udpard_prio_t*)user) - (int)(CAVL2_TO_OWNER(node, udpard_tx_item_t, index_prio)->priority);
+}
+
+static int64_t tx_cavl_compare_deadline(const void* const user, const udpard_tree_t* const node)
+{
+    return (*(const udpard_microsecond_t*)user) - (CAVL2_TO_OWNER(node, udpard_tx_item_t, index_deadline)->deadline);
+}
+
+static udpard_tx_item_t* tx_item_new(const udpard_tx_mem_resources_t memory,
+                                     const udpard_microsecond_t      deadline,
+                                     const udpard_prio_t             priority,
+                                     const udpard_udpip_ep_t         endpoint,
+                                     const size_t                    datagram_payload_size,
+                                     void* const                     user_transfer_reference)
+{
+    udpard_tx_item_t* out = mem_alloc(memory.fragment, sizeof(udpard_tx_item_t));
+    if (out != NULL) {
+        out->index_prio     = (udpard_tree_t){ 0 };
+        out->index_deadline = (udpard_tree_t){ 0 };
+        UDPARD_ASSERT(priority <= UDPARD_PRIORITY_MAX);
+        out->priority                = priority;
+        out->next_in_transfer        = NULL; // Last by default.
+        out->deadline                = deadline;
+        out->destination             = endpoint;
+        out->user_transfer_reference = user_transfer_reference;
+        void* const payload_data     = mem_alloc(memory.payload, datagram_payload_size);
+        if (NULL != payload_data) {
+            out->datagram_payload.data = payload_data;
+            out->datagram_payload.size = datagram_payload_size;
+        } else {
+            mem_free(memory.fragment, sizeof(udpard_tx_item_t), out);
+            out = NULL;
+        }
+    }
+    return out;
+}
+
+/// Produces a chain of tx queue items for later insertion into the tx queue. The tail is NULL if OOM.
+/// The caller is responsible for freeing the memory allocated for the chain.
+static tx_chain_t tx_spool(const udpard_tx_mem_resources_t memory,
+                           const size_t                    mtu,
+                           const udpard_microsecond_t      deadline_usec,
+                           const meta_t                    meta,
+                           const udpard_udpip_ep_t         endpoint,
+                           const udpard_bytes_t            payload,
+                           void* const                     user_transfer_reference)
+{
+    UDPARD_ASSERT(mtu > 0);
+    UDPARD_ASSERT((payload.data != NULL) || (payload.size == 0U));
+    const size_t payload_size_with_crc = payload.size + CRC_SIZE_BYTES;
+    byte_t       crc_bytes[CRC_SIZE_BYTES];
+    serialize_u32(crc_bytes, crc_compute(payload.size, payload.data));
+    tx_chain_t out    = { NULL, NULL, 0 };
+    size_t     offset = 0U;
+    while (offset < payload_size_with_crc) {
+        udpard_tx_item_t* const item = tx_item_new(memory,
+                                                   deadline_usec,
+                                                   meta.priority,
+                                                   endpoint,
+                                                   smaller(payload_size_with_crc - offset, mtu) + HEADER_SIZE_BYTES,
+                                                   user_transfer_reference);
+        if (NULL == out.head) {
+            out.head = item;
+        } else {
+            out.tail->next_in_transfer = item;
+        }
+        out.tail = item;
+        if (NULL == out.tail) {
+            break;
+        }
+        const bool    last       = (payload_size_with_crc - offset) <= mtu;
+        byte_t* const dst_buffer = item->datagram_payload.data;
+        byte_t*       write_ptr  = header_serialize(dst_buffer, meta, last, (uint32_t)out.count, (uint32_t)offset);
+        if (offset < payload.size) {
+            const size_t progress = smaller(payload.size - offset, mtu);
+            // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
+            (void)memcpy(write_ptr, ((const byte_t*)payload.data) + offset, progress);
+            offset += progress;
+            write_ptr += progress;
+            UDPARD_ASSERT(offset <= payload.size);
+            UDPARD_ASSERT((!last) || (offset == payload.size));
+        }
+        if (offset >= payload.size) {
+            const size_t crc_offset = offset - payload.size;
+            UDPARD_ASSERT(crc_offset < CRC_SIZE_BYTES);
+            const size_t available = item->datagram_payload.size - (size_t)(write_ptr - dst_buffer);
+            UDPARD_ASSERT(available <= CRC_SIZE_BYTES);
+            const size_t write_size = smaller(CRC_SIZE_BYTES - crc_offset, available);
+            // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
+            (void)memcpy(write_ptr, &crc_bytes[crc_offset], write_size);
+            offset += write_size;
+        }
+        out.count++;
+    }
+    UDPARD_ASSERT((offset == payload_size_with_crc) || (out.tail == NULL));
+    return out;
+}
+
+static uint32_t tx_push(udpard_tx_t* const         tx,
+                        const udpard_microsecond_t deadline,
+                        const meta_t               meta,
+                        const udpard_udpip_ep_t    endpoint,
+                        const udpard_bytes_t       payload,
+                        void* const                user_transfer_reference)
+{
+    UDPARD_ASSERT(tx != NULL);
+    uint32_t     out         = 0; // The number of frames enqueued; zero on error (error counters incremented).
+    const size_t mtu         = larger(tx->mtu, UDPARD_MTU_MIN);
+    const size_t frame_count = ((payload.size + CRC_SIZE_BYTES + mtu) - 1U) / mtu;
+    if ((tx->queue_size + frame_count) > tx->queue_capacity) {
+        tx->errors_capacity++;
+    } else {
+        const tx_chain_t chain = tx_spool(tx->memory, mtu, deadline, meta, endpoint, payload, user_transfer_reference);
+        if (chain.tail != NULL) { // Insert every item into the tx indexes.
+            UDPARD_ASSERT(frame_count == chain.count);
+            udpard_tx_item_t* next = chain.head;
+            do {
+                const udpard_tree_t* res = cavl2_find_or_insert(&tx->index_prio, //
+                                                                &next->priority,
+                                                                &tx_cavl_compare_prio,
+                                                                &next->index_prio,
+                                                                &cavl2_trivial_factory);
+                UDPARD_ASSERT(res == &next->index_prio);
+                res = cavl2_find_or_insert(&tx->index_deadline, //
+                                           &next->deadline,
+                                           &tx_cavl_compare_deadline,
+                                           &next->index_deadline,
+                                           &cavl2_trivial_factory);
+                UDPARD_ASSERT(res == &next->index_deadline);
+                (void)res;
+                next = next->next_in_transfer;
+            } while (next != NULL);
+            tx->queue_size += chain.count;
+            UDPARD_ASSERT(tx->queue_size <= tx->queue_capacity);
+            UDPARD_ASSERT((chain.count + 0ULL) <= INT32_MAX); // +0 is to suppress warning.
+            out = (uint32_t)chain.count;
+        } else { // The queue is large enough but we ran out of heap memory, so we have to unwind the chain.
+            tx->errors_oom++;
+            udpard_tx_item_t* head = chain.head;
+            while (head != NULL) {
+                udpard_tx_item_t* const next = head->next_in_transfer;
+                udpard_tx_free(tx->memory, head);
+                head = next;
+            }
+        }
+    }
+    return out;
+}
+
+bool udpard_tx_new(udpard_tx_t* const              self,
+                   const uint64_t                  local_uid,
+                   const size_t                    queue_capacity,
+                   const udpard_tx_mem_resources_t memory)
+{
+    const bool ok = (NULL != self) && (local_uid != 0) && tx_validate_mem_resources(memory);
+    if (ok) {
+        mem_zero(sizeof(*self), self);
+        self->local_uid      = local_uid;
+        self->queue_capacity = queue_capacity;
+        self->mtu            = UDPARD_MTU_DEFAULT;
+        self->memory         = memory;
+        self->queue_size     = 0;
+        self->index_prio     = NULL;
+        self->index_deadline = NULL;
+    }
+    return ok;
+}
+
+uint32_t udpard_tx_publish(udpard_tx_t* const         self,
+                           const udpard_microsecond_t now,
+                           const udpard_microsecond_t deadline,
+                           const udpard_prio_t        priority,
+                           const uint64_t             topic_hash,
+                           const uint32_t             subject_id,
+                           const uint64_t             transfer_id,
+                           const udpard_bytes_t       payload,
+                           void* const                user_transfer_reference)
+{
+    (void)self;
+    (void)now;
+    (void)deadline;
+    (void)priority;
+    (void)topic_hash;
+    (void)subject_id;
+    (void)transfer_id;
+    (void)payload;
+    (void)user_transfer_reference;
+    (void)tx_push;
+    return 0;
+}
+
+uint32_t udpard_tx_p2p(udpard_tx_t* const         self,
+                       const udpard_microsecond_t now,
+                       const udpard_microsecond_t deadline,
+                       const uint64_t             remote_uid,
+                       const udpard_udpip_ep_t    remote_ep,
+                       const udpard_prio_t        priority,
+                       const uint64_t             transfer_id,
+                       const udpard_bytes_t       payload,
+                       void* const                user_transfer_reference)
+{
+    (void)self;
+    (void)now;
+    (void)deadline;
+    (void)priority;
+    (void)remote_uid;
+    (void)remote_ep;
+    (void)transfer_id;
+    (void)payload;
+    (void)user_transfer_reference;
+    (void)tx_push;
+    return 0;
+}
+
+udpard_tx_item_t* udpard_tx_peek(const udpard_tx_t* const self, const udpard_microsecond_t now)
+{
+    (void)self;
+    (void)now;
+    return NULL;
+}
+
+void udpard_tx_pop(const udpard_tx_t* const self, udpard_tx_item_t* const item)
+{
+    (void)self;
+    (void)item;
+}
+
+void udpard_tx_free(const udpard_tx_mem_resources_t memory, udpard_tx_item_t* const item)
+{
+    (void)memory;
+    (void)item;
+}
+
+// ---------------------------------------------  RX PIPELINE  ---------------------------------------------

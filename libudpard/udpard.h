@@ -126,6 +126,9 @@ extern "C"
 /// To guarantee a single frame transfer, the maximum payload size shall be 4 bytes less to accommodate the CRC.
 #define UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME (UDPARD_MTU_DEFAULT - 4U)
 
+/// MTU less than this is not supported and should not be used.
+#define UDPARD_MTU_MIN 460U
+
 #define UDPARD_PRIORITY_MAX 7U
 
 /// The library supports at most this many redundant network interfaces per Cyphal node.

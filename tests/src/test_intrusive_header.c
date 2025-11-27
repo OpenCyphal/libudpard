@@ -8,20 +8,16 @@
 
 static void test_header_v2(void)
 {
-    byte_t   buffer[64];
-    header_t hdr_in = {
+    byte_t buffer[64];
+    meta_t meta_in = {
         .priority              = udpard_prio_high,
-        .flag_eot              = true,
         .flag_ack              = false,
-        .frame_index           = 0x123456,
-        .frame_payload_offset  = 0x654321,
         .transfer_payload_size = 0xDEADBEEF,
         .transfer_id           = 0xAABBCCDDEEFF0011ULL,
         .sender_uid            = 0x1122334455667788ULL,
         .topic_hash            = 0x99AABBCCDDEEFF00ULL,
     };
-
-    header_serialize(buffer, hdr_in);
+    header_serialize(buffer, meta_in, true, 0x00123456, 0x00654321);
 
     // >>> from pycyphal.transport.commons.crc import CRC32C
     // >>> list(CRC32C.new(data).value_as_bytes)
@@ -42,30 +38,50 @@ static void test_header_v2(void)
     // clang-format on
     TEST_ASSERT_EQUAL_MEMORY(reference, buffer, HEADER_SIZE_BYTES);
 
-    header_t           hdr_out;
+    meta_t             meta_out;
     udpard_bytes_mut_t payload_out;
-    TEST_ASSERT(
-      header_deserialize((udpard_bytes_mut_t){ .size = sizeof(buffer), .data = buffer }, &hdr_out, &payload_out));
+    bool               flag_eot             = false;
+    uint32_t           frame_index          = 0;
+    uint32_t           frame_payload_offset = 0;
+    TEST_ASSERT(header_deserialize((udpard_bytes_mut_t){ .size = sizeof(buffer), .data = buffer },
+                                   &meta_out,
+                                   &flag_eot,
+                                   &frame_index,
+                                   &frame_payload_offset,
+                                   &payload_out));
     TEST_ASSERT_EQUAL(sizeof(buffer) - HEADER_SIZE_BYTES, payload_out.size);
     TEST_ASSERT_EQUAL(&buffer[HEADER_SIZE_BYTES], payload_out.data);
 
-    TEST_ASSERT_EQUAL_UINT8(hdr_in.priority, hdr_out.priority);
-    TEST_ASSERT_EQUAL_UINT8(hdr_in.flag_eot, hdr_out.flag_eot);
-    TEST_ASSERT_EQUAL_UINT8(hdr_in.flag_ack, hdr_out.flag_ack);
-    TEST_ASSERT_EQUAL_UINT32(hdr_in.frame_index, hdr_out.frame_index);
-    TEST_ASSERT_EQUAL_UINT32(hdr_in.frame_payload_offset, hdr_out.frame_payload_offset);
-    TEST_ASSERT_EQUAL_UINT32(hdr_in.transfer_payload_size, hdr_out.transfer_payload_size);
-    TEST_ASSERT_EQUAL_UINT64(hdr_in.transfer_id, hdr_out.transfer_id);
-    TEST_ASSERT_EQUAL_UINT64(hdr_in.sender_uid, hdr_out.sender_uid);
-    TEST_ASSERT_EQUAL_UINT64(hdr_in.topic_hash, hdr_out.topic_hash);
+    TEST_ASSERT_EQUAL_UINT8(meta_in.priority, meta_out.priority);
+    TEST_ASSERT_TRUE(flag_eot);
+    TEST_ASSERT_FALSE(meta_out.flag_ack);
+    TEST_ASSERT_EQUAL_UINT32(0x00123456, frame_index);
+    TEST_ASSERT_EQUAL_UINT32(0x00654321, frame_payload_offset);
+    TEST_ASSERT_EQUAL_UINT32(meta_in.transfer_payload_size, meta_out.transfer_payload_size);
+    TEST_ASSERT_EQUAL_UINT64(meta_in.transfer_id, meta_out.transfer_id);
+    TEST_ASSERT_EQUAL_UINT64(meta_in.sender_uid, meta_out.sender_uid);
+    TEST_ASSERT_EQUAL_UINT64(meta_in.topic_hash, meta_out.topic_hash);
 
-    TEST_ASSERT_FALSE(header_deserialize((udpard_bytes_mut_t){ .size = 23, .data = buffer }, &hdr_out, &payload_out));
+    TEST_ASSERT_FALSE(header_deserialize((udpard_bytes_mut_t){ .size = 23, .data = buffer },
+                                         &meta_out,
+                                         &flag_eot,
+                                         &frame_index,
+                                         &frame_payload_offset,
+                                         &payload_out));
 
-    TEST_ASSERT(
-      header_deserialize((udpard_bytes_mut_t){ .size = sizeof(buffer), .data = buffer }, &hdr_out, &payload_out));
+    TEST_ASSERT(header_deserialize((udpard_bytes_mut_t){ .size = sizeof(buffer), .data = buffer },
+                                   &meta_out,
+                                   &flag_eot,
+                                   &frame_index,
+                                   &frame_payload_offset,
+                                   &payload_out));
     buffer[HEADER_SIZE_BYTES - 1] ^= 0xFFU; // Corrupt the CRC.
-    TEST_ASSERT_FALSE(
-      header_deserialize((udpard_bytes_mut_t){ .size = sizeof(buffer), .data = buffer }, &hdr_out, &payload_out));
+    TEST_ASSERT_FALSE(header_deserialize((udpard_bytes_mut_t){ .size = sizeof(buffer), .data = buffer },
+                                         &meta_out,
+                                         &flag_eot,
+                                         &frame_index,
+                                         &frame_payload_offset,
+                                         &payload_out));
 }
 
 void setUp(void) {}
