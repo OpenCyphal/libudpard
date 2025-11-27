@@ -30,6 +30,7 @@ Checks: >-
   -bugprone-casting-through-void,
   -misc-include-cleaner,
   -cppcoreguidelines-avoid-do-while,
+  -*-magic-numbers,
 CheckOptions:
   - key:   readability-function-cognitive-complexity.Threshold
     value: '99'

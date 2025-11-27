@@ -19,6 +19,8 @@ set(NO_STATIC_ANALYSIS OFF CACHE BOOL "disable udpard static analysis")
 set(library_dir "${CMAKE_SOURCE_DIR}/libudpard")
 set(unity_root "${CMAKE_SOURCE_DIR}/submodules/unity")
 
+include_directories(${CMAKE_SOURCE_DIR}/lib/cavl)
+
 # Use -DNO_STATIC_ANALYSIS=1 to suppress static analysis.
 # If not suppressed, the tools used here shall be available, otherwise the build will fail.
 if (NOT NO_STATIC_ANALYSIS)
