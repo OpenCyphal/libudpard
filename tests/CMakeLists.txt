@@ -21,6 +21,9 @@ set(unity_root "${CMAKE_SOURCE_DIR}/submodules/unity")
 
 include_directories(${CMAKE_SOURCE_DIR}/lib/cavl)
 
+# TODO FIXME: remove this later
+add_compile_options(-Wno-unused-function)
+
 # Use -DNO_STATIC_ANALYSIS=1 to suppress static analysis.
 # If not suppressed, the tools used here shall be available, otherwise the build will fail.
 if (NOT NO_STATIC_ANALYSIS)
@@ -75,11 +78,5 @@ endfunction()
 # Those that are written in C may #include <udpard.c> to reach its internals; they are called "intrusive".
 # The public interface tests may be written in C++ for convenience.
 gen_test_matrix(test_helpers "src/test_helpers.c")
-gen_test_matrix(test_cavl "src/test_cavl.cpp")
-gen_test_matrix(test_tx "${library_dir}/udpard.c;src/test_tx.cpp")
-gen_test_matrix(test_rx "${library_dir}/udpard.c;src/test_rx.cpp")
-gen_test_matrix(test_e2e "${library_dir}/udpard.c;src/test_e2e.cpp")
-gen_test_matrix(test_misc "${library_dir}/udpard.c;src/test_misc.cpp")
+gen_test_matrix(test_intrusive_header "src/test_intrusive_header.c")
 gen_test_matrix(test_intrusive_crc "src/test_intrusive_crc.c")
-gen_test_matrix(test_intrusive_tx "src/test_intrusive_tx.c")
-gen_test_matrix(test_intrusive_rx "src/test_intrusive_rx.c")

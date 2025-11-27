@@ -103,7 +103,7 @@ jobs:
           sudo apt update -y && sudo apt upgrade -y
           sudo apt install gcc-avr avr-libc
           avr-gcc --version
-      - run: avr-gcc libudpard/*.c -c -std=${{matrix.std}} -mmcu=${{env.mcu}} ${{env.flags}}
+      - run: avr-gcc -Ilib/cavl/ libudpard/*.c -c -std=${{matrix.std}} -mmcu=${{env.mcu}} ${{env.flags}}
 
   arm:
     if: github.event_name == 'push'
@@ -119,7 +119,7 @@ jobs:
       - run: |
           sudo apt update -y && sudo apt upgrade -y
           sudo apt-get install -y gcc-arm-none-eabi
-      - run: arm-none-eabi-gcc libudpard/*.c -c -std=${{matrix.std}} ${{ env.flags }}
+      - run: arm-none-eabi-gcc -Ilib/cavl/ libudpard/*.c -c -std=${{matrix.std}} ${{ env.flags }}
 
   sonar:
     runs-on: ubuntu-latest

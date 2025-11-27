@@ -4,10 +4,9 @@
 /// Author: Pavel Kirienko <pavel@opencyphal.org>
 
 #include "udpard.h"
-#include "cavl2.h"
 #include <string.h>
 
-// --------------------------------------------- BUILD CONFIGURATION ---------------------------------------------
+// ---------------------------------------------  BUILD CONFIGURATION  ---------------------------------------------
 
 /// Define this macro to include build configuration header.
 /// Usage example with CMake: "-DUDPARD_CONFIG_HEADER=\"${CMAKE_CURRENT_SOURCE_DIR}/my_udpard_config.h\""
@@ -28,9 +27,14 @@
 #error "Unsupported language: ISO C99 or a newer version is required."
 #endif
 
-// --------------------------------------------- COMMON DEFINITIONS ---------------------------------------------
+// ---------------------------------------------  COMMONS  ---------------------------------------------
 
-typedef uint_least8_t byte_t; ///< For compatibility with platforms where byte size is not 8 bits.
+#define CAVL2_T         udpard_tree_t
+#define CAVL2_RELATION  int64_t
+#define CAVL2_ASSERT(x) UDPARD_ASSERT(x) // NOSONAR
+#include "cavl2.h"
+
+typedef unsigned char byte_t; ///< For compatibility with platforms where byte size is not 8 bits.
 
 #define RX_SLOT_COUNT (UDPARD_PRIORITY_MAX + 1U)
 #define BIG_BANG      INT64_MIN
@@ -39,19 +43,7 @@ typedef uint_least8_t byte_t; ///< For compatibility with platforms where byte s
 #define MEGA 1000000LL
 
 /// Sessions will be garbage-collected after being idle for this long, along with unfinished transfers, if any.
-#define SESSION_LIFETIME (30 * MEGA)
-
-typedef struct
-{
-    uint64_t      topic_hash;
-    uint64_t      src_uid;
-    uint64_t      transfer_id;
-    uint32_t      subject_id;
-    udpard_prio_t prio;
-} meta_t;
-
-#define HEADER_SIZE_BYTES 48U
-#define HEADER_VERSION    2U
+#define SESSION_LIFETIME (60 * MEGA)
 
 #define UDP_PORT               9382U
 #define IPv4_MCAST_PREFIX      0xEF000000UL
@@ -86,11 +78,8 @@ static void mem_free_payload(const udpard_mem_deleter_t memory, const udpard_byt
     }
 }
 
-static void mem_zero(const size_t size, void* const data)
-{
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-    (void)memset(data, 0, size);
-}
+// NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
+static void mem_zero(const size_t size, void* const data) { (void)memset(data, 0, size); }
 
 // ---------------------------------------------  CRC  ---------------------------------------------
 
@@ -156,3 +145,120 @@ static uint32_t crc_compute(const size_t size, const void* const data)
 {
     return crc_add(CRC_INITIAL, size, data) ^ CRC_OUTPUT_XOR;
 }
+
+// ---------------------------------------------  HEADER  ---------------------------------------------
+
+#define HEADER_SIZE_BYTES 48U
+#define HEADER_VERSION    2U
+
+#define HEADER_FLAG_EOT 0x01U
+#define HEADER_FLAG_ACK 0x02U
+
+typedef struct
+{
+    uint_fast8_t  version;
+    udpard_prio_t priority;
+    bool          flag_eot;
+    bool          flag_ack;
+    uint32_t      frame_index;
+    uint32_t      frame_payload_offset;
+    uint32_t      transfer_payload_size;
+    uint64_t      transfer_id;
+    uint64_t      sender_uid;
+    uint64_t      topic_hash;
+} header_t;
+
+static byte_t* serialize_u32(byte_t* ptr, const uint32_t value)
+{
+    for (size_t i = 0; i < sizeof(value); i++) {
+        *ptr++ = (byte_t)((byte_t)(value >> (i * 8U)) & 0xFFU);
+    }
+    return ptr;
+}
+
+static byte_t* serialize_u64(byte_t* ptr, const uint64_t value)
+{
+    for (size_t i = 0; i < sizeof(value); i++) {
+        *ptr++ = (byte_t)((byte_t)(value >> (i * 8U)) & 0xFFU);
+    }
+    return ptr;
+}
+
+static const byte_t* deserialize_u32(const byte_t* ptr, uint32_t* const out_value)
+{
+    UDPARD_ASSERT((ptr != NULL) && (out_value != NULL));
+    *out_value = 0;
+    for (size_t i = 0; i < sizeof(*out_value); i++) {
+        *out_value |= (uint32_t)((uint32_t)*ptr << (i * 8U)); // NOLINT(google-readability-casting) NOSONAR
+        ptr++;
+    }
+    return ptr;
+}
+
+static const byte_t* deserialize_u64(const byte_t* ptr, uint64_t* const out_value)
+{
+    UDPARD_ASSERT((ptr != NULL) && (out_value != NULL));
+    *out_value = 0;
+    for (size_t i = 0; i < sizeof(*out_value); i++) {
+        *out_value |= ((uint64_t)*ptr << (i * 8U));
+        ptr++;
+    }
+    return ptr;
+}
+
+static void header_serialize(byte_t* const buffer, const header_t hdr)
+{
+    byte_t* ptr   = buffer;
+    byte_t  flags = 0;
+    if (hdr.flag_eot) {
+        flags |= HEADER_FLAG_EOT;
+    }
+    if (hdr.flag_ack) {
+        flags |= HEADER_FLAG_ACK;
+    }
+    *ptr++ = (byte_t)(HEADER_VERSION | (hdr.priority << 5U));
+    *ptr++ = flags;
+    *ptr++ = 0;
+    *ptr++ = 0;
+    ptr    = serialize_u32(ptr, hdr.frame_index);
+    ptr    = serialize_u32(ptr, hdr.frame_payload_offset);
+    ptr    = serialize_u32(ptr, hdr.transfer_payload_size);
+    ptr    = serialize_u64(ptr, hdr.transfer_id);
+    ptr    = serialize_u64(ptr, hdr.sender_uid);
+    ptr    = serialize_u64(ptr, hdr.topic_hash);
+    ptr    = serialize_u32(ptr, 0);
+    ptr    = serialize_u32(ptr, crc_compute(HEADER_SIZE_BYTES - CRC_SIZE_BYTES, buffer));
+    UDPARD_ASSERT((size_t)(ptr - buffer) == HEADER_SIZE_BYTES);
+}
+
+static bool header_deserialize(const udpard_bytes_mut_t  dgram_payload,
+                               header_t* const           out_hdr,
+                               udpard_bytes_mut_t* const out_payload)
+{
+    UDPARD_ASSERT(out_payload != NULL);
+    const bool ok = (dgram_payload.size >= HEADER_SIZE_BYTES) && (dgram_payload.data != NULL) && //
+                    (crc_compute(HEADER_SIZE_BYTES, dgram_payload.data) == CRC_RESIDUE_AFTER_OUTPUT_XOR);
+    if (ok) {
+        const byte_t* ptr  = dgram_payload.data;
+        const byte_t  vp   = *ptr++;
+        out_hdr->version   = vp & 0x1FU;
+        out_hdr->priority  = (udpard_prio_t)((byte_t)(vp >> 5U) & 0x07U);
+        const byte_t flags = *ptr++;
+        out_hdr->flag_eot  = (flags & HEADER_FLAG_EOT) != 0U;
+        out_hdr->flag_ack  = (flags & HEADER_FLAG_ACK) != 0U;
+        ptr += 2U;
+        ptr = deserialize_u32(ptr, &out_hdr->frame_index);
+        ptr = deserialize_u32(ptr, &out_hdr->frame_payload_offset);
+        ptr = deserialize_u32(ptr, &out_hdr->transfer_payload_size);
+        ptr = deserialize_u64(ptr, &out_hdr->transfer_id);
+        ptr = deserialize_u64(ptr, &out_hdr->sender_uid);
+        ptr = deserialize_u64(ptr, &out_hdr->topic_hash);
+        (void)ptr;
+        // Set up the output payload view.
+        out_payload->size = dgram_payload.size - HEADER_SIZE_BYTES;
+        out_payload->data = (byte_t*)dgram_payload.data + HEADER_SIZE_BYTES;
+    }
+    return ok;
+}
+
+// ---------------------------------------------  TX PIPELINE  ---------------------------------------------
