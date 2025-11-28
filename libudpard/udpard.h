@@ -126,7 +126,7 @@ extern "C"
 /// To guarantee a single frame transfer, the maximum payload size shall be 4 bytes less to accommodate the CRC.
 #define UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME (UDPARD_MTU_DEFAULT - 4U)
 
-/// MTU less than this is not supported and should not be used.
+/// MTU less than this should not be used.
 #define UDPARD_MTU_MIN 460U
 
 #define UDPARD_PRIORITY_MAX 7U
@@ -317,9 +317,9 @@ typedef struct udpard_tx_t
 
     /// Error counters incremented automatically when the corresponding error condition occurs.
     /// These counters are never decremented by the library but they can be reset by the application if needed.
-    uint64_t errors_oom;      ///< A transfer could not be enqueued due to OOM.
-    uint64_t errors_capacity; ///< A transfer could not be enqueued due to queue capacity limit.
-    uint64_t errors_deadline; ///< A frame had to be dropped due to premature deadline expiration.
+    uint64_t errors_oom;        ///< A transfer could not be enqueued due to OOM.
+    uint64_t errors_capacity;   ///< A transfer could not be enqueued due to queue capacity limit.
+    uint64_t errors_expiration; ///< A frame had to be dropped due to premature deadline expiration.
 
     /// Internal use only, do not modify!
     udpard_tree_t* index_prio;     ///< Most urgent on the left, then according to the insertion order.
@@ -414,7 +414,7 @@ bool udpard_tx_new(udpard_tx_t* const              self,
 ///   the last frame of the transfer; the TX queue `memory.payload` resource is used for this allocation.
 ///
 /// The time complexity is O(p + log e), where p is the amount of payload in the transfer, and e is the number of
-/// frames already enqueued in the transmission queue.
+/// transfers (not frames) already enqueued in the transmission queue.
 uint32_t udpard_tx_publish(udpard_tx_t* const         self,
                            const udpard_microsecond_t now,
                            const udpard_microsecond_t deadline,
@@ -423,6 +423,7 @@ uint32_t udpard_tx_publish(udpard_tx_t* const         self,
                            const uint32_t             subject_id,
                            const uint64_t             transfer_id,
                            const udpard_bytes_t       payload,
+                           const bool                 ack_required,
                            void* const                user_transfer_reference);
 
 /// Similar to udpard_tx_publish, but for P2P transfers between specific nodes.
@@ -436,20 +437,21 @@ uint32_t udpard_tx_p2p(udpard_tx_t* const         self,
                        const udpard_prio_t        priority,
                        const uint64_t             transfer_id,
                        const udpard_bytes_t       payload,
+                       const bool                 ack_required,
                        void* const                user_transfer_reference);
 
 /// Purges all timed out items from the transmission queue automatically; returns the next item to be transmitted,
 /// if there is any, otherwise NULL. The returned item is not removed from the queue; use udpard_tx_pop() to do that.
 /// The returned item (if any) is guaranteed to be non-expired (deadline>=now).
-udpard_tx_item_t* udpard_tx_peek(const udpard_tx_t* const self, const udpard_microsecond_t now);
+udpard_tx_item_t* udpard_tx_peek(udpard_tx_t* const self, const udpard_microsecond_t now);
 
 /// Transfers the ownership of the specified item to the application. The item does not necessarily need to be the
 /// top one -- it is safe to dequeue any item. The item is dequeued but not invalidated; it is the responsibility of
 /// the application to deallocate its memory later.
 /// The memory SHALL NOT be deallocated UNTIL this function is invoked (use udpard_tx_free()).
 /// If any of the arguments are NULL, the function has no effect.
-/// The time complexity is logarithmic of the queue size. This function does not invoke the dynamic memory manager.
-void udpard_tx_pop(const udpard_tx_t* const self, udpard_tx_item_t* const item);
+/// This function does not invoke the dynamic memory manager.
+void udpard_tx_pop(udpard_tx_t* const self, udpard_tx_item_t* const item);
 
 /// This is a simple helper that frees the memory allocated for the item and its payload.
 /// If the item argument is NULL, the function has no effect. The time complexity is constant.
