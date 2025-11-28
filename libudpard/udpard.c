@@ -436,23 +436,25 @@ static uint32_t tx_push(udpard_tx_t* const         tx,
 static uint64_t tx_purge_expired(udpard_tx_t* const self, const udpard_microsecond_t now)
 {
     uint64_t count = 0;
-    for (udpard_tree_t* p = cavl2_min(self->index_deadline); p != NULL; p = cavl2_next_greater(p)) {
+    for (udpard_tree_t* p = cavl2_min(self->index_deadline); p != NULL;) {
         udpard_tx_item_t* const item = CAVL2_TO_OWNER(p, udpard_tx_item_t, index_deadline);
         if (item->deadline >= now) {
             break;
         }
+        udpard_tree_t* const next = cavl2_next_greater(p); // Get next before removing current node from tree.
         // Remove from both indices.
         cavl2_remove(&self->index_deadline, &item->index_deadline);
         cavl2_remove(&self->index_prio, &item->index_prio);
         // Free the entire transfer chain.
         udpard_tx_item_t* current = item;
         while (current != NULL) {
-            udpard_tx_item_t* const next = current->next_in_transfer;
+            udpard_tx_item_t* const next_in_transfer = current->next_in_transfer;
             udpard_tx_free(self->memory, current);
-            current = next;
+            current = next_in_transfer;
             count++;
             self->queue_size--;
         }
+        p = next;
     }
     return count;
 }

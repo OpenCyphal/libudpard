@@ -1,0 +1,37 @@
+[
+  {
+    "label": "Configure (CMake)",
+    "command": "cmake -B build",
+    "tags": ["build"]
+  },
+  {
+    "label": "Build",
+    "command": "cmake --build build",
+    "tags": ["build"]
+  },
+  {
+    "label": "Configure and Build",
+    "command": "cmake -B build && cmake --build build",
+    "tags": ["build"]
+  },
+  {
+    "label": "Run Tests",
+    "command": "ctest --test-dir build --output-on-failure",
+    "tags": ["test"]
+  },
+  {
+    "label": "Clean",
+    "command": "rm -rf build",
+    "tags": ["build"]
+  },
+  {
+    "label": "Format Code",
+    "command": "cmake --build build --target format",
+    "tags": ["format"]
+  },
+  {
+    "label": "Full Build and Test",
+    "command": "cmake -B build && cmake --build build && ctest --test-dir build --output-on-failure",
+    "tags": ["build", "test"]
+  }
+]

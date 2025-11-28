@@ -12,6 +12,8 @@ cmake_minimum_required(VERSION 3.20)
 project(udpard)
 enable_testing()
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 # Shared Clang-Format target for all subprojects.
 find_program(clang_format NAMES clang-format)
 if (NOT clang_format)
