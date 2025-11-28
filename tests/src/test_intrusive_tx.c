@@ -903,6 +903,71 @@ static void test_tx_deadline_expiration(void)
     free(test_payload);
 }
 
+static void test_tx_deadline_at_current_time(void)
+{
+    instrumented_allocator_t alloc;
+    instrumented_allocator_new(&alloc);
+    const udpard_tx_mem_resources_t mem = {
+        .fragment = instrumented_allocator_make_resource(&alloc),
+        .payload  = instrumented_allocator_make_resource(&alloc),
+    };
+    udpard_tx_t tx;
+    TEST_ASSERT_TRUE(udpard_tx_new(&tx, 0x0123456789ABCDEFULL, 10, mem));
+    const size_t test_payload_size = 100;
+    byte_t       test_payload[100];
+    for (size_t i = 0; i < test_payload_size; i++) {
+        test_payload[i] = (byte_t)(i & 0xFFU);
+    }
+    // Test 1: Try to publish with deadline < now (should be rejected)
+    uint32_t enqueued = udpard_tx_publish(&tx,
+                                          1000000, // now
+                                          999999,  // deadline in the past
+                                          udpard_prio_nominal,
+                                          0x1122334455667788ULL,
+                                          123,
+                                          0xBADC0FFEE0DDF00DULL,
+                                          (udpard_bytes_t){.size = test_payload_size, .data = test_payload},
+                                          false,
+                                          NULL);
+    TEST_ASSERT_EQUAL(0, enqueued);      // Should return 0 (rejected)
+    TEST_ASSERT_EQUAL(0, tx.queue_size); // Nothing enqueued
+    // Test 2: Try to publish with deadline == now (should be accepted, as deadline >= now)
+    enqueued = udpard_tx_publish(&tx,
+                                 1000000, // now
+                                 1000000, // deadline equals now
+                                 udpard_prio_nominal,
+                                 0x1122334455667788ULL,
+                                 123,
+                                 0xBADC0FFEE0DDF00DULL,
+                                 (udpard_bytes_t){.size = test_payload_size, .data = test_payload},
+                                 false,
+                                 NULL);
+    TEST_ASSERT_EQUAL(1, enqueued);      // Should succeed
+    TEST_ASSERT_EQUAL(1, tx.queue_size); // One frame enqueued
+    // Test 3: Try p2p with deadline < now (should be rejected)
+    enqueued = udpard_tx_p2p(&tx,
+                             2000000, // now
+                             1999999, // deadline in the past
+                             0xFEDCBA9876543210ULL,
+                             (udpard_udpip_ep_t){.ip = 0xC0A80101, .port = 9999},
+                             udpard_prio_high,
+                             0x0BADC0DE0BADC0DEULL,
+                             (udpard_bytes_t){.size = test_payload_size, .data = test_payload},
+                             false,
+                             NULL);
+    TEST_ASSERT_EQUAL(0, enqueued);      // Should return 0 (rejected)
+    TEST_ASSERT_EQUAL(1, tx.queue_size); // Still only 1 frame from test 2
+    // Clean up
+    udpard_tx_item_t* frame = udpard_tx_peek(&tx, 0);
+    while (frame != NULL) {
+        udpard_tx_item_t* const next = frame->next_in_transfer;
+        udpard_tx_pop(&tx, frame);
+        udpard_tx_free(tx.memory, frame);
+        frame = next;
+    }
+    TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
+}
+
 static void test_tx_invalid_params(void)
 {
     instrumented_allocator_t alloc;
@@ -998,6 +1063,7 @@ int main(void)
     RUN_TEST(test_tx_publish);
     RUN_TEST(test_tx_p2p);
     RUN_TEST(test_tx_deadline_expiration);
+    RUN_TEST(test_tx_deadline_at_current_time);
     RUN_TEST(test_tx_invalid_params);
     return UNITY_END();
 }

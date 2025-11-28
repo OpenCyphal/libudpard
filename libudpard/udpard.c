@@ -490,7 +490,7 @@ uint32_t udpard_tx_publish(udpard_tx_t* const         self,
                            void* const                user_transfer_reference)
 {
     uint32_t out = 0;
-    if ((self != NULL) && (self->local_uid != 0) && (priority <= UDPARD_PRIORITY_MAX) &&
+    if ((self != NULL) && (deadline >= now) && (self->local_uid != 0) && (priority <= UDPARD_PRIORITY_MAX) &&
         ((payload.data != NULL) || (payload.size == 0U))) {
         self->errors_expiration += tx_purge_expired(self, now);
         const meta_t meta = {
@@ -518,8 +518,9 @@ uint32_t udpard_tx_p2p(udpard_tx_t* const         self,
                        void* const                user_transfer_reference)
 {
     uint32_t out = 0;
-    if ((self != NULL) && (self->local_uid != 0) && (remote_uid != 0) && (remote_ep.ip != 0) && (remote_ep.port != 0) &&
-        (priority <= UDPARD_PRIORITY_MAX) && ((payload.data != NULL) || (payload.size == 0U))) {
+    if ((self != NULL) && (deadline >= now) && (self->local_uid != 0) && (remote_uid != 0) && (remote_ep.ip != 0) &&
+        (remote_ep.port != 0) && (priority <= UDPARD_PRIORITY_MAX) &&
+        ((payload.data != NULL) || (payload.size == 0U))) {
         self->errors_expiration += tx_purge_expired(self, now);
         const meta_t meta = {
             .priority              = priority,
