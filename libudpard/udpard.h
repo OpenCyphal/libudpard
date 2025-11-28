@@ -236,6 +236,10 @@ typedef struct udpard_fragment_t
     /// The application can use this pointer to free the outer buffer after the payload has been consumed.
     udpard_bytes_mut_t origin;
 
+    /// Zero-based index and byte offset of this fragment view from the beginning of the transfer payload.
+    size_t   offset;
+    uint32_t index;
+
     /// When the fragment is no longer needed, this deleter shall be used to free the origin buffer.
     /// We provide a dedicated deleter per fragment to allow NIC drivers to manage the memory directly,
     /// which allows DMA access to the fragment data without copying.
@@ -561,9 +565,9 @@ typedef struct udpard_rx_transfer_t
     /// The total size of the payload available to the application, in bytes, is provided for convenience;
     /// it is the sum of the sizes of all its fragments. For example, if the sender emitted a transfer of 2000
     /// bytes split into two frames, 1408 bytes in the first frame and 592 bytes in the second frame,
-    /// then the payload_size will be 2000 and the payload buffer will contain two fragments of 1408 and 592 bytes.
-    /// The transfer CRC is not included here. If the received payload exceeds the configured extent,
-    /// the excess payload will be discarded and the payload_size will be set to the extent.
+    /// then the payload_size_stored will be 2000 and the payload buffer will contain two fragments of 1408 and
+    /// 592 bytes. The transfer CRC is not included here. If the received payload exceeds the configured extent,
+    /// the excess payload will be discarded and the payload_size_stored will be set to the extent.
     ///
     /// The application is given ownership of the payload buffer, so it is required to free it after use;
     /// this requires freeing both the handles and the payload buffers they point to.
@@ -571,7 +575,13 @@ typedef struct udpard_rx_transfer_t
     /// the application is responsible for freeing them using the correct memory resource.
     ///
     /// If the payload is empty, the corresponding buffer pointers may be NULL.
-    size_t            payload_size;
+    size_t payload_size_stored;
+
+    /// The original size of the transfer payload before extent-based truncation, in bytes.
+    /// This value is provided for informational purposes only; the application should not attempt to access
+    /// the excess payload as it has already been discarded. Cannot be less than payload_size_stored.
+    size_t payload_size_wire;
+
     udpard_fragment_t payload;
 } udpard_rx_transfer_t;
 

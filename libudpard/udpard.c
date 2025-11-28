@@ -36,14 +36,16 @@
 
 typedef unsigned char byte_t; ///< For compatibility with platforms where byte size is not 8 bits.
 
-#define RX_SLOT_COUNT (UDPARD_PRIORITY_MAX + 1U)
-#define BIG_BANG      INT64_MIN
+#define BIG_BANG INT64_MIN
 
 #define KILO 1000L
 #define MEGA 1000000LL
 
 /// Sessions will be garbage-collected after being idle for this long, along with unfinished transfers, if any.
 #define SESSION_LIFETIME (60 * MEGA)
+
+/// The maximum number of incoming transfers that can be in the state of incomplete reassembly simultaneously.
+#define RX_SLOT_COUNT (UDPARD_PRIORITY_MAX + 1U)
 
 #define UDP_PORT               9382U
 #define IPv4_MCAST_PREFIX      0xEF000000UL
@@ -574,3 +576,85 @@ void udpard_tx_free(const udpard_tx_mem_resources_t memory, udpard_tx_item_t* co
 }
 
 // ---------------------------------------------  RX PIPELINE  ---------------------------------------------
+
+/// All but the transfer metadata: fields that change from frame to frame within the same transfer.
+typedef struct
+{
+    uint32_t           index;
+    uint32_t           offset; ///< Offset of this fragment's payload within the full transfer payload.
+    bool               end_of_transfer;
+    udpard_bytes_t     payload; ///< Also contains the transfer CRC (but not the header CRC).
+    udpard_bytes_mut_t origin;  ///< The entirety of the free-able buffer passed from the application.
+} rx_frame_base_t;
+
+/// Full frame state.
+typedef struct
+{
+    rx_frame_base_t base;
+    meta_t          meta;
+} rx_frame_t;
+
+static bool rx_validate_memory_resources(const udpard_rx_memory_resources_t memory)
+{
+    return (memory.session.alloc != NULL) && (memory.session.free != NULL) && //
+           (memory.fragment.alloc != NULL) && (memory.fragment.free != NULL);
+}
+
+/// This is designed to be convertible to/from UdpardFragment, so that the application could be
+/// given a linked list of these objects represented as a list of UdpardFragment.
+typedef struct rx_fragment_t
+{
+    udpard_fragment_t base;
+    udpard_tree_t     tree;
+} rx_fragment_t;
+
+/// Internally, the RX pipeline is arranged as follows:
+///
+/// - There is one port per subscription or an RPC-service listener. Within the port, there are N sessions,
+///   one session per remote node emitting transfers on this port (i.e., on this subject, or sending
+///   request/response of this service). Sessions are constructed dynamically in memory provided by
+///   UdpardMemoryResource.
+///
+/// - Per session, there are UDPARD_NETWORK_INTERFACE_COUNT_MAX interface states to support interface redundancy.
+///
+/// - Per interface, there are RX_SLOT_COUNT slots; a slot keeps the state of a transfer in the process of being
+///   reassembled which includes its payload fragments.
+///
+/// Port -> Session -> Interface -> Slot -> Fragments.
+///
+/// Consider the following examples, where A,B,C denote distinct multi-frame transfers:
+///
+///     A0 A1 A2 B0 B1 B2    -- two transfers without OOO frames; both accepted
+///     A2 A0 A1 B0 B2 B1    -- two transfers with OOO frames; both accepted
+///     A0 A1 B0 A2 B1 B2    -- two transfers with interleaved frames; both accepted (this is why we need 2 slots)
+///     B1 A2 A0 C0 B0 A1 C1 -- if we have only 2 slots: B evicted by C; A and C accepted, B dropped
+///     B0 A0 A1 C0 B1 A2 C1 -- ditto
+///     A0 A1 C0 B0 A2 C1 B1 -- if we have only 2 slots: A evicted by B; B and C accepted, A dropped
+///
+/// TODO: Early truncation is really easy to add since every frame carries the payload offset from the origin.
+typedef struct
+{
+    udpard_microsecond_t ts;          ///< Timestamp of the earliest frame; TIMESTAMP_UNSET upon restart.
+    uint64_t             transfer_id; ///< When first constructed, this shall be set to UINT64_MAX (unreachable value).
+    uint32_t             max_index;   ///< Maximum observed frame index in this transfer (so far); zero upon restart.
+    uint32_t             eot_index;   ///< Frame index where the EOT flag was observed; FRAME_INDEX_UNSET upon restart.
+    uint32_t             accepted_frames; ///< Number of frames accepted so far.
+    size_t               payload_size;
+    udpard_tree_t*       fragments;
+} rx_slot_t;
+
+typedef struct
+{
+    udpard_microsecond_t ts_usec; ///< The timestamp of the last valid transfer to arrive on this interface.
+    rx_slot_t            slots[RX_SLOT_COUNT];
+} rx_iface_t;
+
+/// Keep in mind that we have a dedicated session object per remote node per port; this means that the states
+/// kept here are specific per remote node, as it should be.
+typedef struct
+{
+    udpard_tree_t index_remote_uid;
+    uint64_t      remote_uid;
+    // TODO: a structure for transfer-ID storage and completeness marking.
+    rx_iface_t ifaces[UDPARD_NETWORK_INTERFACE_COUNT_MAX];
+} rx_session_t;
