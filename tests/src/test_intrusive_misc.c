@@ -25,14 +25,14 @@ static void test_list(void)
         udpard_list_member_t link;
     } test_node_t;
 
-    udpard_list_t list = {.head = NULL, .tail = NULL};
+    udpard_list_t list = { .head = NULL, .tail = NULL };
 
     // Test 1: Empty list state
     TEST_ASSERT_NULL(list.head);
     TEST_ASSERT_NULL(list.tail);
 
     // Test 2: Enlist single item
-    test_node_t node1 = {.value = 1, .link = {.next = NULL, .prev = NULL}};
+    test_node_t node1 = { .value = 1, .link = { .next = NULL, .prev = NULL } };
     enlist_head(&list, &node1.link);
     TEST_ASSERT_EQUAL(&node1.link, list.head);
     TEST_ASSERT_EQUAL(&node1.link, list.tail);
@@ -40,7 +40,7 @@ static void test_list(void)
     TEST_ASSERT_NULL(node1.link.prev);
 
     // Test 3: Enlist second item (should become head)
-    test_node_t node2 = {.value = 2, .link = {.next = NULL, .prev = NULL}};
+    test_node_t node2 = { .value = 2, .link = { .next = NULL, .prev = NULL } };
     enlist_head(&list, &node2.link);
     TEST_ASSERT_EQUAL(&node2.link, list.head);
     TEST_ASSERT_EQUAL(&node1.link, list.tail);
@@ -50,7 +50,7 @@ static void test_list(void)
     TEST_ASSERT_EQUAL(&node2.link, node1.link.prev);
 
     // Test 4: Enlist third item (should become new head)
-    test_node_t node3 = {.value = 3, .link = {.next = NULL, .prev = NULL}};
+    test_node_t node3 = { .value = 3, .link = { .next = NULL, .prev = NULL } };
     enlist_head(&list, &node3.link);
     TEST_ASSERT_EQUAL(&node3.link, list.head);
     TEST_ASSERT_EQUAL(&node1.link, list.tail);

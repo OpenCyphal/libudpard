@@ -5,6 +5,7 @@
 
 #include "udpard.h"
 #include <string.h>
+#include <assert.h>
 
 // ---------------------------------------------  BUILD CONFIGURATION  ---------------------------------------------
 
@@ -18,9 +19,16 @@
 /// To disable assertion checks completely, make it expand into `(void)(0)`.
 #ifndef UDPARD_ASSERT
 // Intentional violation of MISRA: inclusion not at the top of the file to eliminate unnecessary dependency on assert.h.
-#include <assert.h> // NOSONAR
 // Intentional violation of MISRA: assertion macro cannot be replaced with a function definition.
 #define UDPARD_ASSERT(x) assert(x) // NOSONAR
+#endif
+
+#if __STDC_VERSION__ < 201112L
+// Intentional violation of MISRA: static assertion macro cannot be replaced with a function definition.
+#define static_assert(x, ...)   typedef char _static_assert_gl(_static_assertion_, __LINE__)[(x) ? 1 : -1] // NOSONAR
+#define _static_assert_gl(a, b) _static_assert_gl_impl(a, b)                                               // NOSONAR
+// Intentional violation of MISRA: the paste operator ## cannot be avoided in this context.
+#define _static_assert_gl_impl(a, b) a##b // NOSONAR
 #endif
 
 #if !defined(__STDC_VERSION__) || (__STDC_VERSION__ < 199901L)
@@ -32,7 +40,7 @@
 #define CAVL2_T         udpard_tree_t
 #define CAVL2_RELATION  int32_t
 #define CAVL2_ASSERT(x) UDPARD_ASSERT(x) // NOSONAR
-#include "cavl2.h"
+#include "cavl2.h"                       // NOSONAR
 
 typedef unsigned char byte_t; ///< For compatibility with platforms where byte size is not 8 bits.
 
@@ -45,7 +53,15 @@ typedef unsigned char byte_t; ///< For compatibility with platforms where byte s
 #define SESSION_LIFETIME (60 * MEGA)
 
 /// The maximum number of incoming transfers that can be in the state of incomplete reassembly simultaneously.
+/// If more transfers than this remain in the reassembly state, the least recently used ones will be dropped.
 #define RX_SLOT_COUNT (UDPARD_PRIORITY_MAX + 1U)
+
+/// Defines the transfer-ID range from the most recently received transfer downward. Transfers whose IDs fall
+/// within that window store the information on whether they were received successfully, which is used to
+/// transmit acknowledgments and to eliminate duplicates. Duplicates outside of this window may be accepted
+/// as new transfers.
+/// Should be a multiple of 64 bits.
+#define RX_TRANSFER_ID_WINDOW_BITS 256U
 
 #define UDP_PORT               9382U
 #define IPv4_MCAST_PREFIX      0xEF000000UL
@@ -640,12 +656,6 @@ typedef struct
     meta_t          meta;
 } rx_frame_t;
 
-static bool rx_validate_memory_resources(const udpard_rx_memory_resources_t memory)
-{
-    return (memory.session.alloc != NULL) && (memory.session.free != NULL) && //
-           (memory.fragment.alloc != NULL) && (memory.fragment.free != NULL);
-}
-
 /// This is designed to be convertible to/from udpard_fragment_t, so that the application could be
 /// given a linked list of these objects represented as a list of udpard_fragment_t.
 typedef struct rx_fragment_t
@@ -681,6 +691,65 @@ typedef struct
     rx_slot_iface_t      iface[UDPARD_NETWORK_INTERFACE_COUNT_MAX];
 } rx_slot_t;
 
+/// Starts with zeros. Remembers the bit values per transfer-ID within the window.
+typedef struct
+{
+    uint64_t head;
+    uint64_t bitset[RX_TRANSFER_ID_WINDOW_BITS / 64U]; ///< The head is at index 0, bit 0.
+} rx_transfer_id_window_t;
+static_assert((RX_TRANSFER_ID_WINDOW_BITS % 64U) == 0U, "must be a multiple of 64 bits");
+
+/// The number of times `from` must be incremented (modulo 2^64) to reach `to`.
+static uint64_t rx_transfer_id_forward_distance(const uint64_t from, const uint64_t to) { return to - from; }
+
+/// Change the head of the transfer-ID window to new_head, shifting the bitset accordingly.
+/// The head is always increased, possibly with wrapping around, so going from 2^64-1 to 0 is considered an increment.
+static void rx_transfer_id_window_update_head(rx_transfer_id_window_t* const self, const uint64_t new_head)
+{
+    static const size_t num_words      = RX_TRANSFER_ID_WINDOW_BITS / 64U;
+    const uint64_t      shift_distance = rx_transfer_id_forward_distance(self->head, new_head);
+    if (shift_distance >= RX_TRANSFER_ID_WINDOW_BITS) {
+        for (size_t i = 0; i < num_words; i++) {
+            self->bitset[i] = 0;
+        }
+    } else {
+        const size_t       word_shift = (size_t)(shift_distance / 64U);
+        const uint_fast8_t bit_shift  = (uint_fast8_t)(shift_distance % 64U);
+        UDPARD_ASSERT(word_shift < num_words);
+        if (word_shift > 0) {
+            for (size_t i = num_words; i > word_shift; i--) {
+                self->bitset[i - 1] = self->bitset[i - 1 - word_shift];
+            }
+            for (size_t i = 0; i < word_shift; i++) {
+                self->bitset[i] = 0;
+            }
+        }
+        if (bit_shift > 0) {
+            for (size_t i = num_words - 1; i > 0; i--) {
+                self->bitset[i] = (self->bitset[i] << bit_shift) | (self->bitset[i - 1] >> (64U - bit_shift));
+            }
+            self->bitset[0] <<= bit_shift;
+        }
+    }
+    self->head = new_head;
+}
+
+/// Mark the specified past transfer-ID as set. No effect if this transfer-ID is outside of the window.
+static void rx_transfer_id_window_set(rx_transfer_id_window_t* const self, const uint64_t transfer_id)
+{
+    const uint64_t rev = rx_transfer_id_forward_distance(transfer_id, self->head);
+    if (rev < RX_TRANSFER_ID_WINDOW_BITS) {
+        self->bitset[rev / 64U] |= 1ULL << (rev % 64U);
+    }
+}
+
+/// True if the specified transfer-ID was set, false if not or outside of the window.
+static bool rx_transfer_id_window_test(rx_transfer_id_window_t* const self, const uint64_t transfer_id)
+{
+    const uint64_t rev = rx_transfer_id_forward_distance(transfer_id, self->head);
+    return (rev < RX_TRANSFER_ID_WINDOW_BITS) && ((self->bitset[rev / 64U] & (1ULL << (rev % 64U))) != 0U);
+}
+
 /// Keep in mind that we have a dedicated session object per remote node per port; this means that the states
 /// kept here are specific per remote node, as it should be.
 typedef struct
@@ -698,7 +767,13 @@ typedef struct
     udpard_list_member_t list_by_animation;
     udpard_microsecond_t last_animated_ts;
 
-    // TODO: a structure for transfer-ID storage and completeness marking.
+    rx_transfer_id_window_t transfer_id_received;
 
     rx_slot_t slots[RX_SLOT_COUNT];
 } rx_session_t;
+
+static bool rx_validate_memory_resources(const udpard_rx_memory_resources_t memory)
+{
+    return (memory.session.alloc != NULL) && (memory.session.free != NULL) && //
+           (memory.fragment.alloc != NULL) && (memory.fragment.free != NULL);
+}
