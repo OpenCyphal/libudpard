@@ -120,11 +120,10 @@ extern "C"
 
 /// RFC 791 states that hosts must be prepared to accept datagrams of up to 576 octets and it is expected that this
 /// library will receive non IP-fragmented datagrams thus the minimum MTU should be larger than 576.
+/// This is also the maximum size of a single-frame transfer.
 /// That being said, the MTU here is set to a larger value that is derived as:
 ///     1500B Ethernet MTU (RFC 894) - 60B IPv4 max header - 8B UDP Header - 48B Cyphal header
 #define UDPARD_MTU_DEFAULT 1384U
-/// To guarantee a single frame transfer, the maximum payload size shall be 4 bytes less to accommodate the CRC.
-#define UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME (UDPARD_MTU_DEFAULT - 4U)
 
 /// MTU less than this should not be used.
 #define UDPARD_MTU_MIN 460U
@@ -298,12 +297,12 @@ typedef struct udpard_tx_mem_resources_t
 /// FUTURE: Eventually we might consider adding another way of arranging the transmission pipeline where the UDP
 /// datagrams ready for transmission are not enqueued into the local prioritized queue but instead are sent directly
 /// to the network interface driver using a dedicated callback. The callback would accept not just a single
-/// chunk of data but a list of three chunks to avoid copying the source transfer payload: the datagram header,
-/// the payload, and (only for the last frame) the CRC. The driver would then use some form of vectorized IO or
-/// MSG_MORE/UDP_CORK to transmit the data; the advantage of this approach is that up to two data copy operations are
-/// eliminated from the stack and the memory allocator is not used at all. The disadvantage is that if the driver
-/// callback is blocking, the application thread will be blocked as well; plus the driver will be responsible
-/// for the correct prioritization of the outgoing datagrams according to the DSCP value.
+/// chunk of data but a list of chunks to avoid copying the source transfer payload: the header and the payload.
+/// The driver would then use some form of vectorized IO or MSG_MORE/UDP_CORK to transmit the data;
+/// the advantage of this approach is that up to two data copy operations are eliminated from the stack and the
+/// memory allocator is not used at all. The disadvantage is that if the driver callback is blocking,
+/// the application thread will be blocked as well; plus the driver will be responsible for the correct
+/// prioritization of the outgoing datagrams according to the DSCP value.
 typedef struct udpard_tx_t
 {
     /// A globally unique identifier of the local node, composed of (VID<<48)|(PID<<32)|INSTANCE_ID.
@@ -314,8 +313,7 @@ typedef struct udpard_tx_t
     size_t queue_capacity;
 
     /// The maximum number of Cyphal transfer payload bytes per UDP datagram.
-    /// The Cyphal/UDP header and the final CRC are added to this value to obtain the total UDP datagram payload size.
-    /// See UDPARD_MTU_*.
+    /// The Cyphal/UDP header is added to this value to obtain the total UDP datagram payload size. See UDPARD_MTU_*.
     /// The value can be changed arbitrarily at any time between enqueue operations.
     size_t mtu;
 
@@ -369,7 +367,7 @@ typedef struct udpard_tx_item_t
     /// This UDP/IP datagram compiled by libudpard should be sent to this remote endpoint (usually multicast).
     udpard_udpip_ep_t destination;
 
-    /// The completed UDP/IP datagram payload. This includes the Cyphal header as well as all required CRCs.
+    /// The completed UDP/IP datagram payload.
     udpard_bytes_mut_t datagram_payload;
 
     /// This opaque pointer is assigned the value that is passed to udpardTxPublish/Request/Respond.
@@ -577,8 +575,8 @@ typedef struct udpard_rx_transfer_t
     /// it is the sum of the sizes of all its fragments. For example, if the sender emitted a transfer of 2000
     /// bytes split into two frames, 1408 bytes in the first frame and 592 bytes in the second frame,
     /// then the payload_size_stored will be 2000 and the payload buffer will contain two fragments of 1408 and
-    /// 592 bytes. The transfer CRC is not included here. If the received payload exceeds the configured extent,
-    /// the excess payload will be discarded and the payload_size_stored will be set to the extent.
+    /// 592 bytes. If the received payload exceeds the configured extent, the excess payload will be discarded
+    /// and the payload_size_stored will be set to the extent.
     ///
     /// The application is given ownership of the payload buffer, so it is required to free it after use;
     /// this requires freeing both the handles and the payload buffers they point to.
@@ -705,7 +703,6 @@ void udpard_rx_subscription_free(udpard_rx_subscription_t* const self);
 ///
 /// The time complexity is O(log n) where n is the number of remote notes publishing on this subject (topic).
 /// No data copy takes place. Malformed frames are discarded in constant time.
-/// Linear time is spent on the CRC verification of the transfer payload when the transfer is complete.
 ///
 /// Returns true on successful processing, false if any of the arguments are invalid.
 bool udpard_rx_subscription_receive(udpard_rx_t* const              rx,

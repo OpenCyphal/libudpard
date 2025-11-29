@@ -287,7 +287,8 @@ static byte_t* header_serialize(byte_t* const  buffer,
                                 const meta_t   meta,
                                 const bool     flag_eot,
                                 const uint32_t frame_index,
-                                const uint32_t frame_payload_offset)
+                                const uint32_t frame_payload_offset,
+                                const uint32_t prefix_crc)
 {
     byte_t* ptr   = buffer;
     byte_t  flags = 0;
@@ -307,7 +308,7 @@ static byte_t* header_serialize(byte_t* const  buffer,
     ptr    = serialize_u64(ptr, meta.transfer_id);
     ptr    = serialize_u64(ptr, meta.sender_uid);
     ptr    = serialize_u64(ptr, meta.topic_hash);
-    ptr    = serialize_u32(ptr, 0);
+    ptr    = serialize_u32(ptr, prefix_crc);
     ptr    = serialize_u32(ptr, crc_full(HEADER_SIZE_BYTES - CRC_SIZE_BYTES, buffer));
     UDPARD_ASSERT((size_t)(ptr - buffer) == HEADER_SIZE_BYTES);
     return ptr;
@@ -318,6 +319,7 @@ static bool header_deserialize(const udpard_bytes_mut_t  dgram_payload,
                                bool* const               flag_eot,
                                uint32_t* const           frame_index,
                                uint32_t* const           frame_payload_offset,
+                               uint32_t* const           prefix_crc,
                                udpard_bytes_mut_t* const out_payload)
 {
     UDPARD_ASSERT(out_payload != NULL);
@@ -339,6 +341,7 @@ static bool header_deserialize(const udpard_bytes_mut_t  dgram_payload,
             ptr = deserialize_u64(ptr, &out_meta->transfer_id);
             ptr = deserialize_u64(ptr, &out_meta->sender_uid);
             ptr = deserialize_u64(ptr, &out_meta->topic_hash);
+            ptr = deserialize_u32(ptr, prefix_crc);
             (void)ptr;
             // Set up the output payload view.
             out_payload->size = dgram_payload.size - HEADER_SIZE_BYTES;
@@ -467,17 +470,16 @@ static tx_chain_t tx_spool(const udpard_tx_mem_resources_t memory,
 {
     UDPARD_ASSERT(mtu > 0);
     UDPARD_ASSERT((payload.data != NULL) || (payload.size == 0U));
-    const size_t payload_size_with_crc = payload.size + CRC_SIZE_BYTES;
-    byte_t       crc_bytes[CRC_SIZE_BYTES];
-    serialize_u32(crc_bytes, crc_full(payload.size, payload.data));
-    tx_chain_t out    = { NULL, NULL, 0 };
-    size_t     offset = 0U;
-    while (offset < payload_size_with_crc) {
-        udpard_tx_item_t* const item = tx_item_new(memory,
+    uint32_t   prefix_crc = CRC_INITIAL;
+    tx_chain_t out        = { NULL, NULL, 0 };
+    size_t     offset     = 0U;
+    while (offset < payload.size) {
+        const size_t            progress = smaller(payload.size - offset, mtu);
+        udpard_tx_item_t* const item     = tx_item_new(memory, //
                                                    deadline,
                                                    meta.priority,
                                                    endpoint,
-                                                   smaller(payload_size_with_crc - offset, mtu) + HEADER_SIZE_BYTES,
+                                                   progress + HEADER_SIZE_BYTES,
                                                    user_transfer_reference);
         if (NULL == out.head) {
             out.head = item;
@@ -488,31 +490,22 @@ static tx_chain_t tx_spool(const udpard_tx_mem_resources_t memory,
         if (NULL == out.tail) {
             break;
         }
-        const bool    last       = (payload_size_with_crc - offset) <= mtu;
-        byte_t* const dst_buffer = item->datagram_payload.data;
-        byte_t*       write_ptr  = header_serialize(dst_buffer, meta, last, (uint32_t)out.count, (uint32_t)offset);
-        if (offset < payload.size) {
-            const size_t progress = smaller(payload.size - offset, mtu);
-            // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-            (void)memcpy(write_ptr, ((const byte_t*)payload.data) + offset, progress);
-            offset += progress;
-            write_ptr += progress;
-            UDPARD_ASSERT(offset <= payload.size);
-            UDPARD_ASSERT((!last) || (offset == payload.size));
-        }
-        if (offset >= payload.size) {
-            const size_t crc_offset = offset - payload.size;
-            UDPARD_ASSERT(crc_offset < CRC_SIZE_BYTES);
-            const size_t available = item->datagram_payload.size - (size_t)(write_ptr - dst_buffer);
-            UDPARD_ASSERT(available <= CRC_SIZE_BYTES);
-            const size_t write_size = smaller(CRC_SIZE_BYTES - crc_offset, available);
-            // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-            (void)memcpy(write_ptr, &crc_bytes[crc_offset], write_size);
-            offset += write_size;
-        }
+        const bool          last     = (payload.size - offset) <= mtu;
+        const byte_t* const read_ptr = ((const byte_t*)payload.data) + offset;
+        prefix_crc                   = crc_add(prefix_crc, progress, read_ptr);
+        byte_t* const write_ptr      = header_serialize(item->datagram_payload.data, //
+                                                   meta,
+                                                   last,
+                                                   (uint32_t)out.count,
+                                                   (uint32_t)offset,
+                                                   prefix_crc ^ CRC_OUTPUT_XOR);
+        (void)memcpy(write_ptr, read_ptr, progress); // NOLINT(*DeprecatedOrUnsafeBufferHandling)
+        offset += progress;
+        UDPARD_ASSERT(offset <= payload.size);
+        UDPARD_ASSERT((!last) || (offset == payload.size));
         out.count++;
     }
-    UDPARD_ASSERT((offset == payload_size_with_crc) || (out.tail == NULL));
+    UDPARD_ASSERT((offset == payload.size) || (out.tail == NULL));
     return out;
 }
 
@@ -526,7 +519,7 @@ static uint32_t tx_push(udpard_tx_t* const         tx,
     UDPARD_ASSERT(tx != NULL);
     uint32_t     out         = 0; // The number of frames enqueued; zero on error (error counters incremented).
     const size_t mtu         = larger(tx->mtu, UDPARD_MTU_MIN);
-    const size_t frame_count = ((payload.size + CRC_SIZE_BYTES + mtu) - 1U) / mtu;
+    const size_t frame_count = (payload.size + mtu - 1U) / mtu;
     if ((tx->queue_size + frame_count) > tx->queue_capacity) {
         tx->errors_capacity++;
     } else {
@@ -724,7 +717,7 @@ typedef struct
 /// given a linked list of these objects represented as a list of udpard_fragment_t.
 typedef struct rx_fragment_t
 {
-    udpard_fragment_t base;
+    udpard_fragment_t base; ///< Must be the first member; do not move!
     udpard_tree_t     tree;
 } rx_fragment_t;
 
@@ -735,7 +728,7 @@ typedef struct
     bool           eot_discovered;
     uint32_t       accepted_frames;     ///< Number of frames accepted so far.
     size_t         payload_size_stored; ///< Grows with each accepted fragment (out of order).
-    uint32_t       crc;                 ///< Out-of-order CRC reconstruction state.
+    uint32_t       crc;                 ///< CRC reconstruction state.
     udpard_tree_t* fragments;
 } rx_slot_iface_t;
 
