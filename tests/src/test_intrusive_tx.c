@@ -218,8 +218,8 @@ static void test_tx_spool_single_frame_default_mtu(void)
                    (udpard_bytes_t){ .size = UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME + 1, .data = payload },
                    NULL);
         TEST_ASSERT_EQUAL(2 * 2ULL, alloc.allocated_fragments);
-        TEST_ASSERT_EQUAL((sizeof(udpard_tx_item_t) + HEADER_SIZE_BYTES) * 2 + UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME + 1 +
-                            CRC_SIZE_BYTES,
+        TEST_ASSERT_EQUAL(((sizeof(udpard_tx_item_t) + HEADER_SIZE_BYTES) * 2) + UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME +
+                            1 + CRC_SIZE_BYTES,
                           alloc.allocated_bytes);
         TEST_ASSERT_EQUAL(2, chain.count);
         TEST_ASSERT_NOT_EQUAL(chain.head, chain.tail);
@@ -257,7 +257,7 @@ static void test_tx_spool_three_frames(void)
                                       (udpard_bytes_t){ .size = ethereal_strength_size, .data = ethereal_strength },
                                       &user_transfer_referent);
     TEST_ASSERT_EQUAL(3 * 2ULL, alloc.allocated_fragments);
-    TEST_ASSERT_EQUAL(3 * (sizeof(udpard_tx_item_t) + HEADER_SIZE_BYTES) + ethereal_strength_size + 4U,
+    TEST_ASSERT_EQUAL((3 * (sizeof(udpard_tx_item_t) + HEADER_SIZE_BYTES)) + ethereal_strength_size + 4U,
                       alloc.allocated_bytes);
     TEST_ASSERT_EQUAL(3, chain.count);
     udpard_tx_item_t* const first = chain.head;
@@ -329,7 +329,7 @@ static void test_tx_spool_crc_spill_1_byte(void)
                                       (udpard_bytes_t){ .size = interstellar_war_size, .data = interstellar_war },
                                       NULL);
     TEST_ASSERT_EQUAL(2 * 2ULL, alloc.allocated_fragments);
-    TEST_ASSERT_EQUAL(2 * (sizeof(udpard_tx_item_t) + HEADER_SIZE_BYTES) + interstellar_war_size + 4U,
+    TEST_ASSERT_EQUAL((2 * (sizeof(udpard_tx_item_t) + HEADER_SIZE_BYTES)) + interstellar_war_size + 4U,
                       alloc.allocated_bytes);
     TEST_ASSERT_EQUAL(2, chain.count);
     // First frame contains payload + first 3 bytes of CRC
@@ -926,7 +926,7 @@ static void test_tx_deadline_at_current_time(void)
                                           0x1122334455667788ULL,
                                           123,
                                           0xBADC0FFEE0DDF00DULL,
-                                          (udpard_bytes_t){.size = test_payload_size, .data = test_payload},
+                                          (udpard_bytes_t){ .size = test_payload_size, .data = test_payload },
                                           false,
                                           NULL);
     TEST_ASSERT_EQUAL(0, enqueued);      // Should return 0 (rejected)
@@ -939,7 +939,7 @@ static void test_tx_deadline_at_current_time(void)
                                  0x1122334455667788ULL,
                                  123,
                                  0xBADC0FFEE0DDF00DULL,
-                                 (udpard_bytes_t){.size = test_payload_size, .data = test_payload},
+                                 (udpard_bytes_t){ .size = test_payload_size, .data = test_payload },
                                  false,
                                  NULL);
     TEST_ASSERT_EQUAL(1, enqueued);      // Should succeed
@@ -949,10 +949,10 @@ static void test_tx_deadline_at_current_time(void)
                              2000000, // now
                              1999999, // deadline in the past
                              0xFEDCBA9876543210ULL,
-                             (udpard_udpip_ep_t){.ip = 0xC0A80101, .port = 9999},
+                             (udpard_udpip_ep_t){ .ip = 0xC0A80101, .port = 9999 },
                              udpard_prio_high,
                              0x0BADC0DE0BADC0DEULL,
-                             (udpard_bytes_t){.size = test_payload_size, .data = test_payload},
+                             (udpard_bytes_t){ .size = test_payload_size, .data = test_payload },
                              false,
                              NULL);
     TEST_ASSERT_EQUAL(0, enqueued);      // Should return 0 (rejected)

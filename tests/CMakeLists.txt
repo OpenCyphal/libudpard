@@ -79,5 +79,5 @@ endfunction()
 # The public interface tests may be written in C++ for convenience.
 gen_test_matrix(test_helpers "src/test_helpers.c")
 gen_test_matrix(test_intrusive_header "src/test_intrusive_header.c")
-gen_test_matrix(test_intrusive_crc "src/test_intrusive_crc.c")
+gen_test_matrix(test_intrusive_misc "src/test_intrusive_misc.c")
 gen_test_matrix(test_intrusive_tx "src/test_intrusive_tx.c")
