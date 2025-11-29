@@ -231,9 +231,7 @@ static uint32_t crc_partial_finalize(const size_t n_bytes, const uint32_t crc_ac
 
 #define HEADER_SIZE_BYTES 48U
 #define HEADER_VERSION    2U
-
-#define HEADER_FLAG_EOT 0x01U
-#define HEADER_FLAG_ACK 0x02U
+#define HEADER_FLAG_ACK   0x01U
 
 typedef struct
 {
@@ -285,16 +283,12 @@ static const byte_t* deserialize_u64(const byte_t* ptr, uint64_t* const out_valu
 
 static byte_t* header_serialize(byte_t* const  buffer,
                                 const meta_t   meta,
-                                const bool     flag_eot,
                                 const uint32_t frame_index,
                                 const uint32_t frame_payload_offset,
                                 const uint32_t prefix_crc)
 {
     byte_t* ptr   = buffer;
     byte_t  flags = 0;
-    if (flag_eot) {
-        flags |= HEADER_FLAG_EOT;
-    }
     if (meta.flag_ack) {
         flags |= HEADER_FLAG_ACK;
     }
@@ -316,7 +310,6 @@ static byte_t* header_serialize(byte_t* const  buffer,
 
 static bool header_deserialize(const udpard_bytes_mut_t  dgram_payload,
                                meta_t* const             out_meta,
-                               bool* const               flag_eot,
                                uint32_t* const           frame_index,
                                uint32_t* const           frame_payload_offset,
                                uint32_t* const           prefix_crc,
@@ -332,7 +325,6 @@ static bool header_deserialize(const udpard_bytes_mut_t  dgram_payload,
         if (version == HEADER_VERSION) {
             out_meta->priority = (udpard_prio_t)((byte_t)(head >> 5U) & 0x07U);
             const byte_t flags = *ptr++;
-            *flag_eot          = (flags & HEADER_FLAG_EOT) != 0U;
             out_meta->flag_ack = (flags & HEADER_FLAG_ACK) != 0U;
             ptr += 2U;
             ptr = deserialize_u32(ptr, frame_index);
@@ -343,6 +335,7 @@ static bool header_deserialize(const udpard_bytes_mut_t  dgram_payload,
             ptr = deserialize_u64(ptr, &out_meta->topic_hash);
             ptr = deserialize_u32(ptr, prefix_crc);
             (void)ptr;
+            // TODO: validate the fields (e.g., ensure offset+size does not exceed the transfer payload size)
             // Set up the output payload view.
             out_payload->size = dgram_payload.size - HEADER_SIZE_BYTES;
             out_payload->data = (byte_t*)dgram_payload.data + HEADER_SIZE_BYTES;
@@ -490,19 +483,13 @@ static tx_chain_t tx_spool(const udpard_tx_mem_resources_t memory,
         if (NULL == out.tail) {
             break;
         }
-        const bool          last     = (payload.size - offset) <= mtu;
         const byte_t* const read_ptr = ((const byte_t*)payload.data) + offset;
         prefix_crc                   = crc_add(prefix_crc, progress, read_ptr);
-        byte_t* const write_ptr      = header_serialize(item->datagram_payload.data, //
-                                                   meta,
-                                                   last,
-                                                   (uint32_t)out.count,
-                                                   (uint32_t)offset,
-                                                   prefix_crc ^ CRC_OUTPUT_XOR);
+        byte_t* const write_ptr      = header_serialize(
+          item->datagram_payload.data, meta, (uint32_t)out.count, (uint32_t)offset, prefix_crc ^ CRC_OUTPUT_XOR);
         (void)memcpy(write_ptr, read_ptr, progress); // NOLINT(*DeprecatedOrUnsafeBufferHandling)
         offset += progress;
         UDPARD_ASSERT(offset <= payload.size);
-        UDPARD_ASSERT((!last) || (offset == payload.size));
         out.count++;
     } while (offset < payload.size);
     UDPARD_ASSERT((offset == payload.size) || (out.tail == NULL));
@@ -721,17 +708,6 @@ typedef struct rx_fragment_t
     udpard_tree_t     tree;
 } rx_fragment_t;
 
-typedef struct
-{
-    uint32_t       max_index; ///< Maximum observed frame index in this transfer (so far); zero upon restart.
-    uint32_t       eot_index; ///< Discovered EOT frame index.
-    bool           eot_discovered;
-    uint32_t       accepted_frames;     ///< Number of frames accepted so far.
-    size_t         payload_size_stored; ///< Grows with each accepted fragment (out of order).
-    uint32_t       crc;                 ///< CRC reconstruction state.
-    udpard_tree_t* fragments;
-} rx_slot_iface_t;
-
 typedef enum
 {
     rx_slot_idle = 0,
@@ -739,13 +715,16 @@ typedef enum
     rx_slot_done = 2,
 } rx_slot_state_t;
 
+/// Frames from all redundant interfaces are pooled into the same reassembly slot per transfer-ID.
+/// The redundant interfaces may use distinct MTU, which requires special handling.
 typedef struct
 {
     rx_slot_state_t      state;
-    udpard_microsecond_t ts_discovery;  ///< The timestamp of the first frame received for this transfer.
-    udpard_microsecond_t ts_completion; ///< The timestamp of the final accepted frame for this transfer.
-    uint64_t             transfer_id;
-    rx_slot_iface_t      iface[UDPARD_NETWORK_INTERFACE_COUNT_MAX];
+    uint64_t             transfer_id;    ///< Which transfer we're reassembling here.
+    udpard_microsecond_t ts_discovery;   ///< The timestamp of the first frame received for this transfer.
+    udpard_microsecond_t ts_completion;  ///< The timestamp of the final accepted frame for this transfer.
+    size_t               covered_prefix; ///< Number of bytes received contiguously from offset zero.
+    udpard_tree_t*       fragments;
 } rx_slot_t;
 
 /// Starts with zeros. Remembers the bit values per transfer-ID within the window.
@@ -824,6 +803,7 @@ typedef struct
     udpard_list_member_t list_by_animation;
     udpard_microsecond_t last_animated_ts;
 
+    /// To weed out duplicates and to retransmit lost ACKs.
     rx_transfer_id_window_t transfer_id_received;
 
     rx_slot_t slots[RX_SLOT_COUNT];
