@@ -7,23 +7,18 @@
 #include "helpers.h"
 #include <unity.h>
 
-// >>> from pycyphal.transport.commons.crc import CRC32C
-// >>> list(CRC32C.new(data).value_as_bytes)
 static const char ethereal_strength[] =
   "All was silent except for the howl of the wind against the antenna. Ye watched as the remaining birds in the "
   "flock gradually settled back into the forest. She stared at the antenna and thought it looked like an enormous "
   "hand stretched open toward the sky, possessing an ethereal strength.";
-static const size_t ethereal_strength_size   = sizeof(ethereal_strength) - 1;
-static const byte_t ethereal_strength_crc[4] = { 209, 88, 130, 43 };
+static const size_t ethereal_strength_size = sizeof(ethereal_strength) - 1;
 
 static const char detail_of_the_cosmos[] =
   "For us, the dark forest state is all-important, but it's just a detail of the cosmos.";
-static const size_t detail_of_the_cosmos_size   = sizeof(detail_of_the_cosmos) - 1;
-static const byte_t detail_of_the_cosmos_crc[4] = { 125, 113, 207, 171 };
+static const size_t detail_of_the_cosmos_size = sizeof(detail_of_the_cosmos) - 1;
 
-static const char   interstellar_war[]      = "You have not seen what a true interstellar war is like.";
-static const size_t interstellar_war_size   = sizeof(interstellar_war) - 1;
-static const byte_t interstellar_war_crc[4] = { 102, 217, 109, 188 };
+static const char   interstellar_war[]    = "You have not seen what a true interstellar war is like.";
+static const size_t interstellar_war_size = sizeof(interstellar_war) - 1;
 
 typedef struct
 {
@@ -43,7 +38,7 @@ static void test_tx_serialize_header(void)
                .sender_uid            = 0x0123456789ABCDEFULL,
                .topic_hash            = 0xFEDCBA9876543210ULL,
         };
-        (void)header_serialize(buffer.data, meta, false, 12345, 0);
+        (void)header_serialize(buffer.data, meta, false, 12345, 0, 0);
         TEST_ASSERT_EQUAL(HEADER_SIZE_BYTES, sizeof(buffer.data));
         // Verify version and priority in first byte
         TEST_ASSERT_EQUAL((HEADER_VERSION | ((unsigned)udpard_prio_fast << 5U)), buffer.data[0]);
@@ -59,7 +54,7 @@ static void test_tx_serialize_header(void)
                .sender_uid            = 0xFEDCBA9876543210ULL,
                .topic_hash            = 0x0123456789ABCDEFULL,
         };
-        (void)header_serialize(buffer.data, meta, true, 0x7FFF, 100);
+        (void)header_serialize(buffer.data, meta, true, 0x7FFF, 100, 0);
         TEST_ASSERT_EQUAL((HEADER_VERSION | ((unsigned)udpard_prio_low << 5U)), buffer.data[0]);
         TEST_ASSERT_EQUAL(HEADER_FLAG_EOT, buffer.data[1]);
     }
@@ -74,7 +69,7 @@ static void test_tx_serialize_header(void)
                .sender_uid            = 0xBBBBBBBBBBBBBBBBULL,
                .topic_hash            = 0xCCCCCCCCCCCCCCCCULL,
         };
-        (void)header_serialize(buffer.data, meta, false, 100, 200);
+        (void)header_serialize(buffer.data, meta, false, 100, 200, 0);
         TEST_ASSERT_EQUAL((HEADER_VERSION | ((unsigned)udpard_prio_nominal << 5U)), buffer.data[0]);
         TEST_ASSERT_EQUAL(HEADER_FLAG_ACK, buffer.data[1]);
     }
@@ -105,7 +100,7 @@ static void test_tx_spool_empty(void)
                                       (udpard_bytes_t){ .size = 0, .data = "" },
                                       &user_transfer_referent);
     TEST_ASSERT_EQUAL(1 * 2ULL, alloc.allocated_fragments);
-    TEST_ASSERT_EQUAL(sizeof(udpard_tx_item_t) + HEADER_SIZE_BYTES + 4, alloc.allocated_bytes);
+    TEST_ASSERT_EQUAL(sizeof(udpard_tx_item_t) + HEADER_SIZE_BYTES, alloc.allocated_bytes);
     TEST_ASSERT_EQUAL(1, chain.count);
     TEST_ASSERT_EQUAL(chain.head, chain.tail);
     TEST_ASSERT_EQUAL(NULL, chain.head->next_in_transfer);
@@ -113,11 +108,8 @@ static void test_tx_spool_empty(void)
     TEST_ASSERT_EQUAL(udpard_prio_fast, chain.head->priority);
     TEST_ASSERT_EQUAL(0x0A0B0C0D, chain.head->destination.ip);
     TEST_ASSERT_EQUAL(0x1234, chain.head->destination.port);
-    TEST_ASSERT_EQUAL(HEADER_SIZE_BYTES + 4, chain.head->datagram_payload.size);
+    TEST_ASSERT_EQUAL(HEADER_SIZE_BYTES, chain.head->datagram_payload.size);
     TEST_ASSERT_EQUAL(&user_transfer_referent, chain.head->user_transfer_reference);
-    // Verify CRC of empty transfer
-    const byte_t* payload_ptr = (const byte_t*)chain.head->datagram_payload.data + HEADER_SIZE_BYTES;
-    TEST_ASSERT_EQUAL(0, memcmp("\x00\x00\x00\x00", payload_ptr, 4));
     udpard_tx_free(mem, chain.head);
     TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
 }
@@ -141,15 +133,14 @@ static void test_tx_spool_single_max_mtu(void)
     };
     const tx_chain_t chain =
       tx_spool(mem,
-               detail_of_the_cosmos_size + CRC_SIZE_BYTES,
+               detail_of_the_cosmos_size,
                1234567890,
                meta,
                (udpard_udpip_ep_t){ .ip = 0x0A0B0C00, .port = 7474 },
                (udpard_bytes_t){ .size = detail_of_the_cosmos_size, .data = detail_of_the_cosmos },
                &user_transfer_referent);
     TEST_ASSERT_EQUAL(1 * 2ULL, alloc.allocated_fragments);
-    TEST_ASSERT_EQUAL(sizeof(udpard_tx_item_t) + HEADER_SIZE_BYTES + detail_of_the_cosmos_size + CRC_SIZE_BYTES,
-                      alloc.allocated_bytes);
+    TEST_ASSERT_EQUAL(sizeof(udpard_tx_item_t) + HEADER_SIZE_BYTES + detail_of_the_cosmos_size, alloc.allocated_bytes);
     TEST_ASSERT_EQUAL(1, chain.count);
     TEST_ASSERT_EQUAL(chain.head, chain.tail);
     TEST_ASSERT_EQUAL(NULL, chain.head->next_in_transfer);
@@ -157,13 +148,11 @@ static void test_tx_spool_single_max_mtu(void)
     TEST_ASSERT_EQUAL(udpard_prio_slow, chain.head->priority);
     TEST_ASSERT_EQUAL(0x0A0B0C00, chain.head->destination.ip);
     TEST_ASSERT_EQUAL(7474, chain.head->destination.port);
-    TEST_ASSERT_EQUAL(HEADER_SIZE_BYTES + detail_of_the_cosmos_size + CRC_SIZE_BYTES,
-                      chain.head->datagram_payload.size);
+    TEST_ASSERT_EQUAL(HEADER_SIZE_BYTES + detail_of_the_cosmos_size, chain.head->datagram_payload.size);
     TEST_ASSERT_EQUAL(&user_transfer_referent, chain.head->user_transfer_reference);
     // Verify payload
     const byte_t* payload_ptr = (const byte_t*)chain.head->datagram_payload.data + HEADER_SIZE_BYTES;
     TEST_ASSERT_EQUAL(0, memcmp(detail_of_the_cosmos, payload_ptr, detail_of_the_cosmos_size));
-    TEST_ASSERT_EQUAL(0, memcmp(detail_of_the_cosmos_crc, payload_ptr + detail_of_the_cosmos_size, CRC_SIZE_BYTES));
     udpard_tx_free(mem, chain.head);
     TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
 }
@@ -176,29 +165,27 @@ static void test_tx_spool_single_frame_default_mtu(void)
         .fragment = instrumented_allocator_make_resource(&alloc),
         .payload  = instrumented_allocator_make_resource(&alloc),
     };
-    const byte_t payload[UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME + 1] = { 0 };
-    const meta_t meta                                             = {
-                                                    .priority              = udpard_prio_slow,
-                                                    .flag_ack              = false,
-                                                    .transfer_payload_size = UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME,
-                                                    .transfer_id           = 0x0123456789ABCDEFULL,
-                                                    .sender_uid            = 0xAAAAAAAAAAAAAAAAULL,
-                                                    .topic_hash            = 0xBBBBBBBBBBBBBBBBULL,
+    const size_t max_single_frame                = UDPARD_MTU_DEFAULT;
+    const byte_t payload[UDPARD_MTU_DEFAULT + 1] = { 0 };
+    const meta_t meta                            = {
+                                   .priority              = udpard_prio_slow,
+                                   .flag_ack              = false,
+                                   .transfer_payload_size = (uint32_t)max_single_frame,
+                                   .transfer_id           = 0x0123456789ABCDEFULL,
+                                   .sender_uid            = 0xAAAAAAAAAAAAAAAAULL,
+                                   .topic_hash            = 0xBBBBBBBBBBBBBBBBULL,
     };
-    // Test: UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME bytes fit in a single frame with the default MTU
+    // Test: max_single_frame bytes fit in a single frame with the default MTU
     {
-        const tx_chain_t chain =
-          tx_spool(mem,
-                   UDPARD_MTU_DEFAULT,
-                   1234567890,
-                   meta,
-                   (udpard_udpip_ep_t){ .ip = 0x0A0B0C00, .port = 7474 },
-                   (udpard_bytes_t){ .size = UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME, .data = payload },
-                   NULL);
+        const tx_chain_t chain = tx_spool(mem,
+                                          UDPARD_MTU_DEFAULT,
+                                          1234567890,
+                                          meta,
+                                          (udpard_udpip_ep_t){ .ip = 0x0A0B0C00, .port = 7474 },
+                                          (udpard_bytes_t){ .size = max_single_frame, .data = payload },
+                                          NULL);
         TEST_ASSERT_EQUAL(1 * 2ULL, alloc.allocated_fragments);
-        TEST_ASSERT_EQUAL(sizeof(udpard_tx_item_t) + HEADER_SIZE_BYTES + UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME +
-                            CRC_SIZE_BYTES,
-                          alloc.allocated_bytes);
+        TEST_ASSERT_EQUAL(sizeof(udpard_tx_item_t) + HEADER_SIZE_BYTES + max_single_frame, alloc.allocated_bytes);
         TEST_ASSERT_EQUAL(1, chain.count);
         TEST_ASSERT_EQUAL(chain.head, chain.tail);
         TEST_ASSERT_EQUAL(NULL, chain.head->next_in_transfer);
@@ -208,18 +195,16 @@ static void test_tx_spool_single_frame_default_mtu(void)
     // Test: Increase the payload by 1 byte and ensure it spills over
     {
         meta_t meta2                = meta;
-        meta2.transfer_payload_size = UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME + 1;
-        const tx_chain_t chain =
-          tx_spool(mem,
-                   UDPARD_MTU_DEFAULT,
-                   1234567890,
-                   meta2,
-                   (udpard_udpip_ep_t){ .ip = 0x0A0B0C00, .port = 7474 },
-                   (udpard_bytes_t){ .size = UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME + 1, .data = payload },
-                   NULL);
+        meta2.transfer_payload_size = (uint32_t)(max_single_frame + 1);
+        const tx_chain_t chain      = tx_spool(mem,
+                                          UDPARD_MTU_DEFAULT,
+                                          1234567890,
+                                          meta2,
+                                          (udpard_udpip_ep_t){ .ip = 0x0A0B0C00, .port = 7474 },
+                                          (udpard_bytes_t){ .size = max_single_frame + 1, .data = payload },
+                                          NULL);
         TEST_ASSERT_EQUAL(2 * 2ULL, alloc.allocated_fragments);
-        TEST_ASSERT_EQUAL(((sizeof(udpard_tx_item_t) + HEADER_SIZE_BYTES) * 2) + UDPARD_MTU_DEFAULT_MAX_SINGLE_FRAME +
-                            1 + CRC_SIZE_BYTES,
+        TEST_ASSERT_EQUAL(((sizeof(udpard_tx_item_t) + HEADER_SIZE_BYTES) * 2) + max_single_frame + 1,
                           alloc.allocated_bytes);
         TEST_ASSERT_EQUAL(2, chain.count);
         TEST_ASSERT_NOT_EQUAL(chain.head, chain.tail);
@@ -248,7 +233,7 @@ static void test_tx_spool_three_frames(void)
                           .sender_uid            = 0x1111111111111111ULL,
                           .topic_hash            = 0x2222222222222222ULL,
     };
-    const size_t     mtu   = (ethereal_strength_size + 4U + 3U) / 3U; // Force payload split into three frames
+    const size_t     mtu   = (ethereal_strength_size + 2U) / 3U; // Force payload split into three frames
     const tx_chain_t chain = tx_spool(mem,
                                       mtu,
                                       223574680,
@@ -257,7 +242,7 @@ static void test_tx_spool_three_frames(void)
                                       (udpard_bytes_t){ .size = ethereal_strength_size, .data = ethereal_strength },
                                       &user_transfer_referent);
     TEST_ASSERT_EQUAL(3 * 2ULL, alloc.allocated_fragments);
-    TEST_ASSERT_EQUAL((3 * (sizeof(udpard_tx_item_t) + HEADER_SIZE_BYTES)) + ethereal_strength_size + 4U,
+    TEST_ASSERT_EQUAL((3 * (sizeof(udpard_tx_item_t) + HEADER_SIZE_BYTES)) + ethereal_strength_size,
                       alloc.allocated_bytes);
     TEST_ASSERT_EQUAL(3, chain.count);
     udpard_tx_item_t* const first = chain.head;
@@ -284,179 +269,19 @@ static void test_tx_spool_three_frames(void)
     TEST_ASSERT_EQUAL(
       0, memcmp(ethereal_strength + mtu, (const byte_t*)second->datagram_payload.data + HEADER_SIZE_BYTES, mtu));
     TEST_ASSERT_EQUAL(&user_transfer_referent, second->user_transfer_reference);
-    // Verify third frame (contains remainder + CRC)
+    // Verify third frame (contains remainder)
     TEST_ASSERT_EQUAL(223574680, third->deadline);
     TEST_ASSERT_EQUAL(udpard_prio_nominal, third->priority);
     const size_t third_payload_size = ethereal_strength_size - (2 * mtu);
-    TEST_ASSERT_EQUAL(HEADER_SIZE_BYTES + third_payload_size + 4U, third->datagram_payload.size);
+    TEST_ASSERT_EQUAL(HEADER_SIZE_BYTES + third_payload_size, third->datagram_payload.size);
     TEST_ASSERT_EQUAL(0,
                       memcmp(ethereal_strength + (2 * mtu),
                              (const byte_t*)third->datagram_payload.data + HEADER_SIZE_BYTES,
                              third_payload_size));
-    TEST_ASSERT_EQUAL(0,
-                      memcmp(ethereal_strength_crc,
-                             (const byte_t*)third->datagram_payload.data + HEADER_SIZE_BYTES + third_payload_size,
-                             CRC_SIZE_BYTES));
     TEST_ASSERT_EQUAL(&user_transfer_referent, third->user_transfer_reference);
     udpard_tx_free(mem, first);
     udpard_tx_free(mem, second);
     udpard_tx_free(mem, third);
-    TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
-}
-
-static void test_tx_spool_crc_spill_1_byte(void)
-{
-    instrumented_allocator_t alloc;
-    instrumented_allocator_new(&alloc);
-    const udpard_tx_mem_resources_t mem = {
-        .fragment = instrumented_allocator_make_resource(&alloc),
-        .payload  = instrumented_allocator_make_resource(&alloc),
-    };
-    const meta_t meta = {
-        .priority              = udpard_prio_nominal,
-        .flag_ack              = false,
-        .transfer_payload_size = (uint32_t)interstellar_war_size,
-        .transfer_id           = 0x0123456789ABCDEFULL,
-        .sender_uid            = 0x3333333333333333ULL,
-        .topic_hash            = 0x4444444444444444ULL,
-    };
-    const size_t     mtu   = interstellar_war_size + 3U; // Leave 1 byte of CRC to spill
-    const tx_chain_t chain = tx_spool(mem,
-                                      mtu,
-                                      223574680,
-                                      meta,
-                                      (udpard_udpip_ep_t){ .ip = 0xBABADEDA, .port = 0xD0ED },
-                                      (udpard_bytes_t){ .size = interstellar_war_size, .data = interstellar_war },
-                                      NULL);
-    TEST_ASSERT_EQUAL(2 * 2ULL, alloc.allocated_fragments);
-    TEST_ASSERT_EQUAL((2 * (sizeof(udpard_tx_item_t) + HEADER_SIZE_BYTES)) + interstellar_war_size + 4U,
-                      alloc.allocated_bytes);
-    TEST_ASSERT_EQUAL(2, chain.count);
-    // First frame contains payload + first 3 bytes of CRC
-    TEST_ASSERT_EQUAL(HEADER_SIZE_BYTES + mtu, chain.head->datagram_payload.size);
-    const byte_t* payload_ptr = (const byte_t*)chain.head->datagram_payload.data + HEADER_SIZE_BYTES;
-    TEST_ASSERT_EQUAL(0, memcmp(interstellar_war, payload_ptr, interstellar_war_size));
-    TEST_ASSERT_EQUAL(0, memcmp(interstellar_war_crc, payload_ptr + interstellar_war_size, 3));
-    // Second frame contains last byte of CRC
-    TEST_ASSERT_EQUAL(HEADER_SIZE_BYTES + 1U, chain.tail->datagram_payload.size);
-    payload_ptr = (const byte_t*)chain.tail->datagram_payload.data + HEADER_SIZE_BYTES;
-    TEST_ASSERT_EQUAL(0, memcmp(interstellar_war_crc + 3, payload_ptr, 1));
-    udpard_tx_free(mem, chain.head);
-    udpard_tx_free(mem, chain.tail);
-    TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
-}
-
-static void test_tx_spool_crc_spill_2_bytes(void)
-{
-    instrumented_allocator_t alloc;
-    instrumented_allocator_new(&alloc);
-    const udpard_tx_mem_resources_t mem = {
-        .fragment = instrumented_allocator_make_resource(&alloc),
-        .payload  = instrumented_allocator_make_resource(&alloc),
-    };
-    const meta_t meta = {
-        .priority              = udpard_prio_nominal,
-        .flag_ack              = false,
-        .transfer_payload_size = (uint32_t)interstellar_war_size,
-        .transfer_id           = 0x0123456789ABCDEFULL,
-        .sender_uid            = 0x5555555555555555ULL,
-        .topic_hash            = 0x6666666666666666ULL,
-    };
-    const size_t     mtu   = interstellar_war_size + 2U; // Leave 2 bytes of CRC to spill
-    const tx_chain_t chain = tx_spool(mem,
-                                      mtu,
-                                      223574680,
-                                      meta,
-                                      (udpard_udpip_ep_t){ .ip = 0xBABADEDA, .port = 0xD0ED },
-                                      (udpard_bytes_t){ .size = interstellar_war_size, .data = interstellar_war },
-                                      NULL);
-    TEST_ASSERT_EQUAL(2, chain.count);
-    // First frame contains payload + first 2 bytes of CRC
-    const byte_t* payload_ptr = (const byte_t*)chain.head->datagram_payload.data + HEADER_SIZE_BYTES;
-    TEST_ASSERT_EQUAL(0, memcmp(interstellar_war, payload_ptr, interstellar_war_size));
-    TEST_ASSERT_EQUAL(0, memcmp(interstellar_war_crc, payload_ptr + interstellar_war_size, 2));
-    // Second frame contains last 2 bytes of CRC
-    TEST_ASSERT_EQUAL(HEADER_SIZE_BYTES + 2U, chain.tail->datagram_payload.size);
-    payload_ptr = (const byte_t*)chain.tail->datagram_payload.data + HEADER_SIZE_BYTES;
-    TEST_ASSERT_EQUAL(0, memcmp(interstellar_war_crc + 2, payload_ptr, 2));
-    udpard_tx_free(mem, chain.head);
-    udpard_tx_free(mem, chain.tail);
-    TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
-}
-
-static void test_tx_spool_crc_spill_3_bytes(void)
-{
-    instrumented_allocator_t alloc;
-    instrumented_allocator_new(&alloc);
-    const udpard_tx_mem_resources_t mem = {
-        .fragment = instrumented_allocator_make_resource(&alloc),
-        .payload  = instrumented_allocator_make_resource(&alloc),
-    };
-    const meta_t meta = {
-        .priority              = udpard_prio_nominal,
-        .flag_ack              = false,
-        .transfer_payload_size = (uint32_t)interstellar_war_size,
-        .transfer_id           = 0x0123456789ABCDEFULL,
-        .sender_uid            = 0x7777777777777777ULL,
-        .topic_hash            = 0x8888888888888888ULL,
-    };
-    const size_t     mtu   = interstellar_war_size + 1U; // Leave 3 bytes of CRC to spill
-    const tx_chain_t chain = tx_spool(mem,
-                                      mtu,
-                                      223574680,
-                                      meta,
-                                      (udpard_udpip_ep_t){ .ip = 0xBABADEDA, .port = 0xD0ED },
-                                      (udpard_bytes_t){ .size = interstellar_war_size, .data = interstellar_war },
-                                      NULL);
-    TEST_ASSERT_EQUAL(2, chain.count);
-    // First frame contains payload + first byte of CRC
-    const byte_t* payload_ptr = (const byte_t*)chain.head->datagram_payload.data + HEADER_SIZE_BYTES;
-    TEST_ASSERT_EQUAL(0, memcmp(interstellar_war, payload_ptr, interstellar_war_size));
-    TEST_ASSERT_EQUAL(0, memcmp(interstellar_war_crc, payload_ptr + interstellar_war_size, 1));
-    // Second frame contains last 3 bytes of CRC
-    TEST_ASSERT_EQUAL(HEADER_SIZE_BYTES + 3U, chain.tail->datagram_payload.size);
-    payload_ptr = (const byte_t*)chain.tail->datagram_payload.data + HEADER_SIZE_BYTES;
-    TEST_ASSERT_EQUAL(0, memcmp(interstellar_war_crc + 1, payload_ptr, 3));
-    udpard_tx_free(mem, chain.head);
-    udpard_tx_free(mem, chain.tail);
-    TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
-}
-
-static void test_tx_spool_crc_spill_full(void)
-{
-    instrumented_allocator_t alloc;
-    instrumented_allocator_new(&alloc);
-    const udpard_tx_mem_resources_t mem = {
-        .fragment = instrumented_allocator_make_resource(&alloc),
-        .payload  = instrumented_allocator_make_resource(&alloc),
-    };
-    const meta_t meta = {
-        .priority              = udpard_prio_nominal,
-        .flag_ack              = false,
-        .transfer_payload_size = (uint32_t)interstellar_war_size,
-        .transfer_id           = 0x0123456789ABCDEFULL,
-        .sender_uid            = 0x9999999999999999ULL,
-        .topic_hash            = 0xAAAAAAAAAAAAAAAAULL,
-    };
-    const size_t     mtu   = interstellar_war_size; // No room for CRC, all 4 bytes spill
-    const tx_chain_t chain = tx_spool(mem,
-                                      mtu,
-                                      223574680,
-                                      meta,
-                                      (udpard_udpip_ep_t){ .ip = 0xBABADEDA, .port = 0xD0ED },
-                                      (udpard_bytes_t){ .size = interstellar_war_size, .data = interstellar_war },
-                                      NULL);
-    TEST_ASSERT_EQUAL(2, chain.count);
-    // First frame contains only payload
-    TEST_ASSERT_EQUAL(HEADER_SIZE_BYTES + interstellar_war_size, chain.head->datagram_payload.size);
-    const byte_t* payload_ptr = (const byte_t*)chain.head->datagram_payload.data + HEADER_SIZE_BYTES;
-    TEST_ASSERT_EQUAL(0, memcmp(interstellar_war, payload_ptr, interstellar_war_size));
-    // Second frame contains all 4 bytes of CRC
-    TEST_ASSERT_EQUAL(HEADER_SIZE_BYTES + 4U, chain.tail->datagram_payload.size);
-    payload_ptr = (const byte_t*)chain.tail->datagram_payload.data + HEADER_SIZE_BYTES;
-    TEST_ASSERT_EQUAL(0, memcmp(interstellar_war_crc, payload_ptr, 4));
-    udpard_tx_free(mem, chain.head);
-    udpard_tx_free(mem, chain.tail);
     TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
 }
 
@@ -734,7 +559,7 @@ static void test_tx_push_oom(void)
     };
     udpard_tx_t tx;
     TEST_ASSERT_TRUE(udpard_tx_new(&tx, 0x0123456789ABCDEFULL, 10000, mem));
-    tx.mtu            = (ethereal_strength_size + 4U + 3U) / 3U;
+    tx.mtu            = (ethereal_strength_size + 2U) / 3U;
     const meta_t meta = {
         .priority              = udpard_prio_nominal,
         .flag_ack              = false,
@@ -767,7 +592,7 @@ static void test_tx_push_payload_oom(void)
     };
     udpard_tx_t tx;
     TEST_ASSERT_TRUE(udpard_tx_new(&tx, 0x0123456789ABCDEFULL, 10000, mem));
-    tx.mtu            = ethereal_strength_size + CRC_SIZE_BYTES;
+    tx.mtu            = ethereal_strength_size;
     const meta_t meta = {
         .priority              = udpard_prio_nominal,
         .flag_ack              = false,
@@ -777,7 +602,7 @@ static void test_tx_push_payload_oom(void)
         .topic_hash            = 0xBBBBBBBBBBBBBBBBULL,
     };
     // There is memory for the item, but 1 byte short for payload
-    alloc.limit_bytes = sizeof(udpard_tx_item_t) + (HEADER_SIZE_BYTES + ethereal_strength_size + CRC_SIZE_BYTES - 1);
+    alloc.limit_bytes       = sizeof(udpard_tx_item_t) + (HEADER_SIZE_BYTES + ethereal_strength_size - 1);
     const uint32_t enqueued = tx_push(&tx,
                                       1234567890U,
                                       meta,
@@ -1051,10 +876,6 @@ int main(void)
     RUN_TEST(test_tx_spool_single_max_mtu);
     RUN_TEST(test_tx_spool_single_frame_default_mtu);
     RUN_TEST(test_tx_spool_three_frames);
-    RUN_TEST(test_tx_spool_crc_spill_1_byte);
-    RUN_TEST(test_tx_spool_crc_spill_2_bytes);
-    RUN_TEST(test_tx_spool_crc_spill_3_bytes);
-    RUN_TEST(test_tx_spool_crc_spill_full);
     RUN_TEST(test_tx_push_peek_pop_free);
     RUN_TEST(test_tx_push_prioritization);
     RUN_TEST(test_tx_push_capacity_limit);

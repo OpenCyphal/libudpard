@@ -473,7 +473,7 @@ static tx_chain_t tx_spool(const udpard_tx_mem_resources_t memory,
     uint32_t   prefix_crc = CRC_INITIAL;
     tx_chain_t out        = { NULL, NULL, 0 };
     size_t     offset     = 0U;
-    while (offset < payload.size) {
+    do {
         const size_t            progress = smaller(payload.size - offset, mtu);
         udpard_tx_item_t* const item     = tx_item_new(memory, //
                                                    deadline,
@@ -504,7 +504,7 @@ static tx_chain_t tx_spool(const udpard_tx_mem_resources_t memory,
         UDPARD_ASSERT(offset <= payload.size);
         UDPARD_ASSERT((!last) || (offset == payload.size));
         out.count++;
-    }
+    } while (offset < payload.size);
     UDPARD_ASSERT((offset == payload.size) || (out.tail == NULL));
     return out;
 }
@@ -519,7 +519,7 @@ static uint32_t tx_push(udpard_tx_t* const         tx,
     UDPARD_ASSERT(tx != NULL);
     uint32_t     out         = 0; // The number of frames enqueued; zero on error (error counters incremented).
     const size_t mtu         = larger(tx->mtu, UDPARD_MTU_MIN);
-    const size_t frame_count = (payload.size + mtu - 1U) / mtu;
+    const size_t frame_count = larger(1, (payload.size + mtu - 1U) / mtu);
     if ((tx->queue_size + frame_count) > tx->queue_capacity) {
         tx->errors_capacity++;
     } else {
