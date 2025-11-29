@@ -38,27 +38,12 @@ static void test_tx_serialize_header(void)
                .sender_uid            = 0x0123456789ABCDEFULL,
                .topic_hash            = 0xFEDCBA9876543210ULL,
         };
-        (void)header_serialize(buffer.data, meta, false, 12345, 0, 0);
+        (void)header_serialize(buffer.data, meta, 12345, 0, 0);
         TEST_ASSERT_EQUAL(HEADER_SIZE_BYTES, sizeof(buffer.data));
         // Verify version and priority in first byte
         TEST_ASSERT_EQUAL((HEADER_VERSION | ((unsigned)udpard_prio_fast << 5U)), buffer.data[0]);
     }
-    // Test case 2: End of transfer flag
-    {
-        header_buffer_t buffer;
-        const meta_t    meta = {
-               .priority              = udpard_prio_low,
-               .flag_ack              = false,
-               .transfer_payload_size = 1234,
-               .transfer_id           = 0x0BADC0DE0BADC0DEULL,
-               .sender_uid            = 0xFEDCBA9876543210ULL,
-               .topic_hash            = 0x0123456789ABCDEFULL,
-        };
-        (void)header_serialize(buffer.data, meta, true, 0x7FFF, 100, 0);
-        TEST_ASSERT_EQUAL((HEADER_VERSION | ((unsigned)udpard_prio_low << 5U)), buffer.data[0]);
-        TEST_ASSERT_EQUAL(HEADER_FLAG_EOT, buffer.data[1]);
-    }
-    // Test case 3: Ack flag
+    // Test case 2: Ack flag
     {
         header_buffer_t buffer;
         const meta_t    meta = {
@@ -69,7 +54,7 @@ static void test_tx_serialize_header(void)
                .sender_uid            = 0xBBBBBBBBBBBBBBBBULL,
                .topic_hash            = 0xCCCCCCCCCCCCCCCCULL,
         };
-        (void)header_serialize(buffer.data, meta, false, 100, 200, 0);
+        (void)header_serialize(buffer.data, meta, 100, 200, 0);
         TEST_ASSERT_EQUAL((HEADER_VERSION | ((unsigned)udpard_prio_nominal << 5U)), buffer.data[0]);
         TEST_ASSERT_EQUAL(HEADER_FLAG_ACK, buffer.data[1]);
     }
