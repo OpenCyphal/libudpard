@@ -131,7 +131,7 @@ extern "C"
 
 #define UDPARD_PRIORITY_MAX 7U
 
-/// The library supports at most this many redundant network interfaces per Cyphal node.
+/// The library supports at most this many local redundant network interfaces.
 #define UDPARD_NETWORK_INTERFACE_COUNT_MAX 3U
 
 typedef int64_t udpard_microsecond_t;
@@ -154,6 +154,17 @@ typedef struct udpard_tree_t
     struct udpard_tree_t* lr[2];
     int_fast8_t           bf;
 } udpard_tree_t;
+
+typedef struct udpard_list_member_t
+{
+    struct udpard_list_member_t* next;
+    struct udpard_list_member_t* prev;
+} udpard_list_member_t;
+typedef struct udpard_list_t
+{
+    udpard_list_member_t* head; ///< NULL if list empty
+    udpard_list_member_t* tail; ///< NULL if list empty
+} udpard_list_t;
 
 typedef struct udpard_bytes_mut_t
 {
@@ -596,13 +607,10 @@ typedef struct udpard_rx_ack_mandate_t
 
 struct udpard_rx_t;
 
-/// A new message is received on a topic.
+/// A new message is received from a topic, or a P2P message is received.
+/// The subscription is NULL for P2P transfers.
 /// The handler takes ownership of the payload; it must free it after use.
 typedef void* (*udpard_rx_on_message_t)(struct udpard_rx_t*, udpard_rx_subscription_t*, udpard_rx_transfer_t);
-
-/// A new peer-to-peer transfer is received.
-/// The handler takes ownership of the payload; it must free it after use.
-typedef void* (*udpard_rx_on_p2p_t)(struct udpard_rx_t*, udpard_rx_transfer_t*);
 
 /// A topic hash collision is detected on a topic.
 typedef void* (*udpard_rx_on_collision_t)(struct udpard_rx_t*, udpard_rx_subscription_t*);
@@ -615,12 +623,10 @@ typedef struct udpard_rx_t
 {
     udpard_rx_port_t p2p_port; ///< A single port used for accepting all P2P transfers.
 
-    udpard_tree_t* index_session_by_expiration; ///< Soonest on the left.
+    udpard_list_t  list_session_by_animation;   ///< Oldest at the tail.
     udpard_tree_t* index_session_by_reordering; ///< Earliest reordering window closure on the left.
-    udpard_tree_t* index_remote_by_uid;         ///< For P2P remote node return path endpoint discovery.
 
     udpard_rx_on_message_t     on_message;
-    udpard_rx_on_p2p_t         on_p2p;
     udpard_rx_on_collision_t   on_collision;
     udpard_rx_on_ack_mandate_t on_ack_mandate;
 
@@ -634,7 +640,6 @@ bool udpard_rx_new(udpard_rx_t* const                 self,
                    const uint64_t                     local_uid,
                    const udpard_rx_memory_resources_t memory,
                    const udpard_rx_on_message_t       on_message,
-                   const udpard_rx_on_p2p_t           on_p2p,
                    const udpard_rx_on_collision_t     on_collision,
                    const udpard_rx_on_ack_mandate_t   on_ack_mandate);
 

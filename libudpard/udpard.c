@@ -270,6 +270,52 @@ static bool header_deserialize(const udpard_bytes_mut_t  dgram_payload,
     return ok;
 }
 
+// ---------------------------------------------  LIST CONTAINER  ---------------------------------------------
+
+/// No effect if not in the list.
+static void delist(udpard_list_t* const list, udpard_list_member_t* const member)
+{
+    if (member->next != NULL) {
+        member->next->prev = member->prev;
+    }
+    if (member->prev != NULL) {
+        member->prev->next = member->next;
+    }
+    if (list->head == member) {
+        list->head = member->next;
+    }
+    if (list->tail == member) {
+        list->tail = member->prev;
+    }
+    member->next = NULL;
+    member->prev = NULL;
+    assert((list->head != NULL) == (list->tail != NULL));
+}
+
+/// If the item is already in the list, it will be delisted first. Can be used for moving to the front.
+static void enlist_head(udpard_list_t* const list, udpard_list_member_t* const member)
+{
+    delist(list, member);
+    assert((member->next == NULL) && (member->prev == NULL));
+    assert((list->head != NULL) == (list->tail != NULL));
+    member->next = list->head;
+    if (list->head != NULL) {
+        list->head->prev = member;
+    }
+    list->head = member;
+    if (list->tail == NULL) {
+        list->tail = member;
+    }
+    assert((list->head != NULL) && (list->tail != NULL));
+}
+
+#define LIST_MEMBER(ptr, owner_type, owner_field) ((owner_type*)unbias_ptr((ptr), offsetof(owner_type, owner_field)))
+static void* unbias_ptr(const void* const ptr, const size_t offset)
+{
+    return (ptr == NULL) ? NULL : (void*)((char*)ptr - offset);
+}
+#define LIST_TAIL(list, owner_type, owner_field) LIST_MEMBER((list).tail, owner_type, owner_field)
+
 // ---------------------------------------------  TX PIPELINE  ---------------------------------------------
 
 typedef struct
@@ -600,61 +646,59 @@ static bool rx_validate_memory_resources(const udpard_rx_memory_resources_t memo
            (memory.fragment.alloc != NULL) && (memory.fragment.free != NULL);
 }
 
-/// This is designed to be convertible to/from UdpardFragment, so that the application could be
-/// given a linked list of these objects represented as a list of UdpardFragment.
+/// This is designed to be convertible to/from udpard_fragment_t, so that the application could be
+/// given a linked list of these objects represented as a list of udpard_fragment_t.
 typedef struct rx_fragment_t
 {
     udpard_fragment_t base;
     udpard_tree_t     tree;
 } rx_fragment_t;
 
-/// Internally, the RX pipeline is arranged as follows:
-///
-/// - There is one port per subscription or an RPC-service listener. Within the port, there are N sessions,
-///   one session per remote node emitting transfers on this port (i.e., on this subject, or sending
-///   request/response of this service). Sessions are constructed dynamically in memory provided by
-///   UdpardMemoryResource.
-///
-/// - Per session, there are UDPARD_NETWORK_INTERFACE_COUNT_MAX interface states to support interface redundancy.
-///
-/// - Per interface, there are RX_SLOT_COUNT slots; a slot keeps the state of a transfer in the process of being
-///   reassembled which includes its payload fragments.
-///
-/// Port -> Session -> Interface -> Slot -> Fragments.
-///
-/// Consider the following examples, where A,B,C denote distinct multi-frame transfers:
-///
-///     A0 A1 A2 B0 B1 B2    -- two transfers without OOO frames; both accepted
-///     A2 A0 A1 B0 B2 B1    -- two transfers with OOO frames; both accepted
-///     A0 A1 B0 A2 B1 B2    -- two transfers with interleaved frames; both accepted (this is why we need 2 slots)
-///     B1 A2 A0 C0 B0 A1 C1 -- if we have only 2 slots: B evicted by C; A and C accepted, B dropped
-///     B0 A0 A1 C0 B1 A2 C1 -- ditto
-///     A0 A1 C0 B0 A2 C1 B1 -- if we have only 2 slots: A evicted by B; B and C accepted, A dropped
-///
-/// TODO: Early truncation is really easy to add since every frame carries the payload offset from the origin.
 typedef struct
 {
-    udpard_microsecond_t ts;          ///< Timestamp of the earliest frame; TIMESTAMP_UNSET upon restart.
-    uint64_t             transfer_id; ///< When first constructed, this shall be set to UINT64_MAX (unreachable value).
-    uint32_t             max_index;   ///< Maximum observed frame index in this transfer (so far); zero upon restart.
-    uint32_t             eot_index;   ///< Frame index where the EOT flag was observed; FRAME_INDEX_UNSET upon restart.
-    uint32_t             accepted_frames; ///< Number of frames accepted so far.
-    size_t               payload_size;
-    udpard_tree_t*       fragments;
-} rx_slot_t;
+    uint32_t       max_index; ///< Maximum observed frame index in this transfer (so far); zero upon restart.
+    uint32_t       eot_index; ///< Discovered EOT frame index.
+    bool           eot_discovered;
+    uint32_t       accepted_frames;     ///< Number of frames accepted so far.
+    size_t         payload_size_stored; ///< Grows with each accepted fragment (out of order).
+    uint32_t       crc;                 ///< Out-of-order CRC reconstruction state.
+    udpard_tree_t* fragments;
+} rx_slot_iface_t;
+
+typedef enum
+{
+    rx_slot_idle = 0,
+    rx_slot_busy = 1,
+    rx_slot_done = 2,
+} rx_slot_state_t;
 
 typedef struct
 {
-    udpard_microsecond_t ts_usec; ///< The timestamp of the last valid transfer to arrive on this interface.
-    rx_slot_t            slots[RX_SLOT_COUNT];
-} rx_iface_t;
+    rx_slot_state_t      state;
+    udpard_microsecond_t ts_discovery;  ///< The timestamp of the first frame received for this transfer.
+    udpard_microsecond_t ts_completion; ///< The timestamp of the final accepted frame for this transfer.
+    uint64_t             transfer_id;
+    rx_slot_iface_t      iface[UDPARD_NETWORK_INTERFACE_COUNT_MAX];
+} rx_slot_t;
 
 /// Keep in mind that we have a dedicated session object per remote node per port; this means that the states
 /// kept here are specific per remote node, as it should be.
 typedef struct
 {
-    udpard_tree_t index_remote_uid;
-    uint64_t      remote_uid;
+    udpard_tree_t   index_remote_uid;
+    udpard_remote_t remote; ///< Most recent discovered reverse path for P2P to the sender.
+
+    udpard_rx_subscription_t* owner;
+
+    /// Sessions interned for the reordering window closure.
+    udpard_tree_t        index_reordering_window;
+    udpard_microsecond_t reordering_window_deadline;
+
+    /// LRU last animated list for automatic retirement of stale sessions.
+    udpard_list_member_t list_by_animation;
+    udpard_microsecond_t last_animated_ts;
+
     // TODO: a structure for transfer-ID storage and completeness marking.
-    rx_iface_t ifaces[UDPARD_NETWORK_INTERFACE_COUNT_MAX];
+
+    rx_slot_t slots[RX_SLOT_COUNT];
 } rx_session_t;
