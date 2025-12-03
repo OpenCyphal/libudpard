@@ -788,7 +788,7 @@ static bool rx_fragment_is_needed(udpard_tree_t* const root,
 /// Finds the number of contiguous payload bytes received from offset zero after accepting a new fragment.
 /// The transfer is considered fully received when covered_prefix >= min(extent, transfer_payload_size).
 /// This should be invoked after the fragment tree accepted a new fragment at frag_offset with frag_size.
-/// The complexity is linear in the number of contiguous fragments following old_prefix.
+/// The complexity is logarithmic if updated after every received frame.
 static size_t rx_fragment_tree_update_covered_prefix(udpard_tree_t* const root,
                                                      const size_t         old_prefix,
                                                      const size_t         frag_offset,
