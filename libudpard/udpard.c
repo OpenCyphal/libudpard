@@ -73,6 +73,7 @@ static udpard_udpip_ep_t make_topic_ep(const uint32_t subject_id)
 }
 
 static size_t   smaller(const size_t a, const size_t b) { return (a < b) ? a : b; }
+static size_t   smaller3(const size_t a, const size_t b, const size_t c) { return smaller(smaller(a, b), c); }
 static size_t   larger(const size_t a, const size_t b) { return (a > b) ? a : b; }
 static uint32_t max_u32(const uint32_t a, const uint32_t b) { return (a > b) ? a : b; }
 
@@ -775,15 +776,36 @@ static bool rx_fragment_tree_has_gap_in_range(udpard_tree_t* const root, const s
 /// True if the specified fragment should be retained. Otherwise, it is redundant and should be discarded.
 /// The complexity is O(log n + k), see rx_fragment_tree_has_gap_in_range() for details.
 static bool rx_fragment_is_needed(udpard_tree_t* const root,
-                                  const size_t         fragment_offset,
-                                  const size_t         fragment_size,
+                                  const size_t         frag_offset,
+                                  const size_t         frag_size,
                                   const size_t         transfer_size,
                                   const size_t         extent)
 {
-    const size_t size  = smaller(transfer_size, extent);
-    const size_t left  = fragment_offset;
-    const size_t right = smaller(fragment_offset + fragment_size, size);
-    return (left < size) && rx_fragment_tree_has_gap_in_range(root, left, right);
+    const size_t end = smaller3(frag_offset + frag_size, transfer_size, extent);
+    return (frag_offset < extent) && rx_fragment_tree_has_gap_in_range(root, frag_offset, end);
+}
+
+/// Finds the number of contiguous payload bytes received from offset zero after accepting a new fragment.
+/// The transfer is considered fully received when covered_prefix >= min(extent, transfer_payload_size).
+/// This should be invoked after the fragment tree accepted a new fragment at frag_offset with frag_size.
+/// The complexity is linear in the number of contiguous fragments following old_prefix.
+static size_t rx_fragment_tree_update_covered_prefix(udpard_tree_t* const root,
+                                                     const size_t         old_prefix,
+                                                     const size_t         frag_offset,
+                                                     const size_t         frag_size)
+{
+    const size_t end = frag_offset + frag_size;
+    if ((frag_offset > old_prefix) || (end <= old_prefix)) {
+        return old_prefix; // The new fragment does not cross the frontier, so it cannot affect the prefix.
+    }
+    udpard_fragment_t* fr = (udpard_fragment_t*)cavl2_predecessor(root, &old_prefix, &rx_cavl_compare_fragment_offset);
+    UDPARD_ASSERT(fr != NULL);
+    size_t out = old_prefix;
+    while ((fr != NULL) && (fr->offset <= out)) {
+        out = larger(out, fr->offset + fr->view.size);
+        fr  = (udpard_fragment_t*)cavl2_next_greater(&fr->index_offset);
+    }
+    return out;
 }
 
 typedef enum
