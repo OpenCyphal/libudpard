@@ -687,8 +687,7 @@ void udpard_tx_free(const udpard_tx_mem_resources_t memory, udpard_tx_item_t* co
 typedef struct
 {
     uint32_t           index;
-    uint32_t           offset; ///< Offset of this fragment's payload within the full transfer payload.
-    bool               end_of_transfer;
+    uint32_t           offset;  ///< Offset of this fragment's payload within the full transfer payload.
     udpard_bytes_t     payload; ///< Also contains the transfer CRC (but not the header CRC).
     udpard_bytes_mut_t origin;  ///< The entirety of the free-able buffer passed from the application.
 } rx_frame_base_t;
@@ -707,6 +706,66 @@ typedef struct rx_fragment_t
     udpard_fragment_t base; ///< Must be the first member; do not move!
     udpard_tree_t     tree;
 } rx_fragment_t;
+
+/// We require that the fragment tree does not contain fully-contained or equal-range fragments.
+/// One implication is that no two fragments can have the same offset.
+static int32_t rx_cavl_compare_fragment_offset(const void* const user, const udpard_tree_t* const node)
+{
+    return ((*(const size_t*)user) - CAVL2_TO_OWNER(node, rx_fragment_t, tree)->base.offset) ? +1 : -1;
+}
+
+/// Find the first fragment where offset >= left in log time. Returns NULL if no such fragment exists.
+/// This is intended for overlap removal and gap detection when deciding if a new fragment is needed.
+static rx_fragment_t* rx_fragment_tree_lower_bound(udpard_tree_t* const root, const size_t left)
+{
+    return CAVL2_TO_OWNER(cavl2_lower_bound(root, &left, &rx_cavl_compare_fragment_offset), rx_fragment_t, tree);
+}
+
+/// True if the fragment tree does not have a contiguous payload coverage in [left, right).
+/// This function requires that the tree does not have fully-contained fragments; one implication is that
+/// no two fragments may have the same offset.
+/// The complexity is O(log n + k), where n is the number of fragments in the tree and k is the number of fragments
+/// overlapping the specified range, assuming there are no fully-contained fragments.
+static bool rx_fragment_tree_has_gap_in_range(udpard_tree_t* const root, const size_t left, const size_t right)
+{
+    if (left >= right) {
+        return false; // empty fragment; no gap by convention
+    }
+    rx_fragment_t* frag =
+      CAVL2_TO_OWNER(cavl2_predecessor(root, &left, &rx_cavl_compare_fragment_offset), rx_fragment_t, tree);
+    if (frag == NULL) {
+        return true;
+    }
+    if ((frag->base.offset + frag->base.view.size) <= left) { // The predecessor ends before the left edge.
+        return true;
+    }
+    size_t covered = left; // This is the O(k) part. The scan starting point search is O(log n).
+    while ((frag != NULL) && (frag->base.offset < right)) {
+        if (frag->base.offset > covered) {
+            return true;
+        }
+        covered = larger(covered, frag->base.offset + frag->base.view.size);
+        if (covered >= right) {
+            return false; // Reached the end of the requested range without gaps.
+        }
+        frag = CAVL2_TO_OWNER(cavl2_next_greater(&frag->tree), rx_fragment_t, tree);
+    }
+    return covered < right;
+}
+
+/// True if the specified fragment should be retained. Otherwise, it is redundant and should be discarded.
+/// The complexity is O(log n + k), see rx_fragment_tree_has_gap_in_range() for details.
+static bool rx_fragment_is_needed(udpard_tree_t* const root,
+                                  const size_t         fragment_offset,
+                                  const size_t         fragment_size,
+                                  const size_t         transfer_size,
+                                  const size_t         extent)
+{
+    const size_t total_size = smaller(transfer_size, extent);
+    const size_t left       = fragment_offset;
+    const size_t right      = smaller(fragment_offset + fragment_size, total_size);
+    return (left < total_size) && rx_fragment_tree_has_gap_in_range(root, left, right);
+}
 
 typedef enum
 {
@@ -804,7 +863,7 @@ typedef struct
     udpard_microsecond_t last_animated_ts;
 
     /// To weed out duplicates and to retransmit lost ACKs.
-    rx_transfer_id_window_t transfer_id_received;
+    rx_transfer_id_window_t acknowledged;
 
     rx_slot_t slots[RX_SLOT_COUNT];
 } rx_session_t;
