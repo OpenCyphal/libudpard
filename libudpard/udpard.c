@@ -99,6 +99,25 @@ static void mem_free_payload(const udpard_mem_deleter_t memory, const udpard_byt
 // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
 static void mem_zero(const size_t size, void* const data) { (void)memset(data, 0, size); }
 
+void udpard_fragment_free_all(udpard_fragment_t* const frag, const udpard_mem_resource_t fragment_memory_resource)
+{
+    if (frag != NULL) {
+        // Descend the tree
+        for (uint_fast8_t i = 0; i < 2; i++) {
+            if (frag->index_offset.lr[i] != NULL) {
+                udpard_fragment_free_all((udpard_fragment_t*)frag->index_offset.lr[i], fragment_memory_resource);
+            }
+        }
+        // Delete this fragment
+        udpard_fragment_t* const parent = (udpard_fragment_t*)frag->index_offset.up;
+        parent->index_offset.lr[parent->index_offset.lr[1] == &frag->index_offset] = NULL;
+        mem_free_payload(frag->payload_deleter, frag->origin);
+        mem_free(fragment_memory_resource, sizeof(udpard_fragment_t), frag);
+        // Ascend the tree, tail call
+        udpard_fragment_free_all(parent, fragment_memory_resource);
+    }
+}
+
 // ---------------------------------------------  CRC  ---------------------------------------------
 
 #define CRC_INITIAL                   0xFFFFFFFFUL
@@ -683,6 +702,15 @@ void udpard_tx_free(const udpard_tx_mem_resources_t memory, udpard_tx_item_t* co
 
 // ---------------------------------------------  RX PIPELINE  ---------------------------------------------
 
+// The fragment tree is built from frames arriving from all redundant interfaces simultaneously.
+// Said frames may have different MTU, so the fragment offsets and sizes may vary significantly.
+// The reassembler decides if a newly arrived fragment is needed based on gap detection in the fragment tree.
+// An accepted fragment may overlap with neighboring fragments; however, the reassembler guarantees that no fragment is
+// fully contained within another fragment; this also implies that there are no fragments sharing the same offset,
+// and that fragments ordered by offset are also ordered by their ends.
+// The reassembler prefers to keep fewer large fragments over many small fragments, to reduce the overhead of
+// managing the fragment tree and the amount of auxiliary memory required for it.
+
 /// All but the transfer metadata: fields that change from frame to frame within the same transfer.
 typedef struct
 {
@@ -699,56 +727,47 @@ typedef struct
     meta_t          meta;
 } rx_frame_t;
 
-/// This is designed to be convertible to/from udpard_fragment_t, so that the application could be
-/// given a linked list of these objects represented as a list of udpard_fragment_t.
-typedef struct rx_fragment_t
-{
-    udpard_fragment_t base; ///< Must be the first member; do not move!
-    udpard_tree_t     tree;
-} rx_fragment_t;
-
 /// We require that the fragment tree does not contain fully-contained or equal-range fragments.
 /// One implication is that no two fragments can have the same offset.
 static int32_t rx_cavl_compare_fragment_offset(const void* const user, const udpard_tree_t* const node)
 {
-    return ((*(const size_t*)user) - CAVL2_TO_OWNER(node, rx_fragment_t, tree)->base.offset) ? +1 : -1;
+    return ((*(const size_t*)user) - ((udpard_fragment_t*)node)->offset) ? +1 : -1;
 }
 
 /// Find the first fragment where offset >= left in log time. Returns NULL if no such fragment exists.
 /// This is intended for overlap removal and gap detection when deciding if a new fragment is needed.
-static rx_fragment_t* rx_fragment_tree_lower_bound(udpard_tree_t* const root, const size_t left)
+static udpard_fragment_t* rx_fragment_tree_lower_bound(udpard_tree_t* const root, const size_t left)
 {
-    return CAVL2_TO_OWNER(cavl2_lower_bound(root, &left, &rx_cavl_compare_fragment_offset), rx_fragment_t, tree);
+    return (udpard_fragment_t*)cavl2_lower_bound(root, &left, &rx_cavl_compare_fragment_offset);
 }
 
 /// True if the fragment tree does not have a contiguous payload coverage in [left, right).
-/// This function requires that the tree does not have fully-contained fragments; one implication is that
-/// no two fragments may have the same offset.
+/// This function requires that the tree does not have fully-overlapped fragments; the implications are that
+/// no two fragments may have the same offset, and that fragments ordered by offset also order by their ends.
 /// The complexity is O(log n + k), where n is the number of fragments in the tree and k is the number of fragments
-/// overlapping the specified range, assuming there are no fully-contained fragments.
+/// overlapping the specified range, assuming there are no fully-overlapped fragments.
 static bool rx_fragment_tree_has_gap_in_range(udpard_tree_t* const root, const size_t left, const size_t right)
 {
     if (left >= right) {
         return false; // empty fragment; no gap by convention
     }
-    rx_fragment_t* frag =
-      CAVL2_TO_OWNER(cavl2_predecessor(root, &left, &rx_cavl_compare_fragment_offset), rx_fragment_t, tree);
+    udpard_fragment_t* frag = (udpard_fragment_t*)cavl2_predecessor(root, &left, &rx_cavl_compare_fragment_offset);
     if (frag == NULL) {
         return true;
     }
-    if ((frag->base.offset + frag->base.view.size) <= left) { // The predecessor ends before the left edge.
+    if ((frag->offset + frag->view.size) <= left) { // The predecessor ends before the left edge.
         return true;
     }
     size_t covered = left; // This is the O(k) part. The scan starting point search is O(log n).
-    while ((frag != NULL) && (frag->base.offset < right)) {
-        if (frag->base.offset > covered) {
+    while ((frag != NULL) && (frag->offset < right)) {
+        if (frag->offset > covered) {
             return true;
         }
-        covered = larger(covered, frag->base.offset + frag->base.view.size);
+        covered = larger(covered, frag->offset + frag->view.size);
         if (covered >= right) {
             return false; // Reached the end of the requested range without gaps.
         }
-        frag = CAVL2_TO_OWNER(cavl2_next_greater(&frag->tree), rx_fragment_t, tree);
+        frag = (udpard_fragment_t*)cavl2_next_greater(&frag->index_offset);
     }
     return covered < right;
 }
@@ -761,10 +780,10 @@ static bool rx_fragment_is_needed(udpard_tree_t* const root,
                                   const size_t         transfer_size,
                                   const size_t         extent)
 {
-    const size_t total_size = smaller(transfer_size, extent);
-    const size_t left       = fragment_offset;
-    const size_t right      = smaller(fragment_offset + fragment_size, total_size);
-    return (left < total_size) && rx_fragment_tree_has_gap_in_range(root, left, right);
+    const size_t size  = smaller(transfer_size, extent);
+    const size_t left  = fragment_offset;
+    const size_t right = smaller(fragment_offset + fragment_size, size);
+    return (left < size) && rx_fragment_tree_has_gap_in_range(root, left, right);
 }
 
 typedef enum
@@ -799,7 +818,7 @@ static uint64_t rx_transfer_id_forward_distance(const uint64_t from, const uint6
 
 /// Change the head of the transfer-ID window to new_head, shifting the bitset accordingly.
 /// The head is always increased, possibly with wrapping around, so going from 2^64-1 to 0 is considered an increment.
-static void rx_transfer_id_window_update_head(rx_transfer_id_window_t* const self, const uint64_t new_head)
+static void rx_transfer_id_window_slide(rx_transfer_id_window_t* const self, const uint64_t new_head)
 {
     static const size_t num_words      = RX_TRANSFER_ID_WINDOW_BITS / 64U;
     const uint64_t      shift_distance = rx_transfer_id_forward_distance(self->head, new_head);

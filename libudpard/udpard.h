@@ -236,7 +236,11 @@ typedef struct udpard_mem_resource_t
 /// at the expense of extra time and memory utilization.
 typedef struct udpard_fragment_t
 {
-    struct udpard_fragment_t* next; ///< Next in the fragmented payload buffer chain; NULL in the last entry.
+    /// The index_offset BST orders fragments by their offset within the full payload buffer.
+    /// It must be the first member.
+    /// The linked list links all fragments by their offset in ascending order, for convenience.
+    udpard_tree_t             index_offset;
+    struct udpard_fragment_t* next;
 
     /// Contains the actual data to be used by the application.
     /// The memory pointed to by this fragment shall not be freed by the application.
@@ -246,9 +250,7 @@ typedef struct udpard_fragment_t
     /// The application can use this pointer to free the outer buffer after the payload has been consumed.
     udpard_bytes_mut_t origin;
 
-    /// Zero-based index and byte offset of this fragment view from the beginning of the transfer payload.
-    size_t   offset;
-    uint32_t index;
+    size_t offset; ///< Offset of this fragment's payload within the full payload buffer.
 
     /// When the fragment is no longer needed, this deleter shall be used to free the origin buffer.
     /// We provide a dedicated deleter per fragment to allow NIC drivers to manage the memory directly,
@@ -257,13 +259,16 @@ typedef struct udpard_fragment_t
     udpard_mem_deleter_t payload_deleter;
 } udpard_fragment_t;
 
-/// Frees the memory allocated for the payload and its fragment headers using the correct memory resources.
+/// Frees the memory allocated for the payload and its fragment headers using the correct memory resources: the memory
+/// resource for the fragments is given explicitly, and the payload is freed using the payload_deleter per fragment.
+/// All fragments in the tree will be freed and invalidated.
+/// The passed fragment can be any fragment inside the tree (not necessarily the root).
+///
 /// The application can do the same thing manually if it has access to the required context to compute the size,
 /// or if the memory resource implementation does not require deallocation size.
-/// The head of the fragment list is passed by value so it is not freed. This is in line with the udpard_rx_transfer_t
-/// design, where the head is stored by value to reduce indirection in small transfers. We call it Scott's Head.
-/// If any of the arguments are NULL, the function has no effect.
-void udpard_fragment_free(const udpard_fragment_t head, const udpard_mem_resource_t memory_fragment);
+///
+/// If any of the arguments are NULL, the function has no effect. The complexity is linear in the number of fragments.
+void udpard_fragment_free_all(udpard_fragment_t* const frag, const udpard_mem_resource_t fragment_memory_resource);
 
 // =====================================================================================================================
 // =================================================    TX PIPELINE    =================================================
@@ -591,7 +596,12 @@ typedef struct udpard_rx_transfer_t
     /// the excess payload as it has already been discarded. Cannot be less than payload_size_stored.
     size_t payload_size_wire;
 
-    udpard_fragment_t payload;
+    /// The payload is stored in a tree, which is also linked-listed for convenience.
+    /// Hence we have two pointers to the same payload tree: one points to the leftmost tree node aka the 1st fragment;
+    /// the other points to the root of the tree.
+    /// Either can be used with udpard_fragment_free_all() to free the entire payload.
+    udpard_fragment_t* payload_first;
+    udpard_fragment_t* payload_root;
 } udpard_rx_transfer_t;
 
 /// Emitted when the stack detects the need to send a reception acknowledgment back to the remote node.
