@@ -249,9 +249,10 @@ static uint32_t crc_partial_finalize(const size_t n_bytes, const uint32_t crc_ac
 
 // ---------------------------------------------  HEADER  ---------------------------------------------
 
-#define HEADER_SIZE_BYTES 48U
-#define HEADER_VERSION    2U
-#define HEADER_FLAG_ACK   0x01U
+#define HEADER_SIZE_BYTES      48U
+#define HEADER_VERSION         2U
+#define HEADER_FLAG_ACK        0x01U
+#define HEADER_FRAME_INDEX_MAX 0xFFFFFFU /// 4 GiB with 256-byte MTU
 
 typedef struct
 {
@@ -316,7 +317,7 @@ static byte_t* header_serialize(byte_t* const  buffer,
     *ptr++ = flags;
     *ptr++ = 0;
     *ptr++ = 0;
-    ptr    = serialize_u32(ptr, frame_index);
+    ptr    = serialize_u32(ptr, frame_index & HEADER_FRAME_INDEX_MAX);
     ptr    = serialize_u32(ptr, frame_payload_offset);
     ptr    = serialize_u32(ptr, meta.transfer_payload_size);
     ptr    = serialize_u64(ptr, meta.transfer_id);
@@ -355,10 +356,15 @@ static bool header_deserialize(const udpard_bytes_mut_t  dgram_payload,
             ptr = deserialize_u64(ptr, &out_meta->topic_hash);
             ptr = deserialize_u32(ptr, prefix_crc);
             (void)ptr;
-            // TODO: validate the fields (e.g., ensure offset+size does not exceed the transfer payload size)
             // Set up the output payload view.
             out_payload->size = dgram_payload.size - HEADER_SIZE_BYTES;
             out_payload->data = (byte_t*)dgram_payload.data + HEADER_SIZE_BYTES;
+            // Finalize the fields.
+            *frame_index = HEADER_FRAME_INDEX_MAX & *frame_index;
+            // Validate the fields.
+            ok = ((uint64_t)*frame_payload_offset + (uint64_t)out_payload->size) <=
+                 (uint64_t)out_meta->transfer_payload_size;
+            ok = ok && ((0 == *frame_index) == (0 == *frame_payload_offset));
         } else {
             ok = false;
         }
@@ -715,9 +721,8 @@ void udpard_tx_free(const udpard_tx_mem_resources_t memory, udpard_tx_item_t* co
 /// All but the transfer metadata: fields that change from frame to frame within the same transfer.
 typedef struct
 {
-    uint32_t           index;
     uint32_t           offset;  ///< Offset of this fragment's payload within the full transfer payload.
-    udpard_bytes_t     payload; ///< Also contains the transfer CRC (but not the header CRC).
+    udpard_bytes_t     payload; ///< Does not include the header, just pure payload.
     udpard_bytes_mut_t origin;  ///< The entirety of the free-able buffer passed from the application.
 } rx_frame_base_t;
 
@@ -732,7 +737,11 @@ typedef struct
 /// One implication is that no two fragments can have the same offset.
 static int32_t rx_cavl_compare_fragment_offset(const void* const user, const udpard_tree_t* const node)
 {
-    return ((*(const size_t*)user) - ((udpard_fragment_t*)node)->offset) ? +1 : -1;
+    const size_t u = *(const size_t*)user;
+    const size_t v = ((const udpard_fragment_t*)node)->offset; // clang-format off
+    if (u < v) { return -1; }
+    if (u > v) { return +1; }
+    return 0; // clang-format on
 }
 
 /// Find the first fragment where offset >= left in log time. Returns NULL if no such fragment exists.
@@ -756,6 +765,7 @@ static bool rx_fragment_tree_has_gap_in_range(udpard_tree_t* const root, const s
     if (frag == NULL) {
         return true;
     }
+    // offset+size can overflow on platforms with 16-bit size and requires special treatment there.
     if ((frag->offset + frag->view.size) <= left) { // The predecessor ends before the left edge.
         return true;
     }
@@ -806,6 +816,27 @@ static size_t rx_fragment_tree_update_covered_prefix(udpard_tree_t* const root,
         fr  = (udpard_fragment_t*)cavl2_next_greater(&fr->index_offset);
     }
     return out;
+}
+
+typedef enum
+{
+    rx_fragment_tree_not_done,
+    rx_fragment_tree_done,
+    rx_fragment_tree_oom,
+} rx_fragment_tree_update_result_t;
+
+/// Takes ownership of the frame payload. Returns true if the transfer is fully reassembled in the tree.
+static rx_fragment_tree_update_result_t rx_fragment_tree_update(udpard_tree_t** const       root,
+                                                                const udpard_mem_resource_t fragment_memory,
+                                                                const rx_frame_base_t       frame,
+                                                                const udpard_mem_deleter_t  payload_deleter,
+                                                                const size_t                transfer_payload_size,
+                                                                const size_t                extent,
+                                                                size_t* const               covered_prefix_io)
+{
+    // First we need to check if the new fragment is needed at all. It is needed in two cases:
+    // 1) It covers new ground in the [0, extent) range.
+    // 2) It overlaps smaller fragments that are already in the tree, which can be replaced.
 }
 
 typedef enum
