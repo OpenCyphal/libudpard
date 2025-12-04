@@ -753,61 +753,6 @@ static int32_t rx_cavl_compare_fragment_end(const void* const user, const udpard
     return 0; // clang-format on
 }
 
-/// Checks the tree for fragments that can be removed if a new one spanning [left, right) is to be inserted.
-/// Returns the first fragment that can be removed, or NULL if none can be removed.
-/// Invoke repeatedly until NULL is returned to remove all redundant fragments.
-/// The complexity is logarithmic in the number of fragments in the tree.
-static udpard_fragment_t* rx_fragment_tree_first_redundant(udpard_tree_t* const root,
-                                                           const size_t         left,
-                                                           const size_t         right)
-{
-    // The most simple case to check first is to find the fragments that fall fully within the new one.
-    // This may somewhat simplify the reasoning about the remaining checks below.
-    udpard_fragment_t* frag = (udpard_fragment_t*)cavl2_lower_bound(root, &left, &rx_cavl_compare_fragment_offset);
-    if ((frag != NULL) && ((frag->offset + frag->view.size) <= right)) {
-        return frag; // We may land here multiple times if the new fragment is large.
-    }
-    // Now we are certain that no fully-contained fragments exist. But the addition of a larger fragment that
-    // joins adjacent fragments together into a larger contiguous block may render smaller fragments that overlap
-    // with its edges redundant. To check for that, we create a new virtual fragment that represents the new fragment
-    // together with those that join it on either end, if any, and then look for fragments fully contained within.
-    // Example:
-    //                |---B---|
-    //             |--X--|
-    //          |--A--|
-    // The addition of fragment A or B will render X redundant, even though it is not contained within any fragment.
-    // This algorithm will detect that and mark X for removal.
-    //
-    // To find the left neighbor, we need to find the fragment crossing the left boundary whose offset is the smallest.
-    // To do that, we simply need to find the fragment with the smallest right boundary that is on the right of our
-    // left boundary. This works because by construction we guarantee that our tree has no fully-contained fragments,
-    // implying that ordering by left is also ordering by right.
-    size_t v_left = left;
-    frag          = (udpard_fragment_t*)cavl2_lower_bound(root, &left, &rx_cavl_compare_fragment_end);
-    if (frag != NULL) {
-        v_left = smaller(v_left, frag->offset); // Ignore fragments ending before our left boundary
-    }
-    // The right neighbor is found by analogy: find the fragment with the largest left boundary that is on the left
-    // of our right boundary. This guarantees that the new virtual right boundary will max out to the right.
-    size_t v_right = right;
-    frag           = (udpard_fragment_t*)cavl2_predecessor(root, &right, &rx_cavl_compare_fragment_offset);
-    if (frag != NULL) {
-        v_right = larger(v_right, frag->offset + frag->view.size); // Ignore fragments starting after our right boundary
-    }
-    UDPARD_ASSERT((v_left <= left) && (right <= v_right));
-    // Adjust the boundaries to avoid removing the neighbors themselves.
-    v_left++;
-    if (v_right > 0) {
-        v_right--;
-    }
-    // Now we repeat the process as above but with the expanded virtual fragment (v_left, v_right-1).
-    frag = (udpard_fragment_t*)cavl2_lower_bound(root, &v_left, &rx_cavl_compare_fragment_offset);
-    if ((frag != NULL) && ((frag->offset + frag->view.size) <= v_right)) {
-        return frag;
-    }
-    return NULL; // Nothing left to remove.
-}
-
 /// True if the fragment tree does not have a contiguous payload coverage in [left, right).
 /// This function requires that the tree does not have fully-overlapped fragments; the implications are that
 /// no two fragments may have the same offset, and that fragments ordered by offset also order by their ends.
@@ -891,55 +836,88 @@ static rx_fragment_tree_update_result_t rx_fragment_tree_update(udpard_tree_t** 
                                                                 const size_t                extent,
                                                                 size_t* const               covered_prefix_io)
 {
-    // First we need to check if the new fragment is needed at all. It is needed in two cases:
+    // The new fragment is needed in two cases:
     // 1) It covers new ground in the [0, extent) range.
     // 2) It overlaps smaller fragments that are already in the tree, which can be replaced.
-    {
-        const size_t       left = frame.offset;
-        udpard_fragment_t* frag = (udpard_fragment_t*)cavl2_predecessor(*root, &left, &rx_cavl_compare_fragment_offset);
-        if ((frag != NULL) && ((frag->offset + frag->view.size) >= (frame.offset + frame.payload.size))) {
-            mem_free_payload(payload_deleter, frame.origin); // New fragment is fully contained within an existing one.
-            return rx_fragment_tree_not_done;
-        }
+    // We do a quick lookup first to see if an existing fragment fully contains the new one;
+    // this simplifies the logic below an is very fast.
+    const size_t       left  = frame.offset;
+    const size_t       right = frame.offset + frame.payload.size;
+    udpard_fragment_t* frag  = (udpard_fragment_t*)cavl2_predecessor(*root, &left, &rx_cavl_compare_fragment_offset);
+    if ((frag != NULL) && ((frag->offset + frag->view.size) >= right)) {
+        mem_free_payload(payload_deleter, frame.origin);
+        return rx_fragment_tree_not_done; // New fragment is fully contained within an existing one.
     }
-    udpard_fragment_t* victim =
-      rx_fragment_tree_first_redundant(*root, frame.offset, frame.offset + frame.payload.size);
-    const bool need =
-      (victim != NULL) || rx_fragment_is_needed(*root, frame.offset, frame.payload.size, transfer_payload_size, extent);
+
+    // The addition of a larger fragment that joins adjacent fragments together into a larger contiguous block may
+    // render smaller fragments that overlap with its edges redundant.
+    // To check for that, we create a new virtual fragment that represents the new fragment together with those
+    // that join it on either end, if any, and then look for fragments contained within.
+    // The search interval would be (v_left, v_right-1) to avoid matching the neighbors themselves.
+    // Example:
+    //                |--B--|
+    //             |--X--|
+    //          |--A--|
+    // The addition of fragment A or B will render X redundant, even though it is not contained within any fragment.
+    // This algorithm will detect that and mark X for removal.
+    //
+    // To find the left neighbor, we need to find the fragment crossing the left boundary whose offset is the smallest.
+    // To do that, we simply need to find the fragment with the smallest right boundary that is on the right of our
+    // left boundary. This works because by construction we guarantee that our tree has no fully-contained fragments,
+    // implying that ordering by left is also ordering by right.
+    //
+    // The right neighbor is found by analogy: find the fragment with the largest left boundary that is on the left
+    // of our right boundary. This guarantees that the new virtual right boundary will max out to the right.
+    size_t v_left  = left;
+    size_t v_right = right;
+    frag           = (udpard_fragment_t*)cavl2_lower_bound(*root, &left, &rx_cavl_compare_fragment_end);
+    if (frag != NULL) {
+        v_left = smaller(v_left, frag->offset + 1U); // Avoid matching the left neighbor itself.
+    }
+    frag = (udpard_fragment_t*)cavl2_predecessor(*root, &right, &rx_cavl_compare_fragment_offset);
+    if (frag != NULL) {
+        v_right = larger(v_right, frag->offset + frag->view.size);
+    }
+    UDPARD_ASSERT((v_left <= left) && (right <= v_right));
+
+    // Find the first victim. It has to be done early to decide if the new fragment is worth keeping at all.
+    frag            = (udpard_fragment_t*)cavl2_lower_bound(*root, &v_left, &rx_cavl_compare_fragment_offset);
+    const bool need = ((frag != NULL) && ((frag->offset + frag->view.size) < v_right)) ||
+                      rx_fragment_is_needed(*root, frame.offset, frame.payload.size, transfer_payload_size, extent);
     if (!need) {
         mem_free_payload(payload_deleter, frame.origin);
         return rx_fragment_tree_not_done; // Cannot make use of this fragment.
     }
 
     // Ensure we can allocate the fragment header for the new frame before pruning the tree to avoid data loss.
-    udpard_fragment_t* frag = mem_alloc(fragment_memory, sizeof(udpard_fragment_t));
-    if (frag == NULL) {
+    udpard_fragment_t* mew = mem_alloc(fragment_memory, sizeof(udpard_fragment_t));
+    if (mew == NULL) {
         mem_free_payload(payload_deleter, frame.origin);
         return rx_fragment_tree_oom; // Cannot allocate fragment header. Maybe we will succeed later.
     }
-    mem_zero(sizeof(*frag), frag);
-    frag->view.data       = frame.payload.data;
-    frag->view.size       = frame.payload.size;
-    frag->origin.data     = frame.origin.data;
-    frag->origin.size     = frame.origin.size;
-    frag->offset          = frame.offset;
-    frag->payload_deleter = payload_deleter;
+    mem_zero(sizeof(*mew), mew);
+    mew->view.data       = frame.payload.data;
+    mew->view.size       = frame.payload.size;
+    mew->origin.data     = frame.origin.data;
+    mew->origin.size     = frame.origin.size;
+    mew->offset          = frame.offset;
+    mew->payload_deleter = payload_deleter;
 
     // Remove all redundant fragments before inserting the new one.
-    while (victim != NULL) {
-        cavl2_remove(root, &victim->index_offset);
-        mem_free_payload(victim->payload_deleter, victim->origin);
-        mem_free(fragment_memory, sizeof(udpard_fragment_t), victim);
-        victim = rx_fragment_tree_first_redundant(*root, frame.offset, frame.offset + frame.payload.size);
+    while ((frag != NULL) && ((frag->offset + frag->view.size) < v_right)) {
+        cavl2_remove(root, &frag->index_offset);
+        mem_free_payload(frag->payload_deleter, frag->origin);
+        mem_free(fragment_memory, sizeof(udpard_fragment_t), frag);
+        frag = (udpard_fragment_t*)cavl2_lower_bound(*root, &v_left, &rx_cavl_compare_fragment_offset);
     }
 
     // Insert the new fragment.
     udpard_tree_t* const res = cavl2_find_or_insert(root, //
-                                                    &frag->offset,
+                                                    &mew->offset,
                                                     &rx_cavl_compare_fragment_offset,
-                                                    &frag->index_offset,
+                                                    &mew->index_offset,
                                                     &cavl2_trivial_factory);
-    UDPARD_ASSERT(res == &frag->index_offset);
+    UDPARD_ASSERT(res == &mew->index_offset);
     (void)res;
 
     // Update the covered prefix.
