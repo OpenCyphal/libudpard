@@ -2,12 +2,13 @@
 // Copyright (c) 2016 Cyphal Development Team.
 /// Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
+// ReSharper disable CppRedundantInlineSpecifier
+// NOLINTBEGIN(*DeprecatedOrUnsafeBufferHandling,*err34-c)
 #pragma once
 
 #include <udpard.h> // Shall always be included first.
 #include <stdlib.h>
 #include <stdio.h>
-#include <limits.h>
 #include <time.h>
 
 #if !(defined(UDPARD_VERSION_MAJOR) && defined(UDPARD_VERSION_MINOR))
@@ -64,12 +65,16 @@ typedef struct
     /// The current state of the allocator.
     size_t allocated_fragments;
     size_t allocated_bytes;
+    /// Event counters.
+    uint64_t count_alloc;
+    uint64_t count_free;
 } instrumented_allocator_t;
 
 static inline void* instrumented_allocator_alloc(void* const user_reference, const size_t size)
 {
     instrumented_allocator_t* const self   = (instrumented_allocator_t*)user_reference;
     void*                           result = NULL;
+    self->count_alloc++;
     if ((size > 0U) &&                                           //
         ((self->allocated_bytes + size) <= self->limit_bytes) && //
         ((self->allocated_fragments + 1U) <= self->limit_fragments)) {
@@ -100,6 +105,7 @@ static inline void* instrumented_allocator_alloc(void* const user_reference, con
 static inline void instrumented_allocator_free(void* const user_reference, const size_t size, void* const pointer)
 {
     instrumented_allocator_t* const self = (instrumented_allocator_t*)user_reference;
+    self->count_free++;
     if (pointer != NULL) {
         uint_least8_t* p         = ((uint_least8_t*)pointer) - INSTRUMENTED_ALLOCATOR_CANARY_SIZE;
         void* const    origin    = p;
@@ -136,6 +142,8 @@ static inline void instrumented_allocator_new(instrumented_allocator_t* const se
     self->limit_bytes         = SIZE_MAX;
     self->allocated_fragments = 0U;
     self->allocated_bytes     = 0U;
+    self->count_alloc         = 0U;
+    self->count_free          = 0U;
 }
 
 static inline udpard_mem_resource_t instrumented_allocator_make_resource(const instrumented_allocator_t* const self)
@@ -164,3 +172,5 @@ static inline void seed_prng(void)
 #ifdef __cplusplus
 }
 #endif
+
+// NOLINTEND(*DeprecatedOrUnsafeBufferHandling,*err34-c)

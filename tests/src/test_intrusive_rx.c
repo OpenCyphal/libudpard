@@ -4,7 +4,37 @@
 /// SPDX-License-Identifier: MIT
 
 #include <udpard.c> // NOLINT(bugprone-suspicious-include)
+#include "helpers.h"
 #include <unity.h>
+
+typedef struct fragment_tree_match_item_t
+{
+    size_t      offset;
+    const char* data; ///< A null-terminated string; NULL at the end.
+} fragment_tree_match_item_t;
+
+static bool fragment_tree_match(udpard_fragment_t* const head, const fragment_tree_match_item_t items[])
+{
+    if (head == NULL) {
+        return (items[0].data == NULL);
+    }
+    const bool match = (head->offset == items[0].offset) &&
+                       (strlen((const char*)head->view.data) == strlen(items[0].data)) &&
+                       (memcmp(head->view.data, items[0].data, head->view.size) == 0);
+    return match && fragment_tree_match((udpard_fragment_t*)cavl2_next_greater(&head->index_offset), &items[1]);
+}
+
+static void test_rx_fragment_tree_update_a(void)
+{
+    instrumented_allocator_t alloc_frag = { 0 };
+    instrumented_allocator_new(&alloc_frag);
+    const udpard_mem_resource_t mem_frag = instrumented_allocator_make_resource(&alloc_frag);
+
+    instrumented_allocator_t alloc_payload = { 0 };
+    instrumented_allocator_new(&alloc_payload);
+    const udpard_mem_resource_t mem_payload = instrumented_allocator_make_resource(&alloc_payload);
+    const udpard_mem_deleter_t  del_payload = instrumented_allocator_make_deleter(&alloc_payload);
+}
 
 static void test_rx_transfer_id_forward_distance(void)
 {
@@ -288,6 +318,7 @@ void tearDown(void) {}
 int main(void)
 {
     UNITY_BEGIN();
+    RUN_TEST(test_rx_fragment_tree_update_a);
     RUN_TEST(test_rx_transfer_id_forward_distance);
     RUN_TEST(test_rx_transfer_id_window_slide);
     RUN_TEST(test_rx_transfer_id_window_manip);

@@ -853,7 +853,6 @@ static rx_fragment_tree_update_result_t rx_fragment_tree_update(udpard_tree_t** 
     // render smaller fragments that overlap with its edges redundant.
     // To check for that, we create a new virtual fragment that represents the new fragment together with those
     // that join it on either end, if any, and then look for fragments contained within.
-    // The search interval would be (v_left, v_right-1) to avoid matching the neighbors themselves.
     // Example:
     //                |--B--|
     //             |--X--|
@@ -876,13 +875,13 @@ static rx_fragment_tree_update_result_t rx_fragment_tree_update(udpard_tree_t** 
     }
     frag = (udpard_fragment_t*)cavl2_predecessor(*root, &right, &rx_cavl_compare_fragment_offset);
     if (frag != NULL) {
-        v_right = larger(v_right, frag->offset + frag->view.size);
+        v_right = larger(v_right, larger(frag->offset + frag->view.size, 1U) - 1U); // Avoid matching the right neighbor
     }
     UDPARD_ASSERT((v_left <= left) && (right <= v_right));
 
     // Find the first victim. It has to be done early to decide if the new fragment is worth keeping at all.
     frag            = (udpard_fragment_t*)cavl2_lower_bound(*root, &v_left, &rx_cavl_compare_fragment_offset);
-    const bool need = ((frag != NULL) && ((frag->offset + frag->view.size) < v_right)) ||
+    const bool need = ((frag != NULL) && ((frag->offset + frag->view.size) <= v_right)) ||
                       rx_fragment_is_needed(*root, frame.offset, frame.payload.size, transfer_payload_size, extent);
     if (!need) {
         mem_free_payload(payload_deleter, frame.origin);
@@ -904,7 +903,7 @@ static rx_fragment_tree_update_result_t rx_fragment_tree_update(udpard_tree_t** 
     mew->payload_deleter = payload_deleter;
 
     // Remove all redundant fragments before inserting the new one.
-    while ((frag != NULL) && ((frag->offset + frag->view.size) < v_right)) {
+    while ((frag != NULL) && ((frag->offset + frag->view.size) <= v_right)) {
         cavl2_remove(root, &frag->index_offset);
         mem_free_payload(frag->payload_deleter, frag->origin);
         mem_free(fragment_memory, sizeof(udpard_fragment_t), frag);
