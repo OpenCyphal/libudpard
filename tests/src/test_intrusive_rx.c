@@ -27,16 +27,26 @@ static udpard_fragment_t* fragment_at(udpard_tree_t* const root, uint32_t index)
     return NULL;
 }
 
-/// Allocates the payload on the heap, emulating normal transfer reception.
-/// The payload shall not contain NUL characters.
-static rx_frame_base_t make_frame_base(const udpard_mem_resource_t mem, const size_t offset, const char* const payload)
+/// Allocates the payload on the heap, emulating normal frame reception.
+static rx_frame_base_t make_frame_base(const udpard_mem_resource_t mem,
+                                       const size_t                offset,
+                                       const size_t                size,
+                                       const void* const           payload)
 {
-    const size_t size = (payload != NULL) ? (strlen(payload) + 1) : 0U;
-    void*        data = mem.alloc(mem.user, size);
-    memcpy(data, payload, size);
+    void* data = mem.alloc(mem.user, size);
+    if (size > 0) {
+        memcpy(data, payload, size);
+    }
     return (rx_frame_base_t){ .offset  = offset,
                               .payload = { .data = data, .size = size },
                               .origin  = { .data = data, .size = size } };
+}
+/// The payload string cannot contain NUL characters.
+static rx_frame_base_t make_frame_base_str(const udpard_mem_resource_t mem,
+                                           const size_t                offset,
+                                           const char* const           payload)
+{
+    return make_frame_base(mem, offset, (payload != NULL) ? (strlen(payload) + 1) : 0U, payload);
 }
 
 static void test_rx_fragment_tree_update_a(void)
@@ -59,7 +69,7 @@ static void test_rx_fragment_tree_update_a(void)
         res = rx_fragment_tree_update(&root, //
                                       mem_frag,
                                       del_payload,
-                                      make_frame_base(mem_payload, 0, NULL),
+                                      make_frame_base_str(mem_payload, 0, NULL),
                                       0,
                                       0,
                                       &cov);
@@ -101,7 +111,7 @@ static void test_rx_fragment_tree_update_a(void)
         res = rx_fragment_tree_update(&root, //
                                       mem_frag,
                                       del_payload,
-                                      make_frame_base(mem_payload, 0, "abc"),
+                                      make_frame_base_str(mem_payload, 0, "abc"),
                                       4,
                                       0,
                                       &cov);
@@ -143,7 +153,7 @@ static void test_rx_fragment_tree_update_a(void)
         res = rx_fragment_tree_update(&root, //
                                       mem_frag,
                                       del_payload,
-                                      make_frame_base(mem_payload, 0, "abcdef"),
+                                      make_frame_base_str(mem_payload, 0, "abcdef"),
                                       7,
                                       3,
                                       &cov);
@@ -186,7 +196,7 @@ static void test_rx_fragment_tree_update_a(void)
         res = rx_fragment_tree_update(&root, //
                                       mem_frag,
                                       del_payload,
-                                      make_frame_base(mem_payload, 0, "abc"),
+                                      make_frame_base_str(mem_payload, 0, "abc"),
                                       100,
                                       10,
                                       &cov);
@@ -198,7 +208,7 @@ static void test_rx_fragment_tree_update_a(void)
         res = rx_fragment_tree_update(&root, //
                                       mem_frag,
                                       del_payload,
-                                      make_frame_base(mem_payload, 8, "xyz"),
+                                      make_frame_base_str(mem_payload, 8, "xyz"),
                                       100,
                                       11,
                                       &cov);
@@ -210,7 +220,7 @@ static void test_rx_fragment_tree_update_a(void)
         res = rx_fragment_tree_update(&root, //
                                       mem_frag,
                                       del_payload,
-                                      make_frame_base(mem_payload, 4, "def"),
+                                      make_frame_base_str(mem_payload, 4, "def"),
                                       100,
                                       11,
                                       &cov);
@@ -245,6 +255,186 @@ static void test_rx_fragment_tree_update_a(void)
         TEST_ASSERT_EQUAL_size_t(3, alloc_payload.count_alloc);
         TEST_ASSERT_EQUAL_size_t(3, alloc_frag.count_free);
         TEST_ASSERT_EQUAL_size_t(3, alloc_payload.count_free);
+    }
+
+    instrumented_allocator_reset(&alloc_frag);
+    instrumented_allocator_reset(&alloc_payload);
+
+    // Multi-frame reassembly test with defragmentation: "0123456789".
+    {
+        udpard_tree_t*                   root = NULL;
+        size_t                           cov  = 0;
+        rx_fragment_tree_update_result_t res  = rx_fragment_tree_not_done;
+        // Add fragment.
+        res = rx_fragment_tree_update(&root, //
+                                      mem_frag,
+                                      del_payload,
+                                      make_frame_base(mem_payload, 0, 2, "01"),
+                                      100,
+                                      10,
+                                      &cov);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        TEST_ASSERT_EQUAL_size_t(2, cov);
+        TEST_ASSERT_NOT_NULL(root);
+        TEST_ASSERT_EQUAL(1, tree_count(root));
+        // Add fragment.
+        res = rx_fragment_tree_update(&root, //
+                                      mem_frag,
+                                      del_payload,
+                                      make_frame_base(mem_payload, 4, 2, "45"),
+                                      100,
+                                      10,
+                                      &cov);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        TEST_ASSERT_EQUAL_size_t(2, cov); // not extended
+        TEST_ASSERT_NOT_NULL(root);
+        TEST_ASSERT_EQUAL(2, tree_count(root));
+        // Add fragment.
+        res = rx_fragment_tree_update(&root, //
+                                      mem_frag,
+                                      del_payload,
+                                      make_frame_base(mem_payload, 3, 2, "34"),
+                                      100,
+                                      10,
+                                      &cov);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        TEST_ASSERT_EQUAL_size_t(2, cov); // not extended
+        TEST_ASSERT_NOT_NULL(root);
+        TEST_ASSERT_EQUAL(3, tree_count(root));
+        // Intermediate check on the current state of the tree so far.
+        TEST_ASSERT_EQUAL_size_t(0, fragment_at(root, 0)->offset);
+        TEST_ASSERT_EQUAL_size_t(2, fragment_at(root, 0)->view.size);
+        TEST_ASSERT_EQUAL_STRING_LEN("01", fragment_at(root, 0)->view.data, 2);
+        TEST_ASSERT_EQUAL_size_t(3, fragment_at(root, 1)->offset);
+        TEST_ASSERT_EQUAL_size_t(2, fragment_at(root, 1)->view.size);
+        TEST_ASSERT_EQUAL_STRING_LEN("34", fragment_at(root, 1)->view.data, 2);
+        TEST_ASSERT_EQUAL_size_t(4, fragment_at(root, 2)->offset);
+        TEST_ASSERT_EQUAL_size_t(2, fragment_at(root, 2)->view.size);
+        TEST_ASSERT_EQUAL_STRING_LEN("45", fragment_at(root, 2)->view.data, 2);
+        TEST_ASSERT_NULL(fragment_at(root, 3));
+        TEST_ASSERT_EQUAL_size_t(3, alloc_frag.allocated_fragments);
+        TEST_ASSERT_EQUAL_size_t(3, alloc_payload.allocated_fragments);
+        TEST_ASSERT_EQUAL_size_t(3, alloc_frag.count_alloc);
+        TEST_ASSERT_EQUAL_size_t(3, alloc_payload.count_alloc);
+        TEST_ASSERT_EQUAL_size_t(0, alloc_frag.count_free);
+        TEST_ASSERT_EQUAL_size_t(0, alloc_payload.count_free);
+        // Add fragment. BRIDGE THE LEFT GAP, EVICT `34` FRAGMENT AS REDUNDANT.
+        res = rx_fragment_tree_update(&root, //
+                                      mem_frag,
+                                      del_payload,
+                                      make_frame_base(mem_payload, 2, 2, "23"),
+                                      100,
+                                      10,
+                                      &cov);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        TEST_ASSERT_EQUAL_size_t(6, cov); // extended!
+        TEST_ASSERT_NOT_NULL(root);
+        TEST_ASSERT_EQUAL(3, tree_count(root));
+        // Check the updated tree state after the eviction. Fragment `34` should be gone.
+        TEST_ASSERT_EQUAL_size_t(0, fragment_at(root, 0)->offset);
+        TEST_ASSERT_EQUAL_size_t(2, fragment_at(root, 0)->view.size);
+        TEST_ASSERT_EQUAL_STRING_LEN("01", fragment_at(root, 0)->view.data, 2);
+        TEST_ASSERT_EQUAL_size_t(2, fragment_at(root, 1)->offset);
+        TEST_ASSERT_EQUAL_size_t(2, fragment_at(root, 1)->view.size);
+        TEST_ASSERT_EQUAL_STRING_LEN("23", fragment_at(root, 1)->view.data, 2);
+        TEST_ASSERT_EQUAL_size_t(4, fragment_at(root, 2)->offset);
+        TEST_ASSERT_EQUAL_size_t(2, fragment_at(root, 2)->view.size);
+        TEST_ASSERT_EQUAL_STRING_LEN("45", fragment_at(root, 2)->view.data, 2);
+        TEST_ASSERT_NULL(fragment_at(root, 3));
+        TEST_ASSERT_EQUAL_size_t(3, alloc_frag.allocated_fragments);
+        TEST_ASSERT_EQUAL_size_t(3, alloc_payload.allocated_fragments);
+        TEST_ASSERT_EQUAL_size_t(4, alloc_frag.count_alloc);
+        TEST_ASSERT_EQUAL_size_t(4, alloc_payload.count_alloc);
+        TEST_ASSERT_EQUAL_size_t(1, alloc_frag.count_free);
+        TEST_ASSERT_EQUAL_size_t(1, alloc_payload.count_free);
+        // Add a fully-contained (redundant) fragment. Should be discarded.
+        res = rx_fragment_tree_update(&root, //
+                                      mem_frag,
+                                      del_payload,
+                                      make_frame_base(mem_payload, 1, 2, ":3"),
+                                      100,
+                                      10,
+                                      &cov);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        TEST_ASSERT_EQUAL_size_t(6, cov); // no new information is added
+        TEST_ASSERT_NOT_NULL(root);
+        TEST_ASSERT_EQUAL(3, tree_count(root));                      // no new frames added
+        TEST_ASSERT_EQUAL_size_t(3, alloc_frag.allocated_fragments); // no new allocations
+        TEST_ASSERT_EQUAL_size_t(3, alloc_payload.allocated_fragments);
+        TEST_ASSERT_EQUAL_size_t(4, alloc_frag.count_alloc);
+        TEST_ASSERT_EQUAL_size_t(5, alloc_payload.count_alloc); // the payload was briefly allocated and discarded
+        TEST_ASSERT_EQUAL_size_t(1, alloc_frag.count_free);
+        TEST_ASSERT_EQUAL_size_t(2, alloc_payload.count_free); // yeah, discarded
+        // Add fragment. Slight overlap on the right, candidate for eviction in the future.
+        res = rx_fragment_tree_update(&root, //
+                                      mem_frag,
+                                      del_payload,
+                                      make_frame_base(mem_payload, 5, 2, "56"),
+                                      100,
+                                      10,
+                                      &cov);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        TEST_ASSERT_EQUAL_size_t(7, cov); // extended by 1 byte
+        TEST_ASSERT_NOT_NULL(root);
+        TEST_ASSERT_EQUAL(4, tree_count(root));
+        // Check the updated tree state.
+        TEST_ASSERT_EQUAL_size_t(0, fragment_at(root, 0)->offset);
+        TEST_ASSERT_EQUAL_size_t(2, fragment_at(root, 0)->view.size);
+        TEST_ASSERT_EQUAL_STRING_LEN("01", fragment_at(root, 0)->view.data, 2);
+        TEST_ASSERT_EQUAL_size_t(2, fragment_at(root, 1)->offset);
+        TEST_ASSERT_EQUAL_size_t(2, fragment_at(root, 1)->view.size);
+        TEST_ASSERT_EQUAL_STRING_LEN("23", fragment_at(root, 1)->view.data, 2);
+        TEST_ASSERT_EQUAL_size_t(4, fragment_at(root, 2)->offset);
+        TEST_ASSERT_EQUAL_size_t(2, fragment_at(root, 2)->view.size);
+        TEST_ASSERT_EQUAL_STRING_LEN("45", fragment_at(root, 2)->view.data, 2);
+        TEST_ASSERT_EQUAL_size_t(5, fragment_at(root, 3)->offset);
+        TEST_ASSERT_EQUAL_size_t(2, fragment_at(root, 3)->view.size);
+        TEST_ASSERT_EQUAL_STRING_LEN("56", fragment_at(root, 3)->view.data, 2);
+        TEST_ASSERT_NULL(fragment_at(root, 4));
+        TEST_ASSERT_EQUAL_size_t(4, alloc_frag.allocated_fragments);
+        TEST_ASSERT_EQUAL_size_t(4, alloc_payload.allocated_fragments);
+        TEST_ASSERT_EQUAL_size_t(5, alloc_frag.count_alloc);
+        TEST_ASSERT_EQUAL_size_t(6, alloc_payload.count_alloc);
+        TEST_ASSERT_EQUAL_size_t(1, alloc_frag.count_free);
+        TEST_ASSERT_EQUAL_size_t(2, alloc_payload.count_free);
+        // Add fragment. Completes the transfer and evicts redundant `45` and `56` fragments.
+        res = rx_fragment_tree_update(&root, //
+                                      mem_frag,
+                                      del_payload,
+                                      make_frame_base(mem_payload, 4, 8, "456789--"),
+                                      100,
+                                      10,
+                                      &cov);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_done, res);
+        TEST_ASSERT_EQUAL_size_t(12, cov); // extended all the way, beyond the extent.
+        TEST_ASSERT_NOT_NULL(root);
+        TEST_ASSERT_EQUAL(3, tree_count(root)); // the tree shrunk due to evictions
+        // Check the updated tree state.
+        TEST_ASSERT_EQUAL_size_t(0, fragment_at(root, 0)->offset);
+        TEST_ASSERT_EQUAL_size_t(2, fragment_at(root, 0)->view.size);
+        TEST_ASSERT_EQUAL_STRING_LEN("01", fragment_at(root, 0)->view.data, 2);
+        TEST_ASSERT_EQUAL_size_t(2, fragment_at(root, 1)->offset);
+        TEST_ASSERT_EQUAL_size_t(2, fragment_at(root, 1)->view.size);
+        TEST_ASSERT_EQUAL_STRING_LEN("23", fragment_at(root, 1)->view.data, 2);
+        TEST_ASSERT_EQUAL_size_t(4, fragment_at(root, 2)->offset);
+        TEST_ASSERT_EQUAL_size_t(8, fragment_at(root, 2)->view.size);
+        TEST_ASSERT_EQUAL_STRING_LEN("456789--", fragment_at(root, 2)->view.data, 8);
+        TEST_ASSERT_NULL(fragment_at(root, 3));
+        TEST_ASSERT_EQUAL_size_t(3, alloc_frag.allocated_fragments);
+        TEST_ASSERT_EQUAL_size_t(3, alloc_payload.allocated_fragments);
+        TEST_ASSERT_EQUAL_size_t(6, alloc_frag.count_alloc);
+        TEST_ASSERT_EQUAL_size_t(7, alloc_payload.count_alloc);
+        TEST_ASSERT_EQUAL_size_t(3, alloc_frag.count_free);
+        TEST_ASSERT_EQUAL_size_t(4, alloc_payload.count_free);
+        // Free the tree (as in freedom). The free tree is free to manifest its own destiny.
+        udpard_fragment_free_all((udpard_fragment_t*)root, mem_frag);
+        // Check the heap.
+        TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
+        TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
+        TEST_ASSERT_EQUAL_size_t(6, alloc_frag.count_alloc);
+        TEST_ASSERT_EQUAL_size_t(7, alloc_payload.count_alloc);
+        TEST_ASSERT_EQUAL_size_t(6, alloc_frag.count_free);
+        TEST_ASSERT_EQUAL_size_t(7, alloc_payload.count_free);
     }
 }
 

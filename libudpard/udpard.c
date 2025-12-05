@@ -855,14 +855,14 @@ static rx_fragment_tree_update_result_t rx_fragment_tree_update(udpard_tree_t** 
     }
 
     // The addition of a larger fragment that joins adjacent fragments together into a larger contiguous block may
-    // render smaller fragments that overlap with its edges redundant.
+    // render smaller fragments crossing its boundaries redundant.
     // To check for that, we create a new virtual fragment that represents the new fragment together with those
-    // that join it on either end, if any, and then look for fragments contained within.
+    // that join it on either end, if any, and then look for fragments contained within the virtual one.
     // Example:
     //                |--B--|
     //             |--X--|
     //          |--A--|
-    // The addition of fragment A or B will render X redundant, even though it is not contained within any fragment.
+    // The addition of fragment A or B will render X redundant, even though it is not contained within either.
     // This algorithm will detect that and mark X for removal.
     //
     // To find the left neighbor, we need to find the fragment crossing the left boundary whose offset is the smallest.
