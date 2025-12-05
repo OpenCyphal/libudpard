@@ -106,7 +106,9 @@ void udpard_fragment_free_all(udpard_fragment_t* const frag, const udpard_mem_re
         // Descend the tree
         for (uint_fast8_t i = 0; i < 2; i++) {
             if (frag->index_offset.lr[i] != NULL) {
+                frag->index_offset.lr[i]->up = NULL; // Prevent backtrack ascension from this branch
                 udpard_fragment_free_all((udpard_fragment_t*)frag->index_offset.lr[i], fragment_memory_resource);
+                frag->index_offset.lr[i] = NULL; // Avoid dangly pointers even if we're headed for imminent destruction
             }
         }
         // Delete this fragment
@@ -115,7 +117,7 @@ void udpard_fragment_free_all(udpard_fragment_t* const frag, const udpard_mem_re
         mem_free(fragment_memory_resource, sizeof(udpard_fragment_t), frag);
         if (parent != NULL) {
             parent->index_offset.lr[parent->index_offset.lr[1] == (udpard_tree_t*)frag] = NULL;
-            udpard_fragment_free_all(parent, fragment_memory_resource); // tail call
+            udpard_fragment_free_all(parent, fragment_memory_resource); // tail call hopefully
         }
     }
 }

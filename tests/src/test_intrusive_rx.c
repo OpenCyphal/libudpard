@@ -97,7 +97,7 @@ static void test_rx_fragment_tree_update_a(void)
         udpard_tree_t*                   root = NULL;
         size_t                           cov  = 0;
         rx_fragment_tree_update_result_t res  = rx_fragment_tree_not_done;
-        //
+        // Add fragment.
         res = rx_fragment_tree_update(&root, //
                                       mem_frag,
                                       del_payload,
@@ -139,7 +139,7 @@ static void test_rx_fragment_tree_update_a(void)
         udpard_tree_t*                   root = NULL;
         size_t                           cov  = 0;
         rx_fragment_tree_update_result_t res  = rx_fragment_tree_not_done;
-        //
+        // Add fragment.
         res = rx_fragment_tree_update(&root, //
                                       mem_frag,
                                       del_payload,
@@ -172,6 +172,79 @@ static void test_rx_fragment_tree_update_a(void)
         TEST_ASSERT_EQUAL_size_t(1, alloc_payload.count_alloc);
         TEST_ASSERT_EQUAL_size_t(1, alloc_frag.count_free);
         TEST_ASSERT_EQUAL_size_t(1, alloc_payload.count_free);
+    }
+
+    instrumented_allocator_reset(&alloc_frag);
+    instrumented_allocator_reset(&alloc_payload);
+
+    // Multi-frame reassembly test: "abc def xyz "; the last nul is beyond the extent.
+    {
+        udpard_tree_t*                   root = NULL;
+        size_t                           cov  = 0;
+        rx_fragment_tree_update_result_t res  = rx_fragment_tree_not_done;
+        // Add fragment.
+        res = rx_fragment_tree_update(&root, //
+                                      mem_frag,
+                                      del_payload,
+                                      make_frame_base(mem_payload, 0, "abc"),
+                                      100,
+                                      10,
+                                      &cov);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        TEST_ASSERT_EQUAL_size_t(4, cov);
+        TEST_ASSERT_NOT_NULL(root);
+        TEST_ASSERT_EQUAL(1, tree_count(root));
+        // Add fragment.
+        res = rx_fragment_tree_update(&root, //
+                                      mem_frag,
+                                      del_payload,
+                                      make_frame_base(mem_payload, 8, "xyz"),
+                                      100,
+                                      11,
+                                      &cov);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        TEST_ASSERT_EQUAL_size_t(4, cov); // not extended due to the gap in the middle.
+        TEST_ASSERT_NOT_NULL(root);
+        TEST_ASSERT_EQUAL(2, tree_count(root));
+        // Add fragment.
+        res = rx_fragment_tree_update(&root, //
+                                      mem_frag,
+                                      del_payload,
+                                      make_frame_base(mem_payload, 4, "def"),
+                                      100,
+                                      11,
+                                      &cov);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_done, res);
+        TEST_ASSERT_EQUAL_size_t(12, cov); // extended to cover the two remaining frames.
+        TEST_ASSERT_NOT_NULL(root);
+        TEST_ASSERT_EQUAL(3, tree_count(root));
+        // Check the retained payload.
+        TEST_ASSERT_EQUAL_size_t(0, fragment_at(root, 0)->offset);
+        TEST_ASSERT_EQUAL_size_t(4, fragment_at(root, 0)->view.size);
+        TEST_ASSERT_EQUAL_STRING("abc", fragment_at(root, 0)->view.data);
+        TEST_ASSERT_EQUAL_size_t(4, fragment_at(root, 1)->offset);
+        TEST_ASSERT_EQUAL_size_t(4, fragment_at(root, 1)->view.size);
+        TEST_ASSERT_EQUAL_STRING("def", fragment_at(root, 1)->view.data);
+        TEST_ASSERT_EQUAL_size_t(8, fragment_at(root, 2)->offset);
+        TEST_ASSERT_EQUAL_size_t(4, fragment_at(root, 2)->view.size);
+        TEST_ASSERT_EQUAL_STRING("xyz", fragment_at(root, 2)->view.data);
+        TEST_ASSERT_NULL(fragment_at(root, 3));
+        // Check the heap.
+        TEST_ASSERT_EQUAL_size_t(3, alloc_frag.allocated_fragments);
+        TEST_ASSERT_EQUAL_size_t(3, alloc_payload.allocated_fragments);
+        TEST_ASSERT_EQUAL_size_t(3, alloc_frag.count_alloc);
+        TEST_ASSERT_EQUAL_size_t(3, alloc_payload.count_alloc);
+        TEST_ASSERT_EQUAL_size_t(0, alloc_frag.count_free);
+        TEST_ASSERT_EQUAL_size_t(0, alloc_payload.count_free);
+        // Free the tree (as in freedom). The free tree is free to manifest its own destiny.
+        udpard_fragment_free_all((udpard_fragment_t*)root, mem_frag);
+        // Check the heap.
+        TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
+        TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
+        TEST_ASSERT_EQUAL_size_t(3, alloc_frag.count_alloc);
+        TEST_ASSERT_EQUAL_size_t(3, alloc_payload.count_alloc);
+        TEST_ASSERT_EQUAL_size_t(3, alloc_frag.count_free);
+        TEST_ASSERT_EQUAL_size_t(3, alloc_payload.count_free);
     }
 }
 
