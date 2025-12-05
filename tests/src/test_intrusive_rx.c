@@ -87,6 +87,48 @@ static void test_rx_fragment_tree_update_a(void)
         TEST_ASSERT_EQUAL_size_t(1, alloc_frag.count_free);
         TEST_ASSERT_EQUAL_size_t(0, alloc_payload.count_free); // bc payload empty
     }
+
+    instrumented_allocator_reset(&alloc_frag);
+    instrumented_allocator_reset(&alloc_payload);
+
+    // Non-empty payload test with zero extent.
+    {
+        udpard_tree_t*                   root = NULL;
+        size_t                           cov  = 0;
+        rx_fragment_tree_update_result_t res  = rx_fragment_tree_not_done;
+        //
+        res = rx_fragment_tree_update(&root, //
+                                      mem_frag,
+                                      del_payload,
+                                      make_frame_base(mem_payload, 0, "abc"),
+                                      3,
+                                      0,
+                                      &cov);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_done, res);
+        TEST_ASSERT_EQUAL_size_t(3, cov);
+        TEST_ASSERT_NOT_NULL(root);
+        TEST_ASSERT_EQUAL(1, tree_count(root));
+        // Check the retained payload.
+        TEST_ASSERT_EQUAL_size_t(0, fragment_at(root, 0)->offset);
+        TEST_ASSERT_EQUAL_size_t(3, fragment_at(root, 0)->view.size);
+        TEST_ASSERT_NULL(fragment_at(root, 1));
+        // Check the heap.
+        TEST_ASSERT_EQUAL_size_t(1, alloc_frag.allocated_fragments);
+        TEST_ASSERT_EQUAL_size_t(1, alloc_payload.allocated_fragments);
+        TEST_ASSERT_EQUAL_size_t(1, alloc_frag.count_alloc);
+        TEST_ASSERT_EQUAL_size_t(1, alloc_payload.count_alloc);
+        TEST_ASSERT_EQUAL_size_t(0, alloc_frag.count_free);
+        TEST_ASSERT_EQUAL_size_t(0, alloc_payload.count_free);
+        // Free the tree (as in freedom). The free tree is free to manifest its own destiny.
+        udpard_fragment_free_all((udpard_fragment_t*)root, mem_frag);
+        // Check the heap.
+        TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
+        TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
+        TEST_ASSERT_EQUAL_size_t(1, alloc_frag.count_alloc);
+        TEST_ASSERT_EQUAL_size_t(1, alloc_payload.count_alloc);
+        TEST_ASSERT_EQUAL_size_t(1, alloc_frag.count_free);
+        TEST_ASSERT_EQUAL_size_t(1, alloc_payload.count_free);
+    }
 }
 
 static void test_rx_transfer_id_forward_distance(void)

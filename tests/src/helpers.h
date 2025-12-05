@@ -147,6 +147,15 @@ static inline void instrumented_allocator_new(instrumented_allocator_t* const se
     self->count_free          = 0U;
 }
 
+/// Resets the counters and generates a new canary.
+/// Will crash if there are outstanding allocations.
+static inline void instrumented_allocator_reset(instrumented_allocator_t* const self)
+{
+    TEST_PANIC_UNLESS(self->allocated_fragments == 0U);
+    TEST_PANIC_UNLESS(self->allocated_bytes == 0U);
+    instrumented_allocator_new(self);
+}
+
 static inline udpard_mem_resource_t instrumented_allocator_make_resource(const instrumented_allocator_t* const self)
 {
     return (udpard_mem_resource_t){ .user  = (void*)self,
