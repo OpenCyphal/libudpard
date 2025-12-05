@@ -756,52 +756,6 @@ static int32_t rx_cavl_compare_fragment_end(const void* const user, const udpard
     return 0; // clang-format on
 }
 
-/// True if the fragment tree does not have a contiguous payload coverage in [left, right).
-/// This function requires that the tree does not have fully-overlapped fragments; the implications are that
-/// no two fragments may have the same offset, and that fragments ordered by offset also order by their ends.
-/// The complexity is O(log n + k), where n is the number of fragments in the tree and k is the number of fragments
-/// overlapping the specified range, assuming there are no fully-overlapped fragments.
-static bool rx_fragment_tree_has_gap_in_range(udpard_tree_t* const root, const size_t left, const size_t right)
-{
-    if (left >= right) {
-        return false; // empty fragment; no gap by convention
-    }
-    udpard_fragment_t* frag = (udpard_fragment_t*)cavl2_predecessor(root, &left, &rx_cavl_compare_fragment_offset);
-    if (frag == NULL) {
-        return true;
-    }
-    // offset+size can overflow on platforms with 16-bit size and requires special treatment there.
-    if ((frag->offset + frag->view.size) <= left) { // The predecessor ends before the left edge.
-        return true;
-    }
-    size_t covered = left; // This is the O(k) part. The scan starting point search is O(log n).
-    while ((frag != NULL) && (frag->offset < right)) {
-        if (frag->offset > covered) {
-            return true;
-        }
-        covered = larger(covered, frag->offset + frag->view.size);
-        if (covered >= right) {
-            return false; // Reached the end of the requested range without gaps.
-        }
-        frag = (udpard_fragment_t*)cavl2_next_greater(&frag->index_offset);
-    }
-    return covered < right;
-}
-
-/// True if the specified fragment should be retained. Otherwise, it is redundant and should be discarded.
-/// The complexity is O(log n + k), see rx_fragment_tree_has_gap_in_range() for details.
-static bool rx_fragment_is_needed(udpard_tree_t* const root,
-                                  const size_t         frag_offset,
-                                  const size_t         frag_size,
-                                  const size_t         transfer_size,
-                                  const size_t         extent)
-{
-    const size_t end = smaller3(frag_offset + frag_size, transfer_size, extent);
-    // We need to special-case zero-size transfers because they are effectively just a single gap at offset zero.
-    return ((end == 0) && (frag_offset == 0)) ||
-           ((frag_offset < extent) && rx_fragment_tree_has_gap_in_range(root, frag_offset, end));
-}
-
 /// Finds the number of contiguous payload bytes received from offset zero after accepting a new fragment.
 /// The transfer is considered fully received when covered_prefix >= min(extent, transfer_payload_size).
 /// This should be invoked after the fragment tree accepted a new fragment at frag_offset with frag_size.
@@ -841,27 +795,51 @@ static rx_fragment_tree_update_result_t rx_fragment_tree_update(udpard_tree_t** 
                                                                 const size_t                extent,
                                                                 size_t* const               covered_prefix_io)
 {
-    // The new fragment is needed in two cases:
-    // 1) It covers new ground in the [0, extent) range.
-    // 2) It overlaps smaller fragments that are already in the tree, which can be replaced.
-    // We do a quick lookup first to see if an existing fragment fully contains the new one;
-    // this simplifies the logic below an is very fast.
+    // Do a quick lookup first to see if an existing fragment fully contains the new one or is equal,
+    // in which case we can immediately discard the new fragment; this simplifies the logic below an is very fast.
+    // This helps maintain a fundamental invariant of the fragment tree: no fully-contained fragments.
     const size_t       left  = frame.offset;
     const size_t       right = frame.offset + frame.payload.size;
     udpard_fragment_t* frag  = (udpard_fragment_t*)cavl2_predecessor(*root, &left, &rx_cavl_compare_fragment_offset);
     if ((frag != NULL) && ((frag->offset + frag->view.size) >= right)) {
         mem_free_payload(payload_deleter, frame.origin);
-        return rx_fragment_tree_not_done; // New fragment is fully contained within an existing one.
+        return rx_fragment_tree_not_done; // New fragment is fully contained within an existing one, discard.
     }
+
+    // If the new fragment is not contained by another, we accept it even if it doesn't add new payload coverage.
+    // This may seem counter-intuitive at first, and it is indeed very easy to query the tree to check if there
+    // is a payload gap in a given range, but the reason we accept such fragments is that we speculate that
+    // other large fragments may arrive in the future that will join with this one, allowing eviction of the smaller
+    // ones, thus representing the full payload in a fewer number of fragments.
+    // Consider the following scenario:
+    //      |--A--|--B--|--C--|--D--|   <-- first fragment set
+    //      |---X---|---Y---|---Z---|   <-- second fragment set
+    // Suppose we already have A..D received. Arrival of either X or Z allows eviction of A/D immediately.
+    // Arrival of Y does not allow an immediate eviction of any fragment, but if we had rejected it because it added
+    // no new coverage, we would miss the opportunity to evict B/C when X or Z arrive later.
+    // Therefore, we keep everything that comes our way as long as it is not smaller than what we already have.
+    //
+    // Ensure we can allocate the fragment header for the new frame before pruning the tree to avoid data loss.
+    udpard_fragment_t* mew = mem_alloc(fragment_memory, sizeof(udpard_fragment_t));
+    if (mew == NULL) {
+        mem_free_payload(payload_deleter, frame.origin);
+        return rx_fragment_tree_oom; // Cannot allocate fragment header. Maybe we will succeed later.
+    }
+    mem_zero(sizeof(*mew), mew);
+    mew->view.data       = frame.payload.data;
+    mew->view.size       = frame.payload.size;
+    mew->origin.data     = frame.origin.data;
+    mew->origin.size     = frame.origin.size;
+    mew->offset          = frame.offset;
+    mew->payload_deleter = payload_deleter;
 
     // The addition of a larger fragment that joins adjacent fragments together into a larger contiguous block may
     // render smaller fragments crossing its boundaries redundant.
     // To check for that, we create a new virtual fragment that represents the new fragment together with those
     // that join it on either end, if any, and then look for fragments contained within the virtual one.
     // Example:
-    //                |--B--|
+    //          |--A--|--B--|
     //             |--X--|
-    //          |--A--|
     // The addition of fragment A or B will render X redundant, even though it is not contained within either.
     // This algorithm will detect that and mark X for removal.
     //
@@ -884,31 +862,9 @@ static rx_fragment_tree_update_result_t rx_fragment_tree_update(udpard_tree_t** 
     }
     UDPARD_ASSERT((v_left <= left) && (right <= v_right));
 
-    // Find the first victim. It has to be done early to decide if the new fragment is worth keeping at all.
-    frag            = (udpard_fragment_t*)cavl2_lower_bound(*root, &v_left, &rx_cavl_compare_fragment_offset);
-    const bool need = ((frag != NULL) && ((frag->offset + frag->view.size) <= v_right)) ||
-                      rx_fragment_is_needed(*root, frame.offset, frame.payload.size, transfer_payload_size, extent);
-    if (!need) {
-        mem_free_payload(payload_deleter, frame.origin);
-        return rx_fragment_tree_not_done; // Cannot make use of this fragment.
-    }
-
-    // Ensure we can allocate the fragment header for the new frame before pruning the tree to avoid data loss.
-    udpard_fragment_t* mew = mem_alloc(fragment_memory, sizeof(udpard_fragment_t));
-    if (mew == NULL) {
-        mem_free_payload(payload_deleter, frame.origin);
-        return rx_fragment_tree_oom; // Cannot allocate fragment header. Maybe we will succeed later.
-    }
-    mem_zero(sizeof(*mew), mew);
-    mew->view.data       = frame.payload.data;
-    mew->view.size       = frame.payload.size;
-    mew->origin.data     = frame.origin.data;
-    mew->origin.size     = frame.origin.size;
-    mew->offset          = frame.offset;
-    mew->payload_deleter = payload_deleter;
-
     // Remove all redundant fragments before inserting the new one.
-    // No need to repeat tree lookup, we just step through the nodes using the next_greater lookup.
+    // No need to repeat tree lookup at every iteration, we just step through the nodes using the next_greater lookup.
+    frag = (udpard_fragment_t*)cavl2_lower_bound(*root, &v_left, &rx_cavl_compare_fragment_offset);
     while ((frag != NULL) && (frag->offset >= v_left) && ((frag->offset + frag->view.size) <= v_right)) {
         udpard_fragment_t* const next = (udpard_fragment_t*)cavl2_next_greater(&frag->index_offset);
         cavl2_remove(root, &frag->index_offset);
@@ -916,7 +872,6 @@ static rx_fragment_tree_update_result_t rx_fragment_tree_update(udpard_tree_t** 
         mem_free(fragment_memory, sizeof(udpard_fragment_t), frag);
         frag = next;
     }
-
     // Insert the new fragment.
     udpard_tree_t* const res = cavl2_find_or_insert(root, //
                                                     &mew->offset,
@@ -925,8 +880,7 @@ static rx_fragment_tree_update_result_t rx_fragment_tree_update(udpard_tree_t** 
                                                     &cavl2_trivial_factory);
     UDPARD_ASSERT(res == &mew->index_offset);
     (void)res;
-
-    // Update the covered prefix.
+    // Update the covered prefix. This requires only a single full scan across all iterations!
     *covered_prefix_io = rx_fragment_tree_update_covered_prefix(*root, //
                                                                 *covered_prefix_io,
                                                                 frame.offset,
