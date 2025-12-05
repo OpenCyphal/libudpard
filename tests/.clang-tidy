@@ -49,6 +49,7 @@ Checks: >-
   -misc-include-cleaner,
   -performance-avoid-endl,
   -cppcoreguidelines-avoid-do-while,
+  -*DeprecatedOrUnsafeBufferHandling,
 WarningsAsErrors: '*'
 HeaderFilterRegex: '.*\.hpp'
 FormatStyle: file
