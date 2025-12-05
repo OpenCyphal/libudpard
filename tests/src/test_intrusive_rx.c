@@ -7,21 +7,35 @@
 #include "helpers.h"
 #include <unity.h>
 
-typedef struct fragment_tree_match_item_t
+static size_t tree_count(udpard_tree_t* const root) // how many make a forest?
 {
-    size_t      offset;
-    const char* data; ///< A null-terminated string; NULL at the end.
-} fragment_tree_match_item_t;
-
-static bool fragment_tree_match(udpard_fragment_t* const head, const fragment_tree_match_item_t items[])
-{
-    if (head == NULL) {
-        return (items[0].data == NULL);
+    size_t count = 0;
+    for (udpard_tree_t* p = cavl2_min(root); p != NULL; p = cavl2_next_greater(p)) {
+        count++;
     }
-    const bool match = (head->offset == items[0].offset) &&
-                       (strlen((const char*)head->view.data) == strlen(items[0].data)) &&
-                       (memcmp(head->view.data, items[0].data, head->view.size) == 0);
-    return match && fragment_tree_match((udpard_fragment_t*)cavl2_next_greater(&head->index_offset), &items[1]);
+    return count;
+}
+
+static udpard_fragment_t* fragment_at(udpard_tree_t* const root, uint32_t index)
+{
+    for (udpard_fragment_t* it = (udpard_fragment_t*)cavl2_min(root); it != NULL;
+         it                    = (udpard_fragment_t*)cavl2_next_greater(&it->index_offset)) {
+        if (index-- == 0U) {
+            return it;
+        }
+    }
+    return NULL;
+}
+
+/// Allocates the payload on the heap, emulating normal transfer reception.
+/// The payload shall not contain NUL characters.
+static rx_frame_base_t make_frame_base(const udpard_mem_resource_t mem, const size_t offset, const char* const payload)
+{
+    const size_t size = (payload != NULL) ? strlen(payload) : 0U;
+    void*        data = mem.alloc(mem.user, size);
+    return (rx_frame_base_t){ .offset  = offset,
+                              .payload = { .data = data, .size = size },
+                              .origin  = { .data = data, .size = size } };
 }
 
 static void test_rx_fragment_tree_update_a(void)
@@ -34,6 +48,45 @@ static void test_rx_fragment_tree_update_a(void)
     instrumented_allocator_new(&alloc_payload);
     const udpard_mem_resource_t mem_payload = instrumented_allocator_make_resource(&alloc_payload);
     const udpard_mem_deleter_t  del_payload = instrumented_allocator_make_deleter(&alloc_payload);
+
+    // Empty payload test
+    {
+        udpard_tree_t*                   root = NULL;
+        size_t                           cov  = 0;
+        rx_fragment_tree_update_result_t res  = rx_fragment_tree_not_done;
+        //
+        res = rx_fragment_tree_update(&root, //
+                                      mem_frag,
+                                      del_payload,
+                                      make_frame_base(mem_payload, 0, ""),
+                                      0,
+                                      0,
+                                      &cov);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_done, res);
+        TEST_ASSERT_EQUAL_size_t(0, cov);
+        TEST_ASSERT_NOT_NULL(root);
+        TEST_ASSERT_EQUAL(1, tree_count(root));
+        // Check the retained payload.
+        TEST_ASSERT_EQUAL_size_t(0, fragment_at(root, 0)->offset);
+        TEST_ASSERT_EQUAL_size_t(0, fragment_at(root, 0)->view.size);
+        TEST_ASSERT_NULL(fragment_at(root, 1));
+        // Check the heap.
+        TEST_ASSERT_EQUAL_size_t(1, alloc_frag.allocated_fragments);
+        TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments); // bc payload empty
+        TEST_ASSERT_EQUAL_size_t(1, alloc_frag.count_alloc);
+        TEST_ASSERT_EQUAL_size_t(1, alloc_payload.count_alloc);
+        TEST_ASSERT_EQUAL_size_t(0, alloc_frag.count_free);
+        TEST_ASSERT_EQUAL_size_t(0, alloc_payload.count_free);
+        // Free the tree (as in freedom). The free tree is free to manifest its own destiny.
+        udpard_fragment_free_all((udpard_fragment_t*)root, mem_frag);
+        // Check the heap.
+        TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
+        TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
+        TEST_ASSERT_EQUAL_size_t(1, alloc_frag.count_alloc);
+        TEST_ASSERT_EQUAL_size_t(1, alloc_payload.count_alloc);
+        TEST_ASSERT_EQUAL_size_t(1, alloc_frag.count_free);
+        TEST_ASSERT_EQUAL_size_t(0, alloc_payload.count_free); // bc payload empty
+    }
 }
 
 static void test_rx_transfer_id_forward_distance(void)

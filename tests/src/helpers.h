@@ -57,6 +57,7 @@ static inline void dummy_free(void* const user, const size_t size, void* const p
 #define INSTRUMENTED_ALLOCATOR_CANARY_SIZE 1024U
 typedef struct
 {
+    /// Each allocator has its own canary, to catch an attempt to free memory allocated by a different allocator.
     uint_least8_t canary[INSTRUMENTED_ALLOCATOR_CANARY_SIZE];
     /// The limit can be changed at any moment to control the maximum amount of memory that can be allocated.
     /// It may be set to a value less than the currently allocated amount.

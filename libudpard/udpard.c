@@ -111,11 +111,12 @@ void udpard_fragment_free_all(udpard_fragment_t* const frag, const udpard_mem_re
         }
         // Delete this fragment
         udpard_fragment_t* const parent = (udpard_fragment_t*)frag->index_offset.up;
-        parent->index_offset.lr[parent->index_offset.lr[1] == &frag->index_offset] = NULL;
         mem_free_payload(frag->payload_deleter, frag->origin);
         mem_free(fragment_memory_resource, sizeof(udpard_fragment_t), frag);
-        // Ascend the tree, tail call
-        udpard_fragment_free_all(parent, fragment_memory_resource);
+        if (parent != NULL) {
+            parent->index_offset.lr[parent->index_offset.lr[1] == (udpard_tree_t*)frag] = NULL;
+            udpard_fragment_free_all(parent, fragment_memory_resource); // tail call
+        }
     }
 }
 
@@ -721,7 +722,7 @@ void udpard_tx_free(const udpard_tx_mem_resources_t memory, udpard_tx_item_t* co
 /// All but the transfer metadata: fields that change from frame to frame within the same transfer.
 typedef struct
 {
-    uint32_t           offset;  ///< Offset of this fragment's payload within the full transfer payload.
+    size_t             offset;  ///< Offset of this fragment's payload within the full transfer payload.
     udpard_bytes_t     payload; ///< Does not include the header, just pure payload.
     udpard_bytes_mut_t origin;  ///< The entirety of the free-able buffer passed from the application.
 } rx_frame_base_t;
@@ -794,13 +795,15 @@ static bool rx_fragment_is_needed(udpard_tree_t* const root,
                                   const size_t         extent)
 {
     const size_t end = smaller3(frag_offset + frag_size, transfer_size, extent);
-    return (frag_offset < extent) && rx_fragment_tree_has_gap_in_range(root, frag_offset, end);
+    // We need to special-case zero-size transfers because they are effectively just a single gap at offset zero.
+    return ((end == 0) && (frag_offset == 0)) ||
+           ((frag_offset < extent) && rx_fragment_tree_has_gap_in_range(root, frag_offset, end));
 }
 
 /// Finds the number of contiguous payload bytes received from offset zero after accepting a new fragment.
 /// The transfer is considered fully received when covered_prefix >= min(extent, transfer_payload_size).
 /// This should be invoked after the fragment tree accepted a new fragment at frag_offset with frag_size.
-/// The complexity is logarithmic if updated after every received frame.
+/// The complexity is amortized-logarithmic, worst case is linear in the number of frames in the transfer.
 static size_t rx_fragment_tree_update_covered_prefix(udpard_tree_t* const root,
                                                      const size_t         old_prefix,
                                                      const size_t         frag_offset,
@@ -830,8 +833,8 @@ typedef enum
 /// Takes ownership of the frame payload; either a new fragment is inserted or the payload is freed.
 static rx_fragment_tree_update_result_t rx_fragment_tree_update(udpard_tree_t** const       root,
                                                                 const udpard_mem_resource_t fragment_memory,
-                                                                const rx_frame_base_t       frame,
                                                                 const udpard_mem_deleter_t  payload_deleter,
+                                                                const rx_frame_base_t       frame,
                                                                 const size_t                transfer_payload_size,
                                                                 const size_t                extent,
                                                                 size_t* const               covered_prefix_io)
@@ -903,11 +906,13 @@ static rx_fragment_tree_update_result_t rx_fragment_tree_update(udpard_tree_t** 
     mew->payload_deleter = payload_deleter;
 
     // Remove all redundant fragments before inserting the new one.
-    while ((frag != NULL) && ((frag->offset + frag->view.size) <= v_right)) {
+    // No need to repeat tree lookup, we just step through the nodes using the next_greater lookup.
+    while ((frag != NULL) && (frag->offset >= v_left) && ((frag->offset + frag->view.size) <= v_right)) {
+        udpard_fragment_t* const next = (udpard_fragment_t*)cavl2_next_greater(&frag->index_offset);
         cavl2_remove(root, &frag->index_offset);
         mem_free_payload(frag->payload_deleter, frag->origin);
         mem_free(fragment_memory, sizeof(udpard_fragment_t), frag);
-        frag = (udpard_fragment_t*)cavl2_lower_bound(*root, &v_left, &rx_cavl_compare_fragment_offset);
+        frag = next;
     }
 
     // Insert the new fragment.
