@@ -1192,6 +1192,151 @@ static void test_rx_transfer_id_window_manip(void)
     TEST_ASSERT_FALSE(rx_transfer_id_window_test(&obj, 0xFFFFFFFFFFFFFFA3ULL));
 }
 
+static void test_rx_fragment_tree_oom(void)
+{
+    instrumented_allocator_t alloc_frag = { 0 };
+    instrumented_allocator_new(&alloc_frag);
+    const udpard_mem_resource_t mem_frag = instrumented_allocator_make_resource(&alloc_frag);
+
+    instrumented_allocator_t alloc_payload = { 0 };
+    instrumented_allocator_new(&alloc_payload);
+    const udpard_mem_resource_t mem_payload = instrumented_allocator_make_resource(&alloc_payload);
+    const udpard_mem_deleter_t  del_payload = instrumented_allocator_make_deleter(&alloc_payload);
+
+    // Test OOM during fragment allocation
+    {
+        udpard_tree_t*                   root = NULL;
+        size_t                           cov  = 0;
+        rx_fragment_tree_update_result_t res  = rx_fragment_tree_not_done;
+
+        // Set fragment allocation limit to zero - fragment allocation will fail
+        alloc_frag.limit_fragments = 0;
+
+        res = rx_fragment_tree_update(&root, //
+                                      mem_frag,
+                                      del_payload,
+                                      make_frame_base_str(mem_payload, 0, "abc"),
+                                      100,
+                                      10,
+                                      &cov);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_oom, res);
+        TEST_ASSERT_EQUAL_size_t(0, cov);
+        TEST_ASSERT_NULL(root);
+        // Payload should have been freed
+        TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
+        TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
+        TEST_ASSERT_EQUAL_size_t(1, alloc_payload.count_alloc); // payload was allocated by make_frame_base_str
+        TEST_ASSERT_EQUAL_size_t(1, alloc_payload.count_free);  // but freed due to OOM
+    }
+    instrumented_allocator_reset(&alloc_frag);
+    instrumented_allocator_reset(&alloc_payload);
+
+    // Test OOM during multi-fragment reassembly
+    {
+        udpard_tree_t*                   root = NULL;
+        size_t                           cov  = 0;
+        rx_fragment_tree_update_result_t res  = rx_fragment_tree_not_done;
+
+        // First fragment succeeds
+        res = rx_fragment_tree_update(&root, //
+                                      mem_frag,
+                                      del_payload,
+                                      make_frame_base_str(mem_payload, 0, "abc"),
+                                      100,
+                                      10,
+                                      &cov);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        TEST_ASSERT_EQUAL_size_t(4, cov);
+        TEST_ASSERT_NOT_NULL(root);
+        TEST_ASSERT_EQUAL(1, tree_count(root));
+        TEST_ASSERT_EQUAL_size_t(1, alloc_frag.allocated_fragments);
+        TEST_ASSERT_EQUAL_size_t(1, alloc_payload.allocated_fragments);
+
+        // Second fragment fails due to OOM
+        alloc_frag.limit_fragments = 1;                             // Already used the limit
+        res                        = rx_fragment_tree_update(&root, //
+                                      mem_frag,
+                                      del_payload,
+                                      make_frame_base_str(mem_payload, 4, "def"),
+                                      100,
+                                      10,
+                                      &cov);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_oom, res);
+        TEST_ASSERT_EQUAL_size_t(4, cov); // Coverage unchanged
+        TEST_ASSERT_NOT_NULL(root);
+        TEST_ASSERT_EQUAL(1, tree_count(root)); // Still only one fragment
+        TEST_ASSERT_EQUAL_size_t(1, alloc_frag.allocated_fragments);
+        TEST_ASSERT_EQUAL_size_t(1, alloc_payload.allocated_fragments);
+        TEST_ASSERT_EQUAL_size_t(2, alloc_payload.count_alloc); // second payload was allocated
+        TEST_ASSERT_EQUAL_size_t(1, alloc_payload.count_free);  // but freed due to OOM
+
+        // Reset limit and add the second fragment successfully
+        alloc_frag.limit_fragments = SIZE_MAX;
+        res                        = rx_fragment_tree_update(&root, //
+                                      mem_frag,
+                                      del_payload,
+                                      make_frame_base_str(mem_payload, 4, "def"),
+                                      100,
+                                      10,
+                                      &cov);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        TEST_ASSERT_EQUAL_size_t(8, cov);
+        TEST_ASSERT_EQUAL(2, tree_count(root));
+        TEST_ASSERT_EQUAL_size_t(2, alloc_frag.allocated_fragments);
+        TEST_ASSERT_EQUAL_size_t(2, alloc_payload.allocated_fragments);
+
+        // Cleanup
+        udpard_fragment_free_all((udpard_fragment_t*)root, mem_frag);
+        TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
+        TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
+    }
+    instrumented_allocator_reset(&alloc_frag);
+    instrumented_allocator_reset(&alloc_payload);
+
+    // Test OOM recovery: fragment allocation fails, then succeeds on retry
+    {
+        udpard_tree_t*                   root = NULL;
+        size_t                           cov  = 0;
+        rx_fragment_tree_update_result_t res  = rx_fragment_tree_not_done;
+
+        // First attempt fails
+        alloc_frag.limit_fragments = 0;
+        res                        = rx_fragment_tree_update(&root, //
+                                      mem_frag,
+                                      del_payload,
+                                      make_frame_base_str(mem_payload, 0, "abcdef"),
+                                      7,
+                                      3,
+                                      &cov);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_oom, res);
+        TEST_ASSERT_EQUAL_size_t(0, cov);
+        TEST_ASSERT_NULL(root);
+
+        // Second attempt succeeds
+        alloc_frag.limit_fragments = SIZE_MAX;
+        res                        = rx_fragment_tree_update(&root, //
+                                      mem_frag,
+                                      del_payload,
+                                      make_frame_base_str(mem_payload, 0, "abcdef"),
+                                      7,
+                                      3,
+                                      &cov);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_done, res);
+        TEST_ASSERT_EQUAL_size_t(7, cov);
+        TEST_ASSERT_NOT_NULL(root);
+        TEST_ASSERT_EQUAL(1, tree_count(root));
+        TEST_ASSERT_EQUAL_size_t(1, alloc_frag.allocated_fragments);
+        TEST_ASSERT_EQUAL_size_t(1, alloc_payload.allocated_fragments);
+
+        // Cleanup
+        udpard_fragment_free_all((udpard_fragment_t*)root, mem_frag);
+        TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
+        TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
+    }
+    instrumented_allocator_reset(&alloc_frag);
+    instrumented_allocator_reset(&alloc_payload);
+}
+
 void setUp(void) {}
 
 void tearDown(void) {}
@@ -1201,6 +1346,7 @@ int main(void)
     UNITY_BEGIN();
     RUN_TEST(test_rx_fragment_tree_update_a);
     RUN_TEST(test_rx_fragment_tree_update_exhaustive);
+    RUN_TEST(test_rx_fragment_tree_oom);
     RUN_TEST(test_rx_transfer_id_forward_distance);
     RUN_TEST(test_rx_transfer_id_window_slide);
     RUN_TEST(test_rx_transfer_id_window_manip);

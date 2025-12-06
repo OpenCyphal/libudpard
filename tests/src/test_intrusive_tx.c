@@ -601,6 +601,44 @@ static void test_tx_push_payload_oom(void)
     TEST_ASSERT_EQUAL(0, tx.queue_size);
 }
 
+static void test_tx_push_oom_mid_transfer(void)
+{
+    instrumented_allocator_t alloc;
+    instrumented_allocator_new(&alloc);
+    const udpard_tx_mem_resources_t mem = {
+        .fragment = instrumented_allocator_make_resource(&alloc),
+        .payload  = instrumented_allocator_make_resource(&alloc),
+    };
+    udpard_tx_t tx;
+    TEST_ASSERT_TRUE(udpard_tx_new(&tx, 0x0123456789ABCDEFULL, 10000, mem));
+    // Create a transfer that requires 3 frames, then fail allocation on the 2nd frame
+    tx.mtu            = (ethereal_strength_size + 2U) / 3U;
+    const meta_t meta = {
+        .priority              = udpard_prio_nominal,
+        .flag_ack              = false,
+        .transfer_payload_size = (uint32_t)ethereal_strength_size,
+        .transfer_id           = 0x0123456789ABCDEFULL,
+        .sender_uid            = 0x0123456789ABCDEFULL,
+        .topic_hash            = 0xBBBBBBBBBBBBBBBBULL,
+    };
+    // Allow enough memory for the first frame but not the second
+    const size_t first_frame_size  = tx.mtu;
+    const size_t first_frame_bytes = sizeof(udpard_tx_item_t) + HEADER_SIZE_BYTES + first_frame_size;
+    alloc.limit_bytes              = first_frame_bytes + 1; // Not enough for the second frame
+    const uint32_t enqueued        = tx_push(&tx,
+                                      1234567890U,
+                                      meta,
+                                      (udpard_udpip_ep_t){ .ip = 0xBABADEDA, .port = 0xD0ED },
+                                      (udpard_bytes_t){ .size = ethereal_strength_size, .data = ethereal_strength },
+                                      NULL);
+    // The entire transfer should fail and be rolled back
+    TEST_ASSERT_EQUAL(0, enqueued);
+    TEST_ASSERT_EQUAL(1, tx.errors_oom);
+    TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, alloc.allocated_bytes);
+    TEST_ASSERT_EQUAL(0, tx.queue_size);
+}
+
 static void test_tx_publish(void)
 {
     instrumented_allocator_t alloc;
@@ -866,6 +904,7 @@ int main(void)
     RUN_TEST(test_tx_push_capacity_limit);
     RUN_TEST(test_tx_push_oom);
     RUN_TEST(test_tx_push_payload_oom);
+    RUN_TEST(test_tx_push_oom_mid_transfer);
     RUN_TEST(test_tx_publish);
     RUN_TEST(test_tx_p2p);
     RUN_TEST(test_tx_deadline_expiration);
