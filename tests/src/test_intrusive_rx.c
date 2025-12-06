@@ -75,7 +75,7 @@ static void test_rx_fragment_tree_update_a(void)
     {
         udpard_tree_t*                   root = NULL;
         size_t                           cov  = 0;
-        rx_fragment_tree_update_result_t res  = rx_fragment_tree_not_done;
+        rx_fragment_tree_update_result_t res  = rx_fragment_tree_rejected;
         //
         res = rx_fragment_tree_update(&root, //
                                       mem_frag,
@@ -116,7 +116,7 @@ static void test_rx_fragment_tree_update_a(void)
     {
         udpard_tree_t*                   root = NULL;
         size_t                           cov  = 0;
-        rx_fragment_tree_update_result_t res  = rx_fragment_tree_not_done;
+        rx_fragment_tree_update_result_t res  = rx_fragment_tree_rejected;
         // Add fragment.
         res = rx_fragment_tree_update(&root, //
                                       mem_frag,
@@ -157,7 +157,7 @@ static void test_rx_fragment_tree_update_a(void)
     {
         udpard_tree_t*                   root = NULL;
         size_t                           cov  = 0;
-        rx_fragment_tree_update_result_t res  = rx_fragment_tree_not_done;
+        rx_fragment_tree_update_result_t res  = rx_fragment_tree_rejected;
         // Add fragment.
         res = rx_fragment_tree_update(&root, //
                                       mem_frag,
@@ -199,7 +199,7 @@ static void test_rx_fragment_tree_update_a(void)
     {
         udpard_tree_t*                   root = NULL;
         size_t                           cov  = 0;
-        rx_fragment_tree_update_result_t res  = rx_fragment_tree_not_done;
+        rx_fragment_tree_update_result_t res  = rx_fragment_tree_rejected;
         // Add fragment.
         res = rx_fragment_tree_update(&root, //
                                       mem_frag,
@@ -208,7 +208,7 @@ static void test_rx_fragment_tree_update_a(void)
                                       100,
                                       10,
                                       &cov);
-        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_accepted, res);
         TEST_ASSERT_EQUAL_size_t(4, cov);
         TEST_ASSERT_NOT_NULL(root);
         TEST_ASSERT_EQUAL(1, tree_count(root));
@@ -220,7 +220,7 @@ static void test_rx_fragment_tree_update_a(void)
                                       100,
                                       11,
                                       &cov);
-        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_accepted, res);
         TEST_ASSERT_EQUAL_size_t(4, cov); // not extended due to the gap in the middle.
         TEST_ASSERT_NOT_NULL(root);
         TEST_ASSERT_EQUAL(2, tree_count(root));
@@ -271,7 +271,7 @@ static void test_rx_fragment_tree_update_a(void)
     {
         udpard_tree_t*                   root = NULL;
         size_t                           cov  = 0;
-        rx_fragment_tree_update_result_t res  = rx_fragment_tree_not_done;
+        rx_fragment_tree_update_result_t res  = rx_fragment_tree_rejected;
         // Add fragment.
         res = rx_fragment_tree_update(&root, //
                                       mem_frag,
@@ -280,7 +280,7 @@ static void test_rx_fragment_tree_update_a(void)
                                       100,
                                       10,
                                       &cov);
-        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_accepted, res);
         TEST_ASSERT_EQUAL_size_t(2, cov);
         TEST_ASSERT_NOT_NULL(root);
         TEST_ASSERT_EQUAL(1, tree_count(root));
@@ -292,7 +292,7 @@ static void test_rx_fragment_tree_update_a(void)
                                       100,
                                       10,
                                       &cov);
-        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_accepted, res);
         TEST_ASSERT_EQUAL_size_t(2, cov); // not extended
         TEST_ASSERT_NOT_NULL(root);
         TEST_ASSERT_EQUAL(2, tree_count(root));
@@ -304,7 +304,7 @@ static void test_rx_fragment_tree_update_a(void)
                                       100,
                                       10,
                                       &cov);
-        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_accepted, res);
         TEST_ASSERT_EQUAL_size_t(2, cov); // not extended
         TEST_ASSERT_NOT_NULL(root);
         TEST_ASSERT_EQUAL(3, tree_count(root));
@@ -333,7 +333,7 @@ static void test_rx_fragment_tree_update_a(void)
                                       100,
                                       10,
                                       &cov);
-        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_accepted, res);
         TEST_ASSERT_EQUAL_size_t(6, cov); // extended!
         TEST_ASSERT_NOT_NULL(root);
         TEST_ASSERT_EQUAL(3, tree_count(root));
@@ -362,7 +362,7 @@ static void test_rx_fragment_tree_update_a(void)
                                       100,
                                       10,
                                       &cov);
-        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_rejected, res);
         TEST_ASSERT_EQUAL_size_t(6, cov); // no new information is added
         TEST_ASSERT_NOT_NULL(root);
         TEST_ASSERT_EQUAL(3, tree_count(root));                      // no new frames added
@@ -380,7 +380,7 @@ static void test_rx_fragment_tree_update_a(void)
                                       100,
                                       10,
                                       &cov);
-        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_accepted, res);
         TEST_ASSERT_EQUAL_size_t(7, cov); // extended by 1 byte
         TEST_ASSERT_NOT_NULL(root);
         TEST_ASSERT_EQUAL(4, tree_count(root));
@@ -464,7 +464,7 @@ static void test_rx_fragment_tree_update_a(void)
     {
         udpard_tree_t*                   root = NULL;
         size_t                           cov  = 0;
-        rx_fragment_tree_update_result_t res  = rx_fragment_tree_not_done;
+        rx_fragment_tree_update_result_t res  = rx_fragment_tree_rejected;
 
         // Add fragment.
         res = rx_fragment_tree_update(&root, //
@@ -474,7 +474,7 @@ static void test_rx_fragment_tree_update_a(void)
                                       21,
                                       21,
                                       &cov);
-        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_accepted, res);
         TEST_ASSERT_EQUAL_size_t(5, cov);
         TEST_ASSERT_NOT_NULL(root);
         TEST_ASSERT(fragment_equals(fragment_at(root, 0), 0, 5, "abcde"));
@@ -488,7 +488,7 @@ static void test_rx_fragment_tree_update_a(void)
                                       21,
                                       21,
                                       &cov);
-        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_rejected, res);
         TEST_ASSERT_EQUAL_size_t(5, cov);
         TEST_ASSERT_NOT_NULL(root);
         TEST_ASSERT(fragment_equals(fragment_at(root, 0), 0, 5, "abcde"));
@@ -506,7 +506,7 @@ static void test_rx_fragment_tree_update_a(void)
                                       21,
                                       21,
                                       &cov);
-        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_accepted, res);
         res = rx_fragment_tree_update(&root, //
                                       mem_frag,
                                       del_payload,
@@ -514,7 +514,7 @@ static void test_rx_fragment_tree_update_a(void)
                                       21,
                                       21,
                                       &cov);
-        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_accepted, res);
         TEST_ASSERT_EQUAL_size_t(5, cov); // not extended due to a gap
         TEST_ASSERT_NOT_NULL(root);
         TEST_ASSERT(fragment_equals(fragment_at(root, 0), 0, 5, "abcde"));
@@ -538,7 +538,7 @@ static void test_rx_fragment_tree_update_a(void)
                                       21,
                                       21,
                                       &cov);
-        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_accepted, res);
         TEST_ASSERT_EQUAL_size_t(5, cov); // not extended due to a gap
         TEST_ASSERT_NOT_NULL(root);
         TEST_ASSERT(fragment_equals(fragment_at(root, 0), 0, 5, "abcde"));
@@ -562,7 +562,7 @@ static void test_rx_fragment_tree_update_a(void)
                                       21,
                                       21,
                                       &cov);
-        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_accepted, res);
         TEST_ASSERT_EQUAL_size_t(16, cov); // jumps to the end because the gap is covered
         TEST_ASSERT_NOT_NULL(root);
         TEST_ASSERT(fragment_equals(fragment_at(root, 0), 0, 5, "abcde"));
@@ -587,7 +587,7 @@ static void test_rx_fragment_tree_update_a(void)
                                       21,
                                       21,
                                       &cov);
-        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_accepted, res);
         TEST_ASSERT_EQUAL_size_t(20, cov); // updated
         TEST_ASSERT_NOT_NULL(root);
         TEST_ASSERT(fragment_equals(fragment_at(root, 0), 0, 5, "abcde"));
@@ -607,7 +607,7 @@ static void test_rx_fragment_tree_update_a(void)
                                       21,
                                       21,
                                       &cov);
-        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_rejected, res);
         res = rx_fragment_tree_update(&root, //
                                       mem_frag,
                                       del_payload,
@@ -615,7 +615,7 @@ static void test_rx_fragment_tree_update_a(void)
                                       21,
                                       21,
                                       &cov);
-        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_rejected, res);
         res = rx_fragment_tree_update(&root, //
                                       mem_frag,
                                       del_payload,
@@ -623,7 +623,7 @@ static void test_rx_fragment_tree_update_a(void)
                                       21,
                                       21,
                                       &cov);
-        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_rejected, res);
         TEST_ASSERT_EQUAL_size_t(20, cov); // no change
         TEST_ASSERT_NOT_NULL(root);
         TEST_ASSERT(fragment_equals(fragment_at(root, 0), 0, 5, "abcde"));
@@ -648,7 +648,7 @@ static void test_rx_fragment_tree_update_a(void)
                                       21,
                                       21,
                                       &cov);
-        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_accepted, res);
         TEST_ASSERT_EQUAL_size_t(20, cov);
         TEST_ASSERT_NOT_NULL(root);
         TEST_ASSERT(fragment_equals(fragment_at(root, 0), 0, 11, "abcdefghijk"));
@@ -671,7 +671,7 @@ static void test_rx_fragment_tree_update_a(void)
                                       21,
                                       21,
                                       &cov);
-        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_accepted, res);
         TEST_ASSERT_EQUAL_size_t(20, cov);
         TEST_ASSERT_NOT_NULL(root);
         TEST_ASSERT(fragment_equals(fragment_at(root, 0), 0, 11, "abcdefghijk"));
@@ -692,7 +692,7 @@ static void test_rx_fragment_tree_update_a(void)
                                       21,
                                       21,
                                       &cov);
-        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_accepted, res);
         TEST_ASSERT_EQUAL_size_t(20, cov);
         TEST_ASSERT_NOT_NULL(root);
         TEST_ASSERT(fragment_equals(fragment_at(root, 0), 0, 11, "abcdefghijk"));
@@ -709,7 +709,7 @@ static void test_rx_fragment_tree_update_a(void)
                                       21,
                                       21,
                                       &cov);
-        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_accepted, res);
         TEST_ASSERT_EQUAL_size_t(20, cov);
         TEST_ASSERT_NOT_NULL(root);
         TEST_ASSERT(fragment_equals(fragment_at(root, 0), 0, 20, "abcdefghijklmnopqrst"));
@@ -845,7 +845,7 @@ static void test_rx_fragment_tree_update_exhaustive(void)
                 transfer_complete = true;
                 break;
             }
-            TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+            TEST_ASSERT((res == rx_fragment_tree_accepted) || (res == rx_fragment_tree_rejected));
         }
         TEST_ASSERT_TRUE(transfer_complete);
         TEST_ASSERT_EQUAL_size_t(payload_length, cov);
@@ -904,7 +904,7 @@ static void test_rx_fragment_tree_update_exhaustive(void)
                 transfer_complete = true;
                 break;
             }
-            TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+            TEST_ASSERT((res == rx_fragment_tree_accepted) || (res == rx_fragment_tree_rejected));
         }
         TEST_ASSERT_TRUE(transfer_complete);
         TEST_ASSERT_EQUAL_size_t(payload_length, cov);
@@ -1207,7 +1207,7 @@ static void test_rx_fragment_tree_oom(void)
     {
         udpard_tree_t*                   root = NULL;
         size_t                           cov  = 0;
-        rx_fragment_tree_update_result_t res  = rx_fragment_tree_not_done;
+        rx_fragment_tree_update_result_t res  = rx_fragment_tree_rejected;
 
         // Set fragment allocation limit to zero - fragment allocation will fail
         alloc_frag.limit_fragments = 0;
@@ -1235,7 +1235,7 @@ static void test_rx_fragment_tree_oom(void)
     {
         udpard_tree_t*                   root = NULL;
         size_t                           cov  = 0;
-        rx_fragment_tree_update_result_t res  = rx_fragment_tree_not_done;
+        rx_fragment_tree_update_result_t res  = rx_fragment_tree_rejected;
 
         // First fragment succeeds
         res = rx_fragment_tree_update(&root, //
@@ -1245,7 +1245,7 @@ static void test_rx_fragment_tree_oom(void)
                                       100,
                                       10,
                                       &cov);
-        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_accepted, res);
         TEST_ASSERT_EQUAL_size_t(4, cov);
         TEST_ASSERT_NOT_NULL(root);
         TEST_ASSERT_EQUAL(1, tree_count(root));
@@ -1279,7 +1279,7 @@ static void test_rx_fragment_tree_oom(void)
                                       100,
                                       10,
                                       &cov);
-        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_accepted, res);
         TEST_ASSERT_EQUAL_size_t(8, cov);
         TEST_ASSERT_EQUAL(2, tree_count(root));
         TEST_ASSERT_EQUAL_size_t(2, alloc_frag.allocated_fragments);
@@ -1297,7 +1297,7 @@ static void test_rx_fragment_tree_oom(void)
     {
         udpard_tree_t*                   root = NULL;
         size_t                           cov  = 0;
-        rx_fragment_tree_update_result_t res  = rx_fragment_tree_not_done;
+        rx_fragment_tree_update_result_t res  = rx_fragment_tree_rejected;
 
         // First attempt fails
         alloc_frag.limit_fragments = 0;

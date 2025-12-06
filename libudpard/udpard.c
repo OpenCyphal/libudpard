@@ -710,7 +710,8 @@ static size_t rx_fragment_tree_update_covered_prefix(udpard_tree_t* const root,
 
 typedef enum
 {
-    rx_fragment_tree_not_done,
+    rx_fragment_tree_rejected,
+    rx_fragment_tree_accepted,
     rx_fragment_tree_done,
     rx_fragment_tree_oom,
 } rx_fragment_tree_update_result_t;
@@ -734,7 +735,7 @@ static rx_fragment_tree_update_result_t rx_fragment_tree_update(udpard_tree_t** 
           (udpard_fragment_t*)cavl2_predecessor(*root, &left, &rx_cavl_compare_fragment_offset);
         if ((frag != NULL) && ((frag->offset + frag->view.size) >= right)) {
             mem_free_payload(payload_deleter, frame.origin);
-            return rx_fragment_tree_not_done; // New fragment is fully contained within an existing one, discard.
+            return rx_fragment_tree_rejected; // New fragment is fully contained within an existing one, discard.
         }
     }
 
@@ -781,7 +782,7 @@ static rx_fragment_tree_update_result_t rx_fragment_tree_update(udpard_tree_t** 
                         (frame.payload.size > smaller(n_left_size, n_right_size));
     if (!accept) {
         mem_free_payload(payload_deleter, frame.origin);
-        return rx_fragment_tree_not_done; // New fragment is not expected to be useful.
+        return rx_fragment_tree_rejected; // New fragment is not expected to be useful.
     }
 
     // Ensure we can allocate the fragment header for the new frame before pruning the tree to avoid data loss.
@@ -837,7 +838,7 @@ static rx_fragment_tree_update_result_t rx_fragment_tree_update(udpard_tree_t** 
                                                                 frame.offset,
                                                                 frame.payload.size);
     return (*covered_prefix_io >= smaller(extent, transfer_payload_size)) ? rx_fragment_tree_done
-                                                                          : rx_fragment_tree_not_done;
+                                                                          : rx_fragment_tree_accepted;
 }
 
 typedef enum
