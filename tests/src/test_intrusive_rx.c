@@ -743,6 +743,180 @@ static void test_rx_fragment_tree_update_a(void)
     instrumented_allocator_reset(&alloc_payload);
 }
 
+/// Exhaustive test for rx_fragment_tree_update with random fragmentation patterns.
+/// Tests a fixed payload split into every possible non-empty substring,
+/// fed in random order with possible duplicates, and verifies correct completion detection.
+static void test_rx_fragment_tree_update_exhaustive(void)
+{
+    instrumented_allocator_t alloc_frag = { 0 };
+    instrumented_allocator_new(&alloc_frag);
+    const udpard_mem_resource_t mem_frag = instrumented_allocator_make_resource(&alloc_frag);
+
+    instrumented_allocator_t alloc_payload = { 0 };
+    instrumented_allocator_new(&alloc_payload);
+    const udpard_mem_resource_t mem_payload = instrumented_allocator_make_resource(&alloc_payload);
+    const udpard_mem_deleter_t  del_payload = instrumented_allocator_make_deleter(&alloc_payload);
+
+    const char   payload[]      = "0123456789";
+    const size_t payload_length = strlen(payload);
+
+    // Generate all possible non-empty substrings (offset, length pairs).
+    // For a string of length N, there are N*(N+1)/2 possible substrings.
+    typedef struct
+    {
+        size_t offset;
+        size_t length;
+    } substring_t;
+
+    const size_t max_substrings = (payload_length * (payload_length + 1)) / 2;
+    substring_t  substrings[max_substrings];
+    size_t       substring_count = 0;
+
+    for (size_t offset = 0; offset < payload_length; offset++) {
+        for (size_t length = 1; length <= (payload_length - offset); length++) {
+            substrings[substring_count].offset = offset;
+            substrings[substring_count].length = length;
+            substring_count++;
+        }
+    }
+    TEST_ASSERT_EQUAL_size_t(max_substrings, substring_count);
+
+    // Run multiple randomized test iterations to explore different orderings.
+    // We use fewer iterations to keep test time reasonable.
+    const size_t num_iterations = 10000;
+
+    for (size_t iteration = 0; iteration < num_iterations; iteration++) {
+        udpard_tree_t* root = NULL;
+        size_t         cov  = 0;
+
+        // Create a randomized schedule of fragments to feed.
+        // We'll randomly select which substrings to use and in what order.
+        // Some may be duplicated, some may be omitted initially.
+
+        // Track which bytes have been covered by submitted fragments.
+        bool byte_covered[10]  = { false };
+        bool transfer_complete = false;
+
+        // Shuffle the substring indices to get a random order.
+        size_t schedule[substring_count];
+        for (size_t i = 0; i < substring_count; i++) {
+            schedule[i] = i;
+        }
+
+        // Fisher-Yates shuffle
+        for (size_t i = substring_count - 1; i > 0; i--) {
+            const size_t j   = (size_t)(rand() % (int)(i + 1));
+            const size_t tmp = schedule[i];
+            schedule[i]      = schedule[j];
+            schedule[j]      = tmp;
+        }
+
+        // Feed fragments in the shuffled order.
+        // We stop after we've seen every byte at least once.
+        for (size_t sched_idx = 0; sched_idx < substring_count; sched_idx++) {
+            const substring_t sub = substrings[schedule[sched_idx]];
+
+            // Allocate and copy the substring payload.
+            char* const frag_data = mem_payload.alloc(mem_payload.user, sub.length);
+            memcpy(frag_data, payload + sub.offset, sub.length);
+
+            const rx_frame_base_t frame = { .offset  = sub.offset,
+                                            .payload = { .data = frag_data, .size = sub.length },
+                                            .origin  = { .data = frag_data, .size = sub.length } };
+
+            const rx_fragment_tree_update_result_t res =
+              rx_fragment_tree_update(&root, mem_frag, del_payload, frame, payload_length, payload_length, &cov);
+
+            // Update our tracking of covered bytes.
+            for (size_t i = 0; i < sub.length; i++) {
+                byte_covered[sub.offset + i] = true;
+            }
+
+            // Check if all bytes are covered.
+            bool all_covered = true;
+            for (size_t i = 0; i < payload_length; i++) {
+                if (!byte_covered[i]) {
+                    all_covered = false;
+                    break;
+                }
+            }
+            if (all_covered) {
+                TEST_ASSERT_EQUAL(rx_fragment_tree_done, res);
+                transfer_complete = true;
+                break;
+            }
+            TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        }
+        TEST_ASSERT_TRUE(transfer_complete);
+        TEST_ASSERT_EQUAL_size_t(payload_length, cov);
+
+        udpard_fragment_free_all((udpard_fragment_t*)root, mem_frag);
+        TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
+        TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
+    }
+    TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
+
+    // Test with duplicates: feed the same fragments multiple times.
+    for (size_t iteration = 0; iteration < num_iterations; iteration++) {
+        udpard_tree_t* root = NULL;
+        size_t         cov  = 0;
+
+        bool byte_covered[10]  = { false };
+        bool transfer_complete = false;
+
+        // Create a schedule with duplicates.
+        const size_t schedule_length = substring_count * 3; // 3x duplication factor
+        size_t       schedule[schedule_length];
+        for (size_t i = 0; i < schedule_length; i++) {
+            schedule[i] = (size_t)(rand() % (int)substring_count);
+        }
+
+        // Feed fragments with duplicates.
+        for (size_t sched_idx = 0; sched_idx < schedule_length; sched_idx++) {
+            const substring_t sub = substrings[schedule[sched_idx]];
+
+            char* const frag_data = mem_payload.alloc(mem_payload.user, sub.length);
+            memcpy(frag_data, payload + sub.offset, sub.length);
+
+            const rx_frame_base_t frame = { .offset  = sub.offset,
+                                            .payload = { .data = frag_data, .size = sub.length },
+                                            .origin  = { .data = frag_data, .size = sub.length } };
+
+            const rx_fragment_tree_update_result_t res =
+              rx_fragment_tree_update(&root, mem_frag, del_payload, frame, payload_length, payload_length, &cov);
+
+            // Update tracking.
+            for (size_t i = 0; i < sub.length; i++) {
+                byte_covered[sub.offset + i] = true;
+            }
+
+            // Check completion.
+            bool all_covered = true;
+            for (size_t i = 0; i < payload_length; i++) {
+                if (!byte_covered[i]) {
+                    all_covered = false;
+                    break;
+                }
+            }
+            if (all_covered) {
+                TEST_ASSERT_EQUAL(rx_fragment_tree_done, res);
+                transfer_complete = true;
+                break;
+            }
+            TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        }
+        TEST_ASSERT_TRUE(transfer_complete);
+        TEST_ASSERT_EQUAL_size_t(payload_length, cov);
+
+        udpard_fragment_free_all((udpard_fragment_t*)root, mem_frag);
+        TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
+        TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
+    }
+    TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
+}
+
 static void test_rx_transfer_id_forward_distance(void)
 {
     // Test 1: Same value (distance is 0)
@@ -1026,6 +1200,7 @@ int main(void)
 {
     UNITY_BEGIN();
     RUN_TEST(test_rx_fragment_tree_update_a);
+    RUN_TEST(test_rx_fragment_tree_update_exhaustive);
     RUN_TEST(test_rx_transfer_id_forward_distance);
     RUN_TEST(test_rx_transfer_id_window_slide);
     RUN_TEST(test_rx_transfer_id_window_manip);
