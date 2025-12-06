@@ -115,9 +115,17 @@ if (ENABLE_COVERAGE)
         COMMAND ${LCOV_PATH} --capture --directory . --output-file coverage-total.info --rc lcov_branch_coverage=1
         COMMAND ${LCOV_PATH} --extract coverage-total.info '*/libudpard/udpard.c' --output-file coverage-udpard.info
                              --rc lcov_branch_coverage=1
+
+        COMMAND ${CMAKE_COMMAND} -E echo ""
+        COMMAND ${CMAKE_COMMAND} -E echo "=== 🔬 COVERAGE SUMMARY BEGIN 📐 ==="
+        COMMAND ${LCOV_PATH} --list coverage-udpard.info --rc lcov_branch_coverage=1
+        COMMAND ${CMAKE_COMMAND} -E echo "==== ⬆️ COVERAGE SUMMARY END ⬆️ ===="
+        COMMAND ${CMAKE_COMMAND} -E echo ""
+
         COMMAND ${GENHTML_PATH} coverage-udpard.info --output-directory coverage-html --title "libudpard coverage"
                                 --legend --demangle-cpp --branch-coverage
         COMMAND ${CMAKE_COMMAND} -E echo "Coverage report: file://${CMAKE_BINARY_DIR}/coverage-html/index.html"
+
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
         COMMENT "Generating coverage HTML report"
     )
