@@ -27,6 +27,17 @@ static udpard_fragment_t* fragment_at(udpard_tree_t* const root, uint32_t index)
     return NULL;
 }
 
+static bool fragment_equals(udpard_fragment_t* const frag,
+                            const size_t             offset,
+                            const size_t             size,
+                            const void* const        payload)
+{
+    if ((frag == NULL) || (frag->offset != offset) || (frag->view.size != size)) {
+        return false;
+    }
+    return (size == 0U) || (memcmp(frag->view.data, payload, size) == 0);
+}
+
 /// Allocates the payload on the heap, emulating normal frame reception.
 static rx_frame_base_t make_frame_base(const udpard_mem_resource_t mem,
                                        const size_t                offset,
@@ -431,6 +442,302 @@ static void test_rx_fragment_tree_update_a(void)
         TEST_ASSERT_EQUAL_size_t(7, alloc_payload.count_alloc);
         TEST_ASSERT_EQUAL_size_t(6, alloc_frag.count_free);
         TEST_ASSERT_EQUAL_size_t(7, alloc_payload.count_free);
+    }
+    instrumented_allocator_reset(&alloc_frag);
+    instrumented_allocator_reset(&alloc_payload);
+
+    // Multi-frame reassembly test with defragmentation: "abcdefghijklmnopqrst". Split with various MTU:
+    //
+    //  MTU 4:  abcd  efgh  ijkl mnop  qrst
+    //          0     4     8    12    16
+    //
+    //  MTU 5:  abcde  fghij  klmno   pqrst
+    //          0      5      10      15
+    //
+    //  MTU 11: abcdefghijk    lmnopqrst
+    //          0              11
+    //
+    // Offset helper:
+    //      abcdefghijklmnopqrst
+    //      01234567890123456789
+    //      00000000001111111111
+    {
+        udpard_tree_t*                   root = NULL;
+        size_t                           cov  = 0;
+        rx_fragment_tree_update_result_t res  = rx_fragment_tree_not_done;
+
+        // Add fragment.
+        res = rx_fragment_tree_update(&root, //
+                                      mem_frag,
+                                      del_payload,
+                                      make_frame_base(mem_payload, 0, 5, "abcde"),
+                                      21,
+                                      21,
+                                      &cov);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        TEST_ASSERT_EQUAL_size_t(5, cov);
+        TEST_ASSERT_NOT_NULL(root);
+        TEST_ASSERT(fragment_equals(fragment_at(root, 0), 0, 5, "abcde"));
+        TEST_ASSERT_NULL(fragment_at(root, 1));
+
+        // Add fragment. Rejected because contained by existing.
+        res = rx_fragment_tree_update(&root, //
+                                      mem_frag,
+                                      del_payload,
+                                      make_frame_base(mem_payload, 0, 4, "abcd"),
+                                      21,
+                                      21,
+                                      &cov);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        TEST_ASSERT_EQUAL_size_t(5, cov);
+        TEST_ASSERT_NOT_NULL(root);
+        TEST_ASSERT(fragment_equals(fragment_at(root, 0), 0, 5, "abcde"));
+        TEST_ASSERT_NULL(fragment_at(root, 1));
+
+        // Add 2 fragments. They cover new ground with a gap but they are small, to be replaced later.
+        // Resulting state:
+        //     0    |abcde               |
+        //     1    |        ijkl        |
+        //     2    |            mnop    |
+        res = rx_fragment_tree_update(&root, //
+                                      mem_frag,
+                                      del_payload,
+                                      make_frame_base(mem_payload, 8, 4, "ijkl"),
+                                      21,
+                                      21,
+                                      &cov);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        res = rx_fragment_tree_update(&root, //
+                                      mem_frag,
+                                      del_payload,
+                                      make_frame_base(mem_payload, 12, 4, "mnop"),
+                                      21,
+                                      21,
+                                      &cov);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        TEST_ASSERT_EQUAL_size_t(5, cov); // not extended due to a gap
+        TEST_ASSERT_NOT_NULL(root);
+        TEST_ASSERT(fragment_equals(fragment_at(root, 0), 0, 5, "abcde"));
+        TEST_ASSERT(fragment_equals(fragment_at(root, 1), 8, 4, "ijkl"));
+        TEST_ASSERT(fragment_equals(fragment_at(root, 2), 12, 4, "mnop"));
+        TEST_ASSERT_NULL(fragment_at(root, 3));
+        TEST_ASSERT_EQUAL_size_t(3, alloc_frag.allocated_fragments);
+        TEST_ASSERT_EQUAL_size_t(3, alloc_payload.allocated_fragments);
+
+        // Add another fragment that doesn't add any new information but is accepted anyway because it is larger.
+        // This may enable defragmentation in the future.
+        // Resulting state:
+        //     0    |abcde               |
+        //     1    |        ijkl        |
+        //     2    |          klmno     |
+        //     3    |            mnop    |
+        res = rx_fragment_tree_update(&root, //
+                                      mem_frag,
+                                      del_payload,
+                                      make_frame_base(mem_payload, 10, 5, "klmno"),
+                                      21,
+                                      21,
+                                      &cov);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        TEST_ASSERT_EQUAL_size_t(5, cov); // not extended due to a gap
+        TEST_ASSERT_NOT_NULL(root);
+        TEST_ASSERT(fragment_equals(fragment_at(root, 0), 0, 5, "abcde"));
+        TEST_ASSERT(fragment_equals(fragment_at(root, 1), 8, 4, "ijkl"));
+        TEST_ASSERT(fragment_equals(fragment_at(root, 2), 10, 5, "klmno"));
+        TEST_ASSERT(fragment_equals(fragment_at(root, 3), 12, 4, "mnop"));
+        TEST_ASSERT_NULL(fragment_at(root, 4));
+        TEST_ASSERT_EQUAL_size_t(4, alloc_frag.allocated_fragments);
+        TEST_ASSERT_EQUAL_size_t(4, alloc_payload.allocated_fragments);
+
+        // Add another fragment that bridges the gap and allows removing ijkl.
+        // Resulting state:
+        //     0    |abcde               |
+        //     1    |     fghij          |  replaces the old 1
+        //     2    |          klmno     |
+        //     3    |            mnop    |  kept because it has 'p'
+        res = rx_fragment_tree_update(&root, //
+                                      mem_frag,
+                                      del_payload,
+                                      make_frame_base(mem_payload, 5, 5, "fghij"),
+                                      21,
+                                      21,
+                                      &cov);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        TEST_ASSERT_EQUAL_size_t(16, cov); // jumps to the end because the gap is covered
+        TEST_ASSERT_NOT_NULL(root);
+        TEST_ASSERT(fragment_equals(fragment_at(root, 0), 0, 5, "abcde"));
+        TEST_ASSERT(fragment_equals(fragment_at(root, 1), 5, 5, "fghij"));
+        TEST_ASSERT(fragment_equals(fragment_at(root, 2), 10, 5, "klmno"));
+        TEST_ASSERT(fragment_equals(fragment_at(root, 3), 12, 4, "mnop"));
+        TEST_ASSERT_NULL(fragment_at(root, 4));
+        TEST_ASSERT_EQUAL_size_t(4, alloc_frag.allocated_fragments);
+        TEST_ASSERT_EQUAL_size_t(4, alloc_payload.allocated_fragments);
+
+        // Add the last smallest fragment. The transfer is not detected as complete because it is set to 21 bytes.
+        // Resulting state:
+        //     0    |abcde               |
+        //     1    |     fghij          |  replaces the old 1
+        //     2    |          klmno     |
+        //     3    |            mnop    |  kept because it has 'p'
+        //     4    |                qrst|
+        res = rx_fragment_tree_update(&root, //
+                                      mem_frag,
+                                      del_payload,
+                                      make_frame_base(mem_payload, 16, 4, "qrst"),
+                                      21,
+                                      21,
+                                      &cov);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        TEST_ASSERT_EQUAL_size_t(20, cov); // updated
+        TEST_ASSERT_NOT_NULL(root);
+        TEST_ASSERT(fragment_equals(fragment_at(root, 0), 0, 5, "abcde"));
+        TEST_ASSERT(fragment_equals(fragment_at(root, 1), 5, 5, "fghij"));
+        TEST_ASSERT(fragment_equals(fragment_at(root, 2), 10, 5, "klmno"));
+        TEST_ASSERT(fragment_equals(fragment_at(root, 3), 12, 4, "mnop"));
+        TEST_ASSERT(fragment_equals(fragment_at(root, 4), 16, 4, "qrst"));
+        TEST_ASSERT_NULL(fragment_at(root, 5));
+        TEST_ASSERT_EQUAL_size_t(5, alloc_frag.allocated_fragments);
+        TEST_ASSERT_EQUAL_size_t(5, alloc_payload.allocated_fragments);
+
+        // Send redundant fragments. State unchanged.
+        res = rx_fragment_tree_update(&root, //
+                                      mem_frag,
+                                      del_payload,
+                                      make_frame_base(mem_payload, 4, 4, "efgh"),
+                                      21,
+                                      21,
+                                      &cov);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        res = rx_fragment_tree_update(&root, //
+                                      mem_frag,
+                                      del_payload,
+                                      make_frame_base(mem_payload, 5, 5, "fghij"),
+                                      21,
+                                      21,
+                                      &cov);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        res = rx_fragment_tree_update(&root, //
+                                      mem_frag,
+                                      del_payload,
+                                      make_frame_base(mem_payload, 0, 5, "abcde"),
+                                      21,
+                                      21,
+                                      &cov);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        TEST_ASSERT_EQUAL_size_t(20, cov); // no change
+        TEST_ASSERT_NOT_NULL(root);
+        TEST_ASSERT(fragment_equals(fragment_at(root, 0), 0, 5, "abcde"));
+        TEST_ASSERT(fragment_equals(fragment_at(root, 1), 5, 5, "fghij"));
+        TEST_ASSERT(fragment_equals(fragment_at(root, 2), 10, 5, "klmno"));
+        TEST_ASSERT(fragment_equals(fragment_at(root, 3), 12, 4, "mnop"));
+        TEST_ASSERT(fragment_equals(fragment_at(root, 4), 16, 4, "qrst"));
+        TEST_ASSERT_NULL(fragment_at(root, 5));
+        TEST_ASSERT_EQUAL_size_t(5, alloc_frag.allocated_fragments);
+        TEST_ASSERT_EQUAL_size_t(5, alloc_payload.allocated_fragments);
+
+        // Add the first max-MTU fragment. Replaces the smaller initial fragments.
+        // Resulting state:
+        //     0    |abcdefghijk         |  replaces 0 and 1
+        //     1    |          klmno     |  kept because it has 'lmno'
+        //     2    |            mnop    |  kept because it has 'p'
+        //     3    |                qrst|
+        res = rx_fragment_tree_update(&root, //
+                                      mem_frag,
+                                      del_payload,
+                                      make_frame_base(mem_payload, 0, 11, "abcdefghijk"),
+                                      21,
+                                      21,
+                                      &cov);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        TEST_ASSERT_EQUAL_size_t(20, cov);
+        TEST_ASSERT_NOT_NULL(root);
+        TEST_ASSERT(fragment_equals(fragment_at(root, 0), 0, 11, "abcdefghijk"));
+        TEST_ASSERT(fragment_equals(fragment_at(root, 1), 10, 5, "klmno"));
+        TEST_ASSERT(fragment_equals(fragment_at(root, 2), 12, 4, "mnop"));
+        TEST_ASSERT(fragment_equals(fragment_at(root, 3), 16, 4, "qrst"));
+        TEST_ASSERT_NULL(fragment_at(root, 4));
+        TEST_ASSERT_EQUAL_size_t(4, alloc_frag.allocated_fragments);
+        TEST_ASSERT_EQUAL_size_t(4, alloc_payload.allocated_fragments);
+
+        // Add the last MTU 5 fragment. Replaces the last two MTU 4 fragments.
+        // Resulting state:
+        //     0    |abcdefghijk         |
+        //     1    |          klmno     |  kept because it has 'lmno'
+        //     2    |               pqrst|
+        res = rx_fragment_tree_update(&root, //
+                                      mem_frag,
+                                      del_payload,
+                                      make_frame_base(mem_payload, 15, 5, "pqrst"),
+                                      21,
+                                      21,
+                                      &cov);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        TEST_ASSERT_EQUAL_size_t(20, cov);
+        TEST_ASSERT_NOT_NULL(root);
+        TEST_ASSERT(fragment_equals(fragment_at(root, 0), 0, 11, "abcdefghijk"));
+        TEST_ASSERT(fragment_equals(fragment_at(root, 1), 10, 5, "klmno"));
+        TEST_ASSERT(fragment_equals(fragment_at(root, 2), 15, 5, "pqrst"));
+        TEST_ASSERT_NULL(fragment_at(root, 3));
+        TEST_ASSERT_EQUAL_size_t(3, alloc_frag.allocated_fragments);
+        TEST_ASSERT_EQUAL_size_t(3, alloc_payload.allocated_fragments);
+
+        // Add the last max-MTU fragment. Replaces the last two fragments.
+        // Resulting state:
+        //     0    |abcdefghijk         |
+        //     1    |           lmnopqrst|
+        res = rx_fragment_tree_update(&root, //
+                                      mem_frag,
+                                      del_payload,
+                                      make_frame_base(mem_payload, 11, 9, "lmnopqrst"),
+                                      21,
+                                      21,
+                                      &cov);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        TEST_ASSERT_EQUAL_size_t(20, cov);
+        TEST_ASSERT_NOT_NULL(root);
+        TEST_ASSERT(fragment_equals(fragment_at(root, 0), 0, 11, "abcdefghijk"));
+        TEST_ASSERT(fragment_equals(fragment_at(root, 1), 11, 9, "lmnopqrst"));
+        TEST_ASSERT_NULL(fragment_at(root, 2));
+        TEST_ASSERT_EQUAL_size_t(2, alloc_frag.allocated_fragments);
+        TEST_ASSERT_EQUAL_size_t(2, alloc_payload.allocated_fragments);
+
+        // Replace everything with a single huge fragment.
+        res = rx_fragment_tree_update(&root, //
+                                      mem_frag,
+                                      del_payload,
+                                      make_frame_base(mem_payload, 0, 20, "abcdefghijklmnopqrst"),
+                                      21,
+                                      21,
+                                      &cov);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_not_done, res);
+        TEST_ASSERT_EQUAL_size_t(20, cov);
+        TEST_ASSERT_NOT_NULL(root);
+        TEST_ASSERT(fragment_equals(fragment_at(root, 0), 0, 20, "abcdefghijklmnopqrst"));
+        TEST_ASSERT_NULL(fragment_at(root, 1));
+        TEST_ASSERT_EQUAL_size_t(1, alloc_frag.allocated_fragments);
+        TEST_ASSERT_EQUAL_size_t(1, alloc_payload.allocated_fragments);
+
+        // One tiny boi will complete the transfer.
+        res = rx_fragment_tree_update(&root, //
+                                      mem_frag,
+                                      del_payload,
+                                      make_frame_base(mem_payload, 19, 2, "t-"),
+                                      21,
+                                      21,
+                                      &cov);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_done, res);
+        TEST_ASSERT_EQUAL_size_t(21, cov);
+        TEST_ASSERT_NOT_NULL(root);
+        TEST_ASSERT(fragment_equals(fragment_at(root, 0), 0, 20, "abcdefghijklmnopqrst"));
+        TEST_ASSERT(fragment_equals(fragment_at(root, 1), 19, 2, "t-"));
+        TEST_ASSERT_NULL(fragment_at(root, 2));
+        TEST_ASSERT_EQUAL_size_t(2, alloc_frag.allocated_fragments);
+        TEST_ASSERT_EQUAL_size_t(2, alloc_payload.allocated_fragments);
+
+        // Cleanup.
+        udpard_fragment_free_all((udpard_fragment_t*)root, mem_frag);
+        TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
+        TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
     }
     instrumented_allocator_reset(&alloc_frag);
     instrumented_allocator_reset(&alloc_payload);
