@@ -20,15 +20,14 @@
 *.hex
 *.dSYM/
 *build/
+build*/
 cmake-build-*/
-build-avr/
 .cache/
 .metadata
 .settings
 .project
 .cproject
 .pydevproject
-.gdbinit
 .scannerwork/
 .vscode/
 **/.idea/*

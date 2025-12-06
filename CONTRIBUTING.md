@@ -27,6 +27,8 @@ Consult with the CI workflow files for the required tools and build & test instr
 You may want to use the [toolshed](https://github.com/OpenCyphal/docker_toolchains/pkgs/container/toolshed)
 container for this.
 
+To run tests with coverage reports, refer to the instructions in `tests/CMakeLists.txt`.
+
 ## Releasing
 
 Simply create a new release & tag on GitHub.

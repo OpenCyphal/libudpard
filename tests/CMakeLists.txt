@@ -15,6 +15,7 @@ enable_testing()
 
 set(CTEST_OUTPUT_ON_FAILURE ON)
 set(NO_STATIC_ANALYSIS OFF CACHE BOOL "disable udpard static analysis")
+set(ENABLE_COVERAGE OFF CACHE BOOL "enable code coverage measurement")
 
 set(library_dir "${CMAKE_SOURCE_DIR}/libudpard")
 set(unity_root "${CMAKE_SOURCE_DIR}/submodules/unity")
@@ -53,6 +54,13 @@ function(gen_test name files compile_definitions compile_flags link_flags c_stan
     target_include_directories(${name} PUBLIC ${library_dir})
     target_compile_definitions(${name} PUBLIC ${compile_definitions})
     target_link_libraries(${name} "${name}_unity")
+
+    # Apply coverage flags if coverage is enabled
+    if (ENABLE_COVERAGE)
+        target_compile_options(${name} PRIVATE --coverage)
+        target_link_options(${name} PRIVATE --coverage)
+    endif()
+
     set_target_properties(
             ${name}
             PROPERTIES
@@ -82,3 +90,31 @@ gen_test_matrix(test_intrusive_header "src/test_intrusive_header.c")
 gen_test_matrix(test_intrusive_misc "src/test_intrusive_misc.c")
 gen_test_matrix(test_intrusive_tx "src/test_intrusive_tx.c")
 gen_test_matrix(test_intrusive_rx "src/test_intrusive_rx.c")
+
+# Coverage targets. Usage:
+#   cmake -DENABLE_COVERAGE=ON ..
+#   make -j16
+#   make test       # Run the tests
+#   make coverage   # Generate coverage reports
+#   xdg-open coverage-html/index.html
+if (ENABLE_COVERAGE)
+    find_program(LCOV_PATH lcov REQUIRED)
+    find_program(GENHTML_PATH genhtml REQUIRED)
+
+    # Target to reset coverage counters
+    add_custom_target(coverage-reset
+        COMMAND ${LCOV_PATH} --zerocounters --directory .
+        COMMAND ${LCOV_PATH} --capture --initial --directory . --output-file coverage-base.info
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        COMMENT "Resetting coverage counters"
+    )
+
+    # Target to generate coverage report
+    add_custom_target(coverage
+        COMMAND ${LCOV_PATH} --capture --directory . --output-file coverage-total.info
+        COMMAND ${LCOV_PATH} --extract coverage-total.info '*/libudpard/udpard.c' --output-file coverage-udpard.info
+        COMMAND ${GENHTML_PATH} coverage-udpard.info --output-directory coverage-html --title "libudpard Coverage" --legend --demangle-cpp
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        COMMENT "Generating coverage HTML report in coverage-html/"
+    )
+endif()
