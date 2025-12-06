@@ -57,8 +57,8 @@ function(gen_test name files compile_definitions compile_flags link_flags c_stan
 
     # Apply coverage flags if coverage is enabled
     if (ENABLE_COVERAGE)
-        target_compile_options(${name} PRIVATE --coverage)
-        target_link_options(${name} PRIVATE --coverage)
+        target_compile_options(${name} PRIVATE --coverage -fprofile-arcs -ftest-coverage)
+        target_link_options(${name} PRIVATE --coverage -fprofile-arcs)
     endif()
 
     set_target_properties(
@@ -105,16 +105,20 @@ if (ENABLE_COVERAGE)
     add_custom_target(coverage-reset
         COMMAND ${LCOV_PATH} --zerocounters --directory .
         COMMAND ${LCOV_PATH} --capture --initial --directory . --output-file coverage-base.info
+                             --rc lcov_branch_coverage=1
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
         COMMENT "Resetting coverage counters"
     )
 
     # Target to generate coverage report
     add_custom_target(coverage
-        COMMAND ${LCOV_PATH} --capture --directory . --output-file coverage-total.info
+        COMMAND ${LCOV_PATH} --capture --directory . --output-file coverage-total.info --rc lcov_branch_coverage=1
         COMMAND ${LCOV_PATH} --extract coverage-total.info '*/libudpard/udpard.c' --output-file coverage-udpard.info
-        COMMAND ${GENHTML_PATH} coverage-udpard.info --output-directory coverage-html --title "libudpard Coverage" --legend --demangle-cpp
+                             --rc lcov_branch_coverage=1
+        COMMAND ${GENHTML_PATH} coverage-udpard.info --output-directory coverage-html --title "libudpard coverage"
+                                --legend --demangle-cpp --branch-coverage
+        COMMAND ${CMAKE_COMMAND} -E echo "Coverage report: file://${CMAKE_BINARY_DIR}/coverage-html/index.html"
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
-        COMMENT "Generating coverage HTML report in coverage-html/"
+        COMMENT "Generating coverage HTML report"
     )
 endif()
