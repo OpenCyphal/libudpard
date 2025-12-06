@@ -621,10 +621,12 @@ static void test_tx_push_oom_mid_transfer(void)
         .sender_uid            = 0x0123456789ABCDEFULL,
         .topic_hash            = 0xBBBBBBBBBBBBBBBBULL,
     };
-    // Allow enough memory for the first frame but not the second
+    // Allow enough memory for first frame item + payload, but fail on second frame's payload allocation
+    // This ensures tx_spool returns a chain with head != NULL but tail == NULL
     const size_t first_frame_size  = tx.mtu;
     const size_t first_frame_bytes = sizeof(udpard_tx_item_t) + HEADER_SIZE_BYTES + first_frame_size;
-    alloc.limit_bytes              = first_frame_bytes + 1; // Not enough for the second frame
+    const size_t second_item_bytes = sizeof(udpard_tx_item_t);
+    alloc.limit_bytes              = first_frame_bytes + second_item_bytes + 1; // Enough for item, not payload
     const uint32_t enqueued        = tx_push(&tx,
                                       1234567890U,
                                       meta,
