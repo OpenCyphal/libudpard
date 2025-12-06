@@ -98,7 +98,6 @@ static void test_rx_fragment_tree_update_a(void)
         TEST_ASSERT_EQUAL_size_t(1, alloc_frag.count_free);
         TEST_ASSERT_EQUAL_size_t(0, alloc_payload.count_free); // bc payload empty
     }
-
     instrumented_allocator_reset(&alloc_frag);
     instrumented_allocator_reset(&alloc_payload);
 
@@ -140,7 +139,6 @@ static void test_rx_fragment_tree_update_a(void)
         TEST_ASSERT_EQUAL_size_t(1, alloc_frag.count_free);
         TEST_ASSERT_EQUAL_size_t(1, alloc_payload.count_free);
     }
-
     instrumented_allocator_reset(&alloc_frag);
     instrumented_allocator_reset(&alloc_payload);
 
@@ -183,7 +181,6 @@ static void test_rx_fragment_tree_update_a(void)
         TEST_ASSERT_EQUAL_size_t(1, alloc_frag.count_free);
         TEST_ASSERT_EQUAL_size_t(1, alloc_payload.count_free);
     }
-
     instrumented_allocator_reset(&alloc_frag);
     instrumented_allocator_reset(&alloc_payload);
 
@@ -256,7 +253,6 @@ static void test_rx_fragment_tree_update_a(void)
         TEST_ASSERT_EQUAL_size_t(3, alloc_frag.count_free);
         TEST_ASSERT_EQUAL_size_t(3, alloc_payload.count_free);
     }
-
     instrumented_allocator_reset(&alloc_frag);
     instrumented_allocator_reset(&alloc_payload);
 
@@ -436,6 +432,8 @@ static void test_rx_fragment_tree_update_a(void)
         TEST_ASSERT_EQUAL_size_t(6, alloc_frag.count_free);
         TEST_ASSERT_EQUAL_size_t(7, alloc_payload.count_free);
     }
+    instrumented_allocator_reset(&alloc_frag);
+    instrumented_allocator_reset(&alloc_payload);
 }
 
 static void test_rx_transfer_id_forward_distance(void)
