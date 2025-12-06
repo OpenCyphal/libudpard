@@ -17,29 +17,6 @@ static void test_crc_streamed(void)
     TEST_ASSERT_EQUAL_UINT32(CRC_RESIDUE_AFTER_OUTPUT_XOR, crc ^ CRC_OUTPUT_XOR);
 }
 
-static void test_crc_unordered(void)
-{
-    {
-        const uint32_t partials[] = {
-            crc_partial(9, 0, 2, "12"),
-            crc_partial(9, 2, 3, "345"),
-            crc_partial(9, 5, 4, "6789"),
-        };
-        const uint32_t crc = crc_partial_finalize(9, partials[1] ^ partials[2] ^ partials[0]); // xor is commutative
-        TEST_ASSERT_EQUAL_UINT32(0xE3069283UL, crc);
-    }
-    {
-        const uint32_t partials[] = {
-            crc_partial(13, 0, 2, "12"),
-            crc_partial(13, 2, 3, "345"),
-            crc_partial(13, 5, 4, "6789"),
-            crc_partial(13, 9, 4, "\x83\x92\x06\xE3"),
-        };
-        const uint32_t crc = crc_partial_finalize(13, partials[1] ^ partials[3] ^ partials[2] ^ partials[0]);
-        TEST_ASSERT_EQUAL_UINT32(CRC_RESIDUE_AFTER_OUTPUT_XOR, crc);
-    }
-}
-
 static void test_list(void)
 {
     typedef struct test_node_t
@@ -183,6 +160,5 @@ int main(void)
     UNITY_BEGIN();
     RUN_TEST(test_crc_streamed);
     RUN_TEST(test_list);
-    RUN_TEST(test_crc_unordered);
     return UNITY_END();
 }

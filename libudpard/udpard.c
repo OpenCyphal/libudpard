@@ -163,13 +163,6 @@ static const uint32_t crc_table[256] = {
     0x79B737BAUL, 0x8BDCB4B9UL, 0x988C474DUL, 0x6AE7C44EUL, 0xBE2DA0A5UL, 0x4C4623A6UL, 0x5F16D052UL, 0xAD7D5351UL,
 };
 
-static const uint32_t crc_zero_byte_mat[32] = {
-    0xF26B8303UL, 0xE13B70F7UL, 0xC79A971FUL, 0x8AD958CFUL, 0x105EC76FUL, 0x20BD8EDEUL, 0x417B1DBCUL, 0x82F63B78UL,
-    0x00000001UL, 0x00000002UL, 0x00000004UL, 0x00000008UL, 0x00000010UL, 0x00000020UL, 0x00000040UL, 0x00000080UL,
-    0x00000100UL, 0x00000200UL, 0x00000400UL, 0x00000800UL, 0x00001000UL, 0x00002000UL, 0x00004000UL, 0x00008000UL,
-    0x00010000UL, 0x00020000UL, 0x00040000UL, 0x00080000UL, 0x00100000UL, 0x00200000UL, 0x00400000UL, 0x00800000UL,
-};
-
 /// Do not forget to apply the output XOR when done, or use crc_compute().
 static uint32_t crc_add(uint32_t crc, const size_t n_bytes, const void* const data)
 {
@@ -181,71 +174,9 @@ static uint32_t crc_add(uint32_t crc, const size_t n_bytes, const void* const da
     return crc;
 }
 
-/// Multiply 32x32 GF(2) column-major matrix by a 32-bit vector.
-static uint32_t gf2_matrix_vector_product(const uint32_t mat[32], uint32_t vec)
-{
-    uint32_t     sum = 0;
-    uint_fast8_t bit = 0;
-    while (vec > 0) {
-        if ((vec & 1U) != 0) {
-            sum ^= mat[bit];
-        }
-        vec >>= 1U;
-        bit++;
-    }
-    return sum;
-}
-
-/// Square a 32x32 GF(2) column-major matrix. Both out_result and mat may refer to the same memory.
-static void gf2_matrix_square(uint32_t out_result[32], const uint32_t mat[32])
-{
-    uint32_t tmp[32];
-    for (uint_fast8_t i = 0; i < 32; i++) {
-        tmp[i] = gf2_matrix_vector_product(mat, mat[i]);
-    }
-    memcpy(out_result, tmp, sizeof(tmp));
-}
-
-/// Advance a CRC remainder by n_bytes of zero bytes. I.e. returns crc(M||0...0) given crc(M).
-static uint32_t crc_shift_zeros_bytes(uint32_t crc, size_t n_bytes)
-{
-    uint32_t power[32]; // Exponentiation-by-squaring on the 32x32 matrix for one zero byte.
-    memcpy(power, crc_zero_byte_mat, sizeof(crc_zero_byte_mat));
-    while (n_bytes > 0) {
-        if ((n_bytes & 1U) != 0) {
-            crc = gf2_matrix_vector_product(power, crc);
-        }
-        n_bytes >>= 1U;
-        if (n_bytes > 0) {
-            gf2_matrix_square(power, power);
-        }
-    }
-    return crc;
-}
-
 static uint32_t crc_full(const size_t n_bytes, const void* const data)
 {
     return crc_add(CRC_INITIAL, n_bytes, data) ^ CRC_OUTPUT_XOR;
-}
-
-/// All partial CRC values must be xor-ed together and passed to crc_partial_finalize() to obtain the final CRC.
-/// Xor is commutative, so the fragments may appear in any order.
-static uint32_t crc_partial(const size_t      total_size_bytes,
-                            const size_t      fragment_offset_bytes,
-                            const size_t      fragment_size_bytes,
-                            const void* const fragment_data)
-{
-    const uint32_t crc         = crc_add(0, fragment_size_bytes, fragment_data);
-    const size_t   bytes_after = total_size_bytes - (fragment_offset_bytes + fragment_size_bytes);
-    return crc_shift_zeros_bytes(crc, bytes_after); // Move this fragment's remainder as if trail zeros followed.
-}
-
-/// Finalize the CRC computation for unordered data fragments.
-/// Accepts the total data size in bytes and the xor of all partial CRCs in an arbitrary order.
-static uint32_t crc_partial_finalize(const size_t n_bytes, const uint32_t crc_acc_raw)
-{
-    const uint32_t K = ~crc_shift_zeros_bytes(CRC_INITIAL, n_bytes); // Correction term K(L) = ~advance(CRC_INITIAL, L)
-    return crc_acc_raw ^ K;                                          // Standard CRC = raw(M) xor K(L)
 }
 
 // ---------------------------------------------  HEADER  ---------------------------------------------
