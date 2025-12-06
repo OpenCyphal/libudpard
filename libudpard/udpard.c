@@ -795,32 +795,68 @@ static rx_fragment_tree_update_result_t rx_fragment_tree_update(udpard_tree_t** 
                                                                 const size_t                extent,
                                                                 size_t* const               covered_prefix_io)
 {
-    // Do a quick lookup first to see if an existing fragment fully contains the new one or is equal,
-    // in which case we can immediately discard the new fragment; this simplifies the logic below an is very fast.
-    // This helps maintain a fundamental invariant of the fragment tree: no fully-contained fragments.
-    const size_t       left  = frame.offset;
-    const size_t       right = frame.offset + frame.payload.size;
-    udpard_fragment_t* frag  = (udpard_fragment_t*)cavl2_predecessor(*root, &left, &rx_cavl_compare_fragment_offset);
-    if ((frag != NULL) && ((frag->offset + frag->view.size) >= right)) {
-        mem_free_payload(payload_deleter, frame.origin);
-        return rx_fragment_tree_not_done; // New fragment is fully contained within an existing one, discard.
+    const size_t left  = frame.offset;
+    const size_t right = frame.offset + frame.payload.size;
+
+    // Check if the new fragment is fully contained within an existing fragment, or is an exact replica of one.
+    // We discard those early to maintain an essential invariant of the fragment tree: no fully-contained fragments.
+    {
+        udpard_fragment_t* const frag =
+          (udpard_fragment_t*)cavl2_predecessor(*root, &left, &rx_cavl_compare_fragment_offset);
+        if ((frag != NULL) && ((frag->offset + frag->view.size) >= right)) {
+            mem_free_payload(payload_deleter, frame.origin);
+            return rx_fragment_tree_not_done; // New fragment is fully contained within an existing one, discard.
+        }
     }
 
-    // If the new fragment is not contained by another, we accept it even if it doesn't add new payload coverage.
-    // This may seem counter-intuitive at first, and it is indeed very easy to query the tree to check if there
-    // is a payload gap in a given range, but the reason we accept such fragments is that we speculate that
-    // other large fragments may arrive in the future that will join with this one, allowing eviction of the smaller
-    // ones, thus representing the full payload in a fewer number of fragments.
+    // Find the left and right neighbors, if any, with possible (likely) overlap. Consider new fragment X with A, B, C:
+    //         |----X----|
+    //      |--A--|
+    //           |--B--|
+    //                |--C--|
+    // Here, only A is the left neighbor, and only C is the right neighbor. B is a victim.
+    // If A.right <= C.left, then there is neither a gap nor a victim to remove.
+    //
+    // To find the left neighbor, we need to find the fragment crossing the left boundary whose offset is the smallest.
+    // To do that, we simply need to find the fragment with the smallest right boundary that is on the right of our
+    // left boundary. This works because by construction we guarantee that our tree has no fully-contained fragments,
+    // implying that ordering by left is also ordering by right.
+    //
+    // The right neighbor is found by analogy: find the fragment with the largest left boundary that is on the left
+    // of our right boundary. This guarantees that the new virtual right boundary will max out to the right.
+    udpard_fragment_t* n_left = (udpard_fragment_t*)cavl2_lower_bound(*root, &left, &rx_cavl_compare_fragment_end);
+    if ((n_left != NULL) && (n_left->offset >= left)) {
+        n_left = NULL; // There is no left neighbor.
+    }
+    udpard_fragment_t* n_right = (udpard_fragment_t*)cavl2_predecessor(*root, &right, &rx_cavl_compare_fragment_offset);
+    if ((n_right != NULL) && ((n_right->offset + n_right->view.size) <= right)) {
+        n_right = NULL; // There is no right neighbor.
+    }
+    const size_t n_left_size  = (n_left != NULL) ? n_left->view.size : 0U;
+    const size_t n_right_size = (n_right != NULL) ? n_right->view.size : 0U;
+
+    // Simple acceptance heuristic -- if the new fragment adds new payload, allows to eliminate a smaller fragment,
+    // or is larger than either neighbor, we accept it. The 'larger' condition is intended to allow
+    // eventual replacement of many small fragments with fewer large fragments.
     // Consider the following scenario:
-    //      |--A--|--B--|--C--|--D--|   <-- first fragment set
-    //      |---X---|---Y---|---Z---|   <-- second fragment set
+    //      |--A--|--B--|--C--|--D--|   <-- small MTU set
+    //      |---X---|---Y---|---Z---|   <-- large MTU set
     // Suppose we already have A..D received. Arrival of either X or Z allows eviction of A/D immediately.
     // Arrival of Y does not allow an immediate eviction of any fragment, but if we had rejected it because it added
-    // no new coverage, we would miss the opportunity to evict B/C when X or Z arrive later.
-    // Therefore, we keep everything that comes our way as long as it is not smaller than what we already have.
-    //
+    // no new coverage, we would miss the opportunity to evict B/C when X or Z arrive later. By this logic alone,
+    // we would also have to accept B and C if they were to arrive after X/Y/Z, which is however unnecessary because
+    // these fragments add no new information AND are smaller than the existing fragments, meaning that they offer
+    // no prospect of eventual defragmentation, so we reject them immediately.
+    const bool accept = (n_left == NULL) || (n_right == NULL) ||
+                        ((n_left->offset + n_left->view.size) < n_right->offset) ||
+                        (frame.payload.size > smaller(n_left_size, n_right_size));
+    if (!accept) {
+        mem_free_payload(payload_deleter, frame.origin);
+        return rx_fragment_tree_not_done; // New fragment is not expected to be useful.
+    }
+
     // Ensure we can allocate the fragment header for the new frame before pruning the tree to avoid data loss.
-    udpard_fragment_t* mew = mem_alloc(fragment_memory, sizeof(udpard_fragment_t));
+    udpard_fragment_t* const mew = mem_alloc(fragment_memory, sizeof(udpard_fragment_t));
     if (mew == NULL) {
         mem_free_payload(payload_deleter, frame.origin);
         return rx_fragment_tree_oom; // Cannot allocate fragment header. Maybe we will succeed later.
@@ -833,44 +869,30 @@ static rx_fragment_tree_update_result_t rx_fragment_tree_update(udpard_tree_t** 
     mew->offset          = frame.offset;
     mew->payload_deleter = payload_deleter;
 
-    // The addition of a larger fragment that joins adjacent fragments together into a larger contiguous block may
+    // The addition of a new fragment that joins adjacent fragments together into a larger contiguous block may
     // render smaller fragments crossing its boundaries redundant.
     // To check for that, we create a new virtual fragment that represents the new fragment together with those
     // that join it on either end, if any, and then look for fragments contained within the virtual one.
+    // The virtual boundaries are adjusted by 1 to ensure that the neighbors themselves are not marked for eviction.
     // Example:
     //          |--A--|--B--|
     //             |--X--|
     // The addition of fragment A or B will render X redundant, even though it is not contained within either.
     // This algorithm will detect that and mark X for removal.
-    //
-    // To find the left neighbor, we need to find the fragment crossing the left boundary whose offset is the smallest.
-    // To do that, we simply need to find the fragment with the smallest right boundary that is on the right of our
-    // left boundary. This works because by construction we guarantee that our tree has no fully-contained fragments,
-    // implying that ordering by left is also ordering by right.
-    //
-    // The right neighbor is found by analogy: find the fragment with the largest left boundary that is on the left
-    // of our right boundary. This guarantees that the new virtual right boundary will max out to the right.
-    size_t v_left  = left;
-    size_t v_right = right;
-    frag           = (udpard_fragment_t*)cavl2_lower_bound(*root, &left, &rx_cavl_compare_fragment_end);
-    if (frag != NULL) {
-        v_left = smaller(v_left, frag->offset + 1U); // Avoid matching the left neighbor itself.
-    }
-    frag = (udpard_fragment_t*)cavl2_predecessor(*root, &right, &rx_cavl_compare_fragment_offset);
-    if (frag != NULL) {
-        v_right = larger(v_right, larger(frag->offset + frag->view.size, 1U) - 1U); // Avoid matching the right neighbor
-    }
+    const size_t v_left = smaller(left, (n_left == NULL) ? SIZE_MAX : (n_left->offset + 1U));
+    const size_t v_right =
+      larger(right, (n_right == NULL) ? 0 : (larger(n_right->offset + n_right->view.size, 1U) - 1U));
     UDPARD_ASSERT((v_left <= left) && (right <= v_right));
 
     // Remove all redundant fragments before inserting the new one.
     // No need to repeat tree lookup at every iteration, we just step through the nodes using the next_greater lookup.
-    frag = (udpard_fragment_t*)cavl2_lower_bound(*root, &v_left, &rx_cavl_compare_fragment_offset);
-    while ((frag != NULL) && (frag->offset >= v_left) && ((frag->offset + frag->view.size) <= v_right)) {
-        udpard_fragment_t* const next = (udpard_fragment_t*)cavl2_next_greater(&frag->index_offset);
-        cavl2_remove(root, &frag->index_offset);
-        mem_free_payload(frag->payload_deleter, frag->origin);
-        mem_free(fragment_memory, sizeof(udpard_fragment_t), frag);
-        frag = next;
+    udpard_fragment_t* victim = (udpard_fragment_t*)cavl2_lower_bound(*root, &v_left, &rx_cavl_compare_fragment_offset);
+    while ((victim != NULL) && (victim->offset >= v_left) && ((victim->offset + victim->view.size) <= v_right)) {
+        udpard_fragment_t* const next = (udpard_fragment_t*)cavl2_next_greater(&victim->index_offset);
+        cavl2_remove(root, &victim->index_offset);
+        mem_free_payload(victim->payload_deleter, victim->origin);
+        mem_free(fragment_memory, sizeof(udpard_fragment_t), victim);
+        victim = next;
     }
     // Insert the new fragment.
     udpard_tree_t* const res = cavl2_find_or_insert(root, //
