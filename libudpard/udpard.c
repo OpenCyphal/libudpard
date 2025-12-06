@@ -72,10 +72,8 @@ static udpard_udpip_ep_t make_topic_ep(const uint32_t subject_id)
     return (udpard_udpip_ep_t){ .ip = IPv4_MCAST_PREFIX | (subject_id & IPv4_MCAST_SUFFIX_MASK), .port = UDP_PORT };
 }
 
-static size_t   smaller(const size_t a, const size_t b) { return (a < b) ? a : b; }
-static size_t   smaller3(const size_t a, const size_t b, const size_t c) { return smaller(smaller(a, b), c); }
-static size_t   larger(const size_t a, const size_t b) { return (a > b) ? a : b; }
-static uint32_t max_u32(const uint32_t a, const uint32_t b) { return (a > b) ? a : b; }
+static size_t smaller(const size_t a, const size_t b) { return (a < b) ? a : b; }
+static size_t larger(const size_t a, const size_t b) { return (a > b) ? a : b; }
 
 static void* mem_alloc(const udpard_mem_resource_t memory, const size_t size)
 {
