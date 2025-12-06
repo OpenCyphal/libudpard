@@ -59,6 +59,7 @@ function(gen_test name files compile_definitions compile_flags link_flags c_stan
     if (ENABLE_COVERAGE)
         target_compile_options(${name} PRIVATE --coverage -fprofile-arcs -ftest-coverage)
         target_link_options(${name} PRIVATE --coverage -fprofile-arcs)
+        target_compile_definitions(${name} PRIVATE NDEBUG=1)  # Remove assertion checks as they interfere with coverage
     endif()
 
     set_target_properties(
