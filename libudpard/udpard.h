@@ -587,8 +587,8 @@ typedef struct udpard_rx_transfer_t
     /// it is the sum of the sizes of all its fragments. For example, if the sender emitted a transfer of 2000
     /// bytes split into two frames, 1408 bytes in the first frame and 592 bytes in the second frame,
     /// then the payload_size_stored will be 2000 and the payload buffer will contain two fragments of 1408 and
-    /// 592 bytes. If the received payload exceeds the configured extent, the excess payload will be discarded
-    /// and the payload_size_stored will be set to the extent.
+    /// 592 bytes. If the received payload exceeds the configured extent, (some of) the excess payload may be
+    /// discarded and the payload_size_stored will be set accordingly.
     ///
     /// The application is given ownership of the payload buffer, so it is required to free it after use;
     /// this requires freeing both the handles and the payload buffers they point to.
