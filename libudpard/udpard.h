@@ -133,7 +133,7 @@ extern "C"
 /// The library supports at most this many local redundant network interfaces.
 #define UDPARD_NETWORK_INTERFACE_COUNT_MAX 3U
 
-typedef int64_t udpard_microsecond_t;
+typedef int64_t udpard_us_t;
 
 typedef enum udpard_prio_t
 {
@@ -370,7 +370,7 @@ typedef struct udpard_tx_item_t
 
     /// This is the same value that is passed to udpard_tx_publish()/p2p().
     /// Frames whose transmission deadline is in the past are dropped (transmission aborted).
-    udpard_microsecond_t deadline;
+    udpard_us_t deadline;
 
     /// The original transfer priority level. The application should obtain the corresponding DSCP value
     /// by mapping it via the dscp_value_per_priority array of the udpard_tx_t instance.
@@ -440,35 +440,35 @@ bool udpard_tx_new(udpard_tx_t* const              self,
 ///
 /// The time complexity is O(p + log e), where p is the amount of payload in the transfer, and e is the number of
 /// transfers (not frames) already enqueued in the transmission queue.
-uint32_t udpard_tx_publish(udpard_tx_t* const         self,
-                           const udpard_microsecond_t now,
-                           const udpard_microsecond_t deadline,
-                           const udpard_prio_t        priority,
-                           const uint64_t             topic_hash,
-                           const uint32_t             subject_id,
-                           const uint64_t             transfer_id,
-                           const udpard_bytes_t       payload,
-                           const bool                 ack_required,
-                           void* const                user_transfer_reference);
+uint32_t udpard_tx_publish(udpard_tx_t* const   self,
+                           const udpard_us_t    now,
+                           const udpard_us_t    deadline,
+                           const udpard_prio_t  priority,
+                           const uint64_t       topic_hash,
+                           const uint32_t       subject_id,
+                           const uint64_t       transfer_id,
+                           const udpard_bytes_t payload,
+                           const bool           ack_required,
+                           void* const          user_transfer_reference);
 
 /// Similar to udpard_tx_publish, but for P2P transfers between specific nodes.
 /// This can only be sent in a response to a published message; the RX pipeline will provide the discovered return
 /// endpoint for this particular remote node.
-uint32_t udpard_tx_p2p(udpard_tx_t* const         self,
-                       const udpard_microsecond_t now,
-                       const udpard_microsecond_t deadline,
-                       const uint64_t             remote_uid,
-                       const udpard_udpip_ep_t    remote_ep,
-                       const udpard_prio_t        priority,
-                       const uint64_t             transfer_id,
-                       const udpard_bytes_t       payload,
-                       const bool                 ack_required,
-                       void* const                user_transfer_reference);
+uint32_t udpard_tx_p2p(udpard_tx_t* const      self,
+                       const udpard_us_t       now,
+                       const udpard_us_t       deadline,
+                       const uint64_t          remote_uid,
+                       const udpard_udpip_ep_t remote_ep,
+                       const udpard_prio_t     priority,
+                       const uint64_t          transfer_id,
+                       const udpard_bytes_t    payload,
+                       const bool              ack_required,
+                       void* const             user_transfer_reference);
 
 /// Purges all timed out items from the transmission queue automatically; returns the next item to be transmitted,
 /// if there is any, otherwise NULL. The returned item is not removed from the queue; use udpard_tx_pop() to do that.
 /// The returned item (if any) is guaranteed to be non-expired (deadline>=now).
-udpard_tx_item_t* udpard_tx_peek(udpard_tx_t* const self, const udpard_microsecond_t now);
+udpard_tx_item_t* udpard_tx_peek(udpard_tx_t* const self, const udpard_us_t now);
 
 /// Transfers the ownership of the specified item to the application. The item does not necessarily need to be the
 /// top one -- it is safe to dequeue any item. The item is dequeued but not invalidated; it is the responsibility of
@@ -523,7 +523,7 @@ typedef struct udpard_rx_port_t
     /// The ORDERED mode is used if the reordering window is non-negative. Zero is not really a special case, it
     /// simply means that out-of-order transfers are not waited for at all (declared permanently lost immediately).
     /// The IMMEDIATE mode is used if the reordering window is negative.
-    udpard_microsecond_t reordering_window;
+    udpard_us_t reordering_window;
 
     udpard_rx_memory_resources_t memory;
 
@@ -578,10 +578,10 @@ typedef struct udpard_rx_subscription_t
 /// The payload is owned by this instance, so the application must free it after use; see udpardRxTransferFree.
 typedef struct udpard_rx_transfer_t
 {
-    udpard_microsecond_t timestamp;
-    udpard_remote_t      origin;
-    udpard_prio_t        priority;
-    uint64_t             transfer_id;
+    udpard_us_t     timestamp;
+    udpard_remote_t origin;
+    udpard_prio_t   priority;
+    uint64_t        transfer_id;
 
     /// The total size of the payload available to the application, in bytes, is provided for convenience;
     /// it is the sum of the sizes of all its fragments. For example, if the sender emitted a transfer of 2000
@@ -662,7 +662,7 @@ bool udpard_rx_new(udpard_rx_t* const                 self,
 /// received transfers when the reordering window expires. If this is invoked simultaneously with rx subscription
 /// reception, then this function should be invoked after the reception handling.
 /// The time complexity is logarithmic in the number of living sessions.
-void udpard_rx_poll(udpard_rx_t* const self, const udpard_microsecond_t now);
+void udpard_rx_poll(udpard_rx_t* const self, const udpard_us_t now);
 
 /// To subscribe to a subject, the application should do this:
 ///     1. Create a new udpard_rx_subscription_t instance using udpard_rx_subscription_new().
@@ -689,7 +689,7 @@ bool udpard_rx_subscription_new(udpard_rx_subscription_t* const    self,
                                 const uint32_t                     subject_id,
                                 const uint64_t                     topic_hash,
                                 const size_t                       extent,
-                                udpard_microsecond_t               reordering_window,
+                                udpard_us_t                        reordering_window,
                                 const udpard_rx_memory_resources_t memory);
 
 void udpard_rx_subscription_free(udpard_rx_subscription_t* const self);
@@ -724,7 +724,7 @@ void udpard_rx_subscription_free(udpard_rx_subscription_t* const self);
 /// Returns true on successful processing, false if any of the arguments are invalid.
 bool udpard_rx_subscription_receive(udpard_rx_t* const              rx,
                                     udpard_rx_subscription_t* const sub,
-                                    const udpard_microsecond_t      timestamp_usec,
+                                    const udpard_us_t               timestamp_usec,
                                     const udpard_udpip_ep_t         source_endpoint,
                                     const udpard_bytes_mut_t        datagram_payload,
                                     const udpard_mem_deleter_t      payload_deleter,
@@ -732,7 +732,7 @@ bool udpard_rx_subscription_receive(udpard_rx_t* const              rx,
 
 /// Like the above but for P2P unicast transfers exchanged between specific nodes.
 bool udpard_rx_p2p_receive(udpard_rx_subscription_t* const rx,
-                           const udpard_microsecond_t      timestamp_usec,
+                           const udpard_us_t               timestamp_usec,
                            const udpard_udpip_ep_t         source_endpoint,
                            const udpard_bytes_mut_t        datagram_payload,
                            const udpard_mem_deleter_t      payload_deleter,

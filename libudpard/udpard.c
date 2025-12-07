@@ -72,8 +72,12 @@ static udpard_udpip_ep_t make_topic_ep(const uint32_t subject_id)
     return (udpard_udpip_ep_t){ .ip = IPv4_MCAST_PREFIX | (subject_id & IPv4_MCAST_SUFFIX_MASK), .port = UDP_PORT };
 }
 
-static size_t smaller(const size_t a, const size_t b) { return (a < b) ? a : b; }
-static size_t larger(const size_t a, const size_t b) { return (a > b) ? a : b; }
+static size_t      smaller(const size_t a, const size_t b) { return (a < b) ? a : b; }
+static size_t      larger(const size_t a, const size_t b) { return (a > b) ? a : b; }
+static int64_t     min_i64(const int64_t a, const int64_t b) { return (a < b) ? a : b; }
+static int64_t     max_i64(const int64_t a, const int64_t b) { return (a > b) ? a : b; }
+static udpard_us_t earlier(const udpard_us_t a, const udpard_us_t b) { return min_i64(a, b); }
+static udpard_us_t later(const udpard_us_t a, const udpard_us_t b) { return max_i64(a, b); }
 
 static void* mem_alloc(const udpard_mem_resource_t memory, const size_t size)
 {
@@ -409,13 +413,11 @@ static int32_t tx_cavl_compare_prio(const void* const user, const udpard_tree_t*
 
 static int32_t tx_cavl_compare_deadline(const void* const user, const udpard_tree_t* const node)
 {
-    return ((*(const udpard_microsecond_t*)user) >= CAVL2_TO_OWNER(node, udpard_tx_item_t, index_deadline)->deadline)
-             ? +1
-             : -1;
+    return ((*(const udpard_us_t*)user) >= CAVL2_TO_OWNER(node, udpard_tx_item_t, index_deadline)->deadline) ? +1 : -1;
 }
 
 static udpard_tx_item_t* tx_item_new(const udpard_tx_mem_resources_t memory,
-                                     const udpard_microsecond_t      deadline,
+                                     const udpard_us_t               deadline,
                                      const udpard_prio_t             priority,
                                      const udpard_udpip_ep_t         endpoint,
                                      const size_t                    datagram_payload_size,
@@ -447,7 +449,7 @@ static udpard_tx_item_t* tx_item_new(const udpard_tx_mem_resources_t memory,
 /// The caller is responsible for freeing the memory allocated for the chain.
 static tx_chain_t tx_spool(const udpard_tx_mem_resources_t memory,
                            const size_t                    mtu,
-                           const udpard_microsecond_t      deadline,
+                           const udpard_us_t               deadline,
                            const meta_t                    meta,
                            const udpard_udpip_ep_t         endpoint,
                            const udpard_bytes_t            payload,
@@ -488,12 +490,12 @@ static tx_chain_t tx_spool(const udpard_tx_mem_resources_t memory,
     return out;
 }
 
-static uint32_t tx_push(udpard_tx_t* const         tx,
-                        const udpard_microsecond_t deadline,
-                        const meta_t               meta,
-                        const udpard_udpip_ep_t    endpoint,
-                        const udpard_bytes_t       payload,
-                        void* const                user_transfer_reference)
+static uint32_t tx_push(udpard_tx_t* const      tx,
+                        const udpard_us_t       deadline,
+                        const meta_t            meta,
+                        const udpard_udpip_ep_t endpoint,
+                        const udpard_bytes_t    payload,
+                        void* const             user_transfer_reference)
 {
     UDPARD_ASSERT(tx != NULL);
     uint32_t     out         = 0; // The number of frames enqueued; zero on error (error counters incremented).
@@ -533,7 +535,7 @@ static uint32_t tx_push(udpard_tx_t* const         tx,
     return out;
 }
 
-static uint64_t tx_purge_expired(udpard_tx_t* const self, const udpard_microsecond_t now)
+static uint64_t tx_purge_expired(udpard_tx_t* const self, const udpard_us_t now)
 {
     uint64_t count = 0;
     for (udpard_tree_t* p = cavl2_min(self->index_deadline); p != NULL;) {
@@ -578,16 +580,16 @@ bool udpard_tx_new(udpard_tx_t* const              self,
     return ok;
 }
 
-uint32_t udpard_tx_publish(udpard_tx_t* const         self,
-                           const udpard_microsecond_t now,
-                           const udpard_microsecond_t deadline,
-                           const udpard_prio_t        priority,
-                           const uint64_t             topic_hash,
-                           const uint32_t             subject_id,
-                           const uint64_t             transfer_id,
-                           const udpard_bytes_t       payload,
-                           const bool                 ack_required,
-                           void* const                user_transfer_reference)
+uint32_t udpard_tx_publish(udpard_tx_t* const   self,
+                           const udpard_us_t    now,
+                           const udpard_us_t    deadline,
+                           const udpard_prio_t  priority,
+                           const uint64_t       topic_hash,
+                           const uint32_t       subject_id,
+                           const uint64_t       transfer_id,
+                           const udpard_bytes_t payload,
+                           const bool           ack_required,
+                           void* const          user_transfer_reference)
 {
     uint32_t out = 0;
     if ((self != NULL) && (deadline >= now) && (self->local_uid != 0) && (priority <= UDPARD_PRIORITY_MAX) &&
@@ -606,16 +608,16 @@ uint32_t udpard_tx_publish(udpard_tx_t* const         self,
     return out;
 }
 
-uint32_t udpard_tx_p2p(udpard_tx_t* const         self,
-                       const udpard_microsecond_t now,
-                       const udpard_microsecond_t deadline,
-                       const uint64_t             remote_uid,
-                       const udpard_udpip_ep_t    remote_ep,
-                       const udpard_prio_t        priority,
-                       const uint64_t             transfer_id,
-                       const udpard_bytes_t       payload,
-                       const bool                 ack_required,
-                       void* const                user_transfer_reference)
+uint32_t udpard_tx_p2p(udpard_tx_t* const      self,
+                       const udpard_us_t       now,
+                       const udpard_us_t       deadline,
+                       const uint64_t          remote_uid,
+                       const udpard_udpip_ep_t remote_ep,
+                       const udpard_prio_t     priority,
+                       const uint64_t          transfer_id,
+                       const udpard_bytes_t    payload,
+                       const bool              ack_required,
+                       void* const             user_transfer_reference)
 {
     uint32_t out = 0;
     if ((self != NULL) && (deadline >= now) && (self->local_uid != 0) && (remote_uid != 0) && (remote_ep.ip != 0) &&
@@ -635,7 +637,7 @@ uint32_t udpard_tx_p2p(udpard_tx_t* const         self,
     return out;
 }
 
-udpard_tx_item_t* udpard_tx_peek(udpard_tx_t* const self, const udpard_microsecond_t now)
+udpard_tx_item_t* udpard_tx_peek(udpard_tx_t* const self, const udpard_us_t now)
 {
     udpard_tx_item_t* out = NULL;
     if (self != NULL) {
@@ -966,15 +968,71 @@ typedef enum
 /// The redundant interfaces may use distinct MTU, which requires special fragment tree handling.
 typedef struct
 {
-    rx_slot_state_t      state;
-    uint64_t             transfer_id;    ///< Which transfer we're reassembling here.
-    udpard_microsecond_t ts_discovery;   ///< The timestamp of the first frame received for this transfer.
-    udpard_microsecond_t ts_completion;  ///< The timestamp of the final accepted frame for this transfer.
-    size_t               covered_prefix; ///< Number of bytes received contiguously from offset zero.
-    size_t               crc_end;        ///< The end offset of the frame whose CRC is stored in `crc`.
-    uint32_t             crc;            ///< Once the reassembly is done, holds the CRC of the entire transfer.
-    udpard_tree_t*       fragments;
+    rx_slot_state_t state;
+    uint64_t        transfer_id;    ///< Which transfer we're reassembling here.
+    udpard_us_t     ts_min;         ///< Earliest frame timestamp, aka transfer reception timestamp.
+    udpard_us_t     ts_max;         ///< Latest frame timestamp, aka transfer completion timestamp.
+    size_t          covered_prefix; ///< Number of bytes received contiguously from offset zero.
+    size_t          crc_end;        ///< The end offset of the frame whose CRC is stored in `crc`.
+    uint32_t        crc;            ///< Once the reassembly is done, holds the CRC of the entire transfer.
+    udpard_tree_t*  fragments;
 } rx_slot_t;
+
+static void rx_slot_reset(rx_slot_t* const slot, const udpard_mem_resource_t fragment_memory)
+{
+    udpard_fragment_free_all((udpard_fragment_t*)slot->fragments, fragment_memory);
+    slot->fragments      = NULL;
+    slot->state          = rx_slot_idle;
+    slot->covered_prefix = 0U;
+    slot->crc_end        = 0U;
+    slot->crc            = CRC_INITIAL;
+}
+
+/// The caller will accept the ownership of the fragments if the resulting state is done.
+static void rx_slot_update(rx_slot_t* const            slot,
+                           const udpard_us_t           ts,
+                           const udpard_mem_resource_t fragment_memory,
+                           const udpard_mem_deleter_t  payload_deleter,
+                           const rx_frame_t            frame,
+                           const size_t                extent,
+                           uint64_t* const             errors_oom,
+                           uint64_t* const             errors_transfer_malformed)
+{
+    if (slot->state != rx_slot_busy) {
+        rx_slot_reset(slot, fragment_memory);
+        slot->state       = rx_slot_busy;
+        slot->transfer_id = frame.meta.transfer_id;
+        slot->ts_min      = ts;
+        slot->ts_max      = ts;
+    }
+    const size_t                           crc_end  = frame.base.offset + frame.base.payload.size;
+    const rx_fragment_tree_update_result_t tree_res = rx_fragment_tree_update(&slot->fragments,
+                                                                              fragment_memory,
+                                                                              payload_deleter,
+                                                                              frame.base,
+                                                                              frame.meta.transfer_payload_size,
+                                                                              extent,
+                                                                              &slot->covered_prefix);
+    if ((tree_res == rx_fragment_tree_accepted) || (tree_res == rx_fragment_tree_done)) {
+        slot->ts_max = later(slot->ts_max, ts);
+        slot->ts_min = earlier(slot->ts_min, ts);
+        if (crc_end >= slot->crc_end) {
+            slot->crc_end = crc_end;
+            slot->crc     = frame.base.crc;
+        }
+    }
+    if (tree_res == rx_fragment_tree_oom) {
+        ++*errors_oom;
+    }
+    if (tree_res == rx_fragment_tree_done) {
+        if (rx_fragment_tree_finalize(slot->fragments, slot->crc)) {
+            slot->state = rx_slot_done; // The caller will handle the completed transfer.
+        } else {
+            ++*errors_transfer_malformed;
+            rx_slot_reset(slot, fragment_memory);
+        }
+    }
+}
 
 /// Keep in mind that we have a dedicated session object per remote node per port; this means that the states
 /// kept here are specific per remote node, as it should be.
@@ -986,12 +1044,12 @@ typedef struct
     udpard_rx_subscription_t* owner;
 
     /// Sessions interned for the reordering window closure.
-    udpard_tree_t        index_reordering_window;
-    udpard_microsecond_t reordering_window_deadline;
+    udpard_tree_t index_reordering_window;
+    udpard_us_t   reordering_window_deadline;
 
     /// LRU last animated list for automatic retirement of stale sessions.
     udpard_list_member_t list_by_animation;
-    udpard_microsecond_t last_animated_ts;
+    udpard_us_t          last_animated_ts;
 
     /// To weed out duplicates and to retransmit lost ACKs.
     rx_transfer_id_window_t acknowledged;

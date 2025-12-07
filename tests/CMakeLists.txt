@@ -94,9 +94,7 @@ gen_test_matrix(test_intrusive_rx "src/test_intrusive_rx.c")
 
 # Coverage targets. Usage:
 #   cmake -DENABLE_COVERAGE=ON ..
-#   make -j16
-#   make test       # Run the tests
-#   make coverage   # Generate coverage reports
+#   make -j16 && make test && make coverage
 #   xdg-open coverage-html/index.html
 if (ENABLE_COVERAGE)
     find_program(LCOV_PATH lcov REQUIRED)
