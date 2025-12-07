@@ -1005,7 +1005,6 @@ static void rx_slot_update(rx_slot_t* const            slot,
         slot->ts_min      = ts;
         slot->ts_max      = ts;
     }
-    const size_t                           crc_end  = frame.base.offset + frame.base.payload.size;
     const rx_fragment_tree_update_result_t tree_res = rx_fragment_tree_update(&slot->fragments,
                                                                               fragment_memory,
                                                                               payload_deleter,
@@ -1014,8 +1013,9 @@ static void rx_slot_update(rx_slot_t* const            slot,
                                                                               extent,
                                                                               &slot->covered_prefix);
     if ((tree_res == rx_fragment_tree_accepted) || (tree_res == rx_fragment_tree_done)) {
-        slot->ts_max = later(slot->ts_max, ts);
-        slot->ts_min = earlier(slot->ts_min, ts);
+        slot->ts_max         = later(slot->ts_max, ts);
+        slot->ts_min         = earlier(slot->ts_min, ts);
+        const size_t crc_end = frame.base.offset + frame.base.payload.size;
         if (crc_end >= slot->crc_end) {
             slot->crc_end = crc_end;
             slot->crc     = frame.base.crc;
