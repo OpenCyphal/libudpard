@@ -1392,6 +1392,121 @@ static void test_rx_fragment_tree_oom(void)
     instrumented_allocator_reset(&alloc_payload);
 }
 
+static void test_udpard_fragment_seek(void)
+{
+    instrumented_allocator_t alloc_frag = {0};
+    instrumented_allocator_new(&alloc_frag);
+    const udpard_mem_resource_t mem_frag = instrumented_allocator_make_resource(&alloc_frag);
+
+    instrumented_allocator_t alloc_payload = {0};
+    instrumented_allocator_new(&alloc_payload);
+    const udpard_mem_resource_t mem_payload = instrumented_allocator_make_resource(&alloc_payload);
+    const udpard_mem_deleter_t  del_payload = instrumented_allocator_make_deleter(&alloc_payload);
+
+    // Build a fragment tree with multiple fragments with gaps between them.
+    // Using make_frame_base to control exact sizes (no null terminators).
+    // Fragments at offsets: 0-3 (3 bytes), 5-8 (3 bytes), 10-14 (4 bytes)
+    udpard_tree_t* root = NULL;
+    size_t         cov  = 0;
+
+    // Fragment 1: offset 0, size 3
+    rx_fragment_tree_update(&root, mem_frag, del_payload, make_frame_base(mem_payload, 0, 3, "abc"), 14, 14, &cov);
+    TEST_ASSERT_NOT_NULL(root);
+    TEST_ASSERT_EQUAL_size_t(3, cov);  // Coverage is only the contiguous prefix from offset 0.
+
+    // Fragment 2: offset 5, size 3
+    rx_fragment_tree_update(&root, mem_frag, del_payload, make_frame_base(mem_payload, 5, 3, "def"), 14, 14, &cov);
+    TEST_ASSERT_EQUAL_size_t(3, cov);  // Still 3, gap at [3-5).
+
+    // Fragment 3: offset 10, size 4
+    rx_fragment_tree_update(&root, mem_frag, del_payload, make_frame_base(mem_payload, 10, 4, "ghij"), 14, 14, &cov);
+
+    TEST_ASSERT_EQUAL(3, tree_count(root));
+    TEST_ASSERT_EQUAL_size_t(3, cov);  // Still 3, gaps prevent full coverage.
+
+    // Get references to the fragments for testing.
+    udpard_fragment_t* frag0 = fragment_at(root, 0);
+    udpard_fragment_t* frag1 = fragment_at(root, 1);
+    udpard_fragment_t* frag2 = fragment_at(root, 2);
+    TEST_ASSERT_NOT_NULL(frag0);
+    TEST_ASSERT_NOT_NULL(frag1);
+    TEST_ASSERT_NOT_NULL(frag2);
+
+    // Test seeking to offset 0 (should return first fragment).
+    TEST_ASSERT_EQUAL_PTR(frag0, udpard_fragment_seek(frag0, 0));
+    TEST_ASSERT_EQUAL_PTR(frag0, udpard_fragment_seek(frag1, 0));
+    TEST_ASSERT_EQUAL_PTR(frag0, udpard_fragment_seek(frag2, 0));
+
+    // Test seeking within first fragment [0-3).
+    TEST_ASSERT_EQUAL_PTR(frag0, udpard_fragment_seek(frag0, 0));
+    TEST_ASSERT_EQUAL_PTR(frag0, udpard_fragment_seek(frag0, 1));
+    TEST_ASSERT_EQUAL_PTR(frag0, udpard_fragment_seek(frag0, 2));
+
+    // Test seeking in gap [3-5) - should return NULL.
+    TEST_ASSERT_NULL(udpard_fragment_seek(frag0, 3));
+    TEST_ASSERT_NULL(udpard_fragment_seek(frag1, 4));
+
+    // Test seeking to start of second fragment [5-8).
+    TEST_ASSERT_EQUAL_PTR(frag1, udpard_fragment_seek(frag0, 5));
+    TEST_ASSERT_EQUAL_PTR(frag1, udpard_fragment_seek(frag1, 5));
+    TEST_ASSERT_EQUAL_PTR(frag1, udpard_fragment_seek(frag2, 5));
+
+    // Test seeking within second fragment.
+    TEST_ASSERT_EQUAL_PTR(frag1, udpard_fragment_seek(frag0, 6));
+    TEST_ASSERT_EQUAL_PTR(frag1, udpard_fragment_seek(frag1, 7));
+
+    // Test seeking in gap [8-10) - should return NULL.
+    TEST_ASSERT_NULL(udpard_fragment_seek(frag0, 8));
+    TEST_ASSERT_NULL(udpard_fragment_seek(frag1, 9));
+
+    // Test seeking to start of third fragment [10-14).
+    TEST_ASSERT_EQUAL_PTR(frag2, udpard_fragment_seek(frag0, 10));
+    TEST_ASSERT_EQUAL_PTR(frag2, udpard_fragment_seek(frag1, 10));
+    TEST_ASSERT_EQUAL_PTR(frag2, udpard_fragment_seek(frag2, 10));
+
+    // Test seeking within third fragment.
+    TEST_ASSERT_EQUAL_PTR(frag2, udpard_fragment_seek(frag0, 11));
+    TEST_ASSERT_EQUAL_PTR(frag2, udpard_fragment_seek(frag1, 12));
+    TEST_ASSERT_EQUAL_PTR(frag2, udpard_fragment_seek(frag2, 13));
+
+    // Test seeking beyond payload (should return NULL).
+    TEST_ASSERT_NULL(udpard_fragment_seek(frag0, 14));
+    TEST_ASSERT_NULL(udpard_fragment_seek(frag1, 14));
+    TEST_ASSERT_NULL(udpard_fragment_seek(frag2, 14));
+    TEST_ASSERT_NULL(udpard_fragment_seek(frag0, 100));
+
+    // Cleanup.
+    udpard_fragment_free_all((udpard_fragment_t*)root, mem_frag);
+    TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
+
+    instrumented_allocator_reset(&alloc_frag);
+    instrumented_allocator_reset(&alloc_payload);
+
+    // Test with single fragment.
+    root = NULL;
+    cov  = 0;
+    rx_fragment_tree_update(&root, mem_frag, del_payload, make_frame_base(mem_payload, 0, 5, "hello"), 5, 5, &cov);
+    TEST_ASSERT_NOT_NULL(root);
+
+    udpard_fragment_t* single = fragment_at(root, 0);
+    TEST_ASSERT_NOT_NULL(single);
+
+    // Seek within single fragment.
+    TEST_ASSERT_EQUAL_PTR(single, udpard_fragment_seek(single, 0));
+    TEST_ASSERT_EQUAL_PTR(single, udpard_fragment_seek(single, 1));
+    TEST_ASSERT_EQUAL_PTR(single, udpard_fragment_seek(single, 2));
+    TEST_ASSERT_EQUAL_PTR(single, udpard_fragment_seek(single, 4));
+
+    // Seek beyond single fragment.
+    TEST_ASSERT_NULL(udpard_fragment_seek(single, 5));
+
+    // Cleanup.
+    udpard_fragment_free_all((udpard_fragment_t*)root, mem_frag);
+    TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
+}
+
 void setUp(void) {}
 
 void tearDown(void) {}
@@ -1402,6 +1517,7 @@ int main(void)
     RUN_TEST(test_rx_fragment_tree_update_a);
     RUN_TEST(test_rx_fragment_tree_update_exhaustive);
     RUN_TEST(test_rx_fragment_tree_oom);
+    RUN_TEST(test_udpard_fragment_seek);
     RUN_TEST(test_rx_transfer_id_forward_distance);
     RUN_TEST(test_rx_transfer_id_window_slide);
     RUN_TEST(test_rx_transfer_id_window_manip);
