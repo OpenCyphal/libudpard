@@ -38,6 +38,34 @@ static bool fragment_equals(udpard_fragment_t* const frag,
     return (size == 0U) || (memcmp(frag->view.data, payload, size) == 0);
 }
 
+/// Scans the fragment tree ensuring that its payload exactly matches the reference.
+/// The node can be any node in the tree.
+static bool fragment_tree_verify(udpard_tree_t* const root,
+                                 const size_t         payload_size,
+                                 const void* const    payload,
+                                 const uint32_t       crc)
+{
+    // Remove redundancies from the payload tree and check the CRC.
+    if (!rx_fragment_tree_finalize(root, crc)) {
+        return false;
+    }
+    // Scan the payload tree.
+    size_t offset = 0;
+    for (const udpard_fragment_t* it = (udpard_fragment_t*)cavl2_min(root); it != NULL; it = it->next) {
+        if (it->offset != offset) {
+            return false;
+        }
+        if ((offset + it->view.size) > payload_size) {
+            return false;
+        }
+        if ((it->view.size > 0) && (memcmp(it->view.data, (const uint8_t*)payload + offset, it->view.size) != 0)) {
+            return false;
+        }
+        offset += it->view.size;
+    }
+    return offset == payload_size;
+}
+
 /// Allocates the payload on the heap, emulating normal frame reception.
 static rx_frame_base_t make_frame_base(const udpard_mem_resource_t mem,
                                        const size_t                offset,
@@ -60,6 +88,9 @@ static rx_frame_base_t make_frame_base_str(const udpard_mem_resource_t mem,
     return make_frame_base(mem, offset, (payload != NULL) ? (strlen(payload) + 1) : 0U, payload);
 }
 
+/// Reference CRC calculation:
+///     >>> from pycyphal.transport.commons.crc import CRC32C
+///     >>> hex(CRC32C.new(b"abc\0").value) + "UL"
 static void test_rx_fragment_tree_update_a(void)
 {
     instrumented_allocator_t alloc_frag = { 0 };
@@ -99,7 +130,8 @@ static void test_rx_fragment_tree_update_a(void)
         TEST_ASSERT_EQUAL_size_t(1, alloc_payload.count_alloc);
         TEST_ASSERT_EQUAL_size_t(0, alloc_frag.count_free);
         TEST_ASSERT_EQUAL_size_t(0, alloc_payload.count_free);
-        // Free the tree.
+        // Verify the payload and free the tree.
+        TEST_ASSERT(fragment_tree_verify(root, 0, "", 0));
         udpard_fragment_free_all((udpard_fragment_t*)root, mem_frag);
         // Check the heap.
         TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
@@ -140,7 +172,8 @@ static void test_rx_fragment_tree_update_a(void)
         TEST_ASSERT_EQUAL_size_t(1, alloc_payload.count_alloc);
         TEST_ASSERT_EQUAL_size_t(0, alloc_frag.count_free);
         TEST_ASSERT_EQUAL_size_t(0, alloc_payload.count_free);
-        // Free the tree (as in freedom).
+        // Verify and free the tree (as in freedom).
+        TEST_ASSERT(fragment_tree_verify(root, 4, "abc", 0x34940e4cUL));
         udpard_fragment_free_all((udpard_fragment_t*)root, mem_frag);
         // Check the heap.
         TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
@@ -158,6 +191,18 @@ static void test_rx_fragment_tree_update_a(void)
         udpard_tree_t*                   root = NULL;
         size_t                           cov  = 0;
         rx_fragment_tree_update_result_t res  = rx_fragment_tree_rejected;
+        // Add fragment beyond the extent, dropped early.
+        res = rx_fragment_tree_update(&root, //
+                                      mem_frag,
+                                      del_payload,
+                                      make_frame_base_str(mem_payload, 3, "abcdef"),
+                                      8,
+                                      3,
+                                      &cov);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_rejected, res);
+        TEST_ASSERT_EQUAL_size_t(0, cov);
+        TEST_ASSERT_NULL(root);
+        TEST_ASSERT_EQUAL(0, tree_count(root));
         // Add fragment.
         res = rx_fragment_tree_update(&root, //
                                       mem_frag,
@@ -179,18 +224,19 @@ static void test_rx_fragment_tree_update_a(void)
         TEST_ASSERT_EQUAL_size_t(1, alloc_frag.allocated_fragments);
         TEST_ASSERT_EQUAL_size_t(1, alloc_payload.allocated_fragments);
         TEST_ASSERT_EQUAL_size_t(1, alloc_frag.count_alloc);
-        TEST_ASSERT_EQUAL_size_t(1, alloc_payload.count_alloc);
+        TEST_ASSERT_EQUAL_size_t(2, alloc_payload.count_alloc);
         TEST_ASSERT_EQUAL_size_t(0, alloc_frag.count_free);
-        TEST_ASSERT_EQUAL_size_t(0, alloc_payload.count_free);
+        TEST_ASSERT_EQUAL_size_t(1, alloc_payload.count_free);
         // Free the tree (as in freedom).
+        TEST_ASSERT(fragment_tree_verify(root, 7, "abcdef", 0x532b03c8UL));
         udpard_fragment_free_all((udpard_fragment_t*)root, mem_frag);
         // Check the heap.
         TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
         TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
         TEST_ASSERT_EQUAL_size_t(1, alloc_frag.count_alloc);
-        TEST_ASSERT_EQUAL_size_t(1, alloc_payload.count_alloc);
+        TEST_ASSERT_EQUAL_size_t(2, alloc_payload.count_alloc);
         TEST_ASSERT_EQUAL_size_t(1, alloc_frag.count_free);
-        TEST_ASSERT_EQUAL_size_t(1, alloc_payload.count_free);
+        TEST_ASSERT_EQUAL_size_t(2, alloc_payload.count_free);
     }
     instrumented_allocator_reset(&alloc_frag);
     instrumented_allocator_reset(&alloc_payload);
@@ -255,6 +301,7 @@ static void test_rx_fragment_tree_update_a(void)
         TEST_ASSERT_EQUAL_size_t(0, alloc_frag.count_free);
         TEST_ASSERT_EQUAL_size_t(0, alloc_payload.count_free);
         // Free the tree (as in freedom).
+        TEST_ASSERT(fragment_tree_verify(root, 12, "abc\0def\0xyz", 0x2758cbe6UL));
         udpard_fragment_free_all((udpard_fragment_t*)root, mem_frag);
         // Check the heap.
         TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
@@ -434,6 +481,7 @@ static void test_rx_fragment_tree_update_a(void)
         TEST_ASSERT_EQUAL_size_t(3, alloc_frag.count_free);
         TEST_ASSERT_EQUAL_size_t(4, alloc_payload.count_free);
         // Free the tree (as in freedom). The free tree is free to manifest its own destiny.
+        TEST_ASSERT(fragment_tree_verify(root, 12, "0123456789--", 0xc73f3ad8UL));
         udpard_fragment_free_all((udpard_fragment_t*)root, mem_frag);
         // Check the heap.
         TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
@@ -734,6 +782,9 @@ static void test_rx_fragment_tree_update_a(void)
         TEST_ASSERT_EQUAL_size_t(2, alloc_frag.allocated_fragments);
         TEST_ASSERT_EQUAL_size_t(2, alloc_payload.allocated_fragments);
 
+        // Verify the final state.
+        TEST_ASSERT(fragment_tree_verify(root, 21, "abcdefghijklmnopqrst-", 0xe7a60f1eUL));
+
         // Cleanup.
         udpard_fragment_free_all((udpard_fragment_t*)root, mem_frag);
         TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
@@ -850,6 +901,8 @@ static void test_rx_fragment_tree_update_exhaustive(void)
         TEST_ASSERT_TRUE(transfer_complete);
         TEST_ASSERT_EQUAL_size_t(payload_length, cov);
 
+        // Verify the final state.
+        TEST_ASSERT(fragment_tree_verify(root, 10, "0123456789", 0x280c069eUL));
         udpard_fragment_free_all((udpard_fragment_t*)root, mem_frag);
         TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
         TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
@@ -909,6 +962,8 @@ static void test_rx_fragment_tree_update_exhaustive(void)
         TEST_ASSERT_TRUE(transfer_complete);
         TEST_ASSERT_EQUAL_size_t(payload_length, cov);
 
+        // Verify the final state.
+        TEST_ASSERT(fragment_tree_verify(root, 10, "0123456789", 0x280c069eUL));
         udpard_fragment_free_all((udpard_fragment_t*)root, mem_frag);
         TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
         TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);

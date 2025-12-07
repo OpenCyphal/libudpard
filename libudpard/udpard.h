@@ -270,6 +270,13 @@ typedef struct udpard_fragment_t
 /// If any of the arguments are NULL, the function has no effect. The complexity is linear in the number of fragments.
 void udpard_fragment_free_all(udpard_fragment_t* const frag, const udpard_mem_resource_t fragment_memory_resource);
 
+/// Given any fragment in a transfer, returns the fragment that contains the given payload offset.
+/// Returns NULL if the offset points beyond the stored payload.
+/// This is also the idiomatic way to find the head of the fragment list when invoked with offset zero.
+/// This function accepts any node in the fragment tree, not necessarily the head or the root, and
+/// has a logarithmic complexity in the number of fragments, which makes it very efficient.
+udpard_fragment_t* udpard_fragment_seek(udpard_fragment_t* any_frag, const size_t offset);
+
 // =====================================================================================================================
 // =================================================    TX PIPELINE    =================================================
 // =====================================================================================================================

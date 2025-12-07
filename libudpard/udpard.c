@@ -98,6 +98,26 @@ static void mem_free_payload(const udpard_mem_deleter_t memory, const udpard_byt
 // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
 static void mem_zero(const size_t size, void* const data) { (void)memset(data, 0, size); }
 
+/// We require that the fragment tree does not contain fully-contained or equal-range fragments. This implies that no
+/// two fragments have the same offset, and that fragments ordered by offset also order by their ends.
+static int32_t cavl_compare_fragment_offset(const void* const user, const udpard_tree_t* const node)
+{
+    const size_t u = *(const size_t*)user;
+    const size_t v = ((const udpard_fragment_t*)node)->offset; // clang-format off
+    if (u < v) { return -1; }
+    if (u > v) { return +1; }
+    return 0; // clang-format on
+}
+static int32_t cavl_compare_fragment_end(const void* const user, const udpard_tree_t* const node)
+{
+    const size_t                   u = *(const size_t*)user;
+    const udpard_fragment_t* const f = (const udpard_fragment_t*)node;
+    const size_t                   v = f->offset + f->view.size; // clang-format off
+    if (u < v) { return -1; }
+    if (u > v) { return +1; }
+    return 0; // clang-format on
+}
+
 void udpard_fragment_free_all(udpard_fragment_t* const frag, const udpard_mem_resource_t fragment_memory_resource)
 {
     if (frag != NULL) {
@@ -118,6 +138,20 @@ void udpard_fragment_free_all(udpard_fragment_t* const frag, const udpard_mem_re
             udpard_fragment_free_all(parent, fragment_memory_resource); // tail call hopefully
         }
     }
+}
+
+udpard_fragment_t* udpard_fragment_seek(udpard_fragment_t* any_frag, const size_t offset)
+{
+    while (any_frag->index_offset.up != NULL) { // Only if the given node is not already the root.
+        any_frag = (udpard_fragment_t*)any_frag->index_offset.up;
+    }
+    udpard_fragment_t* const f =
+      (udpard_fragment_t*)cavl2_predecessor(&any_frag->index_offset, &offset, &cavl_compare_fragment_offset);
+    if ((f != NULL) && ((f->offset + f->view.size) > offset)) {
+        UDPARD_ASSERT(f->offset <= offset);
+        return f;
+    }
+    return NULL;
 }
 
 // ---------------------------------------------  CRC  ---------------------------------------------
@@ -666,26 +700,6 @@ typedef struct
     meta_t          meta;
 } rx_frame_t;
 
-/// We require that the fragment tree does not contain fully-contained or equal-range fragments. This implies that no
-/// two fragments have the same offset, and that fragments ordered by offset also order by their ends.
-static int32_t rx_cavl_compare_fragment_offset(const void* const user, const udpard_tree_t* const node)
-{
-    const size_t u = *(const size_t*)user;
-    const size_t v = ((const udpard_fragment_t*)node)->offset; // clang-format off
-    if (u < v) { return -1; }
-    if (u > v) { return +1; }
-    return 0; // clang-format on
-}
-static int32_t rx_cavl_compare_fragment_end(const void* const user, const udpard_tree_t* const node)
-{
-    const size_t                   u = *(const size_t*)user;
-    const udpard_fragment_t* const f = (const udpard_fragment_t*)node;
-    const size_t                   v = f->offset + f->view.size; // clang-format off
-    if (u < v) { return -1; }
-    if (u > v) { return +1; }
-    return 0; // clang-format on
-}
-
 /// Finds the number of contiguous payload bytes received from offset zero after accepting a new fragment.
 /// The transfer is considered fully received when covered_prefix >= min(extent, transfer_payload_size).
 /// This should be invoked after the fragment tree accepted a new fragment at frag_offset with frag_size.
@@ -699,7 +713,7 @@ static size_t rx_fragment_tree_update_covered_prefix(udpard_tree_t* const root,
     if ((frag_offset > old_prefix) || (end <= old_prefix)) {
         return old_prefix; // The new fragment does not cross the frontier, so it cannot affect the prefix.
     }
-    udpard_fragment_t* fr = (udpard_fragment_t*)cavl2_predecessor(root, &old_prefix, &rx_cavl_compare_fragment_offset);
+    udpard_fragment_t* fr = (udpard_fragment_t*)cavl2_predecessor(root, &old_prefix, &cavl_compare_fragment_offset);
     UDPARD_ASSERT(fr != NULL);
     size_t out = old_prefix;
     while ((fr != NULL) && (fr->offset <= out)) {
@@ -740,7 +754,7 @@ static rx_fragment_tree_update_result_t rx_fragment_tree_update(udpard_tree_t** 
     // We discard those early to maintain an essential invariant of the fragment tree: no fully-contained fragments.
     {
         udpard_fragment_t* const frag =
-          (udpard_fragment_t*)cavl2_predecessor(*root, &left, &rx_cavl_compare_fragment_offset);
+          (udpard_fragment_t*)cavl2_predecessor(*root, &left, &cavl_compare_fragment_offset);
         if ((frag != NULL) && ((frag->offset + frag->view.size) >= right)) {
             mem_free_payload(payload_deleter, frame.origin);
             return rx_fragment_tree_rejected; // New fragment is fully contained within an existing one, discard.
@@ -762,11 +776,11 @@ static rx_fragment_tree_update_result_t rx_fragment_tree_update(udpard_tree_t** 
     //
     // The right neighbor is found by analogy: find the fragment with the largest left boundary that is on the left
     // of our right boundary. This guarantees that the new virtual right boundary will max out to the right.
-    udpard_fragment_t* n_left = (udpard_fragment_t*)cavl2_lower_bound(*root, &left, &rx_cavl_compare_fragment_end);
+    udpard_fragment_t* n_left = (udpard_fragment_t*)cavl2_lower_bound(*root, &left, &cavl_compare_fragment_end);
     if ((n_left != NULL) && (n_left->offset >= left)) {
         n_left = NULL; // There is no left neighbor.
     }
-    udpard_fragment_t* n_right = (udpard_fragment_t*)cavl2_predecessor(*root, &right, &rx_cavl_compare_fragment_offset);
+    udpard_fragment_t* n_right = (udpard_fragment_t*)cavl2_predecessor(*root, &right, &cavl_compare_fragment_offset);
     if ((n_right != NULL) && ((n_right->offset + n_right->view.size) <= right)) {
         n_right = NULL; // There is no right neighbor.
     }
@@ -825,7 +839,7 @@ static rx_fragment_tree_update_result_t rx_fragment_tree_update(udpard_tree_t** 
 
     // Remove all redundant fragments before inserting the new one.
     // No need to repeat tree lookup at every iteration, we just step through the nodes using the next_greater lookup.
-    udpard_fragment_t* victim = (udpard_fragment_t*)cavl2_lower_bound(*root, &v_left, &rx_cavl_compare_fragment_offset);
+    udpard_fragment_t* victim = (udpard_fragment_t*)cavl2_lower_bound(*root, &v_left, &cavl_compare_fragment_offset);
     while ((victim != NULL) && (victim->offset >= v_left) && ((victim->offset + victim->view.size) <= v_right)) {
         udpard_fragment_t* const next = (udpard_fragment_t*)cavl2_next_greater(&victim->index_offset);
         cavl2_remove(root, &victim->index_offset);
@@ -836,7 +850,7 @@ static rx_fragment_tree_update_result_t rx_fragment_tree_update(udpard_tree_t** 
     // Insert the new fragment.
     udpard_tree_t* const res = cavl2_find_or_insert(root, //
                                                     &mew->offset,
-                                                    &rx_cavl_compare_fragment_offset,
+                                                    &cavl_compare_fragment_offset,
                                                     &mew->index_offset,
                                                     &cavl2_trivial_factory);
     UDPARD_ASSERT(res == &mew->index_offset);
@@ -854,6 +868,8 @@ static rx_fragment_tree_update_result_t rx_fragment_tree_update(udpard_tree_t** 
 /// 2. Verifies the CRC of the reassembled payload.
 /// 3. Links all fragments into a linked list for convenient application consumption.
 /// Returns true iff the transfer is valid and safe to deliver to the application.
+/// Observe that this function alters the tree ordering keys, but it does not alter the tree topology,
+/// because each fragment's offset is changed within the bounds that preserve the ordering.
 static bool rx_fragment_tree_finalize(udpard_tree_t* const root, const uint32_t crc_expected)
 {
     uint32_t           crc_computed = CRC_INITIAL;
@@ -863,7 +879,8 @@ static bool rx_fragment_tree_finalize(udpard_tree_t* const root, const uint32_t 
         udpard_fragment_t* const frag = (udpard_fragment_t*)p;
         UDPARD_ASSERT(frag->offset <= offset); // The tree reassembler cannot leave gaps.
         const size_t trim = offset - frag->offset;
-        UDPARD_ASSERT(trim < frag->view.size); // The tree reassembler evicts redundant fragments.
+        // The tree reassembler evicts redundant fragments, so there must be some payload, unless the transfer is empty.
+        UDPARD_ASSERT((trim < frag->view.size) || ((frag->view.size == 0) && (trim == 0) && (offset == 0)));
         frag->offset += trim;
         frag->view.data = (const byte_t*)frag->view.data + trim;
         frag->view.size -= trim;
@@ -872,11 +889,10 @@ static bool rx_fragment_tree_finalize(udpard_tree_t* const root, const uint32_t 
         if (prev != NULL) {
             prev->next = frag;
         }
-        prev = frag;
+        frag->next = NULL;
+        prev       = frag;
     }
-    prev->next = NULL;
-    crc_computed ^= CRC_OUTPUT_XOR;
-    return crc_computed == crc_expected;
+    return (crc_computed ^ CRC_OUTPUT_XOR) == crc_expected;
 }
 
 /// Starts with zeros. Remembers the bit values per transfer-ID within the window.
