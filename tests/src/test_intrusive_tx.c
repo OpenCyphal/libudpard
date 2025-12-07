@@ -611,32 +611,36 @@ static void test_tx_push_oom_mid_transfer(void)
     };
     udpard_tx_t tx;
     TEST_ASSERT_TRUE(udpard_tx_new(&tx, 0x0123456789ABCDEFULL, 10000, mem));
-    // Create a transfer that requires 3 frames, then fail allocation on the 2nd frame
-    tx.mtu            = (ethereal_strength_size + 2U) / 3U;
+    // Create a transfer that requires multiple frames - use large payload to exceed UDPARD_MTU_MIN (460)
+    // Use a 1000-byte payload which will require 3 frames at MTU=460
+    static const byte_t large_payload[1000] = {0};
+    tx.mtu = 460U; // Use minimum MTU to ensure multi-frame transfer
     const meta_t meta = {
         .priority              = udpard_prio_nominal,
         .flag_ack              = false,
-        .transfer_payload_size = (uint32_t)ethereal_strength_size,
+        .transfer_payload_size = 1000U,
         .transfer_id           = 0x0123456789ABCDEFULL,
         .sender_uid            = 0x0123456789ABCDEFULL,
         .topic_hash            = 0xBBBBBBBBBBBBBBBBULL,
     };
-    // Allow enough memory for first frame item + payload, but fail on second frame's payload allocation
-    // This ensures tx_spool returns a chain with head != NULL but tail == NULL
-    const size_t first_frame_size  = tx.mtu;
-    const size_t first_frame_bytes = sizeof(udpard_tx_item_t) + HEADER_SIZE_BYTES + first_frame_size;
-    const size_t second_item_bytes = sizeof(udpard_tx_item_t);
-    alloc.limit_bytes              = first_frame_bytes + second_item_bytes + 1; // Enough for item, not payload
-    const uint32_t enqueued        = tx_push(&tx,
+    // With MTU=460 and payload=1000: frame 0 has 460 bytes, frame 1 has 460 bytes, frame 2 has 80 bytes
+    // Allow first frame completely (item + payload), then fail on second frame's item allocation
+    // This triggers OOM during multi-frame transfer, causing rollback of the first frame
+    const size_t first_frame_payload_size = tx.mtu + HEADER_SIZE_BYTES;
+    const size_t first_frame_total = sizeof(udpard_tx_item_t) + first_frame_payload_size;
+    alloc.limit_bytes = first_frame_total; // Second frame's item allocation will exceed this limit
+    
+    const uint32_t enqueued = tx_push(&tx,
                                       1234567890U,
                                       meta,
                                       (udpard_udpip_ep_t){ .ip = 0xBABADEDA, .port = 0xD0ED },
-                                      (udpard_bytes_t){ .size = ethereal_strength_size, .data = ethereal_strength },
+                                      (udpard_bytes_t){ .size = 1000, .data = large_payload },
                                       NULL);
+    
     // The entire transfer should fail and be rolled back
     TEST_ASSERT_EQUAL(0, enqueued);
     TEST_ASSERT_EQUAL(1, tx.errors_oom);
-    TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);  // All memory should be freed after rollback
     TEST_ASSERT_EQUAL(0, alloc.allocated_bytes);
     TEST_ASSERT_EQUAL(0, tx.queue_size);
 }
