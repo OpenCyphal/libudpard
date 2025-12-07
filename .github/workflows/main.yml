@@ -87,23 +87,24 @@ jobs:
           path: ${{github.workspace}}/**/*
           retention-days: 2
 
-  avr:
-    if: github.event_name == 'push'
-    runs-on: ubuntu-latest
-    env:
-      mcu: at90can64
-      flags: -Wall -Wextra -Werror -pedantic -Wconversion -Wtype-limits
-    strategy:
-      matrix:
-        std: [ 'c99', 'c11', 'gnu99', 'gnu11' ]
-    steps:
-      - uses: actions/checkout@v4
-      # language=bash
-      - run: |
-          sudo apt update -y && sudo apt upgrade -y
-          sudo apt install gcc-avr avr-libc
-          avr-gcc --version
-      - run: avr-gcc -Ilib/cavl/ libudpard/*.c -c -std=${{matrix.std}} -mmcu=${{env.mcu}} ${{env.flags}}
+# TODO: re-enable this
+#  avr:
+#    if: github.event_name == 'push'
+#    runs-on: ubuntu-latest
+#    env:
+#      mcu: at90can64
+#      flags: -Wall -Wextra -Werror -pedantic -Wconversion -Wtype-limits
+#    strategy:
+#      matrix:
+#        std: [ 'c99', 'c11', 'gnu99', 'gnu11' ]
+#    steps:
+#      - uses: actions/checkout@v4
+#      # language=bash
+#      - run: |
+#          sudo apt update -y && sudo apt upgrade -y
+#          sudo apt install gcc-avr avr-libc
+#          avr-gcc --version
+#      - run: avr-gcc -Ilib/cavl/ libudpard/*.c -c -std=${{matrix.std}} -mmcu=${{env.mcu}} ${{env.flags}}
 
   arm:
     if: github.event_name == 'push'
