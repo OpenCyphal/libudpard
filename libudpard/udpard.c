@@ -656,6 +656,7 @@ typedef struct
     size_t             offset;  ///< Offset of this fragment's payload within the full transfer payload.
     udpard_bytes_t     payload; ///< Does not include the header, just pure payload.
     udpard_bytes_mut_t origin;  ///< The entirety of the free-able buffer passed from the application.
+    uint32_t           crc;     ///< CRC of all preceding payload bytes in the transfer plus this fragment's payload.
 } rx_frame_base_t;
 
 /// Full frame state.
@@ -728,6 +729,13 @@ static rx_fragment_tree_update_result_t rx_fragment_tree_update(udpard_tree_t** 
     const size_t left  = frame.offset;
     const size_t right = frame.offset + frame.payload.size;
 
+    // Ignore frames beyond the extent. Zero extent requires special handling because from the reassembler's
+    // view such transfers are useless, but we still want them.
+    if ((left >= extent) && (extent > 0)) {
+        mem_free_payload(payload_deleter, frame.origin);
+        return rx_fragment_tree_rejected; // New fragment is beyond the extent, discard.
+    }
+
     // Check if the new fragment is fully contained within an existing fragment, or is an exact replica of one.
     // We discard those early to maintain an essential invariant of the fragment tree: no fully-contained fragments.
     {
@@ -792,6 +800,7 @@ static rx_fragment_tree_update_result_t rx_fragment_tree_update(udpard_tree_t** 
         return rx_fragment_tree_oom; // Cannot allocate fragment header. Maybe we will succeed later.
     }
     mem_zero(sizeof(*mew), mew);
+    mew->next            = NULL;
     mew->view.data       = frame.payload.data;
     mew->view.size       = frame.payload.size;
     mew->origin.data     = frame.origin.data;
@@ -841,24 +850,34 @@ static rx_fragment_tree_update_result_t rx_fragment_tree_update(udpard_tree_t** 
                                                                           : rx_fragment_tree_accepted;
 }
 
-typedef enum
+/// 1. Eliminates payload overlaps. They may appear if redundant interfaces with different MTU settings are used.
+/// 2. Verifies the CRC of the reassembled payload.
+/// 3. Links all fragments into a linked list for convenient application consumption.
+/// Returns true iff the transfer is valid and safe to deliver to the application.
+static bool rx_fragment_tree_finalize(udpard_tree_t* const root, const uint32_t crc_expected)
 {
-    rx_slot_idle = 0,
-    rx_slot_busy = 1,
-    rx_slot_done = 2,
-} rx_slot_state_t;
-
-/// Frames from all redundant interfaces are pooled into the same reassembly slot per transfer-ID.
-/// The redundant interfaces may use distinct MTU, which requires special handling.
-typedef struct
-{
-    rx_slot_state_t      state;
-    uint64_t             transfer_id;    ///< Which transfer we're reassembling here.
-    udpard_microsecond_t ts_discovery;   ///< The timestamp of the first frame received for this transfer.
-    udpard_microsecond_t ts_completion;  ///< The timestamp of the final accepted frame for this transfer.
-    size_t               covered_prefix; ///< Number of bytes received contiguously from offset zero.
-    udpard_tree_t*       fragments;
-} rx_slot_t;
+    uint32_t           crc_computed = CRC_INITIAL;
+    size_t             offset       = 0;
+    udpard_fragment_t* prev         = NULL;
+    for (udpard_tree_t* p = cavl2_min(root); p != NULL; p = cavl2_next_greater(p)) {
+        udpard_fragment_t* const frag = (udpard_fragment_t*)p;
+        UDPARD_ASSERT(frag->offset <= offset); // The tree reassembler cannot leave gaps.
+        const size_t trim = offset - frag->offset;
+        UDPARD_ASSERT(trim < frag->view.size); // The tree reassembler evicts redundant fragments.
+        frag->offset += trim;
+        frag->view.data = (const byte_t*)frag->view.data + trim;
+        frag->view.size -= trim;
+        offset += frag->view.size;
+        crc_computed = crc_add(crc_computed, frag->view.size, frag->view.data);
+        if (prev != NULL) {
+            prev->next = frag;
+        }
+        prev = frag;
+    }
+    prev->next = NULL;
+    crc_computed ^= CRC_OUTPUT_XOR;
+    return crc_computed == crc_expected;
+}
 
 /// Starts with zeros. Remembers the bit values per transfer-ID within the window.
 typedef struct
@@ -918,6 +937,27 @@ static bool rx_transfer_id_window_test(rx_transfer_id_window_t* const self, cons
     const uint64_t rev = rx_transfer_id_forward_distance(transfer_id, self->head);
     return (rev < RX_TRANSFER_ID_WINDOW_BITS) && ((self->bitset[rev / 64U] & (1ULL << (rev % 64U))) != 0U);
 }
+
+typedef enum
+{
+    rx_slot_idle = 0,
+    rx_slot_busy = 1,
+    rx_slot_done = 2,
+} rx_slot_state_t;
+
+/// Frames from all redundant interfaces are pooled into the same reassembly slot per transfer-ID.
+/// The redundant interfaces may use distinct MTU, which requires special fragment tree handling.
+typedef struct
+{
+    rx_slot_state_t      state;
+    uint64_t             transfer_id;    ///< Which transfer we're reassembling here.
+    udpard_microsecond_t ts_discovery;   ///< The timestamp of the first frame received for this transfer.
+    udpard_microsecond_t ts_completion;  ///< The timestamp of the final accepted frame for this transfer.
+    size_t               covered_prefix; ///< Number of bytes received contiguously from offset zero.
+    size_t               crc_end;        ///< The end offset of the frame whose CRC is stored in `crc`.
+    uint32_t             crc;            ///< Once the reassembly is done, holds the CRC of the entire transfer.
+    udpard_tree_t*       fragments;
+} rx_slot_t;
 
 /// Keep in mind that we have a dedicated session object per remote node per port; this means that the states
 /// kept here are specific per remote node, as it should be.
