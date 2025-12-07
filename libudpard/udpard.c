@@ -753,7 +753,7 @@ static rx_fragment_tree_update_result_t rx_fragment_tree_update(udpard_tree_t** 
     // Check if the new fragment is fully contained within an existing fragment, or is an exact replica of one.
     // We discard those early to maintain an essential invariant of the fragment tree: no fully-contained fragments.
     {
-        udpard_fragment_t* const frag =
+        const udpard_fragment_t* const frag =
           (udpard_fragment_t*)cavl2_predecessor(*root, &left, &cavl_compare_fragment_offset);
         if ((frag != NULL) && ((frag->offset + frag->view.size) >= right)) {
             mem_free_payload(payload_deleter, frame.origin);
@@ -776,11 +776,12 @@ static rx_fragment_tree_update_result_t rx_fragment_tree_update(udpard_tree_t** 
     //
     // The right neighbor is found by analogy: find the fragment with the largest left boundary that is on the left
     // of our right boundary. This guarantees that the new virtual right boundary will max out to the right.
-    udpard_fragment_t* n_left = (udpard_fragment_t*)cavl2_lower_bound(*root, &left, &cavl_compare_fragment_end);
+    const udpard_fragment_t* n_left = (udpard_fragment_t*)cavl2_lower_bound(*root, &left, &cavl_compare_fragment_end);
     if ((n_left != NULL) && (n_left->offset >= left)) {
         n_left = NULL; // There is no left neighbor.
     }
-    udpard_fragment_t* n_right = (udpard_fragment_t*)cavl2_predecessor(*root, &right, &cavl_compare_fragment_offset);
+    const udpard_fragment_t* n_right =
+      (udpard_fragment_t*)cavl2_predecessor(*root, &right, &cavl_compare_fragment_offset);
     if ((n_right != NULL) && ((n_right->offset + n_right->view.size) <= right)) {
         n_right = NULL; // There is no right neighbor.
     }
@@ -848,11 +849,11 @@ static rx_fragment_tree_update_result_t rx_fragment_tree_update(udpard_tree_t** 
         victim = next;
     }
     // Insert the new fragment.
-    udpard_tree_t* const res = cavl2_find_or_insert(root, //
-                                                    &mew->offset,
-                                                    &cavl_compare_fragment_offset,
-                                                    &mew->index_offset,
-                                                    &cavl2_trivial_factory);
+    const udpard_tree_t* const res = cavl2_find_or_insert(root, //
+                                                          &mew->offset,
+                                                          &cavl_compare_fragment_offset,
+                                                          &mew->index_offset,
+                                                          &cavl2_trivial_factory);
     UDPARD_ASSERT(res == &mew->index_offset);
     (void)res;
     // Update the covered prefix. This requires only a single full scan across all iterations!
@@ -948,7 +949,7 @@ static void rx_transfer_id_window_set(rx_transfer_id_window_t* const self, const
 }
 
 /// True if the specified transfer-ID was set, false if not or outside of the window.
-static bool rx_transfer_id_window_test(rx_transfer_id_window_t* const self, const uint64_t transfer_id)
+static bool rx_transfer_id_window_test(const rx_transfer_id_window_t* const self, const uint64_t transfer_id)
 {
     const uint64_t rev = rx_transfer_id_forward_distance(transfer_id, self->head);
     return (rev < RX_TRANSFER_ID_WINDOW_BITS) && ((self->bitset[rev / 64U] & (1ULL << (rev % 64U))) != 0U);
