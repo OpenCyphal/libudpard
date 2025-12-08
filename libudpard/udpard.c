@@ -3,6 +3,8 @@
 /// Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 /// Author: Pavel Kirienko <pavel@opencyphal.org>
 
+// ReSharper disable CppDFATimeOver
+
 #include "udpard.h"
 #include <string.h>
 #include <assert.h>
@@ -769,7 +771,7 @@ static rx_fragment_tree_update_result_t rx_fragment_tree_update(udpard_tree_t** 
     //           |--B--|
     //                |--C--|
     // Here, only A is the left neighbor, and only C is the right neighbor. B is a victim.
-    // If A.right <= C.left, then there is neither a gap nor a victim to remove.
+    // If A.right >= C.left, then there is neither a gap nor a victim to remove.
     //
     // To find the left neighbor, we need to find the fragment crossing the left boundary whose offset is the smallest.
     // To do that, we simply need to find the fragment with the smallest right boundary that is on the right of our
