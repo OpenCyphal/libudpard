@@ -1040,10 +1040,10 @@ static void rx_slot_update(rx_slot_t* const            slot,
 /// kept here are specific per remote node, as it should be.
 typedef struct
 {
-    udpard_tree_t   index_remote_uid;
-    udpard_remote_t remote; ///< Most recent discovered reverse path for P2P to the sender.
+    udpard_tree_t   index_remote_uid; ///< Must be the first member.
+    udpard_remote_t remote;           ///< Most recent discovered reverse path for P2P to the sender.
 
-    udpard_rx_subscription_t* owner;
+    udpard_rx_port_t* owner;
 
     /// Sessions interned for the reordering window closure.
     udpard_tree_t index_reordering_window;
@@ -1058,6 +1058,64 @@ typedef struct
 
     rx_slot_t slots[RX_SLOT_COUNT];
 } rx_session_t;
+
+static int32_t cavl_compare_rx_session_remote_uid(const void* const user, const udpard_tree_t* const node)
+{
+    const uint64_t uid_a = *(const uint64_t*)user;
+    const uint64_t uid_b = ((const rx_session_t*)node)->remote.source_uid; // clang-format off
+    if (uid_a < uid_b) { return -1; }
+    if (uid_a > uid_b) { return 1; }
+    return 0; // clang-format on
+}
+
+/// Fully initializes a new session instance, making it ready to accept frames out of the box.
+static rx_session_t* rx_session_new(udpard_rx_port_t* const owner,
+                                    udpard_list_t* const    sessions_by_animation,
+                                    const uint64_t          remote_uid,
+                                    const udpard_us_t       now)
+{
+    rx_session_t* out = mem_alloc(owner->memory.session, sizeof(rx_session_t));
+    if (out != NULL) {
+        mem_zero(sizeof(*out), out);
+        out->index_remote_uid        = (udpard_tree_t){ NULL, { NULL, NULL }, 0 };
+        out->index_reordering_window = (udpard_tree_t){ NULL, { NULL, NULL }, 0 };
+        out->list_by_animation       = (udpard_list_member_t){ NULL, NULL };
+        for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
+            out->slots[i].fragments = NULL;
+            rx_slot_reset(&out->slots[i], owner->memory.fragment);
+        }
+        out->remote.source_uid   = remote_uid;
+        out->owner               = owner;
+        out->last_animated_ts    = now;
+        const udpard_tree_t* res = cavl2_find_or_insert(&owner->index_session_by_remote_uid,
+                                                        &out->remote.source_uid,
+                                                        &cavl_compare_rx_session_remote_uid,
+                                                        &out->index_remote_uid,
+                                                        &cavl2_trivial_factory);
+        UDPARD_ASSERT(res == &out->index_remote_uid);
+        (void)res;
+        enlist_head(sessions_by_animation, &out->list_by_animation);
+    }
+    return out;
+}
+
+/// Removes the instance from all indexes and frees all associated memory.
+static void rx_session_del(rx_session_t* const   self,
+                           udpard_list_t* const  sessions_by_animation,
+                           udpard_tree_t** const sessions_by_reordering)
+{
+    if (self != NULL) {
+        for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
+            rx_slot_reset(&self->slots[i], self->owner->memory.fragment);
+        }
+        cavl2_remove(&self->owner->index_session_by_remote_uid, &self->index_remote_uid);
+        if (cavl2_is_inserted(*sessions_by_reordering, &self->index_reordering_window)) {
+            cavl2_remove(sessions_by_reordering, &self->index_reordering_window);
+        }
+        delist(sessions_by_animation, &self->list_by_animation);
+        mem_free(self->owner->memory.session, sizeof(rx_session_t), self);
+    }
+}
 
 static bool rx_validate_memory_resources(const udpard_rx_memory_resources_t memory)
 {

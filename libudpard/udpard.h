@@ -565,7 +565,7 @@ typedef struct udpard_rx_port_t
 
 typedef struct udpard_rx_subscription_t
 {
-    udpard_rx_port_t port;
+    udpard_rx_port_t base; ///< Always the first member to ensure pointer equivalence.
 
     uint32_t subject_id;
 
@@ -653,7 +653,7 @@ typedef struct udpard_rx_t
 /// True on success, false if any of the arguments are invalid.
 bool udpard_rx_new(udpard_rx_t* const                 self,
                    const uint64_t                     local_uid,
-                   const udpard_rx_memory_resources_t memory,
+                   const udpard_rx_memory_resources_t p2p_port_memory,
                    const udpard_rx_on_message_t       on_message,
                    const udpard_rx_on_collision_t     on_collision,
                    const udpard_rx_on_ack_mandate_t   on_ack_mandate);
