@@ -46,7 +46,8 @@
 
 typedef unsigned char byte_t; ///< For compatibility with platforms where byte size is not 8 bits.
 
-#define BIG_BANG INT64_MIN
+#define BIG_BANG   INT64_MIN
+#define HEAT_DEATH INT64_MAX
 
 #define KILO 1000L
 #define MEGA 1000000LL
@@ -996,7 +997,7 @@ static void rx_slot_reset(rx_slot_t* const slot, const udpard_mem_resource_t fra
     slot->crc            = CRC_INITIAL;
 }
 
-/// The caller will accept the ownership of the fragments if the resulting state is done.
+/// The caller will accept the ownership of the fragments iff the resulting state is done.
 static void rx_slot_update(rx_slot_t* const            slot,
                            const udpard_us_t           ts,
                            const udpard_mem_resource_t fragment_memory,
@@ -1174,6 +1175,63 @@ static void rx_session_update(rx_session_t* const        self,
     if (rx_transfer_id_window_contains(&self->received, frame.meta.transfer_id)) {
         mem_free_payload(payload_deleter, frame.base.origin);
         return; // Here, we could transmit a negative ack to signal to the sender to abandon efforts to retransmit.
+    }
+
+    // It appears that we need to accept this frame. We need to find a suitable slot.
+    rx_slot_t* slot = NULL;
+    for (size_t i = 0; i < RX_SLOT_COUNT; i++) { // Check if one is in progress already; resume it if so.
+        if ((self->slots[i].state == rx_slot_busy) && (self->slots[i].transfer_id == frame.meta.transfer_id)) {
+            slot = &self->slots[i];
+            break;
+        }
+    }
+    if (slot == NULL) { // This appears to be a new transfer, so we will need to allocate a new slot for it.
+        for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
+            if (self->slots[i].state == rx_slot_idle) {
+                slot = &self->slots[i];
+                break;
+            }
+        }
+    }
+    if (slot == NULL) { // All slots are currently occupied; sacrifice the least recently updated slot.
+        // TODO FIXME: find the nearest transfer-ID instead of the oldest ts; force early reordering window closure?
+        size_t      oldest_index = 0U;
+        udpard_us_t oldest_ts    = HEAT_DEATH;
+        for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
+            if (self->slots[i].ts_min < oldest_ts) {
+                oldest_ts    = self->slots[i].ts_min;
+                oldest_index = i;
+            }
+        }
+        slot = &self->slots[oldest_index];
+        rx_slot_reset(slot, self->owner->memory.fragment);
+    }
+    UDPARD_ASSERT(slot != NULL);
+    UDPARD_ASSERT((slot->state == rx_slot_idle) ||
+                  ((slot->state == rx_slot_busy) && (slot->transfer_id == frame.meta.transfer_id)));
+    UDPARD_ASSERT(slot->state != rx_slot_done);
+
+    // Update the slot state and check if it completes the transfer.
+    rx_slot_update(slot,
+                   ts,
+                   self->owner->memory.fragment,
+                   payload_deleter,
+                   frame,
+                   self->owner->extent,
+                   &rx->errors_oom,
+                   &rx->errors_transfer_malformed);
+    if (slot->state == rx_slot_done) {
+        if (frame.meta.flag_ack) {
+            udpard_fragment_t* const head = (udpard_fragment_t*)cavl2_min(slot->fragments);
+            UDPARD_ASSERT(head != NULL);
+            const udpard_rx_ack_mandate_t mandate = { .remote       = self->remote,
+                                                      .priority     = frame.meta.priority,
+                                                      .transfer_id  = frame.meta.transfer_id,
+                                                      .payload_head = head->view };
+            rx->on_ack_mandate(rx, subscription, mandate);
+        }
+        mem_free_payload(payload_deleter, frame.base.origin);
+        // TODO
     }
 }
 
