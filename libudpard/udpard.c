@@ -959,6 +959,12 @@ static bool rx_transfer_id_window_test(const rx_transfer_id_window_t* const self
     return (rev < RX_TRANSFER_ID_WINDOW_BITS) && ((self->bitset[rev / 64U] & (1ULL << (rev % 64U))) != 0U);
 }
 
+/// True if the specified transfer-ID is within the window, false if outside.
+static bool rx_transfer_id_window_contains(const rx_transfer_id_window_t* const self, const uint64_t transfer_id)
+{
+    return rx_transfer_id_forward_distance(transfer_id, self->head) < RX_TRANSFER_ID_WINDOW_BITS;
+}
+
 typedef enum
 {
     rx_slot_idle = 0,
@@ -1054,7 +1060,7 @@ typedef struct
     udpard_us_t          last_animated_ts;
 
     /// To weed out duplicates and to retransmit lost ACKs.
-    rx_transfer_id_window_t acknowledged;
+    rx_transfer_id_window_t received;
 
     rx_slot_t slots[RX_SLOT_COUNT];
 } rx_session_t;
@@ -1068,7 +1074,7 @@ static int32_t cavl_compare_rx_session_remote_uid(const void* const user, const 
     return 0; // clang-format on
 }
 
-/// Fully initializes a new session instance, making it ready to accept frames out of the box.
+/// Fully initializes a new session instance, making it ready to accept frames out of the box. NULL if OOM.
 static rx_session_t* rx_session_new(udpard_rx_port_t* const owner,
                                     udpard_list_t* const    sessions_by_animation,
                                     const uint64_t          remote_uid,
@@ -1104,16 +1110,70 @@ static void rx_session_del(rx_session_t* const   self,
                            udpard_list_t* const  sessions_by_animation,
                            udpard_tree_t** const sessions_by_reordering)
 {
-    if (self != NULL) {
-        for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
-            rx_slot_reset(&self->slots[i], self->owner->memory.fragment);
+    for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
+        rx_slot_reset(&self->slots[i], self->owner->memory.fragment);
+    }
+    cavl2_remove(&self->owner->index_session_by_remote_uid, &self->index_remote_uid);
+    if (cavl2_is_inserted(*sessions_by_reordering, &self->index_reordering_window)) {
+        cavl2_remove(sessions_by_reordering, &self->index_reordering_window);
+    }
+    delist(sessions_by_animation, &self->list_by_animation);
+    mem_free(self->owner->memory.session, sizeof(rx_session_t), self);
+}
+
+static void rx_session_update(rx_session_t* const        self,
+                              udpard_rx_t* const         rx,
+                              const udpard_us_t          ts,
+                              const udpard_udpip_ep_t    src_ep,
+                              const rx_frame_t           frame,
+                              const udpard_mem_deleter_t payload_deleter,
+                              const uint_fast8_t         ifindex)
+{
+    UDPARD_ASSERT(self->remote.source_uid == frame.meta.sender_uid);
+
+    // Update the return path discovery state.
+    // We identify nodes by their UID, allowing them to migrate across interfaces and IP addresses.
+    UDPARD_ASSERT(ifindex < UDPARD_NETWORK_INTERFACE_COUNT_MAX);
+    self->remote.origin[ifindex] = src_ep;
+
+    // Animate the session to prevent it from being retired.
+    enlist_head(&rx->list_session_by_animation, &self->list_by_animation);
+    self->last_animated_ts = ts;
+
+    // Check for topic hash collisions to prevent data misinterpretation when transient collisions occur.
+    udpard_rx_subscription_t* const subscription = (self->owner == &rx->p2p_port) // P2P is a single special case port.
+                                                     ? NULL
+                                                     : (udpard_rx_subscription_t*)self->owner;
+    if (frame.meta.topic_hash != self->owner->topic_hash) { // Topic hash collision or a misaddressed P2P.
+        rx->on_collision(rx, subscription, self->remote);
+        mem_free_payload(payload_deleter, frame.base.origin);
+        return;
+    }
+
+    // Check if this transfer-ID was already received. Retransmit ACK if needed -- it could have been lost.
+    if (rx_transfer_id_window_test(&self->received, frame.meta.transfer_id)) {
+        // ACK is only retransmitted for the first frame for two reasons:
+        // - We don't want to flood the network with duplicate ACKs for every fragment of a transfer.
+        // - The application may need to look at the head of the transfer to handle acks, which is in the first frame.
+        if (frame.meta.flag_ack && (frame.base.offset == 0U)) {
+            const udpard_rx_ack_mandate_t mandate = { .remote       = self->remote,
+                                                      .priority     = frame.meta.priority,
+                                                      .transfer_id  = frame.meta.transfer_id,
+                                                      .payload_head = frame.base.payload };
+            rx->on_ack_mandate(rx, subscription, mandate);
         }
-        cavl2_remove(&self->owner->index_session_by_remote_uid, &self->index_remote_uid);
-        if (cavl2_is_inserted(*sessions_by_reordering, &self->index_reordering_window)) {
-            cavl2_remove(sessions_by_reordering, &self->index_reordering_window);
-        }
-        delist(sessions_by_animation, &self->list_by_animation);
-        mem_free(self->owner->memory.session, sizeof(rx_session_t), self);
+        mem_free_payload(payload_deleter, frame.base.origin);
+        return;
+    }
+
+    // Check if there is still an opportunity to receive this transfer maintaining the strict transfer-ID ordering.
+    // The strict reassembly ordering requires that the application sees strictly increasing transfer-ID values.
+    // If we receive a transfer-ID out of sequence, we can still linger briefly to allow for late arrivals,
+    // which is called the reordering window. However, once the reordering window has advanced beyond this transfer-ID,
+    // it is lost irreversibly even if resent.
+    if (rx_transfer_id_window_contains(&self->received, frame.meta.transfer_id)) {
+        mem_free_payload(payload_deleter, frame.base.origin);
+        return; // Here, we could transmit a negative ack to signal to the sender to abandon efforts to retransmit.
     }
 }
 

@@ -605,9 +605,11 @@ typedef struct udpard_rx_transfer_t
 
     /// The payload is stored in a tree, which is also linked-listed for convenience.
     /// Hence we have two pointers to the same payload tree: one points to the leftmost tree node aka the 1st fragment;
-    /// the other points to the root of the tree.
+    /// the other points to the root of the tree. The head can be used if sequential access is desired,
+    /// while the root can be used for logarithmic-time seeking of fragments by their offset within the payload
+    /// using udpard_fragment_seek().
     /// Either can be used with udpard_fragment_free_all() to free the entire payload.
-    udpard_fragment_t* payload_first;
+    udpard_fragment_t* payload_head;
     udpard_fragment_t* payload_root;
 } udpard_rx_transfer_t;
 
@@ -628,7 +630,7 @@ struct udpard_rx_t;
 typedef void* (*udpard_rx_on_message_t)(struct udpard_rx_t*, udpard_rx_subscription_t*, udpard_rx_transfer_t);
 
 /// A topic hash collision is detected on a topic.
-typedef void* (*udpard_rx_on_collision_t)(struct udpard_rx_t*, udpard_rx_subscription_t*);
+typedef void* (*udpard_rx_on_collision_t)(struct udpard_rx_t*, udpard_rx_subscription_t*, udpard_remote_t);
 
 /// The application is required to send an acknowledgment back to the sender.
 /// The subscription is NULL for P2P transfers.
