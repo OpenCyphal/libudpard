@@ -1245,6 +1245,44 @@ static void test_rx_transfer_id_window_manip(void)
     TEST_ASSERT_FALSE(rx_transfer_id_window_test(&obj, 99));
     TEST_ASSERT_FALSE(rx_transfer_id_window_test(&obj, 97));
     TEST_ASSERT_FALSE(rx_transfer_id_window_test(&obj, 0xFFFFFFFFFFFFFFA3ULL));
+
+    // Test rx_transfer_id_window_contains with various scenarios
+    // The window contains transfer IDs from (head - 255) to head (256 IDs total)
+
+    // Test with head=100: window contains [100-255 wrapping, ..., 100]
+    obj.head = 100;
+    TEST_ASSERT_TRUE(rx_transfer_id_window_contains(&obj, 100));              // at head
+    TEST_ASSERT_TRUE(rx_transfer_id_window_contains(&obj, 99));               // 1 behind
+    TEST_ASSERT_TRUE(rx_transfer_id_window_contains(&obj, 50));               // 50 behind
+    TEST_ASSERT_TRUE(rx_transfer_id_window_contains(&obj, 0));                // 100 behind
+    TEST_ASSERT_TRUE(rx_transfer_id_window_contains(&obj, 100ULL - 255ULL));  // 255 behind (wraps, edge of window)
+    TEST_ASSERT_FALSE(rx_transfer_id_window_contains(&obj, 100ULL - 256ULL)); // 256 behind (wraps, outside)
+    TEST_ASSERT_FALSE(rx_transfer_id_window_contains(&obj, 101));             // ahead (outside)
+    TEST_ASSERT_FALSE(rx_transfer_id_window_contains(&obj, 200));             // far ahead (outside)
+
+    // Test with head=0: window contains [UINT64_MAX-254, ..., 0]
+    obj.head = 0;
+    TEST_ASSERT_TRUE(rx_transfer_id_window_contains(&obj, 0));                 // at head
+    TEST_ASSERT_TRUE(rx_transfer_id_window_contains(&obj, UINT64_MAX));        // 1 behind (wraps)
+    TEST_ASSERT_TRUE(rx_transfer_id_window_contains(&obj, UINT64_MAX - 100));  // 101 behind
+    TEST_ASSERT_TRUE(rx_transfer_id_window_contains(&obj, UINT64_MAX - 254));  // 255 behind (edge)
+    TEST_ASSERT_FALSE(rx_transfer_id_window_contains(&obj, UINT64_MAX - 255)); // 256 behind (outside)
+    TEST_ASSERT_FALSE(rx_transfer_id_window_contains(&obj, 1));                // ahead (outside)
+
+    // Test with head=UINT64_MAX
+    obj.head = UINT64_MAX;
+    TEST_ASSERT_TRUE(rx_transfer_id_window_contains(&obj, UINT64_MAX));        // at head
+    TEST_ASSERT_TRUE(rx_transfer_id_window_contains(&obj, UINT64_MAX - 1));    // 1 behind
+    TEST_ASSERT_TRUE(rx_transfer_id_window_contains(&obj, UINT64_MAX - 255));  // 255 behind (edge)
+    TEST_ASSERT_FALSE(rx_transfer_id_window_contains(&obj, UINT64_MAX - 256)); // 256 behind (outside)
+    TEST_ASSERT_FALSE(rx_transfer_id_window_contains(&obj, 0));                // ahead (wraps forward, outside)
+
+    // Test boundary at exactly 256 positions
+    obj.head = 1000;
+    TEST_ASSERT_TRUE(rx_transfer_id_window_contains(&obj, 1000));  // at head
+    TEST_ASSERT_TRUE(rx_transfer_id_window_contains(&obj, 745));   // 255 behind (edge, inside)
+    TEST_ASSERT_FALSE(rx_transfer_id_window_contains(&obj, 744));  // 256 behind (outside)
+    TEST_ASSERT_FALSE(rx_transfer_id_window_contains(&obj, 1001)); // ahead (outside)
 }
 
 static void test_rx_fragment_tree_oom(void)
