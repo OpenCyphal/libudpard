@@ -1193,18 +1193,38 @@ static void rx_session_update(rx_session_t* const        self,
             }
         }
     }
-    if (slot == NULL) { // All slots are currently occupied; sacrifice the least recently updated slot.
-        // TODO FIXME: find the nearest transfer-ID instead of the oldest ts; force early reordering window closure?
-        size_t      oldest_index = 0U;
-        udpard_us_t oldest_ts    = HEAT_DEATH;
+    if (slot == NULL) { // All slots are currently occupied; sacrifice the oldest in-progress slot, if any.
+        udpard_us_t oldest_ts = HEAT_DEATH;
         for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
-            if (self->slots[i].ts_min < oldest_ts) {
-                oldest_ts    = self->slots[i].ts_min;
-                oldest_index = i;
+            UDPARD_ASSERT(self->slots[i].state != rx_slot_idle); // Checked this already.
+            if ((self->slots[i].state == rx_slot_busy) && (self->slots[i].ts_min < oldest_ts)) {
+                oldest_ts = self->slots[i].ts_min;
+                slot      = &self->slots[i];
             }
         }
-        slot = &self->slots[oldest_index];
-        rx_slot_reset(slot, self->owner->memory.fragment);
+        if (slot != NULL) {
+            rx_slot_reset(slot, self->owner->memory.fragment);
+        }
+    }
+    if (slot == NULL) {
+        // All slots are in the DONE state! This is a very rare edge case that may occur
+        // only if the reordering window is longer than it takes to transmit RX_SLOT_COUNT transfers fully,
+        // AND there was at least one lost transfer which caused all slots to be interned in the reordering window.
+        // We need a new slot to accept this transfer, but they all are DONE, so if we sacrifice one, we will be
+        // destroying a perfectly valid received transfer that we already confirmed as received!
+        // The solution is to shrink the reordering window temporarily, declaring all transfers spanning from the
+        // current window head to the nearest DONE transfer-ID as permanently lost.
+        uint64_t closest = UINT64_MAX;
+        for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
+            UDPARD_ASSERT(self->slots[i].state == rx_slot_done); // Checked this already.
+            uint64_t fwd_dist = rx_transfer_id_forward_distance(self->received.head, self->slots[i].transfer_id);
+            if (fwd_dist < closest) {
+                closest = fwd_dist;
+                slot    = &self->slots[i];
+            }
+        }
+        UDPARD_ASSERT(slot != NULL);
+        // TODO: eject the slot's transfer to free up the slot for reuse.
     }
     UDPARD_ASSERT(slot != NULL);
     UDPARD_ASSERT((slot->state == rx_slot_idle) ||
@@ -1222,16 +1242,15 @@ static void rx_session_update(rx_session_t* const        self,
                    &rx->errors_transfer_malformed);
     if (slot->state == rx_slot_done) {
         if (frame.meta.flag_ack) {
-            udpard_fragment_t* const head = (udpard_fragment_t*)cavl2_min(slot->fragments);
-            UDPARD_ASSERT(head != NULL);
-            const udpard_rx_ack_mandate_t mandate = { .remote       = self->remote,
-                                                      .priority     = frame.meta.priority,
-                                                      .transfer_id  = frame.meta.transfer_id,
-                                                      .payload_head = head->view };
+            const udpard_rx_ack_mandate_t mandate = {
+                .remote       = self->remote,
+                .priority     = frame.meta.priority,
+                .transfer_id  = frame.meta.transfer_id,
+                .payload_head = ((udpard_fragment_t*)cavl2_min(slot->fragments))->view,
+            };
             rx->on_ack_mandate(rx, subscription, mandate);
         }
-        mem_free_payload(payload_deleter, frame.base.origin);
-        // TODO
+        // TODO either eject or intern the slot in the reordering window.
     }
 }
 
