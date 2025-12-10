@@ -1122,6 +1122,45 @@ static void rx_session_del(rx_session_t* const   self,
     mem_free(self->owner->memory.session, sizeof(rx_session_t), self);
 }
 
+/// Invoked whenever a slot reaches the DONE state.
+/// We need to either eject the slot immediately or to intern it in the reordering window.
+static void rx_session_slot_done(rx_session_t* const self, udpard_rx_t* const rx)
+{
+    // TODO FIXME XXX
+    // Find the nearest transfer-ID slot; eject it if it's in-sequence, if the reordering window is closed,
+    // or if all slots are DONE. Repeat until no more slots can be ejected.
+    // Arm the timer if at least one DONE is left.
+    for (size_t iter = 0; iter < RX_SLOT_COUNT; iter++) {
+        const uint64_t tid_in_sequence = self->received.head + 1U;
+        // TODO
+    }
+}
+
+typedef enum
+{
+    rx_session_transfer_new,
+    rx_session_transfer_acknowledged,
+    rx_session_transfer_lost,
+} rx_session_transfer_status_t;
+
+static rx_session_transfer_status_t rx_session_check_transfer_status(const rx_session_t* const self,
+                                                                     const uint64_t            transfer_id)
+{
+    // Check those that have been already ejected to the application.
+    if (rx_transfer_id_window_test(&self->received, transfer_id)) {
+        return rx_session_transfer_acknowledged;
+    }
+    // Check interned transfers waiting for reordering window closure.
+    for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
+        if ((self->slots[i].state == rx_slot_done) && (self->slots[i].transfer_id == transfer_id)) {
+            return rx_session_transfer_acknowledged; // received successfully but the application is yet to see it
+        }
+    }
+    // The transfer is not received; check if it's within the dup transfer-ID window.
+    return rx_transfer_id_window_contains(&self->received, transfer_id) ? rx_session_transfer_lost
+                                                                        : rx_session_transfer_new;
+}
+
 static void rx_session_update(rx_session_t* const        self,
                               udpard_rx_t* const         rx,
                               const udpard_us_t          ts,
@@ -1152,34 +1191,27 @@ static void rx_session_update(rx_session_t* const        self,
     }
 
     // Check if this transfer-ID was already received. Retransmit ACK if needed -- it could have been lost.
-    if (rx_transfer_id_window_test(&self->received, frame.meta.transfer_id)) {
+    const rx_session_transfer_status_t status = rx_session_check_transfer_status(self, frame.meta.transfer_id);
+    if (status != rx_session_transfer_new) {
         // ACK is only retransmitted for the first frame for two reasons:
         // - We don't want to flood the network with duplicate ACKs for every fragment of a transfer.
         // - The application may need to look at the head of the transfer to handle acks, which is in the first frame.
-        if (frame.meta.flag_ack && (frame.base.offset == 0U)) {
+        if ((status == rx_session_transfer_acknowledged) && frame.meta.flag_ack && (frame.base.offset == 0U)) {
             const udpard_rx_ack_mandate_t mandate = { .remote       = self->remote,
                                                       .priority     = frame.meta.priority,
                                                       .transfer_id  = frame.meta.transfer_id,
                                                       .payload_head = frame.base.payload };
             rx->on_ack_mandate(rx, subscription, mandate);
         }
+        // If the transfer is lost, we will never acknowledge it because we haven't received it,
+        // but some other subscriber might!
         mem_free_payload(payload_deleter, frame.base.origin);
         return;
     }
 
-    // Check if there is still an opportunity to receive this transfer maintaining the strict transfer-ID ordering.
-    // The strict reassembly ordering requires that the application sees strictly increasing transfer-ID values.
-    // If we receive a transfer-ID out of sequence, we can still linger briefly to allow for late arrivals,
-    // which is called the reordering window. However, once the reordering window has advanced beyond this transfer-ID,
-    // it is lost irreversibly even if resent.
-    if (rx_transfer_id_window_contains(&self->received, frame.meta.transfer_id)) {
-        mem_free_payload(payload_deleter, frame.base.origin);
-        return; // Here, we could transmit a negative ack to signal to the sender to abandon efforts to retransmit.
-    }
-
-    // It appears that we need to accept this frame. We need to find a suitable slot.
+    // It appears that we need to accept this frame. We need to find a suitable slot for that.
     rx_slot_t* slot = NULL;
-    for (size_t i = 0; i < RX_SLOT_COUNT; i++) { // Check if one is in progress already; resume it if so.
+    for (size_t i = 0; i < RX_SLOT_COUNT; i++) { // First, check if one is in progress already; resume it if so.
         if ((self->slots[i].state == rx_slot_busy) && (self->slots[i].transfer_id == frame.meta.transfer_id)) {
             slot = &self->slots[i];
             break;
@@ -1202,29 +1234,8 @@ static void rx_session_update(rx_session_t* const        self,
                 slot      = &self->slots[i];
             }
         }
-        if (slot != NULL) {
-            rx_slot_reset(slot, self->owner->memory.fragment);
-        }
-    }
-    if (slot == NULL) {
-        // All slots are in the DONE state! This is a very rare edge case that may occur
-        // only if the reordering window is longer than it takes to transmit RX_SLOT_COUNT transfers fully,
-        // AND there was at least one lost transfer which caused all slots to be interned in the reordering window.
-        // We need a new slot to accept this transfer, but they all are DONE, so if we sacrifice one, we will be
-        // destroying a perfectly valid received transfer that we already confirmed as received!
-        // The solution is to shrink the reordering window temporarily, declaring all transfers spanning from the
-        // current window head to the nearest DONE transfer-ID as permanently lost.
-        uint64_t closest = UINT64_MAX;
-        for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
-            UDPARD_ASSERT(self->slots[i].state == rx_slot_done); // Checked this already.
-            uint64_t fwd_dist = rx_transfer_id_forward_distance(self->received.head, self->slots[i].transfer_id);
-            if (fwd_dist < closest) {
-                closest = fwd_dist;
-                slot    = &self->slots[i];
-            }
-        }
-        UDPARD_ASSERT(slot != NULL);
-        // TODO: eject the slot's transfer to free up the slot for reuse.
+        UDPARD_ASSERT(slot != NULL); // It is by design guaranteed that all slots cannot be DONE, so we'll find one.
+        rx_slot_reset(slot, self->owner->memory.fragment);
     }
     UDPARD_ASSERT(slot != NULL);
     UDPARD_ASSERT((slot->state == rx_slot_idle) ||
@@ -1241,6 +1252,7 @@ static void rx_session_update(rx_session_t* const        self,
                    &rx->errors_oom,
                    &rx->errors_transfer_malformed);
     if (slot->state == rx_slot_done) {
+        UDPARD_ASSERT(rx_session_transfer_acknowledged == rx_session_check_transfer_status(self, slot->transfer_id));
         if (frame.meta.flag_ack) {
             const udpard_rx_ack_mandate_t mandate = {
                 .remote       = self->remote,
@@ -1250,7 +1262,7 @@ static void rx_session_update(rx_session_t* const        self,
             };
             rx->on_ack_mandate(rx, subscription, mandate);
         }
-        // TODO either eject or intern the slot in the reordering window.
+        rx_session_slot_done(self, rx);
     }
 }
 
