@@ -204,7 +204,7 @@ static const uint32_t crc_table[256] = {
     0x79B737BAUL, 0x8BDCB4B9UL, 0x988C474DUL, 0x6AE7C44EUL, 0xBE2DA0A5UL, 0x4C4623A6UL, 0x5F16D052UL, 0xAD7D5351UL,
 };
 
-/// Do not forget to apply the output XOR when done, or use crc_compute().
+/// Do not forget to apply the output XOR when done, or use crc_full().
 static uint32_t crc_add(uint32_t crc, const size_t n_bytes, const void* const data)
 {
     UDPARD_ASSERT((data != NULL) || (n_bytes == 0U));
@@ -338,6 +338,8 @@ static bool header_deserialize(const udpard_bytes_mut_t  dgram_payload,
             ok = ((uint64_t)*frame_payload_offset + (uint64_t)out_payload->size) <=
                  (uint64_t)out_meta->transfer_payload_size;
             ok = ok && ((0 == *frame_index) == (0 == *frame_payload_offset));
+            // The prefix-CRC of the first frame of a transfer equals the CRC of its payload.
+            ok = ok && ((0 < *frame_payload_offset) || (crc_full(out_payload->size, out_payload->data) == *prefix_crc));
         } else {
             ok = false;
         }
@@ -1122,17 +1124,18 @@ static void rx_session_del(rx_session_t* const   self,
     mem_free(self->owner->memory.session, sizeof(rx_session_t), self);
 }
 
-/// Invoked whenever a slot reaches the DONE state.
-/// We need to either eject the slot immediately or to intern it in the reordering window.
-static void rx_session_slot_done(rx_session_t* const self, udpard_rx_t* const rx)
+/// Checks which slots can be ejected or interned in the reordering window.
+/// Should be invoked whenever a slot can potentially be ejected.
+static void rx_session_scan_slots(rx_session_t* const self, udpard_rx_t* const rx)
 {
-    // TODO FIXME XXX
     // Find the nearest transfer-ID slot; eject it if it's in-sequence, if the reordering window is closed,
     // or if all slots are DONE. Repeat until no more slots can be ejected.
     // Arm the timer if at least one DONE is left.
     for (size_t iter = 0; iter < RX_SLOT_COUNT; iter++) {
         const uint64_t tid_in_sequence = self->received.head + 1U;
         // TODO
+        (void)tid_in_sequence;
+        (void)rx;
     }
 }
 
@@ -1262,7 +1265,7 @@ static void rx_session_update(rx_session_t* const        self,
             };
             rx->on_ack_mandate(rx, subscription, mandate);
         }
-        rx_session_slot_done(self, rx);
+        rx_session_scan_slots(self, rx);
     }
 }
 
