@@ -1027,12 +1027,20 @@ static void test_rx_transfer_id_window_slide(void)
     obj.bitset[1] = 0xF000000010000000ULL;
     obj.bitset[2] = 0x8000000100000002ULL;
     obj.bitset[3] = 0x3000001000000003ULL;
+    obj.bitset[4] = 0x0000000000000004ULL;
+    obj.bitset[5] = 0x0000000000000005ULL;
+    obj.bitset[6] = 0x0000000000000006ULL;
+    obj.bitset[7] = 0x0000000000000007ULL;
     rx_transfer_id_window_slide(&obj, 100);
     TEST_ASSERT_EQUAL_UINT64(100, obj.head);
     TEST_ASSERT_EQUAL_UINT64(0x0000000001000001ULL, obj.bitset[0]);
     TEST_ASSERT_EQUAL_UINT64(0xF000000010000000ULL, obj.bitset[1]);
     TEST_ASSERT_EQUAL_UINT64(0x8000000100000002ULL, obj.bitset[2]);
     TEST_ASSERT_EQUAL_UINT64(0x3000001000000003ULL, obj.bitset[3]);
+    TEST_ASSERT_EQUAL_UINT64(0x0000000000000004ULL, obj.bitset[4]);
+    TEST_ASSERT_EQUAL_UINT64(0x0000000000000005ULL, obj.bitset[5]);
+    TEST_ASSERT_EQUAL_UINT64(0x0000000000000006ULL, obj.bitset[6]);
+    TEST_ASSERT_EQUAL_UINT64(0x0000000000000007ULL, obj.bitset[7]);
 
     // Test 2: Shift by 1 bit (within same word)
     obj.head      = 100;
@@ -1040,12 +1048,20 @@ static void test_rx_transfer_id_window_slide(void)
     obj.bitset[1] = 0xF000000010000000ULL;
     obj.bitset[2] = 0x8000000100000002ULL;
     obj.bitset[3] = 0x3000001000000003ULL;
+    obj.bitset[4] = 0x0000000000000004ULL;
+    obj.bitset[5] = 0x0000000000000005ULL;
+    obj.bitset[6] = 0x0000000000000006ULL;
+    obj.bitset[7] = 0x0000000000000007ULL;
     rx_transfer_id_window_slide(&obj, 101);
     TEST_ASSERT_EQUAL_UINT64(101, obj.head);
     TEST_ASSERT_EQUAL_UINT64(0x0000000002000002ULL, obj.bitset[0]);
     TEST_ASSERT_EQUAL_UINT64(0xE000000020000000ULL, obj.bitset[1]);
     TEST_ASSERT_EQUAL_UINT64(0x0000000200000005ULL, obj.bitset[2]);
     TEST_ASSERT_EQUAL_UINT64(0x6000002000000007ULL, obj.bitset[3]);
+    TEST_ASSERT_EQUAL_UINT64(0x0000000000000008ULL, obj.bitset[4]);
+    TEST_ASSERT_EQUAL_UINT64(0x000000000000000AULL, obj.bitset[5]);
+    TEST_ASSERT_EQUAL_UINT64(0x000000000000000CULL, obj.bitset[6]);
+    TEST_ASSERT_EQUAL_UINT64(0x000000000000000EULL, obj.bitset[7]);
 
     // Test 3: Shift by multiple bits within word (shift by 5)
     obj.head      = 200;
@@ -1053,12 +1069,20 @@ static void test_rx_transfer_id_window_slide(void)
     obj.bitset[1] = 0x0000000000000002ULL;
     obj.bitset[2] = 0x0000000000000004ULL;
     obj.bitset[3] = 0x0000000000000008ULL;
+    obj.bitset[4] = 0x0000000000000010ULL;
+    obj.bitset[5] = 0x0000000000000020ULL;
+    obj.bitset[6] = 0x0000000000000040ULL;
+    obj.bitset[7] = 0x0000000000000080ULL;
     rx_transfer_id_window_slide(&obj, 205);
     TEST_ASSERT_EQUAL_UINT64(205, obj.head);
     TEST_ASSERT_EQUAL_UINT64(0x0000000000000020ULL, obj.bitset[0]);
     TEST_ASSERT_EQUAL_UINT64(0x0000000000000040ULL, obj.bitset[1]);
     TEST_ASSERT_EQUAL_UINT64(0x0000000000000080ULL, obj.bitset[2]);
     TEST_ASSERT_EQUAL_UINT64(0x0000000000000100ULL, obj.bitset[3]);
+    TEST_ASSERT_EQUAL_UINT64(0x0000000000000200ULL, obj.bitset[4]);
+    TEST_ASSERT_EQUAL_UINT64(0x0000000000000400ULL, obj.bitset[5]);
+    TEST_ASSERT_EQUAL_UINT64(0x0000000000000800ULL, obj.bitset[6]);
+    TEST_ASSERT_EQUAL_UINT64(0x0000000000001000ULL, obj.bitset[7]);
 
     // Test 4: Shift by 63 bits (maximum within word, with carry to next word)
     obj.head      = 300;
@@ -1066,12 +1090,20 @@ static void test_rx_transfer_id_window_slide(void)
     obj.bitset[1] = 0x8000000000000002ULL;
     obj.bitset[2] = 0x8000000000000004ULL;
     obj.bitset[3] = 0x8000000000000008ULL;
+    obj.bitset[4] = 0x8000000000000010ULL;
+    obj.bitset[5] = 0x8000000000000020ULL;
+    obj.bitset[6] = 0x8000000000000040ULL;
+    obj.bitset[7] = 0x8000000000000080ULL;
     rx_transfer_id_window_slide(&obj, 363);
     TEST_ASSERT_EQUAL_UINT64(363, obj.head);
     TEST_ASSERT_EQUAL_UINT64(0x8000000000000000ULL, obj.bitset[0]);
     TEST_ASSERT_EQUAL_UINT64(0x4000000000000000ULL, obj.bitset[1]);
     TEST_ASSERT_EQUAL_UINT64(0x4000000000000001ULL, obj.bitset[2]);
     TEST_ASSERT_EQUAL_UINT64(0x4000000000000002ULL, obj.bitset[3]);
+    TEST_ASSERT_EQUAL_UINT64(0x4000000000000004ULL, obj.bitset[4]);
+    TEST_ASSERT_EQUAL_UINT64(0x4000000000000008ULL, obj.bitset[5]);
+    TEST_ASSERT_EQUAL_UINT64(0x4000000000000010ULL, obj.bitset[6]);
+    TEST_ASSERT_EQUAL_UINT64(0x4000000000000020ULL, obj.bitset[7]);
 
     // Test 5: Shift by 64 (one full word)
     obj.head      = 100;
@@ -1079,12 +1111,20 @@ static void test_rx_transfer_id_window_slide(void)
     obj.bitset[1] = 0xE000000020000000ULL;
     obj.bitset[2] = 0x0000000200000005ULL;
     obj.bitset[3] = 0x6000002000000007ULL;
+    obj.bitset[4] = 0x0000000000000008ULL;
+    obj.bitset[5] = 0x0000000000000009ULL;
+    obj.bitset[6] = 0x000000000000000AULL;
+    obj.bitset[7] = 0x000000000000000BULL;
     rx_transfer_id_window_slide(&obj, 164);
     TEST_ASSERT_EQUAL_UINT64(164, obj.head);
     TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[0]);
     TEST_ASSERT_EQUAL_UINT64(0x0000000002000002ULL, obj.bitset[1]);
     TEST_ASSERT_EQUAL_UINT64(0xE000000020000000ULL, obj.bitset[2]);
     TEST_ASSERT_EQUAL_UINT64(0x0000000200000005ULL, obj.bitset[3]);
+    TEST_ASSERT_EQUAL_UINT64(0x6000002000000007ULL, obj.bitset[4]);
+    TEST_ASSERT_EQUAL_UINT64(0x0000000000000008ULL, obj.bitset[5]);
+    TEST_ASSERT_EQUAL_UINT64(0x0000000000000009ULL, obj.bitset[6]);
+    TEST_ASSERT_EQUAL_UINT64(0x000000000000000AULL, obj.bitset[7]);
 
     // Test 6: Shift by 65 bits (one word + 1 bit)
     obj.head      = 500;
@@ -1092,12 +1132,20 @@ static void test_rx_transfer_id_window_slide(void)
     obj.bitset[1] = 0x0000000000000003ULL;
     obj.bitset[2] = 0x0000000000000007ULL;
     obj.bitset[3] = 0x000000000000000FULL;
+    obj.bitset[4] = 0x000000000000001FULL;
+    obj.bitset[5] = 0x000000000000003FULL;
+    obj.bitset[6] = 0x000000000000007FULL;
+    obj.bitset[7] = 0x00000000000000FFULL;
     rx_transfer_id_window_slide(&obj, 565);
     TEST_ASSERT_EQUAL_UINT64(565, obj.head);
     TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[0]);
     TEST_ASSERT_EQUAL_UINT64(0x0000000000000002ULL, obj.bitset[1]);
     TEST_ASSERT_EQUAL_UINT64(0x0000000000000006ULL, obj.bitset[2]);
     TEST_ASSERT_EQUAL_UINT64(0x000000000000000EULL, obj.bitset[3]);
+    TEST_ASSERT_EQUAL_UINT64(0x000000000000001EULL, obj.bitset[4]);
+    TEST_ASSERT_EQUAL_UINT64(0x000000000000003EULL, obj.bitset[5]);
+    TEST_ASSERT_EQUAL_UINT64(0x000000000000007EULL, obj.bitset[6]);
+    TEST_ASSERT_EQUAL_UINT64(0x00000000000000FEULL, obj.bitset[7]);
 
     // Test 7: Shift by 128 (two full words)
     obj.head      = 1000;
@@ -1105,12 +1153,20 @@ static void test_rx_transfer_id_window_slide(void)
     obj.bitset[1] = 0x2222222222222222ULL;
     obj.bitset[2] = 0x3333333333333333ULL;
     obj.bitset[3] = 0x4444444444444444ULL;
+    obj.bitset[4] = 0x5555555555555555ULL;
+    obj.bitset[5] = 0x6666666666666666ULL;
+    obj.bitset[6] = 0x7777777777777777ULL;
+    obj.bitset[7] = 0x8888888888888888ULL;
     rx_transfer_id_window_slide(&obj, 1128);
     TEST_ASSERT_EQUAL_UINT64(1128, obj.head);
     TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[0]);
     TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[1]);
     TEST_ASSERT_EQUAL_UINT64(0x1111111111111111ULL, obj.bitset[2]);
     TEST_ASSERT_EQUAL_UINT64(0x2222222222222222ULL, obj.bitset[3]);
+    TEST_ASSERT_EQUAL_UINT64(0x3333333333333333ULL, obj.bitset[4]);
+    TEST_ASSERT_EQUAL_UINT64(0x4444444444444444ULL, obj.bitset[5]);
+    TEST_ASSERT_EQUAL_UINT64(0x5555555555555555ULL, obj.bitset[6]);
+    TEST_ASSERT_EQUAL_UINT64(0x6666666666666666ULL, obj.bitset[7]);
 
     // Test 8: Shift by 192 (three full words)
     obj.head      = 2000;
@@ -1118,38 +1174,62 @@ static void test_rx_transfer_id_window_slide(void)
     obj.bitset[1] = 0xBBBBBBBBBBBBBBBBULL;
     obj.bitset[2] = 0xCCCCCCCCCCCCCCCCULL;
     obj.bitset[3] = 0xDDDDDDDDDDDDDDDDULL;
+    obj.bitset[4] = 0xEEEEEEEEEEEEEEEEULL;
+    obj.bitset[5] = 0xFFFFFFFFFFFFFFFFULL;
+    obj.bitset[6] = 0x1111111111111111ULL;
+    obj.bitset[7] = 0x2222222222222222ULL;
     rx_transfer_id_window_slide(&obj, 2192);
     TEST_ASSERT_EQUAL_UINT64(2192, obj.head);
     TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[0]);
     TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[1]);
     TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[2]);
     TEST_ASSERT_EQUAL_UINT64(0xAAAAAAAAAAAAAAAAULL, obj.bitset[3]);
+    TEST_ASSERT_EQUAL_UINT64(0xBBBBBBBBBBBBBBBBULL, obj.bitset[4]);
+    TEST_ASSERT_EQUAL_UINT64(0xCCCCCCCCCCCCCCCCULL, obj.bitset[5]);
+    TEST_ASSERT_EQUAL_UINT64(0xDDDDDDDDDDDDDDDDULL, obj.bitset[6]);
+    TEST_ASSERT_EQUAL_UINT64(0xEEEEEEEEEEEEEEEEULL, obj.bitset[7]);
 
-    // Test 9: Shift by exactly 256 bits (clears everything)
+    // Test 9: Shift by exactly 512 bits (clears everything)
     obj.head      = 5000;
     obj.bitset[0] = 0x1234567890ABCDEFULL;
     obj.bitset[1] = 0xFEDCBA0987654321ULL;
     obj.bitset[2] = 0xAAAAAAAAAAAAAAAAULL;
     obj.bitset[3] = 0x5555555555555555ULL;
-    rx_transfer_id_window_slide(&obj, 5256);
-    TEST_ASSERT_EQUAL_UINT64(5256, obj.head);
+    obj.bitset[4] = 0x1111111111111111ULL;
+    obj.bitset[5] = 0x2222222222222222ULL;
+    obj.bitset[6] = 0x3333333333333333ULL;
+    obj.bitset[7] = 0x4444444444444444ULL;
+    rx_transfer_id_window_slide(&obj, 5512);
+    TEST_ASSERT_EQUAL_UINT64(5512, obj.head);
     TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[0]);
     TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[1]);
     TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[2]);
     TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[3]);
+    TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[4]);
+    TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[5]);
+    TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[6]);
+    TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[7]);
 
-    // Test 10: Large shift (> 256 bits, erases everything)
+    // Test 10: Large shift (> 512 bits, erases everything)
     obj.head      = 10000;
     obj.bitset[0] = 0xFFFFFFFFFFFFFFFFULL;
     obj.bitset[1] = 0xFFFFFFFFFFFFFFFFULL;
     obj.bitset[2] = 0xFFFFFFFFFFFFFFFFULL;
     obj.bitset[3] = 0xFFFFFFFFFFFFFFFFULL;
-    rx_transfer_id_window_slide(&obj, 10500);
-    TEST_ASSERT_EQUAL_UINT64(10500, obj.head);
+    obj.bitset[4] = 0xFFFFFFFFFFFFFFFFULL;
+    obj.bitset[5] = 0xFFFFFFFFFFFFFFFFULL;
+    obj.bitset[6] = 0xFFFFFFFFFFFFFFFFULL;
+    obj.bitset[7] = 0xFFFFFFFFFFFFFFFFULL;
+    rx_transfer_id_window_slide(&obj, 10600);
+    TEST_ASSERT_EQUAL_UINT64(10600, obj.head);
     TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[0]);
     TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[1]);
     TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[2]);
     TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[3]);
+    TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[4]);
+    TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[5]);
+    TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[6]);
+    TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[7]);
 
     // Test 11: Shift from 0 to small value
     obj.head      = 0;
@@ -1157,12 +1237,20 @@ static void test_rx_transfer_id_window_slide(void)
     obj.bitset[1] = 0x0000000000000000ULL;
     obj.bitset[2] = 0x0000000000000000ULL;
     obj.bitset[3] = 0x0000000000000000ULL;
+    obj.bitset[4] = 0x0000000000000000ULL;
+    obj.bitset[5] = 0x0000000000000000ULL;
+    obj.bitset[6] = 0x0000000000000000ULL;
+    obj.bitset[7] = 0x0000000000000000ULL;
     rx_transfer_id_window_slide(&obj, 10);
     TEST_ASSERT_EQUAL_UINT64(10, obj.head);
     TEST_ASSERT_EQUAL_UINT64(0x0000000000000400ULL, obj.bitset[0]);
     TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[1]);
     TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[2]);
     TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[3]);
+    TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[4]);
+    TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[5]);
+    TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[6]);
+    TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[7]);
 
     // Test 12: Shift with wraparound (UINT64_MAX to 0)
     obj.head      = UINT64_MAX;
@@ -1170,12 +1258,20 @@ static void test_rx_transfer_id_window_slide(void)
     obj.bitset[1] = 0x0000000000000002ULL;
     obj.bitset[2] = 0x0000000000000004ULL;
     obj.bitset[3] = 0x0000000000000008ULL;
+    obj.bitset[4] = 0x0000000000000010ULL;
+    obj.bitset[5] = 0x0000000000000020ULL;
+    obj.bitset[6] = 0x0000000000000040ULL;
+    obj.bitset[7] = 0x0000000000000080ULL;
     rx_transfer_id_window_slide(&obj, 0);
     TEST_ASSERT_EQUAL_UINT64(0, obj.head);
     TEST_ASSERT_EQUAL_UINT64(0x0000000000000002ULL, obj.bitset[0]);
     TEST_ASSERT_EQUAL_UINT64(0x0000000000000004ULL, obj.bitset[1]);
     TEST_ASSERT_EQUAL_UINT64(0x0000000000000008ULL, obj.bitset[2]);
     TEST_ASSERT_EQUAL_UINT64(0x0000000000000010ULL, obj.bitset[3]);
+    TEST_ASSERT_EQUAL_UINT64(0x0000000000000020ULL, obj.bitset[4]);
+    TEST_ASSERT_EQUAL_UINT64(0x0000000000000040ULL, obj.bitset[5]);
+    TEST_ASSERT_EQUAL_UINT64(0x0000000000000080ULL, obj.bitset[6]);
+    TEST_ASSERT_EQUAL_UINT64(0x0000000000000100ULL, obj.bitset[7]);
 
     // Test 13: Shift with wraparound (UINT64_MAX - 5 to 5)
     obj.head      = UINT64_MAX - 5;
@@ -1183,12 +1279,20 @@ static void test_rx_transfer_id_window_slide(void)
     obj.bitset[1] = 0x0000000000000000ULL;
     obj.bitset[2] = 0x0000000000000000ULL;
     obj.bitset[3] = 0x0000000000000000ULL;
+    obj.bitset[4] = 0x0000000000000000ULL;
+    obj.bitset[5] = 0x0000000000000000ULL;
+    obj.bitset[6] = 0x0000000000000000ULL;
+    obj.bitset[7] = 0x0000000000000000ULL;
     rx_transfer_id_window_slide(&obj, 5);
     TEST_ASSERT_EQUAL_UINT64(5, obj.head);
     TEST_ASSERT_EQUAL_UINT64(0xFFFFFFFFFFFFF800ULL, obj.bitset[0]);
     TEST_ASSERT_EQUAL_UINT64(0x00000000000007FFULL, obj.bitset[1]);
     TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[2]);
     TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[3]);
+    TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[4]);
+    TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[5]);
+    TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[6]);
+    TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[7]);
 
     // Test 14: Shift by 32 bits (partial word shift with carries)
     obj.head      = 1000;
@@ -1196,12 +1300,20 @@ static void test_rx_transfer_id_window_slide(void)
     obj.bitset[1] = 0xFFFFFFFF00000000ULL;
     obj.bitset[2] = 0xFFFFFFFF00000000ULL;
     obj.bitset[3] = 0xFFFFFFFF00000000ULL;
+    obj.bitset[4] = 0xFFFFFFFF00000000ULL;
+    obj.bitset[5] = 0xFFFFFFFF00000000ULL;
+    obj.bitset[6] = 0xFFFFFFFF00000000ULL;
+    obj.bitset[7] = 0xFFFFFFFF00000000ULL;
     rx_transfer_id_window_slide(&obj, 1032);
     TEST_ASSERT_EQUAL_UINT64(1032, obj.head);
     TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[0]);
     TEST_ASSERT_EQUAL_UINT64(0x00000000FFFFFFFFULL, obj.bitset[1]);
     TEST_ASSERT_EQUAL_UINT64(0x00000000FFFFFFFFULL, obj.bitset[2]);
     TEST_ASSERT_EQUAL_UINT64(0x00000000FFFFFFFFULL, obj.bitset[3]);
+    TEST_ASSERT_EQUAL_UINT64(0x00000000FFFFFFFFULL, obj.bitset[4]);
+    TEST_ASSERT_EQUAL_UINT64(0x00000000FFFFFFFFULL, obj.bitset[5]);
+    TEST_ASSERT_EQUAL_UINT64(0x00000000FFFFFFFFULL, obj.bitset[6]);
+    TEST_ASSERT_EQUAL_UINT64(0x00000000FFFFFFFFULL, obj.bitset[7]);
 
     // Test 15: All bits set, shift by 1
     obj.head      = 7777;
@@ -1209,12 +1321,20 @@ static void test_rx_transfer_id_window_slide(void)
     obj.bitset[1] = 0xFFFFFFFFFFFFFFFFULL;
     obj.bitset[2] = 0xFFFFFFFFFFFFFFFFULL;
     obj.bitset[3] = 0xFFFFFFFFFFFFFFFFULL;
+    obj.bitset[4] = 0xFFFFFFFFFFFFFFFFULL;
+    obj.bitset[5] = 0xFFFFFFFFFFFFFFFFULL;
+    obj.bitset[6] = 0xFFFFFFFFFFFFFFFFULL;
+    obj.bitset[7] = 0xFFFFFFFFFFFFFFFFULL;
     rx_transfer_id_window_slide(&obj, 7778);
     TEST_ASSERT_EQUAL_UINT64(7778, obj.head);
     TEST_ASSERT_EQUAL_UINT64(0xFFFFFFFFFFFFFFFEULL, obj.bitset[0]);
     TEST_ASSERT_EQUAL_UINT64(0xFFFFFFFFFFFFFFFFULL, obj.bitset[1]);
     TEST_ASSERT_EQUAL_UINT64(0xFFFFFFFFFFFFFFFFULL, obj.bitset[2]);
     TEST_ASSERT_EQUAL_UINT64(0xFFFFFFFFFFFFFFFFULL, obj.bitset[3]);
+    TEST_ASSERT_EQUAL_UINT64(0xFFFFFFFFFFFFFFFFULL, obj.bitset[4]);
+    TEST_ASSERT_EQUAL_UINT64(0xFFFFFFFFFFFFFFFFULL, obj.bitset[5]);
+    TEST_ASSERT_EQUAL_UINT64(0xFFFFFFFFFFFFFFFFULL, obj.bitset[6]);
+    TEST_ASSERT_EQUAL_UINT64(0xFFFFFFFFFFFFFFFFULL, obj.bitset[7]);
 }
 
 static void test_rx_transfer_id_window_manip(void)
@@ -1226,18 +1346,30 @@ static void test_rx_transfer_id_window_manip(void)
     TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[1]);
     TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[2]);
     TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[3]);
+    TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[4]);
+    TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[5]);
+    TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[6]);
+    TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[7]);
     rx_transfer_id_window_set(&obj, 98);
     TEST_ASSERT_EQUAL_UINT64(100, obj.head);
     TEST_ASSERT_EQUAL_UINT64(0x0000000000000005ULL, obj.bitset[0]);
     TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[1]);
     TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[2]);
     TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[3]);
+    TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[4]);
+    TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[5]);
+    TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[6]);
+    TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[7]);
     rx_transfer_id_window_set(&obj, 0xFFFFFFFFFFFFFFA4ULL);
     TEST_ASSERT_EQUAL_UINT64(100, obj.head);
     TEST_ASSERT_EQUAL_UINT64(0x0000000000000005ULL, obj.bitset[0]);
     TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[1]);
     TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[2]);
     TEST_ASSERT_EQUAL_UINT64(0x0000000000000001ULL, obj.bitset[3]); // 192 bits back
+    TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[4]);
+    TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[5]);
+    TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[6]);
+    TEST_ASSERT_EQUAL_UINT64(0x0000000000000000ULL, obj.bitset[7]);
 
     TEST_ASSERT_TRUE(rx_transfer_id_window_test(&obj, 100));
     TEST_ASSERT_TRUE(rx_transfer_id_window_test(&obj, 98));
@@ -1247,41 +1379,41 @@ static void test_rx_transfer_id_window_manip(void)
     TEST_ASSERT_FALSE(rx_transfer_id_window_test(&obj, 0xFFFFFFFFFFFFFFA3ULL));
 
     // Test rx_transfer_id_window_contains with various scenarios
-    // The window contains transfer IDs from (head - 255) to head (256 IDs total)
+    // The window contains transfer IDs from (head - 511) to head (512 IDs total)
 
-    // Test with head=100: window contains [100-255 wrapping, ..., 100]
+    // Test with head=100: window contains [100-511 wrapping, ..., 100]
     obj.head = 100;
     TEST_ASSERT_TRUE(rx_transfer_id_window_contains(&obj, 100));              // at head
     TEST_ASSERT_TRUE(rx_transfer_id_window_contains(&obj, 99));               // 1 behind
     TEST_ASSERT_TRUE(rx_transfer_id_window_contains(&obj, 50));               // 50 behind
     TEST_ASSERT_TRUE(rx_transfer_id_window_contains(&obj, 0));                // 100 behind
-    TEST_ASSERT_TRUE(rx_transfer_id_window_contains(&obj, 100ULL - 255ULL));  // 255 behind (wraps, edge of window)
-    TEST_ASSERT_FALSE(rx_transfer_id_window_contains(&obj, 100ULL - 256ULL)); // 256 behind (wraps, outside)
+    TEST_ASSERT_TRUE(rx_transfer_id_window_contains(&obj, 100ULL - 511ULL));  // 511 behind (wraps, edge of window)
+    TEST_ASSERT_FALSE(rx_transfer_id_window_contains(&obj, 100ULL - 512ULL)); // 512 behind (wraps, outside)
     TEST_ASSERT_FALSE(rx_transfer_id_window_contains(&obj, 101));             // ahead (outside)
     TEST_ASSERT_FALSE(rx_transfer_id_window_contains(&obj, 200));             // far ahead (outside)
 
-    // Test with head=0: window contains [UINT64_MAX-254, ..., 0]
+    // Test with head=0: window contains [UINT64_MAX-510, ..., 0]
     obj.head = 0;
     TEST_ASSERT_TRUE(rx_transfer_id_window_contains(&obj, 0));                 // at head
     TEST_ASSERT_TRUE(rx_transfer_id_window_contains(&obj, UINT64_MAX));        // 1 behind (wraps)
     TEST_ASSERT_TRUE(rx_transfer_id_window_contains(&obj, UINT64_MAX - 100));  // 101 behind
-    TEST_ASSERT_TRUE(rx_transfer_id_window_contains(&obj, UINT64_MAX - 254));  // 255 behind (edge)
-    TEST_ASSERT_FALSE(rx_transfer_id_window_contains(&obj, UINT64_MAX - 255)); // 256 behind (outside)
+    TEST_ASSERT_TRUE(rx_transfer_id_window_contains(&obj, UINT64_MAX - 510));  // 511 behind (edge)
+    TEST_ASSERT_FALSE(rx_transfer_id_window_contains(&obj, UINT64_MAX - 511)); // 512 behind (outside)
     TEST_ASSERT_FALSE(rx_transfer_id_window_contains(&obj, 1));                // ahead (outside)
 
     // Test with head=UINT64_MAX
     obj.head = UINT64_MAX;
     TEST_ASSERT_TRUE(rx_transfer_id_window_contains(&obj, UINT64_MAX));        // at head
     TEST_ASSERT_TRUE(rx_transfer_id_window_contains(&obj, UINT64_MAX - 1));    // 1 behind
-    TEST_ASSERT_TRUE(rx_transfer_id_window_contains(&obj, UINT64_MAX - 255));  // 255 behind (edge)
-    TEST_ASSERT_FALSE(rx_transfer_id_window_contains(&obj, UINT64_MAX - 256)); // 256 behind (outside)
+    TEST_ASSERT_TRUE(rx_transfer_id_window_contains(&obj, UINT64_MAX - 511));  // 511 behind (edge)
+    TEST_ASSERT_FALSE(rx_transfer_id_window_contains(&obj, UINT64_MAX - 512)); // 512 behind (outside)
     TEST_ASSERT_FALSE(rx_transfer_id_window_contains(&obj, 0));                // ahead (wraps forward, outside)
 
-    // Test boundary at exactly 256 positions
+    // Test boundary at exactly 512 positions
     obj.head = 1000;
     TEST_ASSERT_TRUE(rx_transfer_id_window_contains(&obj, 1000));  // at head
-    TEST_ASSERT_TRUE(rx_transfer_id_window_contains(&obj, 745));   // 255 behind (edge, inside)
-    TEST_ASSERT_FALSE(rx_transfer_id_window_contains(&obj, 744));  // 256 behind (outside)
+    TEST_ASSERT_TRUE(rx_transfer_id_window_contains(&obj, 489));   // 511 behind (edge, inside)
+    TEST_ASSERT_FALSE(rx_transfer_id_window_contains(&obj, 488));  // 512 behind (outside)
     TEST_ASSERT_FALSE(rx_transfer_id_window_contains(&obj, 1001)); // ahead (outside)
 }
 
