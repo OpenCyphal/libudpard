@@ -1182,16 +1182,14 @@ static void rx_session_scan_slots(rx_session_t* const self, udpard_rx_t* const r
         // The reordering window timeout implies that we will not be receiving earlier transfers anymore.
         // The all-DONE condition implies that we will not be able to receive any new transfer because there are no
         // free slots left, meaning that a reordering window expiration is unavoidable, so we can expire it early.
-        const udpard_us_t reordering_deadline = slot->ts_min + self->owner->reordering_window;
-        const bool        eject =
-          (slot != NULL) && ((slot->transfer_id == tid_in_sequence) || all_done || (ts >= reordering_deadline));
+        const bool eject = (slot != NULL) && ((slot->transfer_id == tid_in_sequence) || all_done ||
+                                              (ts >= (slot->ts_min + self->owner->reordering_window)));
         if (!eject) {
             // The slot is done but cannot be ejected yet; arm the reordering window timer.
             // There may be transfers with future (more distant) transfer-IDs with an earlier reordering window
             // closure deadline, but we ignore them because the nearest transfer overrides the more distant ones.
             if (slot != NULL) {
-                UDPARD_ASSERT(ts < reordering_deadline);
-                self->reordering_window_deadline = reordering_deadline;
+                self->reordering_window_deadline = slot->ts_min + self->owner->reordering_window;
                 const udpard_tree_t* res         = cavl2_find_or_insert(&rx->index_session_by_reordering,
                                                                 &self->reordering_window_deadline,
                                                                 &cavl_compare_rx_session_reordering_deadline,
@@ -1434,11 +1432,11 @@ void udpard_rx_poll(udpard_rx_t* const self, const udpard_us_t now)
     // Process reordering window timeouts.
     // We may process more than one to minimize transfer delays; this is also expected to be quick.
     while (true) {
-        rx_session_t* const node =
+        rx_session_t* const ses =
           CAVL2_TO_OWNER(cavl2_min(self->index_session_by_reordering), rx_session_t, index_reordering_window);
-        if ((node == NULL) || (now < node->reordering_window_deadline)) {
+        if ((ses == NULL) || (now < ses->reordering_window_deadline)) {
             break;
         }
-        rx_session_scan_slots(node, self, now);
+        rx_session_scan_slots(ses, self, now);
     }
 }
