@@ -59,7 +59,7 @@ typedef unsigned char byte_t; ///< For compatibility with platforms where byte s
 /// The maximum number of incoming transfers that can be in the state of incomplete reassembly simultaneously.
 /// Additional in-progress transfers will be rejected.
 /// This number should normally be at least as large as there are priority levels.
-#define RX_SLOT_COUNT (UDPARD_PRIORITY_MAX + 1U)
+#define RX_SLOT_COUNT (UDPARD_PRIORITY_MAX + 1U + 1U)
 
 /// Defines the transfer-ID range from the most recently received transfer downward. Transfers whose IDs fall
 /// within that window store the information on whether they were received successfully, which is used to
