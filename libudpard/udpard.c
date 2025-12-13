@@ -1278,11 +1278,6 @@ static void rx_session_update(rx_session_t* const        self,
 {
     UDPARD_ASSERT(self->remote.source_uid == frame.meta.sender_uid);
 
-    // Update the return path discovery state.
-    // We identify nodes by their UID, allowing them to migrate across interfaces and IP addresses.
-    UDPARD_ASSERT(ifindex < UDPARD_NETWORK_INTERFACE_COUNT_MAX);
-    self->remote.origin[ifindex] = src_ep;
-
     // Check for topic hash collisions to prevent data misinterpretation when transient collisions occur.
     udpard_rx_subscription_t* const subscription = (self->owner == &rx->p2p_port) // P2P is a single special case port.
                                                      ? NULL
@@ -1299,7 +1294,13 @@ static void rx_session_update(rx_session_t* const        self,
     enlist_head(&rx->list_session_by_animation, &self->list_by_animation);
     self->last_animated_ts = ts;
 
+    // Update the return path discovery state.
+    // We identify nodes by their UID, allowing them to migrate across interfaces and IP addresses.
+    UDPARD_ASSERT(ifindex < UDPARD_NETWORK_INTERFACE_COUNT_MAX);
+    self->remote.origin[ifindex] = src_ep;
+
     // Do-once initialization to ensure we don't lose any transfers by choosing the initial transfer-ID poorly.
+    // Any transfers with prior transfer-ID values arriving later will be rejected, which is acceptable.
     if (!self->initialized) {
         self->initialized = true;
         rx_transfer_id_window_slide(&self->received, frame.meta.transfer_id - 1U);
@@ -1340,17 +1341,36 @@ static void rx_session_update(rx_session_t* const        self,
             }
         }
     }
-    if (slot == NULL) { // All slots are currently occupied; sacrifice the oldest in-progress slot, if any.
+    if (slot == NULL) { // All slots are currently occupied; sacrifice the oldest in-progress slot.
+        // We have an important edge case here. Suppose there is only one non-DONE slot, and there are a few
+        // interleaved transfers in-flight. Each frame will cause the only slot to be sacrificed, resulting in a
+        // complete failure to reassemble any transfer because every received frame will erase the progress made so far.
+        // To prevent that, we apply a very simple heuristic: we only sacrifice the slot if the new transfer-ID is
+        // in the future considering the half-range of uint64_t. This breaks in half the cases when the sender reboots
+        // (if the new transfer-ID is on the wrong side of the half-range), but at least it allows recovery in the
+        // other half and always works correctly if the sender is not rebooted.
+        rx->errors_slot_starvation++;
         udpard_us_t oldest_ts = HEAT_DEATH;
         for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
             UDPARD_ASSERT(self->slots[i].state != rx_slot_idle); // Checked this already.
-            if ((self->slots[i].state == rx_slot_busy) && (self->slots[i].ts_max < oldest_ts)) {
+            // We also know that there is at least one slot that is not DONE.
+            const uint64_t tid_dist =
+              rx_transfer_id_forward_distance(self->slots[i].transfer_id, frame.meta.transfer_id);
+            const bool future_tid = tid_dist < (UINT64_MAX / 2U);
+            if ((self->slots[i].state == rx_slot_busy) && future_tid && (self->slots[i].ts_max < oldest_ts)) {
                 oldest_ts = self->slots[i].ts_max;
                 slot      = &self->slots[i];
             }
         }
-        UDPARD_ASSERT(slot != NULL); // It is by design guaranteed that all slots cannot be DONE, so we'll find one.
-        rx_slot_reset(slot, self->owner->memory.fragment);
+        if (slot != NULL) {
+            rx_slot_reset(slot, self->owner->memory.fragment);
+        }
+    }
+    if (slot == NULL) {
+        // There is no possibility to obtain a slot right now; we have to drop the frame.
+        // We may try again in the future if a duplicate arrives and some slots are freed up in the meantime.
+        mem_free_payload(payload_deleter, frame.base.origin);
+        return;
     }
     UDPARD_ASSERT(slot != NULL);
     UDPARD_ASSERT((slot->state == rx_slot_idle) ||
@@ -1371,7 +1391,7 @@ static void rx_session_update(rx_session_t* const        self,
         if (frame.meta.flag_ack) {
             const udpard_rx_ack_mandate_t mandate = {
                 .remote       = self->remote,
-                .priority     = frame.meta.priority,
+                .priority     = slot->priority,
                 .transfer_id  = frame.meta.transfer_id,
                 .payload_head = ((udpard_fragment_t*)cavl2_min(slot->fragments))->view,
             };
@@ -1415,6 +1435,7 @@ bool udpard_rx_new(udpard_rx_t* const                 self,
         self->errors_oom                  = 0;
         self->errors_frame_malformed      = 0;
         self->errors_transfer_malformed   = 0;
+        self->errors_slot_starvation      = 0;
     }
     return ok;
 }
