@@ -53,6 +53,7 @@ typedef unsigned char byte_t; ///< For compatibility with platforms where byte s
 #define MEGA 1000000LL
 
 /// Sessions will be garbage-collected after being idle for this long, along with unfinished transfers, if any.
+/// Pending slots within a live session will also be reset after this timeout to avoid storing stale data indefinitely.
 #define SESSION_LIFETIME (60 * MEGA)
 
 /// The maximum number of incoming transfers that can be in the state of incomplete reassembly simultaneously.
@@ -980,13 +981,21 @@ typedef enum
 typedef struct
 {
     rx_slot_state_t state;
-    uint64_t        transfer_id;    ///< Which transfer we're reassembling here.
-    udpard_us_t     ts_min;         ///< Earliest frame timestamp, aka transfer reception timestamp.
-    udpard_us_t     ts_max;         ///< Latest frame timestamp, aka transfer completion timestamp.
-    size_t          covered_prefix; ///< Number of bytes received contiguously from offset zero.
-    size_t          crc_end;        ///< The end offset of the frame whose CRC is stored in `crc`.
-    uint32_t        crc;            ///< Once the reassembly is done, holds the CRC of the entire transfer.
-    udpard_tree_t*  fragments;
+
+    uint64_t transfer_id; ///< Which transfer we're reassembling here.
+
+    udpard_us_t ts_min; ///< Earliest frame timestamp, aka transfer reception timestamp.
+    udpard_us_t ts_max; ///< Latest frame timestamp, aka transfer completion timestamp.
+
+    size_t covered_prefix; ///< Number of bytes received contiguously from offset zero.
+    size_t total_size;     ///< The total size of the transfer payload being transmitted (we may only use part of it).
+
+    size_t   crc_end; ///< The end offset of the frame whose CRC is stored in `crc`.
+    uint32_t crc;     ///< Once the reassembly is done, holds the CRC of the entire transfer.
+
+    udpard_prio_t priority;
+
+    udpard_tree_t* fragments;
 } rx_slot_t;
 
 static void rx_slot_reset(rx_slot_t* const slot, const udpard_mem_resource_t fragment_memory)
@@ -1015,6 +1024,9 @@ static void rx_slot_update(rx_slot_t* const            slot,
         slot->transfer_id = frame.meta.transfer_id;
         slot->ts_min      = ts;
         slot->ts_max      = ts;
+        // Some metadata is only needed to pass it over to the application once the transfer is done.
+        slot->total_size = frame.meta.transfer_payload_size;
+        slot->priority   = frame.meta.priority;
     }
     const rx_fragment_tree_update_result_t tree_res = rx_fragment_tree_update(&slot->fragments,
                                                                               fragment_memory,
@@ -1073,7 +1085,17 @@ static int32_t cavl_compare_rx_session_remote_uid(const void* const user, const 
     const uint64_t uid_a = *(const uint64_t*)user;
     const uint64_t uid_b = ((const rx_session_t*)node)->remote.source_uid; // clang-format off
     if (uid_a < uid_b) { return -1; }
-    if (uid_a > uid_b) { return 1; }
+    if (uid_a > uid_b) { return +1; }
+    return 0; // clang-format on
+}
+
+static int32_t cavl_compare_rx_session_reordering_deadline(const void* const user, const udpard_tree_t* const node)
+{
+    const udpard_us_t dl_a = *(const udpard_us_t*)user;
+    const udpard_us_t dl_b = CAVL2_TO_OWNER(node, rx_session_t, index_reordering_window)->reordering_window_deadline;
+    // clang-format off
+    if (dl_a < dl_b) { return -1; }
+    if (dl_a > dl_b) { return +1; }
     return 0; // clang-format on
 }
 
@@ -1086,9 +1108,10 @@ static rx_session_t* rx_session_new(udpard_rx_port_t* const owner,
     rx_session_t* out = mem_alloc(owner->memory.session, sizeof(rx_session_t));
     if (out != NULL) {
         mem_zero(sizeof(*out), out);
-        out->index_remote_uid        = (udpard_tree_t){ NULL, { NULL, NULL }, 0 };
-        out->index_reordering_window = (udpard_tree_t){ NULL, { NULL, NULL }, 0 };
-        out->list_by_animation       = (udpard_list_member_t){ NULL, NULL };
+        out->index_remote_uid           = (udpard_tree_t){ NULL, { NULL, NULL }, 0 };
+        out->index_reordering_window    = (udpard_tree_t){ NULL, { NULL, NULL }, 0 };
+        out->reordering_window_deadline = BIG_BANG;
+        out->list_by_animation          = (udpard_list_member_t){ NULL, NULL };
         for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
             out->slots[i].fragments = NULL;
             rx_slot_reset(&out->slots[i], owner->memory.fragment);
@@ -1126,16 +1149,94 @@ static void rx_session_del(rx_session_t* const   self,
 
 /// Checks which slots can be ejected or interned in the reordering window.
 /// Should be invoked whenever a slot can potentially be ejected.
-static void rx_session_scan_slots(rx_session_t* const self, udpard_rx_t* const rx)
+static void rx_session_scan_slots(rx_session_t* const self, udpard_rx_t* const rx, const udpard_us_t ts)
 {
+    // Reset the reordering window timer because we will either eject everything or arm it again later.
+    if (cavl2_is_inserted(rx->index_session_by_reordering, &self->index_reordering_window)) {
+        cavl2_remove(&rx->index_session_by_reordering, &self->index_reordering_window);
+        self->reordering_window_deadline = BIG_BANG;
+    }
+
     // Find the nearest transfer-ID slot; eject it if it's in-sequence, if the reordering window is closed,
     // or if all slots are DONE. Repeat until no more slots can be ejected.
-    // Arm the timer if at least one DONE is left.
+    // Arm the reordering window timer if at least one DONE is left.
     for (size_t iter = 0; iter < RX_SLOT_COUNT; iter++) {
+        // Find the slot closest to the next in-sequence transfer-ID, and check if all slots are DONE.
         const uint64_t tid_in_sequence = self->received.head + 1U;
-        // TODO
-        (void)tid_in_sequence;
-        (void)rx;
+        uint64_t       min_tid_dist    = UINT64_MAX;
+        rx_slot_t*     slot            = NULL;
+        bool           all_done        = true;
+        for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
+            const uint64_t dist = rx_transfer_id_forward_distance(tid_in_sequence, self->slots[i].transfer_id);
+            if ((self->slots[i].state == rx_slot_done) && (dist < min_tid_dist)) {
+                min_tid_dist = dist;
+                slot         = &self->slots[i];
+            }
+            all_done = all_done && (self->slots[i].state == rx_slot_done);
+        }
+
+        // The slot needs to be ejected if it's in-sequence, if it's reordering window is closed, or if all are DONE.
+        // The reordering window timeout implies that we will not be receiving earlier transfers anymore.
+        // The all-DONE condition implies that we will not be able to receive any new transfer because there are no
+        // free slots left, meaning that a reordering window expiration is unavoidable, so we can expire it early.
+        const udpard_us_t reordering_deadline = slot->ts_min + self->owner->reordering_window;
+        const bool        eject =
+          (slot != NULL) && ((slot->transfer_id == tid_in_sequence) || all_done || (ts >= reordering_deadline));
+        if (!eject) {
+            // The slot is done but cannot be ejected yet; arm the reordering window timer.
+            // There may be transfers with future (more distant) transfer-IDs with an earlier reordering window
+            // closure deadline, but we ignore them because the nearest transfer overrides the more distant ones.
+            if (slot != NULL) {
+                UDPARD_ASSERT(ts < reordering_deadline);
+                self->reordering_window_deadline = reordering_deadline;
+                const udpard_tree_t* res         = cavl2_find_or_insert(&rx->index_session_by_reordering,
+                                                                &self->reordering_window_deadline,
+                                                                &cavl_compare_rx_session_reordering_deadline,
+                                                                &self->index_reordering_window,
+                                                                &cavl2_trivial_factory);
+                UDPARD_ASSERT(res == &self->index_reordering_window);
+                (void)res;
+            }
+            break; // No more slots can be ejected at this time.
+        }
+
+        // Invoke the reception callback, transferring the payload ownership to the application.
+        UDPARD_ASSERT((slot != NULL) && (slot->state == rx_slot_done));
+        udpard_rx_subscription_t* const subscription = (self->owner == &rx->p2p_port) // P2P special case
+                                                         ? NULL
+                                                         : (udpard_rx_subscription_t*)self->owner;
+        const udpard_rx_transfer_t      transfer     = { .timestamp           = slot->ts_min,
+                                                         .origin              = self->remote,
+                                                         .priority            = slot->priority,
+                                                         .transfer_id         = slot->transfer_id,
+                                                         .payload_size_stored = slot->covered_prefix,
+                                                         .payload_size_wire   = slot->total_size,
+                                                         .payload_head = (udpard_fragment_t*)cavl2_min(slot->fragments),
+                                                         .payload_root = (udpard_fragment_t*)slot->fragments };
+        rx->on_message(rx, subscription, transfer);
+
+        // Slide the transfer-ID window to prevent duplicates and out-of-order transfers.
+        // We always pick the next transfer to eject with the nearest transfer-ID, which guarantees that the other
+        // DONE transfers will not end up within the window. Some of the in-progress slots may be obsoleted by
+        // this move, which will be taken care of later.
+        rx_transfer_id_window_slide(&self->received, slot->transfer_id);
+
+        // Reset the slot, but don't free the payload because it's been moved to the application.
+        slot->fragments = NULL;
+        rx_slot_reset(slot, self->owner->memory.fragment);
+    }
+
+    // Having updated the state, ensure that in-progress slots, if any, have not ended up within the accepted window.
+    // Also this is a good opportunity to check for timed-out in-progress slots.
+    for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
+        rx_slot_t* const slot = &self->slots[i];
+        if (slot->state == rx_slot_busy) {
+            const bool timed_out = ts >= (slot->ts_max + SESSION_LIFETIME);
+            const bool obsoleted = rx_transfer_id_window_contains(&self->received, slot->transfer_id);
+            if (timed_out || obsoleted) {
+                rx_slot_reset(slot, self->owner->memory.fragment);
+            }
+        }
     }
 }
 
@@ -1179,10 +1280,6 @@ static void rx_session_update(rx_session_t* const        self,
     UDPARD_ASSERT(ifindex < UDPARD_NETWORK_INTERFACE_COUNT_MAX);
     self->remote.origin[ifindex] = src_ep;
 
-    // Animate the session to prevent it from being retired.
-    enlist_head(&rx->list_session_by_animation, &self->list_by_animation);
-    self->last_animated_ts = ts;
-
     // Check for topic hash collisions to prevent data misinterpretation when transient collisions occur.
     udpard_rx_subscription_t* const subscription = (self->owner == &rx->p2p_port) // P2P is a single special case port.
                                                      ? NULL
@@ -1192,6 +1289,12 @@ static void rx_session_update(rx_session_t* const        self,
         mem_free_payload(payload_deleter, frame.base.origin);
         return;
     }
+
+    // Animate the session to prevent it from being retired.
+    // This may result in repeated creation/deletion of the session if there is only a colliding publisher, but that's
+    // totally fine because creation/deletion is very cheap, and it ensures that all timed-out slots are recycled.
+    enlist_head(&rx->list_session_by_animation, &self->list_by_animation);
+    self->last_animated_ts = ts;
 
     // Check if this transfer-ID was already received. Retransmit ACK if needed -- it could have been lost.
     const rx_session_transfer_status_t status = rx_session_check_transfer_status(self, frame.meta.transfer_id);
@@ -1265,7 +1368,9 @@ static void rx_session_update(rx_session_t* const        self,
             };
             rx->on_ack_mandate(rx, subscription, mandate);
         }
-        rx_session_scan_slots(self, rx);
+        // The final ejection procedure is a little complicated because we need to manage the reordering window
+        // and possible obsolescence of other in-progress slots.
+        rx_session_scan_slots(self, rx, ts);
     }
 }
 
@@ -1273,4 +1378,56 @@ static bool rx_validate_memory_resources(const udpard_rx_memory_resources_t memo
 {
     return (memory.session.alloc != NULL) && (memory.session.free != NULL) && //
            (memory.fragment.alloc != NULL) && (memory.fragment.free != NULL);
+}
+
+bool udpard_rx_new(udpard_rx_t* const                 self,
+                   const uint64_t                     local_uid,
+                   const udpard_rx_memory_resources_t p2p_port_memory,
+                   const udpard_rx_on_message_t       on_message,
+                   const udpard_rx_on_collision_t     on_collision,
+                   const udpard_rx_on_ack_mandate_t   on_ack_mandate)
+{
+    const bool ok = (self != NULL) && (local_uid > 0) && rx_validate_memory_resources(p2p_port_memory) &&
+                    (on_message != NULL) && (on_collision != NULL) && (on_ack_mandate != NULL);
+    if (ok) {
+        mem_zero(sizeof(*self), self);
+        self->p2p_port = (udpard_rx_port_t){
+            .topic_hash                  = local_uid,
+            .extent                      = SIZE_MAX,
+            .reordering_window           = UDPARD_REORDERING_WINDOW_UNORDERED,
+            .memory                      = p2p_port_memory,
+            .index_session_by_remote_uid = NULL,
+        };
+        self->list_session_by_animation   = (udpard_list_t){ NULL, NULL };
+        self->index_session_by_reordering = NULL;
+        self->on_message                  = on_message;
+        self->on_collision                = on_collision;
+        self->on_ack_mandate              = on_ack_mandate;
+        self->errors_oom                  = 0;
+        self->errors_frame_malformed      = 0;
+        self->errors_transfer_malformed   = 0;
+    }
+    return ok;
+}
+
+void udpard_rx_poll(udpard_rx_t* const self, const udpard_us_t now)
+{
+    // Retire timed out sessions. We retire at most one per poll to avoid burstiness because session retirement
+    // may potentially free up a lot of memory at once.
+    {
+        rx_session_t* const ses = LIST_TAIL(self->list_session_by_animation, rx_session_t, list_by_animation);
+        if ((ses != NULL) && (now >= (ses->last_animated_ts + SESSION_LIFETIME))) {
+            rx_session_del(ses, &self->list_session_by_animation, &self->index_session_by_reordering);
+        }
+    }
+    // Process reordering window timeouts.
+    // We may process more than one to minimize transfer delays; this is also expected to be quick.
+    while (true) {
+        rx_session_t* const node =
+          CAVL2_TO_OWNER(cavl2_min(self->index_session_by_reordering), rx_session_t, index_reordering_window);
+        if ((node == NULL) || (now < node->reordering_window_deadline)) {
+            break;
+        }
+        rx_session_scan_slots(node, self, now);
+    }
 }

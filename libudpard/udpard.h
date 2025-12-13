@@ -317,7 +317,7 @@ typedef struct udpard_tx_mem_resources_t
 /// prioritization of the outgoing datagrams according to the DSCP value.
 typedef struct udpard_tx_t
 {
-    /// A globally unique identifier of the local node, composed of (VID<<48)|(PID<<32)|INSTANCE_ID.
+    /// An IEEE EUI-64 globally unique identifier of the local node.
     uint64_t local_uid;
 
     /// The maximum number of UDP datagrams this instance is allowed to enqueue.
@@ -502,27 +502,59 @@ typedef struct udpard_rx_memory_resources_t
     udpard_mem_resource_t fragment;
 } udpard_rx_memory_resources_t;
 
+/// The transfer reassembly state machine can operate in several modes described below.
+///
+///     ORDERED
+///
+/// Each transfer is received at most once. The sequence of transfers delivered (ejected)
+/// to the application is STRICTLY INCREASING (with possible gaps in case of loss).
+///
+/// The reassembler may hold completed transfers for a brief time if they arrive out-of-order,
+/// hoping for the earlier missing transfers to show up, such that they are not permanently lost.
+/// For example, a sequence 1 2 4 3 5 will be delivered as 1 2 3 4 5 if 3 arrives shortly after 4;
+/// however, if 3 does not arrive within the configured reordering window,
+/// the application will receive 1 2 4 5, and transfer 3 will be permanently lost even if it arrives later
+/// because accepting it without violating the strictly increasing transfer-ID constraint is not possible.
+///
+/// The ORDERED mode is used if the reordering window is non-negative. Zero is not really a special case, it
+/// simply means that out-of-order transfers are not waited for at all (declared permanently lost immediately).
+/// This should be the default option for most subscriptions; in particular, it is intended for state estimators
+/// and control systems where ordering is critical.
+///
+///     UNORDERED
+///
+/// Each transfer is ejected immediately upon successful reassembly. Ordering is not enforced,
+/// but duplicates are still removed. For example, a sequence 1 2 4 3 5 will be delivered as-is without delay.
+///
+/// This mode does not reject nor delay transfers arriving late, making it the desired choice for applications
+/// where all transfers need to be received no matter the order. This is in particular useful for request-response
+/// topics.
+///
+/// The UNORDERED mode is used if the reordering window duration is set to UDPARD_REORDERING_WINDOW_UNORDERED.
+///
+///     STATELESS
+///
+/// Only single-frame transfers are accepted (where the entire payload fits into a single datagram,
+/// or the extent does not exceed the MTU). No attempt to enforce ordering is made.
+/// A minimal attempt to remove duplicates is made using a simple short constant-time constant-memory arrival log;
+/// this is usually sufficient to remove duplicates arriving from redundant interfaces.
+/// The return path is only discovered for the one interface that delivered the transfer.
+///
+/// The stateless mode does not allocate any dynamic memory for the port at all and does not contain any
+/// variable-complexity processing logic, enabling great scalability for topics with a very large number of
+/// publishers where unordered and duplicated messages are acceptable, such as the heartbeat topic.
+///
+/// The UNORDERED mode is used if the reordering window duration is set to UDPARD_REORDERING_WINDOW_STATELESS.
+#define UDPARD_REORDERING_WINDOW_UNORDERED ((udpard_us_t)(-1))
+#define UDPARD_REORDERING_WINDOW_STATELESS ((udpard_us_t)(-2))
+
 /// This type represents an open input port, such as a subscription to a topic.
 typedef struct udpard_rx_port_t
 {
     uint64_t topic_hash; ///< Mismatch will be filtered out.
     size_t   extent;
 
-    /// The transfer reassembly state machine can operate in two modes:
-    ///
-    /// ORDERED --- Each transfer is received at most once. The sequence of transfers delivered (ejected)
-    /// to the application is STRICTLY INCREASING (with possible gaps in case of loss). The reassembler may hold
-    /// completed transfers for a brief time if they arrive out-of-order, hoping for the earlier missing transfers
-    /// to show up, such that they are not permanently lost. For example, a sequence 1 2 4 3 5 will be delivered as
-    /// 1 2 3 4 5 if 3 arrives shortly after 4; however, if 3 does not arrive within the configured reordering window,
-    /// the application will receive 1 2 4 5, and transfer 3 will be permanently lost even if it arrives later.
-    ///
-    /// IMMEDIATE --- Each transfer is ejected immediately upon successful reassembly. Transfers may be duplicated
-    /// and arrive out-of-order.
-    ///
-    /// The ORDERED mode is used if the reordering window is non-negative. Zero is not really a special case, it
-    /// simply means that out-of-order transfers are not waited for at all (declared permanently lost immediately).
-    /// The IMMEDIATE mode is used if the reordering window is negative.
+    /// See UDPARD_REORDERING_WINDOW_... above.
     udpard_us_t reordering_window;
 
     udpard_rx_memory_resources_t memory;
@@ -655,6 +687,10 @@ typedef struct udpard_rx_t
     uint64_t errors_transfer_malformed; ///< A received transfer was malformed (e.g., CRC error) and thus dropped.
 } udpard_rx_t;
 
+/// The extent of the P2P port is set to SIZE_MAX by default (no truncation at all).
+/// The application can alter it via udpard_rx_t::p2p_port.extent at any moment if needed; it takes effect immediately
+/// but may in some cases cause in-progress transfers to be lost if increased updated mid-transfer.
+///
 /// True on success, false if any of the arguments are invalid.
 bool udpard_rx_new(udpard_rx_t* const                 self,
                    const uint64_t                     local_uid,
