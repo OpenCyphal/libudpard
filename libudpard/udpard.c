@@ -1077,6 +1077,8 @@ typedef struct
     /// To weed out duplicates and to retransmit lost ACKs.
     rx_transfer_id_window_t received;
 
+    bool initialized; // Set after the first transfer is received.
+
     rx_slot_t slots[RX_SLOT_COUNT];
 } rx_session_t;
 
@@ -1126,6 +1128,7 @@ static rx_session_t* rx_session_new(udpard_rx_port_t* const owner,
                                                         &cavl2_trivial_factory);
         UDPARD_ASSERT(res == &out->index_remote_uid);
         (void)res;
+        out->initialized = false;
         enlist_head(sessions_by_animation, &out->list_by_animation);
     }
     return out;
@@ -1216,10 +1219,12 @@ static void rx_session_scan_slots(rx_session_t* const self, udpard_rx_t* const r
         rx->on_message(rx, subscription, transfer);
 
         // Slide the transfer-ID window to prevent duplicates and out-of-order transfers.
+        // Mark the current transfer as received.
         // We always pick the next transfer to eject with the nearest transfer-ID, which guarantees that the other
         // DONE transfers will not end up within the window. Some of the in-progress slots may be obsoleted by
         // this move, which will be taken care of later.
         rx_transfer_id_window_slide(&self->received, slot->transfer_id);
+        rx_transfer_id_window_set(&self->received, slot->transfer_id);
 
         // Reset the slot, but don't free the payload because it's been moved to the application.
         slot->fragments = NULL;
@@ -1296,6 +1301,12 @@ static void rx_session_update(rx_session_t* const        self,
     enlist_head(&rx->list_session_by_animation, &self->list_by_animation);
     self->last_animated_ts = ts;
 
+    // Do-once initialization to ensure we don't lose any transfers by choosing the initial transfer-ID poorly.
+    if (!self->initialized) {
+        self->initialized = true;
+        rx_transfer_id_window_slide(&self->received, frame.meta.transfer_id - 1U);
+    }
+
     // Check if this transfer-ID was already received. Retransmit ACK if needed -- it could have been lost.
     const rx_session_transfer_status_t status = rx_session_check_transfer_status(self, frame.meta.transfer_id);
     if (status != rx_session_transfer_new) {
@@ -1335,8 +1346,8 @@ static void rx_session_update(rx_session_t* const        self,
         udpard_us_t oldest_ts = HEAT_DEATH;
         for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
             UDPARD_ASSERT(self->slots[i].state != rx_slot_idle); // Checked this already.
-            if ((self->slots[i].state == rx_slot_busy) && (self->slots[i].ts_min < oldest_ts)) {
-                oldest_ts = self->slots[i].ts_min;
+            if ((self->slots[i].state == rx_slot_busy) && (self->slots[i].ts_max < oldest_ts)) {
+                oldest_ts = self->slots[i].ts_max;
                 slot      = &self->slots[i];
             }
         }

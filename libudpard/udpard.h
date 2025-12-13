@@ -654,7 +654,10 @@ typedef struct udpard_rx_ack_mandate_t
     udpard_remote_t remote;
     udpard_prio_t   priority;
     uint64_t        transfer_id;
-    udpard_bytes_t  payload_head; ///< View of the first <=MTU bytes of the transfer payload that is being confirmed.
+
+    /// View of the first <=MTU bytes of the transfer payload that is being confirmed.
+    /// Valid until return from the callback.
+    udpard_bytes_t payload_head;
 } udpard_rx_ack_mandate_t;
 
 struct udpard_rx_t;
