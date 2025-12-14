@@ -2036,7 +2036,8 @@ static void on_ack_mandate(udpard_rx_t* const rx, udpard_rx_subscription_t* cons
     cb_result->ack_mandate.am.payload_head.data = cb_result->ack_mandate.payload_head_storage;
 }
 
-static void test_session_ordered_basic(void)
+/// Tests the ORDERED reassembly mode (strictly increasing transfer-ID sequence).
+static void test_session_ordered(void)
 {
     // Initialize the memory resources.
     instrumented_allocator_t alloc_frag = { 0 };
@@ -2778,7 +2779,7 @@ int main(void)
 
     RUN_TEST(test_rx_slot_update);
 
-    RUN_TEST(test_session_ordered_basic);
+    RUN_TEST(test_session_ordered);
 
     RUN_TEST(test_udpard_fragment_seek);
 
