@@ -779,7 +779,7 @@ static rx_fragment_tree_update_result_t rx_fragment_tree_update(udpard_tree_t** 
 
     // Ignore frames beyond the extent. Zero extent requires special handling because from the reassembler's
     // view such transfers are useless, but we still want them.
-    if ((left >= extent) && (extent > 0)) {
+    if (((extent > 0) && (left >= extent)) || ((extent == 0) && (left > extent))) {
         mem_free_payload(payload_deleter, frame.origin);
         return rx_fragment_tree_rejected; // New fragment is beyond the extent, discard.
     }

@@ -772,19 +772,19 @@ void udpard_rx_subscription_free(udpard_rx_subscription_t* const self);
 /// Returns true on successful processing, false if any of the arguments are invalid.
 bool udpard_rx_subscription_receive(udpard_rx_t* const              rx,
                                     udpard_rx_subscription_t* const sub,
-                                    const udpard_us_t               timestamp_usec,
+                                    const udpard_us_t               timestamp,
                                     const udpard_udpip_ep_t         source_endpoint,
                                     const udpard_bytes_mut_t        datagram_payload,
                                     const udpard_mem_deleter_t      payload_deleter,
                                     const uint_fast8_t              redundant_iface_index);
 
 /// Like the above but for P2P unicast transfers exchanged between specific nodes.
-bool udpard_rx_p2p_receive(udpard_rx_subscription_t* const rx,
-                           const udpard_us_t               timestamp_usec,
-                           const udpard_udpip_ep_t         source_endpoint,
-                           const udpard_bytes_mut_t        datagram_payload,
-                           const udpard_mem_deleter_t      payload_deleter,
-                           const uint_fast8_t              redundant_iface_index);
+bool udpard_rx_p2p_receive(udpard_rx_t* const         rx,
+                           const udpard_us_t          timestamp,
+                           const udpard_udpip_ep_t    source_endpoint,
+                           const udpard_bytes_mut_t   datagram_payload,
+                           const udpard_mem_deleter_t payload_deleter,
+                           const uint_fast8_t         redundant_iface_index);
 
 #ifdef __cplusplus
 }
