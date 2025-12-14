@@ -1911,7 +1911,7 @@ static void on_ack_mandate(udpard_rx_t* const rx, udpard_rx_subscription_t* cons
     cb_result->ack_mandate.am.payload_head.data = cb_result->ack_mandate.payload_head_storage;
 }
 
-static void test_session_a(void)
+static void test_session_ordered_basic(void)
 {
     // Initialize the memory resources.
     instrumented_allocator_t alloc_frag = { 0 };
@@ -1933,212 +1933,238 @@ static void test_session_a(void)
     const uint64_t local_uid = 0xC3C8E4974254E1F5ULL;
     udpard_rx_t    rx;
     TEST_ASSERT(udpard_rx_new(&rx, local_uid, rx_mem, &on_message, &on_collision, &on_ack_mandate));
+    callback_result_t cb_result = { 0 };
+    rx.user                     = &cb_result;
 
-    // Test ordered reception.
-    {
-        callback_result_t cb_result = { 0 };
-        rx.user                     = &cb_result;
+    // Construct the session instance.
+    udpard_us_t         now        = 0;
+    const uint64_t      remote_uid = 0xA1B2C3D4E5F60718ULL;
+    udpard_rx_port_t    port       = { .topic_hash                  = 0x4E81E200CB479D4CULL,
+                                       .extent                      = 1000,
+                                       .reordering_window           = 1 * KILO,
+                                       .memory                      = rx_mem,
+                                       .index_session_by_remote_uid = NULL };
+    rx_session_t* const ses        = rx_session_new(&port, &rx.list_session_by_animation, remote_uid, now);
 
-        // Construct the session instance.
-        udpard_us_t         now        = 0;
-        const uint64_t      remote_uid = 0xA1B2C3D4E5F60718ULL;
-        udpard_rx_port_t    port       = { .topic_hash                  = 0x4E81E200CB479D4CULL,
-                                           .extent                      = 1000,
-                                           .reordering_window           = 1 * KILO,
-                                           .memory                      = rx_mem,
-                                           .index_session_by_remote_uid = NULL };
-        rx_session_t* const ses        = rx_session_new(&port, &rx.list_session_by_animation, remote_uid, now);
+    // Verify construction outcome.
+    TEST_ASSERT_NOT_NULL(ses);
+    TEST_ASSERT_EQUAL_PTR(rx.list_session_by_animation.head, &ses->list_by_animation);
+    TEST_ASSERT_EQUAL_PTR(port.index_session_by_remote_uid, &ses->index_remote_uid);
+    TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
+    TEST_ASSERT_EQUAL(sizeof(rx_session_t), alloc_session.allocated_bytes);
 
-        // Verify construction outcome.
-        TEST_ASSERT_NOT_NULL(ses);
-        TEST_ASSERT_EQUAL_PTR(rx.list_session_by_animation.head, &ses->list_by_animation);
-        TEST_ASSERT_EQUAL_PTR(port.index_session_by_remote_uid, &ses->index_remote_uid);
-        TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
-        TEST_ASSERT_EQUAL(sizeof(rx_session_t), alloc_session.allocated_bytes);
+    // Feed a valid multi-frame transfer and ensure the callback is invoked and the states are updated.
+    meta_t meta = { .priority              = udpard_prio_high,
+                    .flag_ack              = true,
+                    .transfer_payload_size = 10,
+                    .transfer_id           = 42,
+                    .sender_uid            = remote_uid,
+                    .topic_hash            = port.topic_hash };
+    now += 1000;
+    rx_session_update(ses,
+                      &rx,
+                      now,
+                      (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1234 },
+                      make_frame(meta, mem_payload, "0123456789", 5, 5),
+                      del_payload,
+                      0);
+    now += 1000;
+    rx_session_update(ses,
+                      &rx,
+                      now,
+                      (udpard_udpip_ep_t){ .ip = 0x0A000002, .port = 0x4321 }, // different endpoint
+                      make_frame(meta, mem_payload, "0123456789", 0, 5),
+                      del_payload,
+                      2); // different interface
 
-        // Feed a valid multi-frame transfer and ensure the callback is invoked and the states are updated.
-        meta_t meta = { .priority              = udpard_prio_high,
-                        .flag_ack              = true,
-                        .transfer_payload_size = 10,
-                        .transfer_id           = 42,
-                        .sender_uid            = remote_uid,
-                        .topic_hash            = port.topic_hash };
-        now += 1000;
-        rx_session_update(ses,
-                          &rx,
-                          now,
-                          (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1234 },
-                          make_frame(meta, mem_payload, "0123456789", 5, 5),
-                          del_payload,
-                          0);
-        now += 1000;
-        rx_session_update(ses,
-                          &rx,
-                          now,
-                          (udpard_udpip_ep_t){ .ip = 0x0A000002, .port = 0x4321 }, // different endpoint
-                          make_frame(meta, mem_payload, "0123456789", 0, 5),
-                          del_payload,
-                          2); // different interface
+    // Check the results and free the transfer.
+    TEST_ASSERT_EQUAL(1, cb_result.message.count);
+    TEST_ASSERT_EQUAL_PTR(&rx, cb_result.rx);
+    TEST_ASSERT_EQUAL_PTR(&port, cb_result.sub);
+    TEST_ASSERT_EQUAL(1000, cb_result.message.transfer.timestamp);
+    TEST_ASSERT_EQUAL(udpard_prio_high, cb_result.message.transfer.priority);
+    TEST_ASSERT_EQUAL(42, cb_result.message.transfer.transfer_id);
+    // Check the return path discovery.
+    TEST_ASSERT_EQUAL(remote_uid, cb_result.message.transfer.remote.uid);
+    TEST_ASSERT_EQUAL(0x0A000001, cb_result.message.transfer.remote.endpoints[0].ip);
+    TEST_ASSERT_EQUAL(0x00000000, cb_result.message.transfer.remote.endpoints[1].ip);
+    TEST_ASSERT_EQUAL(0x0A000002, cb_result.message.transfer.remote.endpoints[2].ip);
+    TEST_ASSERT_EQUAL(0x1234, cb_result.message.transfer.remote.endpoints[0].port);
+    TEST_ASSERT_EQUAL(0x0000, cb_result.message.transfer.remote.endpoints[1].port);
+    TEST_ASSERT_EQUAL(0x4321, cb_result.message.transfer.remote.endpoints[2].port);
+    // Check the payload.
+    TEST_ASSERT_EQUAL(2, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL(2 * sizeof(udpard_fragment_t), alloc_frag.allocated_bytes);
+    TEST_ASSERT_EQUAL(2, alloc_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(10, alloc_payload.allocated_bytes);
+    TEST_ASSERT(transfer_payload_verify(&cb_result.message.transfer, 10, "0123456789", 10));
 
-        // Check the results and free the transfer.
-        TEST_ASSERT_EQUAL(1, cb_result.message.count);
-        TEST_ASSERT_EQUAL_PTR(&rx, cb_result.rx);
-        TEST_ASSERT_EQUAL_PTR(&port, cb_result.sub);
-        TEST_ASSERT_EQUAL(1000, cb_result.message.transfer.timestamp);
-        TEST_ASSERT_EQUAL(udpard_prio_high, cb_result.message.transfer.priority);
-        TEST_ASSERT_EQUAL(42, cb_result.message.transfer.transfer_id);
-        // Check the return path discovery.
-        TEST_ASSERT_EQUAL(remote_uid, cb_result.message.transfer.remote.uid);
-        TEST_ASSERT_EQUAL(0x0A000001, cb_result.message.transfer.remote.endpoints[0].ip);
-        TEST_ASSERT_EQUAL(0x00000000, cb_result.message.transfer.remote.endpoints[1].ip);
-        TEST_ASSERT_EQUAL(0x0A000002, cb_result.message.transfer.remote.endpoints[2].ip);
-        TEST_ASSERT_EQUAL(0x1234, cb_result.message.transfer.remote.endpoints[0].port);
-        TEST_ASSERT_EQUAL(0x0000, cb_result.message.transfer.remote.endpoints[1].port);
-        TEST_ASSERT_EQUAL(0x4321, cb_result.message.transfer.remote.endpoints[2].port);
-        // Check the payload.
-        TEST_ASSERT_EQUAL(2, alloc_frag.allocated_fragments);
-        TEST_ASSERT_EQUAL(2 * sizeof(udpard_fragment_t), alloc_frag.allocated_bytes);
-        TEST_ASSERT_EQUAL(2, alloc_payload.allocated_fragments);
-        TEST_ASSERT_EQUAL(10, alloc_payload.allocated_bytes);
-        TEST_ASSERT(transfer_payload_verify(&cb_result.message.transfer, 10, "0123456789", 10));
+    // Successful reception mandates sending an ACK.
+    TEST_ASSERT_EQUAL(1, cb_result.ack_mandate.count);
+    TEST_ASSERT_EQUAL(udpard_prio_high, cb_result.ack_mandate.am.priority);
+    TEST_ASSERT_EQUAL(42, cb_result.ack_mandate.am.transfer_id);
+    // Where to send the ack.
+    TEST_ASSERT_EQUAL(remote_uid, cb_result.ack_mandate.am.remote.uid);
+    TEST_ASSERT_EQUAL(0x0A000001, cb_result.ack_mandate.am.remote.endpoints[0].ip);
+    TEST_ASSERT_EQUAL(0x00000000, cb_result.ack_mandate.am.remote.endpoints[1].ip);
+    TEST_ASSERT_EQUAL(0x0A000002, cb_result.ack_mandate.am.remote.endpoints[2].ip);
+    TEST_ASSERT_EQUAL(0x1234, cb_result.ack_mandate.am.remote.endpoints[0].port);
+    TEST_ASSERT_EQUAL(0x0000, cb_result.ack_mandate.am.remote.endpoints[1].port);
+    TEST_ASSERT_EQUAL(0x4321, cb_result.ack_mandate.am.remote.endpoints[2].port);
+    // First frame payload is sometimes needed for ACK generation.
+    TEST_ASSERT_EQUAL_size_t(5, cb_result.ack_mandate.am.payload_head.size);
+    TEST_ASSERT_EQUAL_MEMORY("01234", cb_result.ack_mandate.am.payload_head.data, 5);
 
-        // Successful reception mandates sending an ACK.
-        TEST_ASSERT_EQUAL(1, cb_result.ack_mandate.count);
-        TEST_ASSERT_EQUAL(udpard_prio_high, cb_result.ack_mandate.am.priority);
-        TEST_ASSERT_EQUAL(42, cb_result.ack_mandate.am.transfer_id);
-        // Where to send the ack.
-        TEST_ASSERT_EQUAL(remote_uid, cb_result.ack_mandate.am.remote.uid);
-        TEST_ASSERT_EQUAL(0x0A000001, cb_result.ack_mandate.am.remote.endpoints[0].ip);
-        TEST_ASSERT_EQUAL(0x00000000, cb_result.ack_mandate.am.remote.endpoints[1].ip);
-        TEST_ASSERT_EQUAL(0x0A000002, cb_result.ack_mandate.am.remote.endpoints[2].ip);
-        TEST_ASSERT_EQUAL(0x1234, cb_result.ack_mandate.am.remote.endpoints[0].port);
-        TEST_ASSERT_EQUAL(0x0000, cb_result.ack_mandate.am.remote.endpoints[1].port);
-        TEST_ASSERT_EQUAL(0x4321, cb_result.ack_mandate.am.remote.endpoints[2].port);
-        // First frame payload is sometimes needed for ACK generation.
-        TEST_ASSERT_EQUAL_size_t(5, cb_result.ack_mandate.am.payload_head.size);
-        TEST_ASSERT_EQUAL_MEMORY("01234", cb_result.ack_mandate.am.payload_head.data, 5);
+    // No collisions so far.
+    TEST_ASSERT_EQUAL(0, cb_result.collision.count);
 
-        // No collisions so far.
-        TEST_ASSERT_EQUAL(0, cb_result.collision.count);
+    // Free the transfer payload.
+    udpard_fragment_free_all(cb_result.message.transfer.payload_head, mem_frag);
+    TEST_ASSERT_EQUAL(0, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments);
 
-        // Free the transfer payload.
-        udpard_fragment_free_all(cb_result.message.transfer.payload_head, mem_frag);
-        TEST_ASSERT_EQUAL(0, alloc_frag.allocated_fragments);
-        TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
-        TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments);
+    // Feed a repeated frame with the same transfer-ID.
+    // Should be ignored except for the return path and ACK retransmission.
+    TEST_ASSERT_EQUAL(0, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments);
+    now += 1000;
+    rx_session_update(ses,
+                      &rx,
+                      now,
+                      (udpard_udpip_ep_t){ .ip = 0x0A000003, .port = 0x1111 }, // different endpoint
+                      make_frame(meta, mem_payload, "abcdef", 0, 6),
+                      del_payload,
+                      1); // different interface
+    TEST_ASSERT_EQUAL(0x0A000001, ses->remote.endpoints[0].ip);
+    TEST_ASSERT_EQUAL(0x0A000003, ses->remote.endpoints[1].ip);
+    TEST_ASSERT_EQUAL(0x0A000002, ses->remote.endpoints[2].ip);
+    TEST_ASSERT_EQUAL(0x1234, ses->remote.endpoints[0].port);
+    TEST_ASSERT_EQUAL(0x1111, ses->remote.endpoints[1].port);
+    TEST_ASSERT_EQUAL(0x4321, ses->remote.endpoints[2].port);
 
-        // Feed a repeated frame with the same transfer-ID.
-        // Should be ignored except for the return path and ACK retransmission.
-        TEST_ASSERT_EQUAL(0, alloc_frag.allocated_fragments);
-        TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
-        TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments);
-        now += 1000;
-        rx_session_update(ses,
-                          &rx,
-                          now,
-                          (udpard_udpip_ep_t){ .ip = 0x0A000003, .port = 0x1111 }, // different endpoint
-                          make_frame(meta, mem_payload, "abcdef", 0, 6),
-                          del_payload,
-                          1); // different interface
-        TEST_ASSERT_EQUAL(0x0A000001, ses->remote.endpoints[0].ip);
-        TEST_ASSERT_EQUAL(0x0A000003, ses->remote.endpoints[1].ip);
-        TEST_ASSERT_EQUAL(0x0A000002, ses->remote.endpoints[2].ip);
-        TEST_ASSERT_EQUAL(0x1234, ses->remote.endpoints[0].port);
-        TEST_ASSERT_EQUAL(0x1111, ses->remote.endpoints[1].port);
-        TEST_ASSERT_EQUAL(0x4321, ses->remote.endpoints[2].port);
+    // Nothing happened except that we just generated another ACK mandate.
+    TEST_ASSERT_EQUAL(1, cb_result.message.count);
+    TEST_ASSERT_EQUAL(2, cb_result.ack_mandate.count);
+    TEST_ASSERT_EQUAL(0, cb_result.collision.count);
+    TEST_ASSERT_EQUAL(0, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments); // the new frame payload was freed by the session
+    TEST_ASSERT_EQUAL(udpard_prio_high, cb_result.ack_mandate.am.priority);
+    TEST_ASSERT_EQUAL(42, cb_result.ack_mandate.am.transfer_id);
+    // Where to send the ack -- new address discovered.
+    TEST_ASSERT_EQUAL(remote_uid, cb_result.ack_mandate.am.remote.uid);
+    TEST_ASSERT_EQUAL(0x0A000001, cb_result.ack_mandate.am.remote.endpoints[0].ip);
+    TEST_ASSERT_EQUAL(0x0A000003, cb_result.ack_mandate.am.remote.endpoints[1].ip); // updated!
+    TEST_ASSERT_EQUAL(0x0A000002, cb_result.ack_mandate.am.remote.endpoints[2].ip);
+    TEST_ASSERT_EQUAL(0x1234, cb_result.ack_mandate.am.remote.endpoints[0].port);
+    TEST_ASSERT_EQUAL(0x1111, cb_result.ack_mandate.am.remote.endpoints[1].port); // updated!
+    TEST_ASSERT_EQUAL(0x4321, cb_result.ack_mandate.am.remote.endpoints[2].port);
+    // First frame payload is sometimes needed for ACK generation.
+    TEST_ASSERT_EQUAL_size_t(6, cb_result.ack_mandate.am.payload_head.size);
+    TEST_ASSERT_EQUAL_MEMORY("abcdef", cb_result.ack_mandate.am.payload_head.data, 6);
 
-        // Nothing happened except that we just generated another ACK mandate.
-        TEST_ASSERT_EQUAL(1, cb_result.message.count);
-        TEST_ASSERT_EQUAL(2, cb_result.ack_mandate.count);
-        TEST_ASSERT_EQUAL(0, cb_result.collision.count);
-        TEST_ASSERT_EQUAL(0, alloc_frag.allocated_fragments);
-        TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
-        TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments); // the new frame payload was freed by the session
-        TEST_ASSERT_EQUAL(udpard_prio_high, cb_result.ack_mandate.am.priority);
-        TEST_ASSERT_EQUAL(42, cb_result.ack_mandate.am.transfer_id);
-        // Where to send the ack -- new address discovered.
-        TEST_ASSERT_EQUAL(remote_uid, cb_result.ack_mandate.am.remote.uid);
-        TEST_ASSERT_EQUAL(0x0A000001, cb_result.ack_mandate.am.remote.endpoints[0].ip);
-        TEST_ASSERT_EQUAL(0x0A000003, cb_result.ack_mandate.am.remote.endpoints[1].ip); // updated!
-        TEST_ASSERT_EQUAL(0x0A000002, cb_result.ack_mandate.am.remote.endpoints[2].ip);
-        TEST_ASSERT_EQUAL(0x1234, cb_result.ack_mandate.am.remote.endpoints[0].port);
-        TEST_ASSERT_EQUAL(0x1111, cb_result.ack_mandate.am.remote.endpoints[1].port); // updated!
-        TEST_ASSERT_EQUAL(0x4321, cb_result.ack_mandate.am.remote.endpoints[2].port);
-        // First frame payload is sometimes needed for ACK generation.
-        TEST_ASSERT_EQUAL_size_t(6, cb_result.ack_mandate.am.payload_head.size);
-        TEST_ASSERT_EQUAL_MEMORY("abcdef", cb_result.ack_mandate.am.payload_head.data, 6);
+    // Feed a repeated frame with the same transfer-ID.
+    // Should be ignored except for the return path update. No ACK needed because the frame does not request it.
+    TEST_ASSERT_EQUAL(0, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments);
+    meta.flag_ack = false;
+    now += 1000;
+    rx_session_update(ses,
+                      &rx,
+                      now,
+                      (udpard_udpip_ep_t){ .ip = 0x0A000004, .port = 0x2222 }, // different endpoint
+                      make_frame(meta, mem_payload, "123", 0, 3),
+                      del_payload,
+                      0);
+    TEST_ASSERT_EQUAL(0x0A000004, ses->remote.endpoints[0].ip);
+    TEST_ASSERT_EQUAL(0x0A000003, ses->remote.endpoints[1].ip);
+    TEST_ASSERT_EQUAL(0x0A000002, ses->remote.endpoints[2].ip);
+    TEST_ASSERT_EQUAL(0x2222, ses->remote.endpoints[0].port);
+    TEST_ASSERT_EQUAL(0x1111, ses->remote.endpoints[1].port);
+    TEST_ASSERT_EQUAL(0x4321, ses->remote.endpoints[2].port);
+    // Nothing happened.
+    TEST_ASSERT_EQUAL(0, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(1, cb_result.message.count);
+    TEST_ASSERT_EQUAL(2, cb_result.ack_mandate.count);
+    TEST_ASSERT_EQUAL(0, cb_result.collision.count);
 
-        // Feed a repeated frame with the same transfer-ID.
-        // Should be ignored except for the return path update. No ACK needed because the frame does not request it.
-        TEST_ASSERT_EQUAL(0, alloc_frag.allocated_fragments);
-        TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
-        TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments);
-        meta.flag_ack = false;
-        now += 1000;
-        rx_session_update(ses,
-                          &rx,
-                          now,
-                          (udpard_udpip_ep_t){ .ip = 0x0A000004, .port = 0x2222 }, // different endpoint
-                          make_frame(meta, mem_payload, "123", 0, 3),
-                          del_payload,
-                          0);
-        TEST_ASSERT_EQUAL(0x0A000004, ses->remote.endpoints[0].ip);
-        TEST_ASSERT_EQUAL(0x0A000003, ses->remote.endpoints[1].ip);
-        TEST_ASSERT_EQUAL(0x0A000002, ses->remote.endpoints[2].ip);
-        TEST_ASSERT_EQUAL(0x2222, ses->remote.endpoints[0].port);
-        TEST_ASSERT_EQUAL(0x1111, ses->remote.endpoints[1].port);
-        TEST_ASSERT_EQUAL(0x4321, ses->remote.endpoints[2].port);
-        // Nothing happened.
-        TEST_ASSERT_EQUAL(0, alloc_frag.allocated_fragments);
-        TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
-        TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments);
-        TEST_ASSERT_EQUAL(1, cb_result.message.count);
-        TEST_ASSERT_EQUAL(2, cb_result.ack_mandate.count);
-        TEST_ASSERT_EQUAL(0, cb_result.collision.count);
+    // Feed a repeated frame with the same transfer-ID.
+    // Should be ignored except for the return path update. No ACK needed because the frame is not the first one.
+    TEST_ASSERT_EQUAL(0, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments);
+    meta.flag_ack = true;
+    now += 1000;
+    rx_session_update(ses,
+                      &rx,
+                      now,
+                      (udpard_udpip_ep_t){ .ip = 0x0A000004, .port = 0x2222 },
+                      make_frame(meta, mem_payload, "123456", 3, 3),
+                      del_payload,
+                      0);
+    TEST_ASSERT_EQUAL(0x0A000004, ses->remote.endpoints[0].ip);
+    TEST_ASSERT_EQUAL(0x0A000003, ses->remote.endpoints[1].ip);
+    TEST_ASSERT_EQUAL(0x0A000002, ses->remote.endpoints[2].ip);
+    TEST_ASSERT_EQUAL(0x2222, ses->remote.endpoints[0].port);
+    TEST_ASSERT_EQUAL(0x1111, ses->remote.endpoints[1].port);
+    TEST_ASSERT_EQUAL(0x4321, ses->remote.endpoints[2].port);
+    // Nothing happened.
+    TEST_ASSERT_EQUAL(0, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(1, cb_result.message.count);
+    TEST_ASSERT_EQUAL(2, cb_result.ack_mandate.count);
+    TEST_ASSERT_EQUAL(0, cb_result.collision.count);
 
-        // Feed a repeated frame with an earlier transfer-ID.
-        // Should be ignored except for the return path update. No ACK because we haven't actually received this TID.
-        TEST_ASSERT_EQUAL(0, alloc_frag.allocated_fragments);
-        TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
-        TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments);
-        meta.flag_ack    = true; // requested, but it will not be sent
-        meta.transfer_id = 7;    // earlier TID that was not received
-        now += 1000;
-        rx_session_update(ses,
-                          &rx,
-                          now,
-                          (udpard_udpip_ep_t){ .ip = 0x0A000005, .port = 0x3333 }, // different endpoint
-                          make_frame(meta, mem_payload, "123", 0, 3),
-                          del_payload,
-                          2);
-        TEST_ASSERT_EQUAL(0x0A000004, ses->remote.endpoints[0].ip);
-        TEST_ASSERT_EQUAL(0x0A000003, ses->remote.endpoints[1].ip);
-        TEST_ASSERT_EQUAL(0x0A000005, ses->remote.endpoints[2].ip);
-        TEST_ASSERT_EQUAL(0x2222, ses->remote.endpoints[0].port);
-        TEST_ASSERT_EQUAL(0x1111, ses->remote.endpoints[1].port);
-        TEST_ASSERT_EQUAL(0x3333, ses->remote.endpoints[2].port);
-        // Nothing happened.
-        TEST_ASSERT_EQUAL(0, alloc_frag.allocated_fragments);
-        TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
-        TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments);
-        TEST_ASSERT_EQUAL(1, cb_result.message.count);
-        TEST_ASSERT_EQUAL(2, cb_result.ack_mandate.count);
-        TEST_ASSERT_EQUAL(0, cb_result.collision.count);
+    // Feed a repeated frame with an earlier transfer-ID.
+    // Should be ignored except for the return path update. No ACK because we haven't actually received this TID.
+    TEST_ASSERT_EQUAL(0, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments);
+    meta.flag_ack    = true; // requested, but it will not be sent
+    meta.transfer_id = 7;    // earlier TID that was not received
+    now += 1000;
+    rx_session_update(ses,
+                      &rx,
+                      now,
+                      (udpard_udpip_ep_t){ .ip = 0x0A000005, .port = 0x3333 }, // different endpoint
+                      make_frame(meta, mem_payload, "123", 0, 3),
+                      del_payload,
+                      2);
+    TEST_ASSERT_EQUAL(0x0A000004, ses->remote.endpoints[0].ip);
+    TEST_ASSERT_EQUAL(0x0A000003, ses->remote.endpoints[1].ip);
+    TEST_ASSERT_EQUAL(0x0A000005, ses->remote.endpoints[2].ip);
+    TEST_ASSERT_EQUAL(0x2222, ses->remote.endpoints[0].port);
+    TEST_ASSERT_EQUAL(0x1111, ses->remote.endpoints[1].port);
+    TEST_ASSERT_EQUAL(0x3333, ses->remote.endpoints[2].port);
+    // Nothing happened.
+    TEST_ASSERT_EQUAL(0, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(1, cb_result.message.count);
+    TEST_ASSERT_EQUAL(2, cb_result.ack_mandate.count);
+    TEST_ASSERT_EQUAL(0, cb_result.collision.count);
 
-        // Time out the session state.
-        now += SESSION_LIFETIME;
-        udpard_rx_poll(&rx, now);
-        TEST_ASSERT_EQUAL(0, alloc_frag.allocated_fragments);
-        TEST_ASSERT_EQUAL(0, alloc_session.allocated_fragments);
-        TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments);
+    // TODO: feed out-of-order transfers and ensure they are ordered correctly at the output.
 
-        // Final checks.
-        TEST_ASSERT_EQUAL(1, cb_result.message.count);
-        TEST_ASSERT_EQUAL(2, cb_result.ack_mandate.count);
-        TEST_ASSERT_EQUAL(0, cb_result.collision.count);
-        instrumented_allocator_reset(&alloc_frag); // Will crash if there are leaks
-        instrumented_allocator_reset(&alloc_payload);
-    }
+    // Time out the session state.
+    now += SESSION_LIFETIME;
+    udpard_rx_poll(&rx, now);
+    TEST_ASSERT_EQUAL(0, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, alloc_session.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments);
+
+    // Final checks.
+    TEST_ASSERT_EQUAL(1, cb_result.message.count);
+    TEST_ASSERT_EQUAL(2, cb_result.ack_mandate.count);
+    TEST_ASSERT_EQUAL(0, cb_result.collision.count);
+    instrumented_allocator_reset(&alloc_frag); // Will crash if there are leaks
+    instrumented_allocator_reset(&alloc_payload);
 }
 
 // ---------------------------------------------  FRAGMENT  ---------------------------------------------
@@ -2265,14 +2291,20 @@ void tearDown(void) {}
 int main(void)
 {
     UNITY_BEGIN();
+
     RUN_TEST(test_rx_fragment_tree_update_a);
     RUN_TEST(test_rx_fragment_tree_update_exhaustive);
     RUN_TEST(test_rx_fragment_tree_oom);
+
     RUN_TEST(test_rx_transfer_id_forward_distance);
     RUN_TEST(test_rx_transfer_id_window_slide);
     RUN_TEST(test_rx_transfer_id_window_manip);
+
     RUN_TEST(test_rx_slot_update);
-    RUN_TEST(test_session_a);
+
+    RUN_TEST(test_session_ordered_basic);
+
     RUN_TEST(test_udpard_fragment_seek);
+
     return UNITY_END();
 }
