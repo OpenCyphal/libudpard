@@ -45,7 +45,7 @@ typedef unsigned char byte_t; ///< For compatibility with platforms where byte s
 #define BIG_BANG   INT64_MIN
 #define HEAT_DEATH INT64_MAX
 
-#define KILO 1000L
+#define KILO 1000LL
 #define MEGA 1000000LL
 
 /// Sessions will be garbage-collected after being idle for this long, along with unfinished transfers, if any.

@@ -1850,6 +1850,120 @@ static void test_rx_slot_update(void)
     instrumented_allocator_reset(&alloc_frag);
     instrumented_allocator_reset(&alloc_payload);
 
+    // Test 7: Inconsistent frame fields; suspicious transfer rejected.
+    {
+        rx_slot_t slot            = { 0 };
+        slot.state                = rx_slot_idle;
+        errors_transfer_malformed = 0;
+        errors_oom                = 0;
+
+        // First frame initializes the slot with transfer_payload_size=20 and priority=udpard_prio_high
+        rx_frame_t frame1                 = { 0 };
+        frame1.base                       = make_frame_base(mem_payload, 0, 5, "hello");
+        frame1.base.crc                   = 0x12345678;
+        frame1.meta.transfer_id           = 3333;
+        frame1.meta.transfer_payload_size = 20;
+        frame1.meta.priority              = udpard_prio_high;
+
+        rx_slot_update(&slot, 9000, mem_frag, del_payload, frame1, 20, &errors_oom, &errors_transfer_malformed);
+
+        TEST_ASSERT_EQUAL(rx_slot_busy, slot.state);
+        TEST_ASSERT_EQUAL(20, slot.total_size);
+        TEST_ASSERT_EQUAL(udpard_prio_high, slot.priority);
+        TEST_ASSERT_EQUAL_size_t(5, slot.covered_prefix);
+        TEST_ASSERT_EQUAL(0, errors_transfer_malformed);
+
+        // Second frame with DIFFERENT transfer_payload_size (should trigger the branch and reset the slot)
+        rx_frame_t frame2                 = { 0 };
+        frame2.base                       = make_frame_base(mem_payload, 5, 5, "world");
+        frame2.base.crc                   = 0xABCDEF00;
+        frame2.meta.transfer_id           = 3333;
+        frame2.meta.transfer_payload_size = 25; // DIFFERENT from frame1's 20
+        frame2.meta.priority              = udpard_prio_high;
+
+        rx_slot_update(&slot, 9100, mem_frag, del_payload, frame2, 25, &errors_oom, &errors_transfer_malformed);
+
+        // Verify that the malformed error was counted and slot was reset
+        TEST_ASSERT_EQUAL(1, errors_transfer_malformed);
+        TEST_ASSERT_EQUAL(rx_slot_idle, slot.state); // Slot reset due to inconsistent total_size
+        TEST_ASSERT_EQUAL_size_t(0, slot.covered_prefix);
+        TEST_ASSERT_NULL(slot.fragments);
+
+        // Reset counters
+        errors_transfer_malformed = 0;
+
+        // Third frame initializes the slot again with transfer_payload_size=30 and priority=udpard_prio_low
+        rx_frame_t frame3                 = { 0 };
+        frame3.base                       = make_frame_base(mem_payload, 0, 5, "test1");
+        frame3.base.crc                   = 0x11111111;
+        frame3.meta.transfer_id           = 4444;
+        frame3.meta.transfer_payload_size = 30;
+        frame3.meta.priority              = udpard_prio_low;
+
+        rx_slot_update(&slot, 9200, mem_frag, del_payload, frame3, 30, &errors_oom, &errors_transfer_malformed);
+
+        TEST_ASSERT_EQUAL(rx_slot_busy, slot.state);
+        TEST_ASSERT_EQUAL(30, slot.total_size);
+        TEST_ASSERT_EQUAL(udpard_prio_low, slot.priority);
+        TEST_ASSERT_EQUAL_size_t(5, slot.covered_prefix);
+        TEST_ASSERT_EQUAL(0, errors_transfer_malformed);
+
+        // Fourth frame with DIFFERENT priority (should trigger the branch and reset the slot)
+        rx_frame_t frame4                 = { 0 };
+        frame4.base                       = make_frame_base(mem_payload, 5, 5, "test2");
+        frame4.base.crc                   = 0x22222222;
+        frame4.meta.transfer_id           = 4444;
+        frame4.meta.transfer_payload_size = 30;               // Same as frame3
+        frame4.meta.priority              = udpard_prio_high; // DIFFERENT from frame3's udpard_prio_low
+
+        rx_slot_update(&slot, 9300, mem_frag, del_payload, frame4, 30, &errors_oom, &errors_transfer_malformed);
+
+        // Verify that the malformed error was counted and slot was reset
+        TEST_ASSERT_EQUAL(1, errors_transfer_malformed);
+        TEST_ASSERT_EQUAL(rx_slot_idle, slot.state); // Slot reset due to inconsistent priority
+        TEST_ASSERT_EQUAL_size_t(0, slot.covered_prefix);
+        TEST_ASSERT_NULL(slot.fragments);
+
+        // Reset counters
+        errors_transfer_malformed = 0;
+
+        // Fifth frame initializes the slot again
+        rx_frame_t frame5                 = { 0 };
+        frame5.base                       = make_frame_base(mem_payload, 0, 5, "test3");
+        frame5.base.crc                   = 0x33333333;
+        frame5.meta.transfer_id           = 5555;
+        frame5.meta.transfer_payload_size = 40;
+        frame5.meta.priority              = udpard_prio_nominal;
+
+        rx_slot_update(&slot, 9400, mem_frag, del_payload, frame5, 40, &errors_oom, &errors_transfer_malformed);
+
+        TEST_ASSERT_EQUAL(rx_slot_busy, slot.state);
+        TEST_ASSERT_EQUAL(40, slot.total_size);
+        TEST_ASSERT_EQUAL(udpard_prio_nominal, slot.priority);
+        TEST_ASSERT_EQUAL_size_t(5, slot.covered_prefix);
+        TEST_ASSERT_EQUAL(0, errors_transfer_malformed);
+
+        // Sixth frame with BOTH different transfer_payload_size AND priority (should still trigger the branch)
+        rx_frame_t frame6                 = { 0 };
+        frame6.base                       = make_frame_base(mem_payload, 5, 5, "test4");
+        frame6.base.crc                   = 0x44444444;
+        frame6.meta.transfer_id           = 5555;
+        frame6.meta.transfer_payload_size = 50;               // DIFFERENT from frame5's 40
+        frame6.meta.priority              = udpard_prio_fast; // DIFFERENT from frame5's udpard_prio_nominal
+
+        rx_slot_update(&slot, 9500, mem_frag, del_payload, frame6, 50, &errors_oom, &errors_transfer_malformed);
+
+        // Verify that the malformed error was counted and slot was reset
+        TEST_ASSERT_EQUAL(1, errors_transfer_malformed);
+        TEST_ASSERT_EQUAL(rx_slot_idle, slot.state); // Slot reset due to both inconsistencies
+        TEST_ASSERT_EQUAL_size_t(0, slot.covered_prefix);
+        TEST_ASSERT_NULL(slot.fragments);
+
+        rx_slot_reset(&slot, mem_frag);
+    }
+    instrumented_allocator_reset(&alloc_frag);
+    instrumented_allocator_reset(&alloc_payload);
+
     // Verify no memory leaks
     TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
     TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
