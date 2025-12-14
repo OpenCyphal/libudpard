@@ -9,8 +9,6 @@
 #include <string.h>
 #include <assert.h>
 
-// ---------------------------------------------  BUILD CONFIGURATION  ---------------------------------------------
-
 /// Define this macro to include build configuration header.
 /// Usage example with CMake: "-DUDPARD_CONFIG_HEADER=\"${CMAKE_CURRENT_SOURCE_DIR}/my_udpard_config.h\""
 #ifdef UDPARD_CONFIG_HEADER
@@ -36,8 +34,6 @@
 #if !defined(__STDC_VERSION__) || (__STDC_VERSION__ < 199901L)
 #error "Unsupported language: ISO C99 or a newer version is required."
 #endif
-
-// ---------------------------------------------  COMMONS  ---------------------------------------------
 
 #define CAVL2_T         udpard_tree_t
 #define CAVL2_RELATION  int32_t
@@ -221,7 +217,9 @@ static uint32_t crc_full(const size_t n_bytes, const void* const data)
     return crc_add(CRC_INITIAL, n_bytes, data) ^ CRC_OUTPUT_XOR;
 }
 
-// ---------------------------------------------  HEADER  ---------------------------------------------
+// ---------------------------------------------------------------------------------------------------------------------
+// ---------------------------------------------          HEADER           ---------------------------------------------
+// ---------------------------------------------------------------------------------------------------------------------
 
 #define HEADER_SIZE_BYTES      48U
 #define HEADER_VERSION         2U
@@ -394,7 +392,9 @@ static void* unbias_ptr(const void* const ptr, const size_t offset)
 }
 #define LIST_TAIL(list, owner_type, owner_field) LIST_MEMBER((list).tail, owner_type, owner_field)
 
-// ---------------------------------------------  TX PIPELINE  ---------------------------------------------
+// ---------------------------------------------------------------------------------------------------------------------
+// ---------------------------------------------        TX PIPELINE        ---------------------------------------------
+// ---------------------------------------------------------------------------------------------------------------------
 
 typedef struct
 {
@@ -681,10 +681,34 @@ void udpard_tx_free(const udpard_tx_mem_resources_t memory, udpard_tx_item_t* co
     }
 }
 
-// ---------------------------------------------  RX PIPELINE  ---------------------------------------------
-
-// The fragment tree is built from frames arriving from all redundant interfaces simultaneously.
-// Said frames may have different MTU, so the fragment offsets and sizes may vary significantly.
+// ---------------------------------------------------------------------------------------------------------------------
+// ---------------------------------------------        RX PIPELINE        ---------------------------------------------
+// ---------------------------------------------------------------------------------------------------------------------
+//
+// The RX pipeline is a layered solution: PORT -> SESSION -> SLOT -> FRAGMENT TREE.
+//
+// Ports are created by the application per subject to subscribe to. There are various parameters defined per port,
+// such as the extent (max payload size to accept) and the reassembly mode (ORDERED, UNORDERED, STATELESS).
+//
+// Each port automatically creates a dedicated session per remote node that publishes on that subject
+// (unless the STATELESS mode is used, which is simple and limited). Sessions are automatically cleaned up and
+// removed when the remote node ceases to publish for a certain (large) timeout period.
+//
+// Each session holds RX_SLOT_COUNT slots for concurrent transfers from the same remote node on the same subject;
+// concurrent transfers may occur due to spontaneous datagram reordering or when the sender needs to emit a higher-
+// priority transfer while a lower-priority transfer is still ongoing (this is why there needs to be at least as many
+// slots as there are priority levels). Each slot accepts frames from all redundant network interfaces at once and
+// runs an efficient fragment tree reassembler to reconstruct the original transfer payload with automatic deduplication
+// and defragmentation; since all interfaces are pooled together, the reassembler is completely insensitive to
+// permanent or transient failure of any of the redundant interfaces; as long as at least one of them is able to
+// deliver frames, the link will function; further, transient packet loss in one of the interfaces does not affect
+// the overall reliability.
+//
+// Each session holds an efficient bitmap of recently received/seen transfers, which is used for ack retransmission
+// if the remote end attempts to retransmit a transfer that was already fully received, and is also used for duplicate
+// rejection.
+//
+// The redundant interfaces may have distinct MTUs, so the fragment offsets and sizes may vary significantly.
 // The reassembler decides if a newly arrived fragment is needed based on gap detection in the fragment tree.
 // An accepted fragment may overlap with neighboring fragments; however, the reassembler guarantees that no fragment is
 // fully contained within another fragment; this also implies that there are no fragments sharing the same offset,
@@ -707,6 +731,8 @@ typedef struct
     rx_frame_base_t base;
     meta_t          meta;
 } rx_frame_t;
+
+// ---------------------------------------------  FRAGMENT TREE  ---------------------------------------------
 
 /// Finds the number of contiguous payload bytes received from offset zero after accepting a new fragment.
 /// The transfer is considered fully received when covered_prefix >= min(extent, transfer_payload_size).
@@ -733,10 +759,10 @@ static size_t rx_fragment_tree_update_covered_prefix(udpard_tree_t* const root,
 
 typedef enum
 {
-    rx_fragment_tree_rejected,
-    rx_fragment_tree_accepted,
-    rx_fragment_tree_done,
-    rx_fragment_tree_oom,
+    rx_fragment_tree_rejected, ///< The newly received fragment was not needed for the tree and was freed.
+    rx_fragment_tree_accepted, ///< The newly received fragment was accepted into the tree, possibly replacing another.
+    rx_fragment_tree_done,     ///< The newly received fragment completed the transfer; the caller must extract payload.
+    rx_fragment_tree_oom,      ///< The fragment could not be accepted, but a possible future duplicate may work.
 } rx_fragment_tree_update_result_t;
 
 /// Takes ownership of the frame payload; either a new fragment is inserted or the payload is freed.
@@ -904,6 +930,8 @@ static bool rx_fragment_tree_finalize(udpard_tree_t* const root, const uint32_t 
     return (crc_computed ^ CRC_OUTPUT_XOR) == crc_expected;
 }
 
+// ---------------------------------------------  TRANSFER-ID WINDOW  ---------------------------------------------
+
 /// Starts with zeros. Remembers the bit values per transfer-ID within the window.
 typedef struct
 {
@@ -969,6 +997,8 @@ static bool rx_transfer_id_window_contains(const rx_transfer_id_window_t* const 
     return rx_transfer_id_forward_distance(transfer_id, self->head) < RX_TRANSFER_ID_WINDOW_BITS;
 }
 
+// ---------------------------------------------  SLOT  ---------------------------------------------
+
 typedef enum
 {
     rx_slot_idle = 0,
@@ -1028,6 +1058,12 @@ static void rx_slot_update(rx_slot_t* const            slot,
         slot->total_size = frame.meta.transfer_payload_size;
         slot->priority   = frame.meta.priority;
     }
+    // Enforce consistent per-frame values throughout the transfer.
+    if ((slot->total_size != frame.meta.transfer_payload_size) || (slot->priority != frame.meta.priority)) {
+        ++*errors_transfer_malformed;
+        rx_slot_reset(slot, fragment_memory);
+        return;
+    }
     const rx_fragment_tree_update_result_t tree_res = rx_fragment_tree_update(&slot->fragments,
                                                                               fragment_memory,
                                                                               payload_deleter,
@@ -1056,6 +1092,8 @@ static void rx_slot_update(rx_slot_t* const            slot,
         }
     }
 }
+
+// ---------------------------------------------  SESSION  ---------------------------------------------
 
 /// Keep in mind that we have a dedicated session object per remote node per port; this means that the states
 /// kept here are specific per remote node, as it should be.
@@ -1095,10 +1133,7 @@ static int32_t cavl_compare_rx_session_reordering_deadline(const void* const use
 {
     const udpard_us_t dl_a = *(const udpard_us_t*)user;
     const udpard_us_t dl_b = CAVL2_TO_OWNER(node, rx_session_t, index_reordering_window)->reordering_window_deadline;
-    // clang-format off
-    if (dl_a < dl_b) { return -1; }
-    if (dl_a > dl_b) { return +1; }
-    return 0; // clang-format on
+    return (dl_a >= dl_b) ? +1 : -1;
 }
 
 /// Fully initializes a new session instance, making it ready to accept frames out of the box. NULL if OOM.
@@ -1408,6 +1443,8 @@ static bool rx_validate_memory_resources(const udpard_rx_memory_resources_t memo
     return (memory.session.alloc != NULL) && (memory.session.free != NULL) && //
            (memory.fragment.alloc != NULL) && (memory.fragment.free != NULL);
 }
+
+// ---------------------------------------------  RX PUBLIC API  ---------------------------------------------
 
 bool udpard_rx_new(udpard_rx_t* const                 self,
                    const uint64_t                     local_uid,

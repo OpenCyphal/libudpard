@@ -552,7 +552,10 @@ typedef struct udpard_rx_memory_resources_t
 typedef struct udpard_rx_port_t
 {
     uint64_t topic_hash; ///< Mismatch will be filtered out.
-    size_t   extent;
+
+    /// Transfer payloads exceeding this extent may be truncated.
+    /// The total size of the received payload may still exceed this extent setting by some small margin.
+    size_t extent;
 
     /// See UDPARD_REORDERING_WINDOW_... above.
     udpard_us_t reordering_window;
@@ -623,7 +626,7 @@ typedef struct udpard_rx_transfer_t
     /// bytes split into two frames, 1408 bytes in the first frame and 592 bytes in the second frame,
     /// then the payload_size_stored will be 2000 and the payload buffer will contain two fragments of 1408 and
     /// 592 bytes. If the received payload exceeds the configured extent, (some of) the excess payload may be
-    /// discarded and the payload_size_stored will be set accordingly.
+    /// discarded and the payload_size_stored will be set accordingly, but it may still exceed the extent somewhat.
     ///
     /// The application is given ownership of the payload buffer, so it is required to free it after use;
     /// this requires freeing both the handles and the payload buffers they point to.
