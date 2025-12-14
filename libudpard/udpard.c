@@ -1247,7 +1247,7 @@ static void rx_session_scan_slots(rx_session_t* const self, udpard_rx_t* const r
         const udpard_rx_transfer_t      transfer     = { .timestamp           = slot->ts_min,
                                                          .priority            = slot->priority,
                                                          .transfer_id         = slot->transfer_id,
-                                                         .source              = self->remote,
+                                                         .remote              = self->remote,
                                                          .payload_size_stored = slot->covered_prefix,
                                                          .payload_size_wire   = slot->total_size,
                                                          .payload_head = (udpard_fragment_t*)cavl2_min(slot->fragments),
@@ -1315,20 +1315,12 @@ static void rx_session_update(rx_session_t* const        self,
                               const uint_fast8_t         ifindex)
 {
     UDPARD_ASSERT(self->remote.uid == frame.meta.sender_uid);
-
-    // Check for topic hash collisions to prevent data misinterpretation when transient collisions occur.
+    UDPARD_ASSERT(frame.meta.topic_hash == self->owner->topic_hash); // must be checked by the caller beforehand
     udpard_rx_subscription_t* const subscription = (self->owner == &rx->p2p_port) // P2P is a single special case port.
                                                      ? NULL
                                                      : (udpard_rx_subscription_t*)self->owner;
-    if (frame.meta.topic_hash != self->owner->topic_hash) { // Topic hash collision or a misaddressed P2P.
-        rx->on_collision(rx, subscription, self->remote);
-        mem_free_payload(payload_deleter, frame.base.origin);
-        return;
-    }
 
     // Animate the session to prevent it from being retired.
-    // This may result in repeated creation/deletion of the session if there is only a colliding publisher, but that's
-    // totally fine because creation/deletion is very cheap, and it ensures that all timed-out slots are recycled.
     enlist_head(&rx->list_session_by_animation, &self->list_by_animation);
     self->last_animated_ts = ts;
 
@@ -1359,6 +1351,7 @@ static void rx_session_update(rx_session_t* const        self,
         }
         // If the transfer is lost, we will never acknowledge it because we haven't received it,
         // but some other subscriber might!
+        // This invalidates the payload_head reference passed to the ack mandate callback.
         mem_free_payload(payload_deleter, frame.base.origin);
         return;
     }

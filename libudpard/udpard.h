@@ -619,7 +619,7 @@ typedef struct udpard_rx_transfer_t
     udpard_us_t     timestamp;
     udpard_prio_t   priority;
     uint64_t        transfer_id;
-    udpard_remote_t source;
+    udpard_remote_t remote;
 
     /// The total size of the payload available to the application, in bytes, is provided for convenience;
     /// it is the sum of the sizes of all its fragments. For example, if the sender emitted a transfer of 2000
@@ -654,9 +654,9 @@ typedef struct udpard_rx_transfer_t
 /// Emitted when the stack detects the need to send a reception acknowledgment back to the remote node.
 typedef struct udpard_rx_ack_mandate_t
 {
-    udpard_remote_t remote;
     udpard_prio_t   priority;
     uint64_t        transfer_id;
+    udpard_remote_t remote;
 
     /// View of the first <=MTU bytes of the transfer payload that is being confirmed.
     /// Valid until return from the callback.
