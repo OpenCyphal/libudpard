@@ -189,6 +189,8 @@ typedef struct udpard_udpip_ep_t
 /// based on the source address of the received UDP datagrams. If the sender's endpoint could not be discovered
 /// for a certain interface, the corresponding entry in the origin array will be zeroed.
 /// Note that this allows the sender to change its network interface address dynamically.
+/// The library does not make any assumptions about the specific values and their uniqueness;
+/// as such, multiple remote nodes can even share the same endpoint.
 typedef struct udpard_remote_t
 {
     uint64_t          uid;
@@ -691,7 +693,6 @@ typedef struct udpard_rx_t
     uint64_t errors_oom;                ///< A frame could not be processed (transfer possibly dropped) due to OOM.
     uint64_t errors_frame_malformed;    ///< A received frame was malformed and thus dropped.
     uint64_t errors_transfer_malformed; ///< A received transfer was malformed (e.g., CRC error) and thus dropped.
-    uint64_t errors_slot_starvation;    ///< Pathological OOO arrival pattern exhausted the state machine resources.
 
     void* user; ///< Opaque pointer for the application use only. Not accessed by the library.
 } udpard_rx_t;

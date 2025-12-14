@@ -1864,7 +1864,10 @@ typedef struct
     struct
     {
         /// The most recently received transfer is at index #0; older transfers follow.
-        udpard_rx_transfer_t history[4];
+        /// The history is needed to allow batch ejection when multiple interned transfers are released.
+        /// There cannot be more than RX_SLOT_COUNT transfers in the history because that is the maximum
+        /// number of concurrent transfers that can be in-flight for a given session.
+        udpard_rx_transfer_t history[RX_SLOT_COUNT];
         uint64_t             count;
     } message;
     struct
@@ -1883,13 +1886,16 @@ typedef struct
 
 static void on_message(udpard_rx_t* const rx, udpard_rx_subscription_t* const sub, const udpard_rx_transfer_t transfer)
 {
+    printf("on_message: ts=%lld transfer_id=%llu payload_size_stored=%zu\n",
+           (long long)transfer.timestamp,
+           (unsigned long long)transfer.transfer_id,
+           transfer.payload_size_stored);
     callback_result_t* const cb_result = (callback_result_t* const)rx->user;
     cb_result->rx                      = rx;
     cb_result->sub                     = sub;
-    static_assert(sizeof(cb_result->message.history) / sizeof(cb_result->message.history[0]) == 4, "");
-    cb_result->message.history[3] = cb_result->message.history[2];
-    cb_result->message.history[2] = cb_result->message.history[1];
-    cb_result->message.history[1] = cb_result->message.history[0];
+    for (size_t i = RX_SLOT_COUNT - 1; i > 0; i--) {
+        cb_result->message.history[i] = cb_result->message.history[i - 1];
+    }
     cb_result->message.history[0] = transfer;
     cb_result->message.count++;
 }
@@ -2279,6 +2285,7 @@ static void test_session_ordered_basic(void)
     meta.flag_ack    = false;
     meta.transfer_id = 500;
     now += 1000;
+    const udpard_us_t ts_500 = now;
     rx_session_update(ses,
                       &rx,
                       now,
@@ -2360,16 +2367,164 @@ static void test_session_ordered_basic(void)
     TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
     TEST_ASSERT_EQUAL(1, alloc_payload.allocated_fragments);
 
+    // Now, we are going to partially complete 499 and wait for the reordering window to close on 500.
+    // As a result, 500 will be ejected and 499 will be reset because in the ORDERED mode it cannot follow 500.
+    TEST_ASSERT_EQUAL(5, cb_result.message.count);
+    TEST_ASSERT_EQUAL(4, cb_result.ack_mandate.count);
+    TEST_ASSERT_EQUAL(1, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
+    TEST_ASSERT_EQUAL(1, alloc_payload.allocated_fragments);
+    meta.priority    = udpard_prio_optional;
+    meta.flag_ack    = true; // requested but obviously it won't be sent since it's incomplete
+    meta.transfer_id = 499;
+    now += 1000;
+    rx_session_update(ses,
+                      &rx,
+                      now,
+                      (udpard_udpip_ep_t){ .ip = 0x0A000005, .port = 0x3333 },
+                      make_frame(meta, mem_payload, "abc", 0, 3), // incomplete
+                      del_payload,
+                      2);
+    TEST_ASSERT_EQUAL(5, cb_result.message.count);
+    TEST_ASSERT_EQUAL(4, cb_result.ack_mandate.count);
+    TEST_ASSERT_EQUAL(2, alloc_frag.allocated_fragments); // 499 incomplete
+    TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
+    TEST_ASSERT_EQUAL(2, alloc_payload.allocated_fragments);
+    // Advance time beyond the reordering window for transfer 500 and poll the global rx state.
+    now = ts_500 + port.reordering_window;
+    udpard_rx_poll(&rx, now);
+    TEST_ASSERT_EQUAL(6, cb_result.message.count); // 500 ejected!
+    TEST_ASSERT_EQUAL(4, cb_result.ack_mandate.count);
+    TEST_ASSERT_EQUAL(1, alloc_frag.allocated_fragments); // 499 reset!
+    TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
+    TEST_ASSERT_EQUAL(1, alloc_payload.allocated_fragments);
+    // Verify transfer 500.
+    TEST_ASSERT_EQUAL(ts_500, cb_result.message.history[0].timestamp);
+    TEST_ASSERT_EQUAL(udpard_prio_optional, cb_result.message.history[0].priority);
+    TEST_ASSERT_EQUAL(500, cb_result.message.history[0].transfer_id);
+    TEST_ASSERT(transfer_payload_verify(&cb_result.message.history[0], 10, "9876543210", 10));
+    udpard_fragment_free_all(cb_result.message.history[0].payload_head, mem_frag);
+    // All transfers processed, nothing is interned.
+    TEST_ASSERT_EQUAL(6, cb_result.message.count);
+    TEST_ASSERT_EQUAL(4, cb_result.ack_mandate.count);
+    TEST_ASSERT_EQUAL(0, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments);
+
+    // The head is currently set to 500.
+    // Now, feed a large number of transfers to occupy all available slots.
+    // The last transfer will force an early closure of the reordering window on TID 1000.
+    const udpard_udpip_ep_t ep = { .ip = 0x0A000005, .port = 0x3333 };
+    TEST_ASSERT_EQUAL(6, cb_result.message.count);
+    TEST_ASSERT_EQUAL(4, cb_result.ack_mandate.count);
+    TEST_ASSERT_EQUAL(0, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments);
+    meta.transfer_payload_size = 2;
+    meta.flag_ack              = false;
+    now += 1000;
+    const udpard_us_t ts_1000 = now;
+    for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
+        meta.transfer_id = 1000 + i;
+        now              = ts_1000 + (udpard_us_t)i;
+        char data[2]     = { '0', (char)('0' + i) };
+        rx_session_update(ses, &rx, now, ep, make_frame(meta, mem_payload, data, 0, 2), del_payload, 2);
+    }
+    now = ts_1000 + 1000;
+    // 8 transfers are interned.
+    TEST_ASSERT_EQUAL(6, cb_result.message.count);
+    TEST_ASSERT_EQUAL(4, cb_result.ack_mandate.count);
+    TEST_ASSERT_EQUAL(8, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
+    TEST_ASSERT_EQUAL(8, alloc_payload.allocated_fragments);
+    // Pushing a repeat transfer doesn't do anything, it's just dropped.
+    rx_session_update(ses, &rx, now, ep, make_frame(meta, mem_payload, "zz", 0, 2), del_payload, 2);
+    // Yeah, it's just dropped.
+    TEST_ASSERT_EQUAL(6, cb_result.message.count);
+    TEST_ASSERT_EQUAL(4, cb_result.ack_mandate.count);
+    TEST_ASSERT_EQUAL(8, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
+    TEST_ASSERT_EQUAL(8, alloc_payload.allocated_fragments);
+    // Send another transfer. This time we make it multi-frame and incomplete. The entire interned set is released.
+    meta.transfer_id = 2000;
+    now += 1000;
+    rx_session_update(ses, &rx, now, ep, make_frame(meta, mem_payload, "20", 0, 1), del_payload, 2);
+    // We should get RX_SLOT_COUNT callbacks.
+    TEST_ASSERT_EQUAL(14, cb_result.message.count);
+    TEST_ASSERT_EQUAL(4, cb_result.ack_mandate.count);
+    TEST_ASSERT_EQUAL(9, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
+    TEST_ASSERT_EQUAL(9, alloc_payload.allocated_fragments);
+    // Check and free the received transfers from the callback.
+    for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
+        udpard_rx_transfer_t* const tr = &cb_result.message.history[RX_SLOT_COUNT - (i + 1)]; // reverse order
+        TEST_ASSERT_EQUAL_INT64(ts_1000 + (udpard_us_t)i, tr->timestamp);
+        TEST_ASSERT_EQUAL(udpard_prio_optional, tr->priority);
+        TEST_ASSERT_EQUAL(1000 + i, tr->transfer_id);
+        TEST_ASSERT(transfer_payload_verify(tr, 2, (char[]){ '0', (char)('0' + i) }, 2));
+        udpard_fragment_free_all(tr->payload_head, mem_frag);
+    }
+    TEST_ASSERT_EQUAL(14, cb_result.message.count);
+    TEST_ASSERT_EQUAL(4, cb_result.ack_mandate.count);
+    TEST_ASSERT_EQUAL(1, alloc_frag.allocated_fragments); // 2000 incomplete
+    TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
+    TEST_ASSERT_EQUAL(1, alloc_payload.allocated_fragments);
+
+    // Send more than RX_SLOT_COUNT incomplete transfers to evict the incomplete 2000.
+    // Afterward, complete some of them out of order and ensure they are received in the correct order.
+    meta.transfer_id          = 3000;
+    const udpard_us_t ts_3000 = now + 1000;
+    for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
+        meta.transfer_id = 3000 + i;
+        now              = ts_3000 + (udpard_us_t)i;
+        rx_session_update(ses, &rx, now, ep, make_frame(meta, mem_payload, "30", 0, 1), del_payload, 2);
+    }
+    now = ts_3000 + 1000;
+    // 8 transfers are in progress.
+    TEST_ASSERT_EQUAL(14, cb_result.message.count);
+    TEST_ASSERT_EQUAL(4, cb_result.ack_mandate.count);
+    TEST_ASSERT_EQUAL(8, alloc_frag.allocated_fragments); // all slots occupied
+    TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
+    TEST_ASSERT_EQUAL(8, alloc_payload.allocated_fragments);
+    // Complete 3001, 3000 out of order.
+    meta.transfer_id = 3001;
+    now += 1000;
+    rx_session_update(ses, &rx, now, ep, make_frame(meta, mem_payload, "31", 1, 1), del_payload, 2);
+    meta.transfer_id = 3000;
+    now += 1000;
+    rx_session_update(ses, &rx, now, ep, make_frame(meta, mem_payload, "30", 1, 1), del_payload, 2);
+    // Wait for the reordering window to close on 3000. Then 3000 and 3001 will be ejected.
+    now = ts_3000 + port.reordering_window;
+    udpard_rx_poll(&rx, now);
+    // 2 transfers ejected. The remaining 3002..3007 are still in-progress. 2000 is lost to slot starvation.
+    TEST_ASSERT_EQUAL(16, cb_result.message.count);
+    TEST_ASSERT_EQUAL(4, cb_result.ack_mandate.count);
+    TEST_ASSERT_EQUAL(10, alloc_frag.allocated_fragments); // 8 transfers, of them 2 keep two frames each.
+    TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
+    TEST_ASSERT_EQUAL(10, alloc_payload.allocated_fragments); // ditto
+    // Verify the ejected transfers: 3000->#1, 3001->#0.
+    TEST_ASSERT_EQUAL_INT64(ts_3000, cb_result.message.history[1].timestamp);
+    TEST_ASSERT_EQUAL(3000, cb_result.message.history[1].transfer_id);
+    TEST_ASSERT(transfer_payload_verify(&cb_result.message.history[1], 2, "30", 2));
+    udpard_fragment_free_all(cb_result.message.history[1].payload_head, mem_frag);
+    // Now 3001.
+    TEST_ASSERT_EQUAL_INT64(ts_3000 + 1, cb_result.message.history[0].timestamp);
+    TEST_ASSERT_EQUAL(3001, cb_result.message.history[0].transfer_id);
+    TEST_ASSERT(transfer_payload_verify(&cb_result.message.history[0], 2, "31", 2));
+    udpard_fragment_free_all(cb_result.message.history[0].payload_head, mem_frag);
+    // We still have 3002..3007 in progress. They will be freed once the session has expired.
+    TEST_ASSERT_EQUAL(16, cb_result.message.count);
+    TEST_ASSERT_EQUAL(4, cb_result.ack_mandate.count);
+    TEST_ASSERT_EQUAL(6, alloc_frag.allocated_fragments); // 6 in-progress transfers, each holding one frame
+    TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
+    TEST_ASSERT_EQUAL(6, alloc_payload.allocated_fragments); // ditto
+
     // Time out the session state.
     now += SESSION_LIFETIME;
     udpard_rx_poll(&rx, now);
     TEST_ASSERT_EQUAL(0, alloc_frag.allocated_fragments);
     TEST_ASSERT_EQUAL(0, alloc_session.allocated_fragments);
     TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments);
-
-    // Final checks.
-    TEST_ASSERT_EQUAL(5, cb_result.message.count);
-    TEST_ASSERT_EQUAL(4, cb_result.ack_mandate.count);
     instrumented_allocator_reset(&alloc_frag); // Will crash if there are leaks
     instrumented_allocator_reset(&alloc_payload);
 }

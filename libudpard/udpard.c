@@ -53,9 +53,9 @@ typedef unsigned char byte_t; ///< For compatibility with platforms where byte s
 #define SESSION_LIFETIME (60 * MEGA)
 
 /// The maximum number of incoming transfers that can be in the state of incomplete reassembly simultaneously.
-/// Additional in-progress transfers will be rejected.
-/// This number should normally be at least as large as there are priority levels.
-#define RX_SLOT_COUNT (UDPARD_PRIORITY_MAX + 1U + 1U)
+/// Additional transfers will replace the oldest ones.
+/// This number should normally be at least as large as there are priority levels. More is fine but rarely useful.
+#define RX_SLOT_COUNT (UDPARD_PRIORITY_MAX + 1U)
 
 /// Defines the transfer-ID range from the most recently received transfer downward. Transfers whose IDs fall
 /// within that window store the information on whether they were received successfully, which is used to
@@ -1189,39 +1189,39 @@ static void rx_session_del(rx_session_t* const   self,
 }
 
 /// Checks which slots can be ejected or interned in the reordering window.
-/// Should be invoked whenever a slot can potentially be ejected.
-static void rx_session_scan_slots(rx_session_t* const self, udpard_rx_t* const rx, const udpard_us_t ts)
+/// Should be invoked whenever a slot MAY or MUST be ejected.
+/// If the force flag is set, at least one DONE slot will be ejected even if its reordering window is still open;
+/// this is used to forcibly free up at least one slot when all slots are busy and a new transfer arrives.
+static void rx_session_scan_slots(rx_session_t* const self,
+                                  udpard_rx_t* const  rx,
+                                  const udpard_us_t   ts,
+                                  const bool          force_one)
 {
     // Reset the reordering window timer because we will either eject everything or arm it again later.
     if (cavl2_is_inserted(rx->index_session_by_reordering, &self->index_reordering_window)) {
         cavl2_remove(&rx->index_session_by_reordering, &self->index_reordering_window);
         self->reordering_window_deadline = BIG_BANG;
     }
-
-    // Find the nearest transfer-ID slot; eject it if it's in-sequence, if the reordering window is closed,
-    // or if all slots are DONE. Repeat until no more slots can be ejected.
-    // Arm the reordering window timer if at least one DONE is left.
+    // We need to repeat the scan because each ejection may open up the window for the next in-sequence transfer.
     for (size_t iter = 0; iter < RX_SLOT_COUNT; iter++) {
-        // Find the slot closest to the next in-sequence transfer-ID, and check if all slots are DONE.
-        const uint64_t tid_in_sequence = self->received.head + 1U;
-        uint64_t       min_tid_dist    = UINT64_MAX;
-        rx_slot_t*     slot            = NULL;
-        bool           all_done        = true;
+        // Find the slot closest to the next in-sequence transfer-ID.
+        const uint64_t tid_expected = self->received.head + 1U;
+        uint64_t       min_tid_dist = UINT64_MAX;
+        rx_slot_t*     slot         = NULL;
         for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
-            const uint64_t dist = rx_transfer_id_forward_distance(tid_in_sequence, self->slots[i].transfer_id);
+            const uint64_t dist = rx_transfer_id_forward_distance(tid_expected, self->slots[i].transfer_id);
             if ((self->slots[i].state == rx_slot_done) && (dist < min_tid_dist)) {
                 min_tid_dist = dist;
                 slot         = &self->slots[i];
             }
-            all_done = all_done && (self->slots[i].state == rx_slot_done);
         }
 
-        // The slot needs to be ejected if it's in-sequence, if it's reordering window is closed, or if all are DONE.
+        // The slot needs to be ejected if it's in-sequence, if it's reordering window is closed, or if we're
+        // asked to force an ejection and we haven't done so yet.
         // The reordering window timeout implies that we will not be receiving earlier transfers anymore.
-        // The all-DONE condition implies that we will not be able to receive any new transfer because there are no
-        // free slots left, meaning that a reordering window expiration is unavoidable, so we can expire it early.
-        const bool eject = (slot != NULL) && ((slot->transfer_id == tid_in_sequence) || all_done ||
-                                              (ts >= (slot->ts_min + self->owner->reordering_window)));
+        const bool eject =
+          (slot != NULL) && ((slot->transfer_id == tid_expected) ||
+                             (ts >= (slot->ts_min + self->owner->reordering_window)) || (force_one && (iter == 0)));
         if (!eject) {
             // The slot is done but cannot be ejected yet; arm the reordering window timer.
             // There may be transfers with future (more distant) transfer-IDs with an earlier reordering window
@@ -1372,36 +1372,32 @@ static void rx_session_update(rx_session_t* const        self,
             }
         }
     }
-    if (slot == NULL) { // All slots are currently occupied; sacrifice the oldest in-progress slot.
-        // We have an important edge case here. Suppose there is only one non-DONE slot, and there are a few
-        // interleaved transfers in-flight. Each frame will cause the only slot to be sacrificed, resulting in a
-        // complete failure to reassemble any transfer because every received frame will erase the progress made so far.
-        // To prevent that, we apply a very simple heuristic: we only sacrifice the slot if the new transfer-ID is
-        // in the future considering the half-range of uint64_t. This breaks in half the cases when the sender reboots
-        // (if the new transfer-ID is on the wrong side of the half-range), but at least it allows recovery in the
-        // other half and always works correctly if the sender is not rebooted.
-        rx->errors_slot_starvation++;
+    if (slot == NULL) { // All slots are currently occupied; sacrifice the oldest slot, which may be busy or done.
         udpard_us_t oldest_ts = HEAT_DEATH;
         for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
             UDPARD_ASSERT(self->slots[i].state != rx_slot_idle); // Checked this already.
-            // We also know that there is at least one slot that is not DONE.
-            const uint64_t tid_dist =
-              rx_transfer_id_forward_distance(self->slots[i].transfer_id, frame.meta.transfer_id);
-            const bool future_tid = tid_dist < (UINT64_MAX / 2U);
-            if ((self->slots[i].state == rx_slot_busy) && future_tid && (self->slots[i].ts_max < oldest_ts)) {
+            if (self->slots[i].ts_max < oldest_ts) {
                 oldest_ts = self->slots[i].ts_max;
                 slot      = &self->slots[i];
             }
         }
-        if (slot != NULL) {
-            rx_slot_reset(slot, self->owner->memory.fragment);
+        // If it's busy, it is probably just a stale transfer, so it's a no-brainer to evict it.
+        // If it's done, we have to force the reordering window to close early to free up a slot without transfer loss.
+        UDPARD_ASSERT((slot != NULL) && ((slot->state == rx_slot_busy) || (slot->state == rx_slot_done)));
+        if (slot->state == rx_slot_done) {
+            rx_session_scan_slots(self, rx, ts, true); // A slot will be ejected (maybe another one).
+            slot = NULL; // Repeat the search. It is certain that now we have at least one idle slot.
+            for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
+                if (self->slots[i].state == rx_slot_idle) {
+                    slot = &self->slots[i];
+                    break;
+                }
+            }
+        } else {
+            UDPARD_ASSERT(slot->state == rx_slot_busy);
+            rx_slot_reset(slot, self->owner->memory.fragment); // Just a stale transfer, it's probably dead anyway.
         }
-    }
-    if (slot == NULL) {
-        // There is no possibility to obtain a slot right now; we have to drop the frame.
-        // We may try again in the future if a duplicate arrives and some slots are freed up in the meantime.
-        mem_free_payload(payload_deleter, frame.base.origin);
-        return;
+        UDPARD_ASSERT((slot != NULL) && (slot->state == rx_slot_idle));
     }
     UDPARD_ASSERT(slot != NULL);
     UDPARD_ASSERT((slot->state == rx_slot_idle) ||
@@ -1430,7 +1426,7 @@ static void rx_session_update(rx_session_t* const        self,
         }
         // The final ejection procedure is a little complicated because we need to manage the reordering window
         // and possible obsolescence of other in-progress slots.
-        rx_session_scan_slots(self, rx, ts);
+        rx_session_scan_slots(self, rx, ts, false);
     }
 }
 
@@ -1468,7 +1464,6 @@ bool udpard_rx_new(udpard_rx_t* const                 self,
         self->errors_oom                  = 0;
         self->errors_frame_malformed      = 0;
         self->errors_transfer_malformed   = 0;
-        self->errors_slot_starvation      = 0;
         self->user                        = NULL;
     }
     return ok;
@@ -1492,6 +1487,6 @@ void udpard_rx_poll(udpard_rx_t* const self, const udpard_us_t now)
         if ((ses == NULL) || (now < ses->reordering_window_deadline)) {
             break;
         }
-        rx_session_scan_slots(ses, self, now);
+        rx_session_scan_slots(ses, self, now, false);
     }
 }
