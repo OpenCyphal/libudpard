@@ -668,14 +668,14 @@ struct udpard_rx_t;
 /// A new message is received from a topic, or a P2P message is received.
 /// The subscription is NULL for P2P transfers.
 /// The handler takes ownership of the payload; it must free it after use.
-typedef void* (*udpard_rx_on_message_t)(struct udpard_rx_t*, udpard_rx_subscription_t*, udpard_rx_transfer_t);
+typedef void (*udpard_rx_on_message_t)(struct udpard_rx_t*, udpard_rx_subscription_t*, udpard_rx_transfer_t);
 
 /// A topic hash collision is detected on a topic.
-typedef void* (*udpard_rx_on_collision_t)(struct udpard_rx_t*, udpard_rx_subscription_t*, udpard_remote_t);
+typedef void (*udpard_rx_on_collision_t)(struct udpard_rx_t*, udpard_rx_subscription_t*, udpard_remote_t);
 
 /// The application is required to send an acknowledgment back to the sender.
 /// The subscription is NULL for P2P transfers.
-typedef void* (*udpard_rx_on_ack_mandate_t)(struct udpard_rx_t*, udpard_rx_subscription_t*, udpard_rx_ack_mandate_t);
+typedef void (*udpard_rx_on_ack_mandate_t)(struct udpard_rx_t*, udpard_rx_subscription_t*, udpard_rx_ack_mandate_t);
 
 typedef struct udpard_rx_t
 {
@@ -692,6 +692,8 @@ typedef struct udpard_rx_t
     uint64_t errors_frame_malformed;    ///< A received frame was malformed and thus dropped.
     uint64_t errors_transfer_malformed; ///< A received transfer was malformed (e.g., CRC error) and thus dropped.
     uint64_t errors_slot_starvation;    ///< Pathological OOO arrival pattern exhausted the state machine resources.
+
+    void* user; ///< Opaque pointer for the application use only. Not accessed by the library.
 } udpard_rx_t;
 
 /// The extent of the P2P port is set to SIZE_MAX by default (no truncation at all).

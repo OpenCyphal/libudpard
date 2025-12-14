@@ -149,6 +149,9 @@ udpard_fragment_t* udpard_fragment_seek(udpard_fragment_t* any_frag, const size_
     while (any_frag->index_offset.up != NULL) { // Only if the given node is not already the root.
         any_frag = (udpard_fragment_t*)any_frag->index_offset.up;
     }
+    if (offset == 0) { // Common fast path.
+        return (udpard_fragment_t*)cavl2_min(&any_frag->index_offset);
+    }
     udpard_fragment_t* const f =
       (udpard_fragment_t*)cavl2_predecessor(&any_frag->index_offset, &offset, &cavl_compare_fragment_offset);
     if ((f != NULL) && ((f->offset + f->view.size) > offset)) {
@@ -1473,6 +1476,7 @@ bool udpard_rx_new(udpard_rx_t* const                 self,
         self->errors_frame_malformed      = 0;
         self->errors_transfer_malformed   = 0;
         self->errors_slot_starvation      = 0;
+        self->user                        = NULL;
     }
     return ok;
 }
