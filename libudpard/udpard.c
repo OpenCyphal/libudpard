@@ -1126,7 +1126,7 @@ typedef struct
 static int32_t cavl_compare_rx_session_remote_uid(const void* const user, const udpard_tree_t* const node)
 {
     const uint64_t uid_a = *(const uint64_t*)user;
-    const uint64_t uid_b = ((const rx_session_t*)node)->remote.source_uid; // clang-format off
+    const uint64_t uid_b = ((const rx_session_t*)node)->remote.uid; // clang-format off
     if (uid_a < uid_b) { return -1; }
     if (uid_a > uid_b) { return +1; }
     return 0; // clang-format on
@@ -1156,11 +1156,11 @@ static rx_session_t* rx_session_new(udpard_rx_port_t* const owner,
             out->slots[i].fragments = NULL;
             rx_slot_reset(&out->slots[i], owner->memory.fragment);
         }
-        out->remote.source_uid   = remote_uid;
+        out->remote.uid          = remote_uid;
         out->owner               = owner;
         out->last_animated_ts    = now;
         const udpard_tree_t* res = cavl2_find_or_insert(&owner->index_session_by_remote_uid,
-                                                        &out->remote.source_uid,
+                                                        &out->remote.uid,
                                                         &cavl_compare_rx_session_remote_uid,
                                                         &out->index_remote_uid,
                                                         &cavl2_trivial_factory);
@@ -1245,9 +1245,9 @@ static void rx_session_scan_slots(rx_session_t* const self, udpard_rx_t* const r
                                                          ? NULL
                                                          : (udpard_rx_subscription_t*)self->owner;
         const udpard_rx_transfer_t      transfer     = { .timestamp           = slot->ts_min,
-                                                         .origin              = self->remote,
                                                          .priority            = slot->priority,
                                                          .transfer_id         = slot->transfer_id,
+                                                         .source              = self->remote,
                                                          .payload_size_stored = slot->covered_prefix,
                                                          .payload_size_wire   = slot->total_size,
                                                          .payload_head = (udpard_fragment_t*)cavl2_min(slot->fragments),
@@ -1314,7 +1314,7 @@ static void rx_session_update(rx_session_t* const        self,
                               const udpard_mem_deleter_t payload_deleter,
                               const uint_fast8_t         ifindex)
 {
-    UDPARD_ASSERT(self->remote.source_uid == frame.meta.sender_uid);
+    UDPARD_ASSERT(self->remote.uid == frame.meta.sender_uid);
 
     // Check for topic hash collisions to prevent data misinterpretation when transient collisions occur.
     udpard_rx_subscription_t* const subscription = (self->owner == &rx->p2p_port) // P2P is a single special case port.
@@ -1335,7 +1335,7 @@ static void rx_session_update(rx_session_t* const        self,
     // Update the return path discovery state.
     // We identify nodes by their UID, allowing them to migrate across interfaces and IP addresses.
     UDPARD_ASSERT(ifindex < UDPARD_NETWORK_INTERFACE_COUNT_MAX);
-    self->remote.origin[ifindex] = src_ep;
+    self->remote.endpoints[ifindex] = src_ep;
 
     // Do-once initialization to ensure we don't lose any transfers by choosing the initial transfer-ID poorly.
     // Any transfers with prior transfer-ID values arriving later will be rejected, which is acceptable.

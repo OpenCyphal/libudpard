@@ -191,8 +191,8 @@ typedef struct udpard_udpip_ep_t
 /// Note that this allows the sender to change its network interface address dynamically.
 typedef struct udpard_remote_t
 {
-    uint64_t          source_uid;
-    udpard_udpip_ep_t origin[UDPARD_NETWORK_INTERFACE_COUNT_MAX]; ///< Zeros in unavailable ifaces.
+    uint64_t          uid;
+    udpard_udpip_ep_t endpoints[UDPARD_NETWORK_INTERFACE_COUNT_MAX]; ///< Zeros in unavailable ifaces.
 } udpard_remote_t;
 
 /// The semantics are similar to malloc/free.
@@ -617,9 +617,9 @@ typedef struct udpard_rx_subscription_t
 typedef struct udpard_rx_transfer_t
 {
     udpard_us_t     timestamp;
-    udpard_remote_t origin;
     udpard_prio_t   priority;
     uint64_t        transfer_id;
+    udpard_remote_t source;
 
     /// The total size of the payload available to the application, in bytes, is provided for convenience;
     /// it is the sum of the sizes of all its fragments. For example, if the sender emitted a transfer of 2000

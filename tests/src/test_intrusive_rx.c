@@ -16,6 +16,72 @@ static size_t tree_count(udpard_tree_t* const root) // how many make a forest?
     return count;
 }
 
+/// Allocates the payload on the heap, emulating normal frame reception.
+static rx_frame_base_t make_frame_base(const udpard_mem_resource_t mem_payload,
+                                       const size_t                offset,
+                                       const size_t                size,
+                                       const void* const           payload)
+{
+    void* data = mem_payload.alloc(mem_payload.user, size);
+    if (size > 0) {
+        memcpy(data, payload, size);
+    }
+    return (rx_frame_base_t){ .offset  = offset,
+                              .payload = { .data = data, .size = size },
+                              .origin  = { .data = data, .size = size } };
+}
+/// The payload string cannot contain NUL characters.
+static rx_frame_base_t make_frame_base_str(const udpard_mem_resource_t mem_payload,
+                                           const size_t                offset,
+                                           const char* const           payload)
+{
+    return make_frame_base(mem_payload, offset, (payload != NULL) ? (strlen(payload) + 1) : 0U, payload);
+}
+
+/// The created frame will copy the given full transfer payload at the specified offset, of the specified size.
+/// The full transfer payload can be invalidated after this call. It is needed here so that we could compute the
+/// CRC prefix correctly, which covers the transfer payload bytes in [0,(offset+size)].
+static rx_frame_t make_frame(const meta_t                meta,
+                             const udpard_mem_resource_t mem_payload,
+                             const void* const           full_transfer_payload,
+                             const size_t                frame_payload_offset,
+                             const size_t                frame_payload_size)
+{
+    rx_frame_base_t base = make_frame_base(mem_payload,
+                                           frame_payload_offset,
+                                           frame_payload_size,
+                                           (const uint8_t*)full_transfer_payload + frame_payload_offset);
+    base.crc             = crc_full(frame_payload_offset + frame_payload_size, (const uint8_t*)full_transfer_payload);
+    return (rx_frame_t){ .base = base, .meta = meta };
+}
+
+/// Scans the transfer payload ensuring that its payload exactly matches the reference.
+/// The node can be any node in the tree.
+static bool transfer_payload_verify(udpard_rx_transfer_t* const transfer,
+                                    const size_t                payload_size_stored,
+                                    const void* const           payload,
+                                    const size_t                payload_size_wire)
+{
+    udpard_fragment_t* frag   = transfer->payload_head;
+    size_t             offset = 0;
+    while (frag != NULL) {
+        if (frag->offset != offset) {
+            return false;
+        }
+        if ((offset + frag->view.size) > payload_size_stored) {
+            return false;
+        }
+        if (memcmp(frag->view.data, (const uint8_t*)payload + offset, frag->view.size) != 0) {
+            return false;
+        }
+        offset += frag->view.size;
+        frag = frag->next;
+    }
+    return (transfer->payload_size_wire == payload_size_wire) && (offset == payload_size_stored);
+}
+
+// ---------------------------------------------  FRAGMENT TREE  ---------------------------------------------
+
 static udpard_fragment_t* fragment_at(udpard_tree_t* const root, uint32_t index)
 {
     for (udpard_fragment_t* it = (udpard_fragment_t*)cavl2_min(root); it != NULL;
@@ -65,30 +131,6 @@ static bool fragment_tree_verify(udpard_tree_t* const root,
     }
     return offset == payload_size;
 }
-
-/// Allocates the payload on the heap, emulating normal frame reception.
-static rx_frame_base_t make_frame_base(const udpard_mem_resource_t mem,
-                                       const size_t                offset,
-                                       const size_t                size,
-                                       const void* const           payload)
-{
-    void* data = mem.alloc(mem.user, size);
-    if (size > 0) {
-        memcpy(data, payload, size);
-    }
-    return (rx_frame_base_t){ .offset  = offset,
-                              .payload = { .data = data, .size = size },
-                              .origin  = { .data = data, .size = size } };
-}
-/// The payload string cannot contain NUL characters.
-static rx_frame_base_t make_frame_base_str(const udpard_mem_resource_t mem,
-                                           const size_t                offset,
-                                           const char* const           payload)
-{
-    return make_frame_base(mem, offset, (payload != NULL) ? (strlen(payload) + 1) : 0U, payload);
-}
-
-// ---------------------------------------------  FRAGMENT TREE  ---------------------------------------------
 
 /// Reference CRC calculation:
 ///     >>> from pycyphal.transport.commons.crc import CRC32C
@@ -1815,25 +1857,52 @@ static void test_rx_slot_update(void)
 
 // ---------------------------------------------  SESSION  ---------------------------------------------
 
+typedef struct
+{
+    udpard_rx_t*              rx;
+    udpard_rx_subscription_t* sub;
+    struct
+    {
+        udpard_rx_transfer_t transfer;
+        uint64_t             count;
+    } message;
+    struct
+    {
+        udpard_remote_t remote;
+        uint64_t        count;
+    } collision;
+    struct
+    {
+        udpard_rx_ack_mandate_t am;
+        uint64_t                count;
+    } ack_mandate;
+} callback_result_t;
+
 static void on_message(udpard_rx_t* const rx, udpard_rx_subscription_t* const sub, const udpard_rx_transfer_t transfer)
 {
-    (void)rx;
-    (void)sub;
-    (void)transfer;
+    callback_result_t* const cb_result = (callback_result_t* const)rx->user;
+    cb_result->rx                      = rx;
+    cb_result->sub                     = sub;
+    cb_result->message.transfer        = transfer;
+    cb_result->message.count++;
 }
 
 static void on_collision(udpard_rx_t* const rx, udpard_rx_subscription_t* const sub, const udpard_remote_t remote)
 {
-    (void)rx;
-    (void)sub;
-    (void)remote;
+    callback_result_t* const cb_result = (callback_result_t* const)rx->user;
+    cb_result->rx                      = rx;
+    cb_result->sub                     = sub;
+    cb_result->collision.remote        = remote;
+    cb_result->collision.count++;
 }
 
 static void on_ack_mandate(udpard_rx_t* const rx, udpard_rx_subscription_t* const sub, const udpard_rx_ack_mandate_t am)
 {
-    (void)rx;
-    (void)sub;
-    (void)am;
+    callback_result_t* const cb_result = (callback_result_t* const)rx->user;
+    cb_result->rx                      = rx;
+    cb_result->sub                     = sub;
+    cb_result->ack_mandate.am          = am;
+    cb_result->ack_mandate.count++;
 }
 
 static void test_session_a(void)
@@ -1861,19 +1930,85 @@ static void test_session_a(void)
 
     // Test ordered reception.
     {
+        callback_result_t cb_result = { 0 };
+        rx.user                     = &cb_result;
+
         // Construct the session instance.
+        udpard_us_t         now        = 0;
         const uint64_t      remote_uid = 0xA1B2C3D4E5F60718ULL;
         udpard_rx_port_t    port       = { .topic_hash                  = 0x4E81E200CB479D4CULL,
                                            .extent                      = 1000,
                                            .reordering_window           = 1 * KILO,
                                            .memory                      = rx_mem,
                                            .index_session_by_remote_uid = NULL };
-        rx_session_t* const ses        = rx_session_new(&port, &rx.list_session_by_animation, remote_uid, 0);
-        TEST_ASSERT_NOT_NULL(ses);
+        rx_session_t* const ses        = rx_session_new(&port, &rx.list_session_by_animation, remote_uid, now);
 
-        (void)mem_payload;
-        (void)del_payload;
+        // Verify construction outcome.
+        TEST_ASSERT_NOT_NULL(ses);
+        TEST_ASSERT_EQUAL_PTR(rx.list_session_by_animation.head, &ses->list_by_animation);
+        TEST_ASSERT_EQUAL_PTR(port.index_session_by_remote_uid, &ses->index_remote_uid);
+        TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
+        TEST_ASSERT_EQUAL(sizeof(rx_session_t), alloc_session.allocated_bytes);
+
+        // Feed a valid multi-frame transfer and ensure the callback is invoked and the states are updated.
+        meta_t meta = { .priority              = udpard_prio_high,
+                        .flag_ack              = true,
+                        .transfer_payload_size = 10,
+                        .transfer_id           = 42,
+                        .sender_uid            = remote_uid,
+                        .topic_hash            = port.topic_hash };
+        now += 1000;
+        rx_session_update(ses,
+                          &rx,
+                          now,
+                          (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1234 },
+                          make_frame(meta, mem_payload, "0123456789", 5, 5),
+                          del_payload,
+                          0);
+        now += 1000;
+        rx_session_update(ses,
+                          &rx,
+                          now,
+                          (udpard_udpip_ep_t){ .ip = 0x0A000002, .port = 0x4321 }, // different endpoint
+                          make_frame(meta, mem_payload, "0123456789", 0, 5),
+                          del_payload,
+                          2); // different interface
+
+        // Check the results and free the transfer.
+        TEST_ASSERT_EQUAL(1, cb_result.message.count);
+        TEST_ASSERT_EQUAL(1000, cb_result.message.transfer.timestamp);
+        TEST_ASSERT_EQUAL(udpard_prio_high, cb_result.message.transfer.priority);
+        TEST_ASSERT_EQUAL(42, cb_result.message.transfer.transfer_id);
+        // Check the return path discovery.
+        TEST_ASSERT_EQUAL(remote_uid, cb_result.message.transfer.source.uid);
+        TEST_ASSERT_EQUAL(0x0A000001, cb_result.message.transfer.source.endpoints[0].ip);
+        TEST_ASSERT_EQUAL(0x00000000, cb_result.message.transfer.source.endpoints[1].ip);
+        TEST_ASSERT_EQUAL(0x0A000002, cb_result.message.transfer.source.endpoints[2].ip);
+        TEST_ASSERT_EQUAL(0x1234, cb_result.message.transfer.source.endpoints[0].port);
+        TEST_ASSERT_EQUAL(0x0000, cb_result.message.transfer.source.endpoints[1].port);
+        TEST_ASSERT_EQUAL(0x4321, cb_result.message.transfer.source.endpoints[2].port);
+        // Check the payload.
+        TEST_ASSERT_EQUAL(2, alloc_frag.allocated_fragments);
+        TEST_ASSERT_EQUAL(2 * sizeof(udpard_fragment_t), alloc_frag.allocated_bytes);
+        TEST_ASSERT_EQUAL(2, alloc_payload.allocated_fragments);
+        TEST_ASSERT_EQUAL(10, alloc_payload.allocated_bytes);
+        TEST_ASSERT(transfer_payload_verify(&cb_result.message.transfer, 10, "0123456789", 10));
+        // Free the transfer payload.
+        udpard_fragment_free_all(cb_result.message.transfer.payload_head, mem_frag);
+        // Check the final heap state.
+        TEST_ASSERT_EQUAL(0, alloc_frag.allocated_fragments);
+        TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
+        TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments);
+
+        // Time out the session state.
+        now += SESSION_LIFETIME;
+        udpard_rx_poll(&rx, now);
+        TEST_ASSERT_EQUAL(0, alloc_frag.allocated_fragments);
+        TEST_ASSERT_EQUAL(0, alloc_session.allocated_fragments);
+        TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments);
     }
+    instrumented_allocator_reset(&alloc_frag);
+    instrumented_allocator_reset(&alloc_payload);
 }
 
 // ---------------------------------------------  FRAGMENT  ---------------------------------------------
