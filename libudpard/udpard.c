@@ -1189,14 +1189,15 @@ static void rx_session_del(rx_session_t* const   self,
     mem_free(self->owner->memory.session, sizeof(rx_session_t), self);
 }
 
-/// Checks which slots can be ejected or interned in the reordering window.
-/// Should be invoked whenever a slot MAY or MUST be ejected.
+/// In the ORDERED mode, checks which slots can be ejected or interned in the reordering window.
+/// This is only useful for the ORDERED mode.
+/// Should be invoked whenever a slot MAY or MUST be ejected (i.e., on completion or when an empty slot is required).
 /// If the force flag is set, at least one DONE slot will be ejected even if its reordering window is still open;
 /// this is used to forcibly free up at least one slot when all slots are busy and a new transfer arrives.
-static void rx_session_scan_slots(rx_session_t* const self,
-                                  udpard_rx_t* const  rx,
-                                  const udpard_us_t   ts,
-                                  const bool          force_one)
+static void rx_session_ordered_scan_slots(rx_session_t* const self,
+                                          udpard_rx_t* const  rx,
+                                          const udpard_us_t   ts,
+                                          const bool          force_one)
 {
     // Reset the reordering window timer because we will either eject everything or arm it again later.
     if (cavl2_is_inserted(rx->index_session_by_reordering, &self->index_reordering_window)) {
@@ -1214,12 +1215,15 @@ static void rx_session_scan_slots(rx_session_t* const self,
             if ((self->slots[i].state == rx_slot_done) && (dist < min_tid_dist)) {
                 min_tid_dist = dist;
                 slot         = &self->slots[i];
+                if (dist == 0) {
+                    break; // Fast path for a common case.
+                }
             }
         }
 
         // The slot needs to be ejected if it's in-sequence, if it's reordering window is closed, or if we're
         // asked to force an ejection and we haven't done so yet.
-        // The reordering window timeout implies that we will not be receiving earlier transfers anymore.
+        // The reordering window timeout implies that earlier transfers will be dropped if ORDERED mode is used.
         const bool eject =
           (slot != NULL) && ((slot->transfer_id == tid_expected) ||
                              (ts >= (slot->ts_min + self->owner->reordering_window)) || (force_one && (iter == 0)));
@@ -1284,9 +1288,9 @@ static void rx_session_scan_slots(rx_session_t* const self,
 
 typedef enum
 {
-    rx_session_transfer_new,
-    rx_session_transfer_acknowledged,
-    rx_session_transfer_lost,
+    rx_session_transfer_new,          ///< Should be accepted --- part of a transfer not yet received.
+    rx_session_transfer_acknowledged, ///< Send ACK back if requested by the sender; already received and processed.
+    rx_session_transfer_late,         ///< Not received but ORDERED acceptance is no longer possible.
 } rx_session_transfer_status_t;
 
 static rx_session_transfer_status_t rx_session_check_transfer_status(const rx_session_t* const self,
@@ -1303,7 +1307,7 @@ static rx_session_transfer_status_t rx_session_check_transfer_status(const rx_se
         }
     }
     // The transfer is not received; check if it's within the dup transfer-ID window.
-    return rx_transfer_id_window_contains(&self->received, transfer_id) ? rx_session_transfer_lost
+    return rx_transfer_id_window_contains(&self->received, transfer_id) ? rx_session_transfer_late
                                                                         : rx_session_transfer_new;
 }
 
@@ -1386,7 +1390,7 @@ static void rx_session_update(rx_session_t* const        self,
         // If it's done, we have to force the reordering window to close early to free up a slot without transfer loss.
         UDPARD_ASSERT((slot != NULL) && ((slot->state == rx_slot_busy) || (slot->state == rx_slot_done)));
         if (slot->state == rx_slot_done) {
-            rx_session_scan_slots(self, rx, ts, true); // A slot will be ejected (maybe another one).
+            rx_session_ordered_scan_slots(self, rx, ts, true); // A slot will be ejected (maybe another one).
             slot = NULL; // Repeat the search. It is certain that now we have at least one idle slot.
             for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
                 if (self->slots[i].state == rx_slot_idle) {
@@ -1427,7 +1431,7 @@ static void rx_session_update(rx_session_t* const        self,
         }
         // The final ejection procedure is a little complicated because we need to manage the reordering window
         // and possible obsolescence of other in-progress slots.
-        rx_session_scan_slots(self, rx, ts, false);
+        rx_session_ordered_scan_slots(self, rx, ts, false);
     }
 }
 
@@ -1488,6 +1492,6 @@ void udpard_rx_poll(udpard_rx_t* const self, const udpard_us_t now)
         if ((ses == NULL) || (now < ses->reordering_window_deadline)) {
             break;
         }
-        rx_session_scan_slots(ses, self, now, false);
+        rx_session_ordered_scan_slots(ses, self, now, false);
     }
 }
