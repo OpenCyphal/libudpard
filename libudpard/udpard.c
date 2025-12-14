@@ -1064,6 +1064,7 @@ static void rx_slot_update(rx_slot_t* const            slot,
     // Enforce consistent per-frame values throughout the transfer.
     if ((slot->total_size != frame.meta.transfer_payload_size) || (slot->priority != frame.meta.priority)) {
         ++*errors_transfer_malformed;
+        mem_free_payload(payload_deleter, frame.base.origin);
         rx_slot_reset(slot, fragment_memory);
         return;
     }
