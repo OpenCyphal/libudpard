@@ -1127,7 +1127,7 @@ typedef struct
 static int32_t cavl_compare_rx_session_remote_uid(const void* const user, const udpard_tree_t* const node)
 {
     const uint64_t uid_a = *(const uint64_t*)user;
-    const uint64_t uid_b = ((const rx_session_t*)node)->remote.uid; // clang-format off
+    const uint64_t uid_b = ((const rx_session_t*)(const void*)node)->remote.uid; // clang-format off
     if (uid_a < uid_b) { return -1; }
     if (uid_a > uid_b) { return +1; }
     return 0; // clang-format on

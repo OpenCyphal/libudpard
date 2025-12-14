@@ -21,7 +21,7 @@ static void test_header_v2(void)
     // Compute the correct prefix_crc from the payload
     memset(&buffer[HEADER_SIZE_BYTES], 0, sizeof(buffer) - HEADER_SIZE_BYTES); // Initialize payload
     const uint32_t payload_crc = crc_full(sizeof(buffer) - HEADER_SIZE_BYTES, &buffer[HEADER_SIZE_BYTES]);
-    header_serialize(buffer, meta_in, 0, 0, payload_crc);  // frame_index=0, frame_payload_offset=0 for first frame
+    header_serialize(buffer, meta_in, 0, 0, payload_crc); // frame_index=0, frame_payload_offset=0 for first frame
     memset(&buffer[HEADER_SIZE_BYTES], 0, sizeof(buffer) - HEADER_SIZE_BYTES); // Re-initialize payload to match
 
     // We don't validate the exact byte layout anymore since we compute prefix_crc dynamically
@@ -43,9 +43,9 @@ static void test_header_v2(void)
 
     TEST_ASSERT_EQUAL_UINT8(meta_in.priority, meta_out.priority);
     TEST_ASSERT_FALSE(meta_out.flag_ack);
-    TEST_ASSERT_EQUAL_UINT32(0, frame_index);  // First frame has index 0
-    TEST_ASSERT_EQUAL_UINT32(0, frame_payload_offset);  // First frame has offset 0
-    TEST_ASSERT_EQUAL_UINT32(payload_crc, prefix_crc);  // For first frame, prefix_crc equals payload CRC
+    TEST_ASSERT_EQUAL_UINT32(0, frame_index);          // First frame has index 0
+    TEST_ASSERT_EQUAL_UINT32(0, frame_payload_offset); // First frame has offset 0
+    TEST_ASSERT_EQUAL_UINT32(payload_crc, prefix_crc); // For first frame, prefix_crc equals payload CRC
     TEST_ASSERT_EQUAL_UINT32(meta_in.transfer_payload_size, meta_out.transfer_payload_size);
     TEST_ASSERT_EQUAL_UINT64(meta_in.transfer_id, meta_out.transfer_id);
     TEST_ASSERT_EQUAL_UINT64(meta_in.sender_uid, meta_out.sender_uid);
