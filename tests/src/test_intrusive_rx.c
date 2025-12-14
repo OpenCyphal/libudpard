@@ -1863,7 +1863,8 @@ typedef struct
     udpard_rx_subscription_t* sub;
     struct
     {
-        udpard_rx_transfer_t transfer;
+        /// The most recently received transfer is at index #0; older transfers follow.
+        udpard_rx_transfer_t history[4];
         uint64_t             count;
     } message;
     struct
@@ -1885,7 +1886,11 @@ static void on_message(udpard_rx_t* const rx, udpard_rx_subscription_t* const su
     callback_result_t* const cb_result = (callback_result_t* const)rx->user;
     cb_result->rx                      = rx;
     cb_result->sub                     = sub;
-    cb_result->message.transfer        = transfer;
+    static_assert(sizeof(cb_result->message.history) / sizeof(cb_result->message.history[0]) == 4, "");
+    cb_result->message.history[3] = cb_result->message.history[2];
+    cb_result->message.history[2] = cb_result->message.history[1];
+    cb_result->message.history[1] = cb_result->message.history[0];
+    cb_result->message.history[0] = transfer;
     cb_result->message.count++;
 }
 
@@ -1941,7 +1946,7 @@ static void test_session_ordered_basic(void)
     const uint64_t      remote_uid = 0xA1B2C3D4E5F60718ULL;
     udpard_rx_port_t    port       = { .topic_hash                  = 0x4E81E200CB479D4CULL,
                                        .extent                      = 1000,
-                                       .reordering_window           = 1 * KILO,
+                                       .reordering_window           = 20 * KILO,
                                        .memory                      = rx_mem,
                                        .index_session_by_remote_uid = NULL };
     rx_session_t* const ses        = rx_session_new(&port, &rx.list_session_by_animation, remote_uid, now);
@@ -1981,23 +1986,23 @@ static void test_session_ordered_basic(void)
     TEST_ASSERT_EQUAL(1, cb_result.message.count);
     TEST_ASSERT_EQUAL_PTR(&rx, cb_result.rx);
     TEST_ASSERT_EQUAL_PTR(&port, cb_result.sub);
-    TEST_ASSERT_EQUAL(1000, cb_result.message.transfer.timestamp);
-    TEST_ASSERT_EQUAL(udpard_prio_high, cb_result.message.transfer.priority);
-    TEST_ASSERT_EQUAL(42, cb_result.message.transfer.transfer_id);
+    TEST_ASSERT_EQUAL(1000, cb_result.message.history[0].timestamp);
+    TEST_ASSERT_EQUAL(udpard_prio_high, cb_result.message.history[0].priority);
+    TEST_ASSERT_EQUAL(42, cb_result.message.history[0].transfer_id);
     // Check the return path discovery.
-    TEST_ASSERT_EQUAL(remote_uid, cb_result.message.transfer.remote.uid);
-    TEST_ASSERT_EQUAL(0x0A000001, cb_result.message.transfer.remote.endpoints[0].ip);
-    TEST_ASSERT_EQUAL(0x00000000, cb_result.message.transfer.remote.endpoints[1].ip);
-    TEST_ASSERT_EQUAL(0x0A000002, cb_result.message.transfer.remote.endpoints[2].ip);
-    TEST_ASSERT_EQUAL(0x1234, cb_result.message.transfer.remote.endpoints[0].port);
-    TEST_ASSERT_EQUAL(0x0000, cb_result.message.transfer.remote.endpoints[1].port);
-    TEST_ASSERT_EQUAL(0x4321, cb_result.message.transfer.remote.endpoints[2].port);
+    TEST_ASSERT_EQUAL(remote_uid, cb_result.message.history[0].remote.uid);
+    TEST_ASSERT_EQUAL(0x0A000001, cb_result.message.history[0].remote.endpoints[0].ip);
+    TEST_ASSERT_EQUAL(0x00000000, cb_result.message.history[0].remote.endpoints[1].ip);
+    TEST_ASSERT_EQUAL(0x0A000002, cb_result.message.history[0].remote.endpoints[2].ip);
+    TEST_ASSERT_EQUAL(0x1234, cb_result.message.history[0].remote.endpoints[0].port);
+    TEST_ASSERT_EQUAL(0x0000, cb_result.message.history[0].remote.endpoints[1].port);
+    TEST_ASSERT_EQUAL(0x4321, cb_result.message.history[0].remote.endpoints[2].port);
     // Check the payload.
     TEST_ASSERT_EQUAL(2, alloc_frag.allocated_fragments);
     TEST_ASSERT_EQUAL(2 * sizeof(udpard_fragment_t), alloc_frag.allocated_bytes);
     TEST_ASSERT_EQUAL(2, alloc_payload.allocated_fragments);
     TEST_ASSERT_EQUAL(10, alloc_payload.allocated_bytes);
-    TEST_ASSERT(transfer_payload_verify(&cb_result.message.transfer, 10, "0123456789", 10));
+    TEST_ASSERT(transfer_payload_verify(&cb_result.message.history[0], 10, "0123456789", 10));
 
     // Successful reception mandates sending an ACK.
     TEST_ASSERT_EQUAL(1, cb_result.ack_mandate.count);
@@ -2015,11 +2020,8 @@ static void test_session_ordered_basic(void)
     TEST_ASSERT_EQUAL_size_t(5, cb_result.ack_mandate.am.payload_head.size);
     TEST_ASSERT_EQUAL_MEMORY("01234", cb_result.ack_mandate.am.payload_head.data, 5);
 
-    // No collisions so far.
-    TEST_ASSERT_EQUAL(0, cb_result.collision.count);
-
     // Free the transfer payload.
-    udpard_fragment_free_all(cb_result.message.transfer.payload_head, mem_frag);
+    udpard_fragment_free_all(cb_result.message.history[0].payload_head, mem_frag);
     TEST_ASSERT_EQUAL(0, alloc_frag.allocated_fragments);
     TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
     TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments);
@@ -2047,7 +2049,6 @@ static void test_session_ordered_basic(void)
     // Nothing happened except that we just generated another ACK mandate.
     TEST_ASSERT_EQUAL(1, cb_result.message.count);
     TEST_ASSERT_EQUAL(2, cb_result.ack_mandate.count);
-    TEST_ASSERT_EQUAL(0, cb_result.collision.count);
     TEST_ASSERT_EQUAL(0, alloc_frag.allocated_fragments);
     TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
     TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments); // the new frame payload was freed by the session
@@ -2091,7 +2092,6 @@ static void test_session_ordered_basic(void)
     TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments);
     TEST_ASSERT_EQUAL(1, cb_result.message.count);
     TEST_ASSERT_EQUAL(2, cb_result.ack_mandate.count);
-    TEST_ASSERT_EQUAL(0, cb_result.collision.count);
 
     // Feed a repeated frame with the same transfer-ID.
     // Should be ignored except for the return path update. No ACK needed because the frame is not the first one.
@@ -2119,7 +2119,6 @@ static void test_session_ordered_basic(void)
     TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments);
     TEST_ASSERT_EQUAL(1, cb_result.message.count);
     TEST_ASSERT_EQUAL(2, cb_result.ack_mandate.count);
-    TEST_ASSERT_EQUAL(0, cb_result.collision.count);
 
     // Feed a repeated frame with an earlier transfer-ID.
     // Should be ignored except for the return path update. No ACK because we haven't actually received this TID.
@@ -2148,9 +2147,218 @@ static void test_session_ordered_basic(void)
     TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments);
     TEST_ASSERT_EQUAL(1, cb_result.message.count);
     TEST_ASSERT_EQUAL(2, cb_result.ack_mandate.count);
-    TEST_ASSERT_EQUAL(0, cb_result.collision.count);
 
-    // TODO: feed out-of-order transfers and ensure they are ordered correctly at the output.
+    // Feed an out-of-order transfer. It will be interned in the reordering window, waiting for the missing transfer(s).
+    // From now on we will be using single-frame transfers because at the session level they are not that different
+    // from multi-frame ones except for the continuation slot lookup, which we've already covered.
+    TEST_ASSERT_EQUAL(1, cb_result.message.count);
+    TEST_ASSERT_EQUAL(2, cb_result.ack_mandate.count);
+    TEST_ASSERT_EQUAL(0, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments);
+    meta.priority    = udpard_prio_low;
+    meta.flag_ack    = true; // requested
+    meta.transfer_id = 44;   // skips one transfer-ID, forcing a reordering delay.
+    now += 1000;
+    const udpard_us_t ts_44 = now;
+    rx_session_update(ses,
+                      &rx,
+                      now,
+                      (udpard_udpip_ep_t){ .ip = 0x0A000005, .port = 0x3333 },
+                      make_frame(meta, mem_payload, "abcdefghij", 0, 10),
+                      del_payload,
+                      2);
+    // We are asked to send an ACK, but the application hasn't seen the transfer yet -- it is interned.
+    TEST_ASSERT_EQUAL(1, cb_result.message.count);
+    TEST_ASSERT_EQUAL(3, cb_result.ack_mandate.count);
+    TEST_ASSERT_EQUAL(1, alloc_frag.allocated_fragments); // the interned transfer
+    TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
+    TEST_ASSERT_EQUAL(1, alloc_payload.allocated_fragments); // the interned transfer
+    // Verify the ACK mandate.
+    TEST_ASSERT_EQUAL(udpard_prio_low, cb_result.ack_mandate.am.priority);
+    TEST_ASSERT_EQUAL(44, cb_result.ack_mandate.am.transfer_id);
+    // Where to send the ack -- new address discovered.
+    TEST_ASSERT_EQUAL(remote_uid, cb_result.ack_mandate.am.remote.uid);
+    TEST_ASSERT_EQUAL(0x0A000004, cb_result.ack_mandate.am.remote.endpoints[0].ip);
+    TEST_ASSERT_EQUAL(0x0A000003, cb_result.ack_mandate.am.remote.endpoints[1].ip); // updated!
+    TEST_ASSERT_EQUAL(0x0A000005, cb_result.ack_mandate.am.remote.endpoints[2].ip);
+    TEST_ASSERT_EQUAL(0x2222, cb_result.ack_mandate.am.remote.endpoints[0].port);
+    TEST_ASSERT_EQUAL(0x1111, cb_result.ack_mandate.am.remote.endpoints[1].port); // updated!
+    TEST_ASSERT_EQUAL(0x3333, cb_result.ack_mandate.am.remote.endpoints[2].port);
+    // First frame payload is sometimes needed for ACK generation.
+    TEST_ASSERT_EQUAL_size_t(10, cb_result.ack_mandate.am.payload_head.size);
+    TEST_ASSERT_EQUAL_MEMORY("abcdefghij", cb_result.ack_mandate.am.payload_head.data, 10);
+
+    // Repeat the same transfer. It must be rejected even though the reception head is still at 42.
+    TEST_ASSERT_EQUAL(1, cb_result.message.count);
+    TEST_ASSERT_EQUAL(3, cb_result.ack_mandate.count);
+    TEST_ASSERT_EQUAL(1, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
+    TEST_ASSERT_EQUAL(1, alloc_payload.allocated_fragments);
+    meta.flag_ack = false;
+    now += 1000;
+    rx_session_update(ses,
+                      &rx,
+                      now,
+                      (udpard_udpip_ep_t){ .ip = 0x0A000005, .port = 0x3333 },
+                      make_frame(meta, mem_payload, "0123456789", 0, 10), // ignored anyway
+                      del_payload,
+                      2);
+    // Nothing happened.
+    TEST_ASSERT_EQUAL(1, cb_result.message.count);
+    TEST_ASSERT_EQUAL(3, cb_result.ack_mandate.count);
+    TEST_ASSERT_EQUAL(1, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
+    TEST_ASSERT_EQUAL(1, alloc_payload.allocated_fragments);
+
+    // Feed another out-of-order transfer.
+    TEST_ASSERT_EQUAL(1, cb_result.message.count);
+    TEST_ASSERT_EQUAL(3, cb_result.ack_mandate.count);
+    TEST_ASSERT_EQUAL(1, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
+    TEST_ASSERT_EQUAL(1, alloc_payload.allocated_fragments);
+    meta.priority    = udpard_prio_fast;
+    meta.flag_ack    = false;
+    meta.transfer_id = 46; // after this one, we will have: received: 42, interned: 44, 46. Waiting for 43, 45.
+    now += 1000;
+    const udpard_us_t ts_46 = now;
+    rx_session_update(ses,
+                      &rx,
+                      now,
+                      (udpard_udpip_ep_t){ .ip = 0x0A000005, .port = 0x3333 },
+                      make_frame(meta, mem_payload, "klmnopqrst", 0, 10),
+                      del_payload,
+                      2);
+    // Nothing happened, the transfer added to the interned set.
+    TEST_ASSERT_EQUAL(1, cb_result.message.count);
+    TEST_ASSERT_EQUAL(3, cb_result.ack_mandate.count);
+    TEST_ASSERT_EQUAL(2, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
+    TEST_ASSERT_EQUAL(2, alloc_payload.allocated_fragments);
+
+    // Feed the missing transfer 45. It will not, however, release anything because 43 is still missing.
+    TEST_ASSERT_EQUAL(1, cb_result.message.count);
+    TEST_ASSERT_EQUAL(3, cb_result.ack_mandate.count);
+    TEST_ASSERT_EQUAL(2, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
+    TEST_ASSERT_EQUAL(2, alloc_payload.allocated_fragments);
+    meta.priority    = udpard_prio_optional;
+    meta.flag_ack    = true;
+    meta.transfer_id = 45;
+    now += 1000;
+    const udpard_us_t ts_45 = now;
+    rx_session_update(ses,
+                      &rx,
+                      now,
+                      (udpard_udpip_ep_t){ .ip = 0x0A000005, .port = 0x3333 },
+                      make_frame(meta, mem_payload, "9876543210", 0, 10),
+                      del_payload,
+                      2);
+    // ACK requested and the transfer is added to the interned set: 44, 45, 46.
+    TEST_ASSERT_EQUAL(1, cb_result.message.count);
+    TEST_ASSERT_EQUAL(4, cb_result.ack_mandate.count);
+    TEST_ASSERT_EQUAL(3, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
+    TEST_ASSERT_EQUAL(3, alloc_payload.allocated_fragments);
+    // Verify the ACK mandate.
+    TEST_ASSERT_EQUAL(udpard_prio_optional, cb_result.ack_mandate.am.priority);
+    TEST_ASSERT_EQUAL(45, cb_result.ack_mandate.am.transfer_id);
+    TEST_ASSERT_EQUAL_size_t(10, cb_result.ack_mandate.am.payload_head.size);
+    TEST_ASSERT_EQUAL_MEMORY("9876543210", cb_result.ack_mandate.am.payload_head.data, 10);
+
+    // Receive another out-of-order transfer 500. It will likewise be interned.
+    // The reception bitmask will still stay at the old head, allowing us to continue providing ACK retransmission
+    // and duplicate rejection until the reordering timeout for 500 has expired. At that moment, the head will be
+    // moved and the old ack/duplicate state will be discarded as being too old.
+    TEST_ASSERT_EQUAL(1, cb_result.message.count);
+    TEST_ASSERT_EQUAL(4, cb_result.ack_mandate.count);
+    TEST_ASSERT_EQUAL(3, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
+    TEST_ASSERT_EQUAL(3, alloc_payload.allocated_fragments);
+    meta.priority    = udpard_prio_optional;
+    meta.flag_ack    = false;
+    meta.transfer_id = 500;
+    now += 1000;
+    rx_session_update(ses,
+                      &rx,
+                      now,
+                      (udpard_udpip_ep_t){ .ip = 0x0A000005, .port = 0x3333 },
+                      make_frame(meta, mem_payload, "9876543210", 0, 10),
+                      del_payload,
+                      2);
+    // Nothing happened, the transfer added to the interned set.
+    TEST_ASSERT_EQUAL(1, cb_result.message.count);
+    TEST_ASSERT_EQUAL(4, cb_result.ack_mandate.count);
+    TEST_ASSERT_EQUAL(4, alloc_frag.allocated_fragments); // 44, 45, 46, 500.
+    TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
+    TEST_ASSERT_EQUAL(4, alloc_payload.allocated_fragments);
+
+    // Now, emit the missing transfer 43. This will release 43, 44, 45, and 46 to the application.
+    // The head will be moved. ACKs have already been transmitted for all of them.
+    TEST_ASSERT_EQUAL(1, cb_result.message.count);
+    TEST_ASSERT_EQUAL(4, cb_result.ack_mandate.count);
+    TEST_ASSERT_EQUAL(4, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
+    TEST_ASSERT_EQUAL(4, alloc_payload.allocated_fragments);
+    meta.priority    = udpard_prio_optional;
+    meta.flag_ack    = false;
+    meta.transfer_id = 43;
+    now += 1000;
+    const udpard_us_t ts_43 = now;
+    rx_session_update(ses,
+                      &rx,
+                      now,
+                      (udpard_udpip_ep_t){ .ip = 0x0A000005, .port = 0x3333 },
+                      make_frame(meta, mem_payload, "0123443210", 0, 10),
+                      del_payload,
+                      2);
+    // 4 transfers released.
+    TEST_ASSERT_EQUAL(5, cb_result.message.count);
+    TEST_ASSERT_EQUAL(4, cb_result.ack_mandate.count);    // no new mandates.
+    TEST_ASSERT_EQUAL(5, alloc_frag.allocated_fragments); // not freed yet, see below.
+    TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
+    TEST_ASSERT_EQUAL(5, alloc_payload.allocated_fragments);
+    // The return path is the same for all transfers because it's taken from the shared session state during ejection.
+    for (size_t i = 0; i < 4; i++) {
+        udpard_remote_t* const rem = &cb_result.message.history[i].remote;
+        TEST_ASSERT_EQUAL(remote_uid, rem->uid);
+        TEST_ASSERT_EQUAL(0x0A000004, rem->endpoints[0].ip);
+        TEST_ASSERT_EQUAL(0x0A000003, rem->endpoints[1].ip);
+        TEST_ASSERT_EQUAL(0x0A000005, rem->endpoints[2].ip);
+        TEST_ASSERT_EQUAL(0x2222, rem->endpoints[0].port);
+        TEST_ASSERT_EQUAL(0x1111, rem->endpoints[1].port);
+        TEST_ASSERT_EQUAL(0x3333, rem->endpoints[2].port);
+    }
+    // Verify transfer 43. It was released first so it's currently at index 3, then 44->#2, 45->#1, 46->#0.
+    TEST_ASSERT_EQUAL(ts_43, cb_result.message.history[3].timestamp);
+    TEST_ASSERT_EQUAL(udpard_prio_optional, cb_result.message.history[3].priority);
+    TEST_ASSERT_EQUAL(43, cb_result.message.history[3].transfer_id);
+    TEST_ASSERT(transfer_payload_verify(&cb_result.message.history[3], 10, "0123443210", 10));
+    // Verify transfer 44.
+    TEST_ASSERT_EQUAL(ts_44, cb_result.message.history[2].timestamp);
+    TEST_ASSERT_EQUAL(udpard_prio_low, cb_result.message.history[2].priority);
+    TEST_ASSERT_EQUAL(44, cb_result.message.history[2].transfer_id);
+    TEST_ASSERT(transfer_payload_verify(&cb_result.message.history[2], 10, "abcdefghij", 10));
+    // Verify transfer 45.
+    TEST_ASSERT_EQUAL(ts_45, cb_result.message.history[1].timestamp);
+    TEST_ASSERT_EQUAL(udpard_prio_optional, cb_result.message.history[1].priority);
+    TEST_ASSERT_EQUAL(45, cb_result.message.history[1].transfer_id);
+    TEST_ASSERT(transfer_payload_verify(&cb_result.message.history[1], 10, "9876543210", 10));
+    // Verify transfer 46.
+    TEST_ASSERT_EQUAL(ts_46, cb_result.message.history[0].timestamp);
+    TEST_ASSERT_EQUAL(udpard_prio_fast, cb_result.message.history[0].priority);
+    TEST_ASSERT_EQUAL(46, cb_result.message.history[0].transfer_id);
+    TEST_ASSERT(transfer_payload_verify(&cb_result.message.history[0], 10, "klmnopqrst", 10));
+    // Free all received transfer payloads. We still have transfer 500 interned though.
+    TEST_ASSERT_EQUAL(5, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
+    TEST_ASSERT_EQUAL(5, alloc_payload.allocated_fragments);
+    for (size_t i = 0; i < 4; i++) {
+        udpard_fragment_free_all(cb_result.message.history[i].payload_head, mem_frag);
+    }
+    TEST_ASSERT_EQUAL(1, alloc_frag.allocated_fragments); // 500 is still there
+    TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
+    TEST_ASSERT_EQUAL(1, alloc_payload.allocated_fragments);
 
     // Time out the session state.
     now += SESSION_LIFETIME;
@@ -2160,9 +2368,8 @@ static void test_session_ordered_basic(void)
     TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments);
 
     // Final checks.
-    TEST_ASSERT_EQUAL(1, cb_result.message.count);
-    TEST_ASSERT_EQUAL(2, cb_result.ack_mandate.count);
-    TEST_ASSERT_EQUAL(0, cb_result.collision.count);
+    TEST_ASSERT_EQUAL(5, cb_result.message.count);
+    TEST_ASSERT_EQUAL(4, cb_result.ack_mandate.count);
     instrumented_allocator_reset(&alloc_frag); // Will crash if there are leaks
     instrumented_allocator_reset(&alloc_payload);
 }
