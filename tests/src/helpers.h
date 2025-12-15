@@ -3,7 +3,9 @@
 /// Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
 // ReSharper disable CppRedundantInlineSpecifier
-// NOLINTBEGIN(*DeprecatedOrUnsafeBufferHandling,*err34-c)
+// NOLINTBEGIN(*-unchecked-string-to-number-conversion,*-deprecated-headers,*-designated-initializers,*-loop-convert)
+// NOLINTBEGIN(*DeprecatedOrUnsafeBufferHandling,*err34-c,*-vararg,*-use-auto,*-use-nullptr,*-redundant-void-arg)
+// NOLINTBEGIN(*-cstyle-cast)
 #pragma once
 
 #include <udpard.h> // Shall always be included first.
@@ -74,7 +76,7 @@ typedef struct
 static inline void* instrumented_allocator_alloc(void* const user_reference, const size_t size)
 {
     instrumented_allocator_t* const self   = (instrumented_allocator_t*)user_reference;
-    void*                           result = NULL;
+    void*                           result = NULL; // NOLINT(*-const-correctness)
     self->count_alloc++;
     if ((size > 0U) &&                                           //
         ((self->allocated_bytes + size) <= self->limit_bytes) && //
@@ -83,7 +85,7 @@ static inline void* instrumented_allocator_alloc(void* const user_reference, con
         void*        origin             = malloc(size_with_canaries);
         TEST_PANIC_UNLESS(origin != NULL);
         *((size_t*)origin) = size;
-        uint_least8_t* p   = ((uint_least8_t*)origin) + sizeof(size_t);
+        uint_least8_t* p   = ((uint_least8_t*)origin) + sizeof(size_t); // NOLINT(*-const-correctness)
         result             = ((uint_least8_t*)origin) + INSTRUMENTED_ALLOCATOR_CANARY_SIZE;
         for (size_t i = sizeof(size_t); i < INSTRUMENTED_ALLOCATOR_CANARY_SIZE; i++) // Fill the front canary.
         {
@@ -107,7 +109,7 @@ static inline void instrumented_allocator_free(void* const user_reference, const
 {
     instrumented_allocator_t* const self = (instrumented_allocator_t*)user_reference;
     self->count_free++;
-    if (pointer != NULL) {
+    if (pointer != NULL) { // NOLINTNEXTLINE(*-const-correctness)
         uint_least8_t* p         = ((uint_least8_t*)pointer) - INSTRUMENTED_ALLOCATOR_CANARY_SIZE;
         void* const    origin    = p;
         const size_t   true_size = *((const size_t*)origin);
@@ -183,4 +185,6 @@ static inline void seed_prng(void)
 }
 #endif
 
-// NOLINTEND(*DeprecatedOrUnsafeBufferHandling,*err34-c)
+// NOLINTEND(*-cstyle-cast)
+// NOLINTEND(*DeprecatedOrUnsafeBufferHandling,*err34-c,*-vararg,*-use-auto,*-use-nullptr,*-redundant-void-arg)
+// NOLINTEND(*-unchecked-string-to-number-conversion,*-deprecated-headers,*-designated-initializers,*-loop-convert)

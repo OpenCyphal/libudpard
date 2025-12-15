@@ -11,12 +11,12 @@
 namespace {
 
 /// The data is copied.
-udpard_fragment_t* make_test_fragment(const udpard_mem_resource_t fragment_memory,
-                                      const udpard_mem_resource_t payload_memory,
-                                      const udpard_mem_deleter_t  payload_deleter,
-                                      const size_t                offset,
-                                      const size_t                size,
-                                      const void*                 data)
+udpard_fragment_t* make_test_fragment(const udpard_mem_resource_t& fragment_memory,
+                                      const udpard_mem_resource_t& payload_memory,
+                                      const udpard_mem_deleter_t   payload_deleter,
+                                      const size_t                 offset,
+                                      const size_t                 size,
+                                      const void*                  data)
 {
     auto* frag =
       static_cast<udpard_fragment_t*>(fragment_memory.alloc(fragment_memory.user, sizeof(udpard_fragment_t)));
