@@ -1553,6 +1553,16 @@ bool udpard_rx_new(udpard_rx_t* const                 self,
     return ok;
 }
 
+void udpard_rx_free(udpard_rx_t* const self)
+{
+    if (self != NULL) {
+        while (self->list_session_by_animation.tail != NULL) {
+            udpard_rx_port_free(self,
+                                LIST_TAIL(self->list_session_by_animation, rx_session_t, list_by_animation)->owner);
+        }
+    }
+}
+
 void udpard_rx_poll(udpard_rx_t* const self, const udpard_us_t now)
 {
     UDPARD_ASSERT(!self->p2p_port.invoked);
@@ -1595,6 +1605,7 @@ bool udpard_rx_port_new(udpard_rx_port_t* const            self,
         self->reordering_window           = reordering_window;
         self->memory                      = memory;
         self->index_session_by_remote_uid = NULL;
+        self->user                        = NULL;
         self->invoked                     = false;
     }
     return ok;

@@ -478,12 +478,10 @@ uint32_t udpard_tx_p2p(udpard_tx_t* const      self,
 /// The returned item (if any) is guaranteed to be non-expired (deadline>=now).
 udpard_tx_item_t* udpard_tx_peek(udpard_tx_t* const self, const udpard_us_t now);
 
-/// Transfers the ownership of the specified item to the application. The item does not necessarily need to be the
-/// top one -- it is safe to dequeue any item. The item is dequeued but not invalidated; it is the responsibility of
-/// the application to deallocate its memory later.
-/// The memory SHALL NOT be deallocated UNTIL this function is invoked (use udpard_tx_free()).
+/// Transfers the ownership of the specified item to the application. The item does not have to be the top one.
+/// The item is dequeued but not invalidated; the application must deallocate its memory later; see udpard_tx_free().
+/// The memory SHALL NOT be deallocated UNTIL this function is invoked.
 /// If any of the arguments are NULL, the function has no effect.
-/// This function does not invoke the dynamic memory manager.
 void udpard_tx_pop(udpard_tx_t* const self, udpard_tx_item_t* const item);
 
 /// This is a simple helper that frees the memory allocated for the item and its payload.
@@ -516,7 +514,7 @@ typedef struct udpard_rx_memory_resources_t
 /// -----------------------------------------−-------------------------------------------------------------------------
 /// ORDERED    Strictly increasing transfer-ID  May delay transfers                 Non-negative number of microseconds
 /// UNORDERED  Unique transfer-ID               Ordering not guaranteed             UDPARD_REORDERING_WINDOW_UNORDERED
-/// STATELESS  Constant time, constant memory   Single-frame only, duplicates       UDPARD_REORDERING_WINDOW_STATELESS
+/// STATELESS  Constant time, constant memory   1-frame only, dups, no responses    UDPARD_REORDERING_WINDOW_STATELESS
 ///
 /// If not sure, choose the ORDERED mode with a ~5 ms reordering window for all topics except for request-response
 /// RPC-style, in which case choose UNORDERED. The STATELESS mode is chiefly intended just for the heartbeat topic.
@@ -616,6 +614,9 @@ typedef struct udpard_rx_port_t
     /// which is easy to implement since each port gets a dedicated set of memory resources.
     udpard_tree_t* index_session_by_remote_uid;
 
+    /// Opaque pointer for the application use only. Not accessed by the library.
+    void* user;
+
     /// Do not access. This is used to prevent accidental reentry from within the callbacks.
     bool invoked;
 } udpard_rx_port_t;
@@ -705,11 +706,10 @@ typedef struct udpard_rx_t
 
 /// The extent of the P2P port is set to SIZE_MAX by default (no truncation at all).
 /// The application can alter it via udpard_rx_t::p2p_port.extent at any moment if needed; it takes effect immediately
-/// but may in some cases cause in-progress transfers to be lost if increased mid-transfer.
-///
-/// To free a udpard_rx_t instance, the application must simply free all its ports using udpard_rx_port_free().
-/// The RX instance will be safe to discard afterward.
-///
+/// but may in some cases cause in-progress transfers to be lost if increased mid-transfer,
+/// so it is best to do it once after initialization.
+/// The application does not need to initialize the P2P port itself; it is initialized automatically.
+/// The application must push the datagrams arriving to its P2P sockets into this port using udpard_rx_port_push().
 /// True on success, false if any of the arguments are invalid.
 bool udpard_rx_new(udpard_rx_t* const                 self,
                    const uint64_t                     local_uid,
@@ -717,6 +717,13 @@ bool udpard_rx_new(udpard_rx_t* const                 self,
                    const udpard_rx_on_message_t       on_message,
                    const udpard_rx_on_collision_t     on_collision,
                    const udpard_rx_on_ack_mandate_t   on_ack_mandate);
+
+/// Returns all memory allocated for the entire RX stack, including all ports, sessions, slots, fragments, etc.
+/// It is safe to invoke this at any time, but the instance and its ports shall not be used again unless
+/// re-initialized. Only memory that is allocated by the library is returned; the ports and the RX instance
+/// themselves are not freed.
+/// The function has no effect if the argument is NULL.
+void udpard_rx_free(udpard_rx_t* const self);
 
 /// Must be invoked at least every few milliseconds (more often is fine) to purge timed-out sessions and eject
 /// received transfers when the reordering window expires. If this is invoked simultaneously with rx subscription
