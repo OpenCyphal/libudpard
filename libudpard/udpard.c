@@ -1143,22 +1143,18 @@ static void rx_session_on_ack_mandate(const rx_session_t* const self,
                                       const udpard_bytes_t      payload_head)
 {
     UDPARD_ASSERT(self->owner->invoked);
-    udpard_rx_subscription_t* const subscription =
-      (self->owner == &rx->p2p_port) ? NULL : (udpard_rx_subscription_t*)self->owner;
     const udpard_rx_ack_mandate_t mandate = {
         .remote = self->remote, .priority = priority, .transfer_id = transfer_id, .payload_head = payload_head
     };
     UDPARD_ASSERT(payload_head.data != NULL || payload_head.size == 0U);
     UDPARD_ASSERT(rx->on_ack_mandate != NULL);
-    rx->on_ack_mandate(rx, subscription, mandate);
+    rx->on_ack_mandate(rx, self->owner, mandate);
 }
 
 /// The payload ownership is transferred to the application.
 static void rx_session_on_message(const rx_session_t* const self, udpard_rx_t* const rx, rx_slot_t* const slot)
 {
     UDPARD_ASSERT(self->owner->invoked);
-    udpard_rx_subscription_t* const subscription =
-      (self->owner == &rx->p2p_port) ? NULL : (udpard_rx_subscription_t*)self->owner;
     const udpard_rx_transfer_t transfer = {
         .timestamp           = slot->ts_min,
         .priority            = slot->priority,
@@ -1171,7 +1167,7 @@ static void rx_session_on_message(const rx_session_t* const self, udpard_rx_t* c
     };
     slot->fragments = NULL; // Transfer ownership to the application.
     UDPARD_ASSERT(rx->on_message != NULL);
-    rx->on_message(rx, subscription, transfer);
+    rx->on_message(rx, self->owner, transfer);
 }
 
 static int32_t cavl_compare_rx_session_remote_uid(const void* const user, const udpard_tree_t* const node)
@@ -1224,9 +1220,9 @@ static rx_session_t* rx_session_new(udpard_rx_port_t* const owner,
 }
 
 /// Removes the instance from all indexes and frees all associated memory.
-static void rx_session_del(rx_session_t* const   self,
-                           udpard_list_t* const  sessions_by_animation,
-                           udpard_tree_t** const sessions_by_reordering)
+static void rx_session_free(rx_session_t* const   self,
+                            udpard_list_t* const  sessions_by_animation,
+                            udpard_tree_t** const sessions_by_reordering)
 {
     for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
         rx_slot_reset(&self->slots[i], self->owner->memory.fragment);
@@ -1523,10 +1519,6 @@ static void rx_session_update(rx_session_t* const        self,
     (ordered ? rx_session_update_ordered : rx_session_update_unordered)(self, rx, ts, frame, payload_deleter);
 }
 
-// ---------------------------------------------  RX PORT  ---------------------------------------------
-
-// TODO
-
 // ---------------------------------------------  RX PUBLIC API  ---------------------------------------------
 
 static bool rx_validate_memory_resources(const udpard_rx_memory_resources_t memory)
@@ -1542,18 +1534,10 @@ bool udpard_rx_new(udpard_rx_t* const                 self,
                    const udpard_rx_on_collision_t     on_collision,
                    const udpard_rx_on_ack_mandate_t   on_ack_mandate)
 {
-    const bool ok = (self != NULL) && (local_uid > 0) && rx_validate_memory_resources(p2p_port_memory) &&
-                    (on_message != NULL) && (on_collision != NULL) && (on_ack_mandate != NULL);
+    bool ok = (self != NULL) && (local_uid > 0) && rx_validate_memory_resources(p2p_port_memory) &&
+              (on_message != NULL) && (on_collision != NULL) && (on_ack_mandate != NULL);
     if (ok) {
         mem_zero(sizeof(*self), self);
-        self->p2p_port = (udpard_rx_port_t){
-            .topic_hash                  = local_uid,
-            .extent                      = SIZE_MAX,
-            .reordering_window           = UDPARD_REORDERING_WINDOW_UNORDERED,
-            .memory                      = p2p_port_memory,
-            .index_session_by_remote_uid = NULL,
-            .invoked                     = false,
-        };
         self->list_session_by_animation   = (udpard_list_t){ NULL, NULL };
         self->index_session_by_reordering = NULL;
         self->on_message                  = on_message;
@@ -1563,6 +1547,8 @@ bool udpard_rx_new(udpard_rx_t* const                 self,
         self->errors_frame_malformed      = 0;
         self->errors_transfer_malformed   = 0;
         self->user                        = NULL;
+        ok =
+          udpard_rx_port_new(&self->p2p_port, local_uid, SIZE_MAX, UDPARD_REORDERING_WINDOW_UNORDERED, p2p_port_memory);
     }
     return ok;
 }
@@ -1576,7 +1562,7 @@ void udpard_rx_poll(udpard_rx_t* const self, const udpard_us_t now)
     {
         rx_session_t* const ses = LIST_TAIL(self->list_session_by_animation, rx_session_t, list_by_animation);
         if ((ses != NULL) && (now >= (ses->last_animated_ts + SESSION_LIFETIME))) {
-            rx_session_del(ses, &self->list_session_by_animation, &self->index_session_by_reordering);
+            rx_session_free(ses, &self->list_session_by_animation, &self->index_session_by_reordering);
         }
     }
     // Process reordering window timeouts.
@@ -1590,4 +1576,37 @@ void udpard_rx_poll(udpard_rx_t* const self, const udpard_us_t now)
         rx_session_ordered_scan_slots(ses, self, now, false);
     }
     self->p2p_port.invoked = false;
+}
+
+bool udpard_rx_port_new(udpard_rx_port_t* const            self,
+                        const uint64_t                     topic_hash,
+                        const size_t                       extent,
+                        const udpard_us_t                  reordering_window,
+                        const udpard_rx_memory_resources_t memory)
+{
+    const bool win_ok = (reordering_window >= 0) || //
+                        (reordering_window == UDPARD_REORDERING_WINDOW_UNORDERED) ||
+                        (reordering_window == UDPARD_REORDERING_WINDOW_STATELESS);
+    const bool ok = (self != NULL) && rx_validate_memory_resources(memory) && win_ok;
+    if (ok) {
+        mem_zero(sizeof(*self), self);
+        self->topic_hash                  = topic_hash;
+        self->extent                      = extent;
+        self->reordering_window           = reordering_window;
+        self->memory                      = memory;
+        self->index_session_by_remote_uid = NULL;
+        self->invoked                     = false;
+    }
+    return ok;
+}
+
+void udpard_rx_port_free(udpard_rx_t* const rx, udpard_rx_port_t* const port)
+{
+    if ((rx != NULL) && (port != NULL)) {
+        while (port->index_session_by_remote_uid != NULL) {
+            rx_session_free((rx_session_t*)(void*)port->index_session_by_remote_uid,
+                            &rx->list_session_by_animation,
+                            &rx->index_session_by_reordering);
+        }
+    }
 }

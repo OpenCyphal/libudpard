@@ -568,7 +568,8 @@ typedef struct udpard_rx_memory_resources_t
 /// This type represents an open input port, such as a subscription to a topic.
 typedef struct udpard_rx_port_t
 {
-    uint64_t topic_hash; ///< Mismatch will be filtered out.
+    /// Mismatch will be filtered out and the collision notification callback invoked.
+    uint64_t topic_hash;
 
     /// Transfer payloads exceeding this extent may be truncated.
     /// The total size of the received payload may still exceed this extent setting by some small margin.
@@ -619,17 +620,6 @@ typedef struct udpard_rx_port_t
     bool invoked;
 } udpard_rx_port_t;
 
-typedef struct udpard_rx_subscription_t
-{
-    udpard_rx_port_t base; ///< Always the first member to ensure pointer equivalence.
-
-    uint32_t subject_id;
-
-    /// The IP multicast group address and the UDP port number where UDP/IP datagrams matching this Cyphal
-    /// subject will be sent by the publishers (remote nodes). READ-ONLY
-    udpard_udpip_ep_t mcast_ep;
-} udpard_rx_subscription_t;
-
 /// Represents a received Cyphal transfer.
 /// The payload is owned by this instance, so the application must free it after use; see udpardRxTransferFree.
 typedef struct udpard_rx_transfer_t
@@ -675,7 +665,6 @@ typedef struct udpard_rx_ack_mandate_t
     udpard_prio_t   priority;
     uint64_t        transfer_id;
     udpard_remote_t remote;
-
     /// View of the first <=MTU bytes of the transfer payload that is being confirmed.
     /// Valid until return from the callback.
     udpard_bytes_t payload_head;
@@ -684,16 +673,17 @@ typedef struct udpard_rx_ack_mandate_t
 struct udpard_rx_t;
 
 /// A new message is received from a topic, or a P2P message is received.
-/// The subscription is NULL for P2P transfers.
 /// The handler takes ownership of the payload; it must free it after use.
-typedef void (*udpard_rx_on_message_t)(struct udpard_rx_t*, udpard_rx_subscription_t*, udpard_rx_transfer_t);
+/// For P2P transfers, the p2p_port of udpard_rx_t is passed as the port argument.
+typedef void (*udpard_rx_on_message_t)(struct udpard_rx_t*, udpard_rx_port_t*, udpard_rx_transfer_t);
 
 /// A topic hash collision is detected on a topic.
-typedef void (*udpard_rx_on_collision_t)(struct udpard_rx_t*, udpard_rx_subscription_t*, udpard_remote_t);
+/// For P2P transfers, the p2p_port of udpard_rx_t is passed as the port argument.
+typedef void (*udpard_rx_on_collision_t)(struct udpard_rx_t*, udpard_rx_port_t*, udpard_remote_t);
 
 /// The application is required to send an acknowledgment back to the sender.
-/// The subscription is NULL for P2P transfers.
-typedef void (*udpard_rx_on_ack_mandate_t)(struct udpard_rx_t*, udpard_rx_subscription_t*, udpard_rx_ack_mandate_t);
+/// For P2P transfers, the p2p_port of udpard_rx_t is passed as the port argument.
+typedef void (*udpard_rx_on_ack_mandate_t)(struct udpard_rx_t*, udpard_rx_port_t*, udpard_rx_ack_mandate_t);
 
 typedef struct udpard_rx_t
 {
@@ -715,7 +705,10 @@ typedef struct udpard_rx_t
 
 /// The extent of the P2P port is set to SIZE_MAX by default (no truncation at all).
 /// The application can alter it via udpard_rx_t::p2p_port.extent at any moment if needed; it takes effect immediately
-/// but may in some cases cause in-progress transfers to be lost if increased updated mid-transfer.
+/// but may in some cases cause in-progress transfers to be lost if increased mid-transfer.
+///
+/// To free a udpard_rx_t instance, the application must simply free all its ports using udpard_rx_port_free().
+/// The RX instance will be safe to discard afterward.
 ///
 /// True on success, false if any of the arguments are invalid.
 bool udpard_rx_new(udpard_rx_t* const                 self,
@@ -727,7 +720,7 @@ bool udpard_rx_new(udpard_rx_t* const                 self,
 
 /// Must be invoked at least every few milliseconds (more often is fine) to purge timed-out sessions and eject
 /// received transfers when the reordering window expires. If this is invoked simultaneously with rx subscription
-/// reception, then this function should be invoked after the reception handling.
+/// reception, then this function should ideally be invoked after the reception handling.
 /// The time complexity is logarithmic in the number of living sessions.
 void udpard_rx_poll(udpard_rx_t* const self, const udpard_us_t now);
 
@@ -752,14 +745,17 @@ void udpard_rx_poll(udpard_rx_t* const self, const udpard_us_t now);
 ///
 /// The return value is true on success, false if any of the arguments are invalid.
 /// The time complexity is constant. This function does not invoke the dynamic memory manager.
-bool udpard_rx_subscription_new(udpard_rx_subscription_t* const    self,
-                                const uint32_t                     subject_id,
-                                const uint64_t                     topic_hash,
-                                const size_t                       extent,
-                                udpard_us_t                        reordering_window,
-                                const udpard_rx_memory_resources_t memory);
+bool udpard_rx_port_new(udpard_rx_port_t* const            self,
+                        const uint64_t                     topic_hash,
+                        const size_t                       extent,
+                        const udpard_us_t                  reordering_window,
+                        const udpard_rx_memory_resources_t memory);
 
-void udpard_rx_subscription_free(udpard_rx_subscription_t* const self);
+/// Returns all memory allocated for the sessions, slots, fragments, etc of the given port.
+/// Does not free the port itself and does not alter the RX instance aside from unlinking the port from it.
+/// It is safe to invoke this at any time, but the port instance shall not be used again unless re-initialized.
+/// The function has no effect if any of the arguments are NULL.
+void udpard_rx_port_free(udpard_rx_t* const rx, udpard_rx_port_t* const port);
 
 /// The timestamp value indicates the arrival time of the datagram. Often, naive software timestamping is adequate
 /// for these purposes, but some applications may require a greater accuracy (e.g., for time synchronization).
@@ -771,37 +767,22 @@ void udpard_rx_subscription_free(udpard_rx_subscription_t* const self);
 /// any of the arguments are invalid; the function returns false in that case and the caller must clean up.
 ///
 /// The function invokes the dynamic memory manager in the following cases only (refer to udpard_rx_port_t):
-///
-///     1. A new session state instance is allocated when a new session is initiated.
-///
-///     2. A new transfer fragment handle is allocated when a new transfer fragment is accepted.
-///
-///     3. Allocated objects may occasionally be deallocated to clean up stale transfers and sessions when publishers
-///        disappear. This behavior does not increase the worst case execution time and does not improve the worst
-///        case memory consumption, so a deterministic application need not consider this behavior in its resource
-///        analysis. This behavior is implemented for the benefit of applications where rigorous characterization is
-///        unnecessary.
+/// 1. A new session state instance is allocated when a new session is initiated.
+/// 2. A new transfer fragment handle is allocated when a new transfer fragment is accepted.
+/// 3. Allocated objects may occasionally be deallocated to clean up stale transfers and sessions.
 ///
 /// The time complexity is O(log n + log k) where n is the number of remote notes publishing on this subject (topic),
 /// and k is the number of fragments retained in memory for the corresponding in-progress transfer.
 /// No data copying takes place.
 ///
 /// Returns true on successful processing, false if any of the arguments are invalid.
-bool udpard_rx_subscription_receive(udpard_rx_t* const              rx,
-                                    udpard_rx_subscription_t* const sub,
-                                    const udpard_us_t               timestamp,
-                                    const udpard_udpip_ep_t         source_endpoint,
-                                    const udpard_bytes_mut_t        datagram_payload,
-                                    const udpard_mem_deleter_t      payload_deleter,
-                                    const uint_fast8_t              redundant_iface_index);
-
-/// Like the above but for P2P unicast transfers exchanged between specific nodes.
-bool udpard_rx_p2p_receive(udpard_rx_t* const         rx,
-                           const udpard_us_t          timestamp,
-                           const udpard_udpip_ep_t    source_endpoint,
-                           const udpard_bytes_mut_t   datagram_payload,
-                           const udpard_mem_deleter_t payload_deleter,
-                           const uint_fast8_t         redundant_iface_index);
+bool udpard_rx_port_push(udpard_rx_t* const         rx,
+                         udpard_rx_port_t* const    port,
+                         const udpard_us_t          timestamp,
+                         const udpard_udpip_ep_t    source_ep,
+                         const udpard_bytes_mut_t   datagram_payload,
+                         const udpard_mem_deleter_t payload_deleter,
+                         const uint_fast8_t         redundant_iface_index);
 
 #ifdef __cplusplus
 }

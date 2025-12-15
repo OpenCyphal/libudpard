@@ -1973,8 +1973,8 @@ static void test_rx_slot_update(void)
 
 typedef struct
 {
-    udpard_rx_t*              rx;
-    udpard_rx_subscription_t* sub;
+    udpard_rx_t*      rx;
+    udpard_rx_port_t* port;
     struct
     {
         /// The most recently received transfer is at index #0; older transfers follow.
@@ -1998,7 +1998,7 @@ typedef struct
     } ack_mandate;
 } callback_result_t;
 
-static void on_message(udpard_rx_t* const rx, udpard_rx_subscription_t* const sub, const udpard_rx_transfer_t transfer)
+static void on_message(udpard_rx_t* const rx, udpard_rx_port_t* const port, const udpard_rx_transfer_t transfer)
 {
     printf("on_message: ts=%lld transfer_id=%llu payload_size_stored=%zu\n",
            (long long)transfer.timestamp,
@@ -2006,7 +2006,7 @@ static void on_message(udpard_rx_t* const rx, udpard_rx_subscription_t* const su
            transfer.payload_size_stored);
     callback_result_t* const cb_result = (callback_result_t* const)rx->user;
     cb_result->rx                      = rx;
-    cb_result->sub                     = sub;
+    cb_result->port                    = port;
     for (size_t i = RX_SLOT_COUNT - 1; i > 0; i--) {
         cb_result->message.history[i] = cb_result->message.history[i - 1];
     }
@@ -2014,23 +2014,23 @@ static void on_message(udpard_rx_t* const rx, udpard_rx_subscription_t* const su
     cb_result->message.count++;
 }
 
-static void on_collision(udpard_rx_t* const rx, udpard_rx_subscription_t* const sub, const udpard_remote_t remote)
+static void on_collision(udpard_rx_t* const rx, udpard_rx_port_t* const port, const udpard_remote_t remote)
 {
     callback_result_t* const cb_result = (callback_result_t* const)rx->user;
     cb_result->rx                      = rx;
-    cb_result->sub                     = sub;
+    cb_result->port                    = port;
     cb_result->collision.remote        = remote;
     cb_result->collision.count++;
 }
 
-static void on_ack_mandate(udpard_rx_t* const rx, udpard_rx_subscription_t* const sub, const udpard_rx_ack_mandate_t am)
+static void on_ack_mandate(udpard_rx_t* const rx, udpard_rx_port_t* const port, const udpard_rx_ack_mandate_t am)
 {
     printf("on_ack_mandate: transfer_id=%llu payload_head_size=%zu\n",
            (unsigned long long)am.transfer_id,
            am.payload_head.size);
     callback_result_t* const cb_result = (callback_result_t* const)rx->user;
     cb_result->rx                      = rx;
-    cb_result->sub                     = sub;
+    cb_result->port                    = port;
     cb_result->ack_mandate.am          = am;
     cb_result->ack_mandate.count++;
     // Copy the payload head to our storage.
@@ -2112,7 +2112,7 @@ static void test_session_ordered(void)
     // Check the results and free the transfer.
     TEST_ASSERT_EQUAL(1, cb_result.message.count);
     TEST_ASSERT_EQUAL_PTR(&rx, cb_result.rx);
-    TEST_ASSERT_EQUAL_PTR(&port, cb_result.sub);
+    TEST_ASSERT_EQUAL_PTR(&port, cb_result.port);
     TEST_ASSERT_EQUAL(1000, cb_result.message.history[0].timestamp);
     TEST_ASSERT_EQUAL(udpard_prio_high, cb_result.message.history[0].priority);
     TEST_ASSERT_EQUAL(42, cb_result.message.history[0].transfer_id);
@@ -2708,7 +2708,7 @@ static void test_session_unordered(void)
     // Transfer is ejected immediately in UNORDERED mode.
     TEST_ASSERT_EQUAL(1, cb_result.message.count);
     TEST_ASSERT_EQUAL_PTR(&rx, cb_result.rx);
-    TEST_ASSERT_NULL(cb_result.sub); // p2p transfers have NULL subscription
+    TEST_ASSERT_EQUAL_PTR(&rx.p2p_port, cb_result.port);
     TEST_ASSERT_EQUAL(1000, cb_result.message.history[0].timestamp);
     TEST_ASSERT_EQUAL(udpard_prio_high, cb_result.message.history[0].priority);
     TEST_ASSERT_EQUAL(100, cb_result.message.history[0].transfer_id);
