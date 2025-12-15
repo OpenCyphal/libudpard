@@ -709,7 +709,17 @@ void udpard_tx_free(const udpard_tx_mem_resources_t memory, udpard_tx_item_t* co
 //
 // Each session holds an efficient bitmap of recently received/seen transfers, which is used for ack retransmission
 // if the remote end attempts to retransmit a transfer that was already fully received, and is also used for duplicate
-// rejection.
+// rejection. In the ORDERED mode, late transfers (those arriving out of order past the reordering window closure)
+// are never acked, but they may still be received and acked by some other nodes in the network.
+//
+// Acks are transmitted immediately upon successful reception of a transfer. If the remote end retransmits the transfer
+// (e.g., if the first ack was lost or due to a spurious duplication), repeat acks are only retransmitted
+// for the first frame of the transfer because:
+//
+// - We don't want to flood the network with duplicate ACKs for every fragment of a multi-frame transfer.
+//   They are already duplicated for each redundant interface.
+//
+// - The application may need to look at the head of the transfer to handle acks, which is in the first frame.
 //
 // The redundant interfaces may have distinct MTUs, so the fragment offsets and sizes may vary significantly.
 // The reassembler decides if a newly arrived fragment is needed based on gap detection in the fragment tree.
@@ -1117,9 +1127,11 @@ typedef struct
     udpard_us_t          last_animated_ts;
 
     /// To weed out duplicates and to retransmit lost ACKs.
+    /// The head points at the newest transfer-ID ejected to the application (which may not be the same as
+    /// the newest successfully received transfer-ID in case of interning).
     rx_transfer_id_window_t received;
 
-    bool initialized; // Set after the first transfer is received.
+    bool initialized; ///< Set after the first frame is seen.
 
     rx_slot_t slots[RX_SLOT_COUNT];
 } rx_session_t;
@@ -1298,21 +1310,18 @@ static void rx_session_ordered_scan_slots(rx_session_t* const self,
     }
 
     // Having updated the state, ensure that in-progress slots, if any, have not ended up within the accepted window.
-    // Also this is a good opportunity to check for timed-out in-progress slots.
+    // This is essential for the ORDERED mode.
     for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
-        rx_slot_t* const slot = &self->slots[i];
-        if (slot->state == rx_slot_busy) {
-            const bool timed_out = ts >= (slot->ts_max + SESSION_LIFETIME);
-            const bool obsoleted = rx_transfer_id_window_contains(&self->received, slot->transfer_id);
-            if (timed_out || obsoleted) {
-                rx_slot_reset(slot, self->owner->memory.fragment);
-            }
+        if ((self->slots[i].state == rx_slot_busy) &&
+            rx_transfer_id_window_contains(&self->received, self->slots[i].transfer_id)) {
+            rx_slot_reset(&self->slots[i], self->owner->memory.fragment);
         }
     }
 }
 
 /// Finds an existing in-progress slot with the specified transfer-ID, or allocates a new one.
 /// Allocation always succeeds so the result is never NULL, but it may cause early ejection of an interned DONE slot.
+/// THIS IS POTENTIALLY DESTRUCTIVE IN THE ORDERED MODE because it may force an early reordering window closure.
 static rx_slot_t* rx_session_get_slot(rx_session_t* const self,
                                       udpard_rx_t* const  rx,
                                       const udpard_us_t   ts,
@@ -1322,6 +1331,12 @@ static rx_slot_t* rx_session_get_slot(rx_session_t* const self,
     for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
         if ((self->slots[i].state == rx_slot_busy) && (self->slots[i].transfer_id == transfer_id)) {
             return &self->slots[i];
+        }
+    }
+    // Use this opportunity to check for timed-out in-progress slots. This may free up a slot for the search below.
+    for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
+        if ((self->slots[i].state == rx_slot_busy) && (ts >= (self->slots[i].ts_max + SESSION_LIFETIME))) {
+            rx_slot_reset(&self->slots[i], self->owner->memory.fragment);
         }
     }
     // This appears to be a new transfer, so we will need to allocate a new slot for it.
@@ -1365,27 +1380,114 @@ static rx_slot_t* rx_session_get_slot(rx_session_t* const self,
 
 typedef enum
 {
-    rx_session_transfer_new,          ///< Should be accepted --- part of a transfer not yet received.
-    rx_session_transfer_acknowledged, ///< Send ACK back if requested by the sender; already received and processed.
-    rx_session_transfer_late,         ///< Not received but ORDERED acceptance is no longer possible.
+    rx_session_transfer_new,      ///< Should be accepted --- part of a transfer not yet received.
+    rx_session_transfer_interned, ///< Received but not yet ejected to the application. Occurs in ORDERED mode only.
+    rx_session_transfer_ejected,  ///< Already received and delivered to the application.
+    rx_session_transfer_late,     ///< Not received but ORDERED acceptance is no longer possible.
 } rx_session_transfer_status_t;
 
-static rx_session_transfer_status_t rx_session_check_transfer_status(const rx_session_t* const self,
-                                                                     const uint64_t            transfer_id)
+/// Guides the reception logic on how to handle an incoming frame with the specified transfer-ID.
+static rx_session_transfer_status_t rx_session_get_transfer_status(const rx_session_t* const self,
+                                                                   const uint64_t            transfer_id)
 {
     // Check those that have been already ejected to the application.
     if (rx_transfer_id_window_test(&self->received, transfer_id)) {
-        return rx_session_transfer_acknowledged;
+        return rx_session_transfer_ejected;
     }
     // Check interned transfers waiting for reordering window closure.
     for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
         if ((self->slots[i].state == rx_slot_done) && (self->slots[i].transfer_id == transfer_id)) {
-            return rx_session_transfer_acknowledged; // received successfully but the application is yet to see it
+            return rx_session_transfer_interned; // received successfully but the application is yet to see it
         }
     }
     // The transfer is not received; check if it's within the dup transfer-ID window.
     return rx_transfer_id_window_contains(&self->received, transfer_id) ? rx_session_transfer_late
                                                                         : rx_session_transfer_new;
+}
+
+/// The ORDERED mode implementation. May delay incoming transfers to maintain strict transfer-ID ordering.
+static void rx_session_update_ordered(rx_session_t* const        self,
+                                      udpard_rx_t* const         rx,
+                                      const udpard_us_t          ts,
+                                      const rx_frame_t           frame,
+                                      const udpard_mem_deleter_t payload_deleter)
+{
+    const rx_session_transfer_status_t status = rx_session_get_transfer_status(self, frame.meta.transfer_id);
+    if (status == rx_session_transfer_new) {
+        rx_slot_t* const slot = rx_session_get_slot(self, rx, ts, frame.meta.transfer_id);
+        UDPARD_ASSERT((slot != NULL) && (slot->state != rx_slot_done));
+        UDPARD_ASSERT((slot->state == rx_slot_idle) ||
+                      ((slot->state == rx_slot_busy) && (slot->transfer_id == frame.meta.transfer_id)));
+
+        rx_slot_update(slot,
+                       ts,
+                       self->owner->memory.fragment,
+                       payload_deleter,
+                       frame,
+                       self->owner->extent,
+                       &rx->errors_oom,
+                       &rx->errors_transfer_malformed);
+
+        if (slot->state == rx_slot_done) {
+            UDPARD_ASSERT(rx_session_transfer_interned == rx_session_get_transfer_status(self, slot->transfer_id));
+            if (frame.meta.flag_ack) {
+                rx_session_on_ack_mandate(
+                  self, rx, slot->priority, slot->transfer_id, ((udpard_fragment_t*)cavl2_min(slot->fragments))->view);
+            }
+            rx_session_ordered_scan_slots(self, rx, ts, false);
+        }
+    } else {
+        const bool received = (status == rx_session_transfer_interned) || (status == rx_session_transfer_ejected);
+        if (received && frame.meta.flag_ack && (frame.base.offset == 0U)) {
+            rx_session_on_ack_mandate(self, rx, frame.meta.priority, frame.meta.transfer_id, frame.base.payload);
+        }
+        mem_free_payload(payload_deleter, frame.base.origin);
+    }
+}
+
+/// The UNORDERED mode implementation. Ejects every transfer immediately upon completion without delay.
+static void rx_session_update_unordered(rx_session_t* const        self,
+                                        udpard_rx_t* const         rx,
+                                        const udpard_us_t          ts,
+                                        const rx_frame_t           frame,
+                                        const udpard_mem_deleter_t payload_deleter)
+{
+    UDPARD_ASSERT(self->owner->reordering_window < 0);
+    const rx_session_transfer_status_t status = rx_session_get_transfer_status(self, frame.meta.transfer_id);
+    if ((status == rx_session_transfer_new) || (status == rx_session_transfer_late)) {
+        rx_slot_t* const slot = rx_session_get_slot(self, rx, ts, frame.meta.transfer_id);
+        UDPARD_ASSERT((slot != NULL) && (slot->state != rx_slot_done));
+        UDPARD_ASSERT((slot->state == rx_slot_idle) ||
+                      ((slot->state == rx_slot_busy) && (slot->transfer_id == frame.meta.transfer_id)));
+
+        rx_slot_update(slot,
+                       ts,
+                       self->owner->memory.fragment,
+                       payload_deleter,
+                       frame,
+                       self->owner->extent,
+                       &rx->errors_oom,
+                       &rx->errors_transfer_malformed);
+
+        if (slot->state == rx_slot_done) {
+            if (frame.meta.flag_ack) {
+                rx_session_on_ack_mandate(
+                  self, rx, slot->priority, slot->transfer_id, ((udpard_fragment_t*)cavl2_min(slot->fragments))->view);
+            }
+            if (status == rx_session_transfer_new) { // It's either NEW or LATE; LATE means already inside the window.
+                rx_transfer_id_window_slide(&self->received, slot->transfer_id);
+            }
+            rx_transfer_id_window_set(&self->received, slot->transfer_id);
+            rx_session_on_message(self, rx, slot);
+            UDPARD_ASSERT(slot->fragments == NULL); // Payload ownership transferred to the application.
+            rx_slot_reset(slot, self->owner->memory.fragment);
+        }
+    } else {
+        if (frame.meta.flag_ack && (frame.base.offset == 0U)) {
+            rx_session_on_ack_mandate(self, rx, frame.meta.priority, frame.meta.transfer_id, frame.base.payload);
+        }
+        mem_free_payload(payload_deleter, frame.base.origin);
+    }
 }
 
 static void rx_session_update(rx_session_t* const        self,
@@ -1416,45 +1518,9 @@ static void rx_session_update(rx_session_t* const        self,
         rx_transfer_id_window_slide(&self->received, frame.meta.transfer_id - 1U);
     }
 
-    // Check if this transfer-ID was already received. Retransmit ACK if needed -- it could have been lost.
-    const rx_session_transfer_status_t status = rx_session_check_transfer_status(self, frame.meta.transfer_id);
-    if (status != rx_session_transfer_new) {
-        // ACK is only retransmitted for the first frame for two reasons:
-        // - We don't want to flood the network with duplicate ACKs for every fragment of a transfer.
-        // - The application may need to look at the head of the transfer to handle acks, which is in the first frame.
-        if ((status == rx_session_transfer_acknowledged) && frame.meta.flag_ack && (frame.base.offset == 0U)) {
-            rx_session_on_ack_mandate(self, rx, frame.meta.priority, frame.meta.transfer_id, frame.base.payload);
-        }
-        // If the transfer is lost, we will never acknowledge it because we haven't received it,
-        // but some other subscriber might!
-        // This invalidates the payload_head reference passed to the ack mandate callback.
-        mem_free_payload(payload_deleter, frame.base.origin);
-        return;
-    }
-
-    // It appears that we need to accept this frame. We need to find a suitable slot for that.
-    rx_slot_t* const slot = rx_session_get_slot(self, rx, ts, frame.meta.transfer_id);
-    UDPARD_ASSERT((slot != NULL) && (slot->state != rx_slot_done));
-    UDPARD_ASSERT((slot->state == rx_slot_idle) ||
-                  ((slot->state == rx_slot_busy) && (slot->transfer_id == frame.meta.transfer_id)));
-    rx_slot_update(slot,
-                   ts,
-                   self->owner->memory.fragment,
-                   payload_deleter,
-                   frame,
-                   self->owner->extent,
-                   &rx->errors_oom,
-                   &rx->errors_transfer_malformed);
-    if (slot->state == rx_slot_done) {
-        UDPARD_ASSERT(rx_session_transfer_acknowledged == rx_session_check_transfer_status(self, slot->transfer_id));
-        if (frame.meta.flag_ack) {
-            rx_session_on_ack_mandate(
-              self, rx, slot->priority, slot->transfer_id, ((udpard_fragment_t*)cavl2_min(slot->fragments))->view);
-        }
-        // In the ORDERED mode, the final ejection procedure is somewhat convoluted because we need to manage the
-        // reordering window and possible obsolescence of other in-progress slots.
-        rx_session_ordered_scan_slots(self, rx, ts, false);
-    }
+    // Accept the frame depending on the selected reassembly mode.
+    const bool ordered = self->owner->reordering_window >= 0;
+    (ordered ? rx_session_update_ordered : rx_session_update_unordered)(self, rx, ts, frame, payload_deleter);
 }
 
 static bool rx_validate_memory_resources(const udpard_rx_memory_resources_t memory)

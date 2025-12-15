@@ -560,6 +560,7 @@ typedef struct udpard_rx_port_t
     size_t extent;
 
     /// See UDPARD_REORDERING_WINDOW_... above.
+    /// Behavior undefined if the reassembly mode is switched on a live port with ongoing transfers.
     udpard_us_t reordering_window;
 
     udpard_rx_memory_resources_t memory;
