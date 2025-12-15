@@ -598,6 +598,9 @@ typedef struct udpard_rx_port_t
     /// passing it to the library; alternatively, applications could limit memory consumption per port,
     /// which is easy to implement since each port gets a dedicated set of memory resources.
     udpard_tree_t* index_session_by_remote_uid;
+
+    /// Do not access. This is used to prevent accidental reentry from within the callbacks.
+    bool invoked;
 } udpard_rx_port_t;
 
 typedef struct udpard_rx_subscription_t
@@ -609,9 +612,6 @@ typedef struct udpard_rx_subscription_t
     /// The IP multicast group address and the UDP port number where UDP/IP datagrams matching this Cyphal
     /// subject will be sent by the publishers (remote nodes). READ-ONLY
     udpard_udpip_ep_t mcast_ep;
-
-    /// Do not access. This is used to prevent accidental reentry from within the callbacks.
-    bool invoked;
 } udpard_rx_subscription_t;
 
 /// Represents a received Cyphal transfer.

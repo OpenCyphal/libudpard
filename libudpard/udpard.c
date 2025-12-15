@@ -1130,6 +1130,7 @@ static void rx_session_on_ack_mandate(const rx_session_t* const self,
                                       const uint64_t            transfer_id,
                                       const udpard_bytes_t      payload_head)
 {
+    UDPARD_ASSERT(self->owner->invoked);
     udpard_rx_subscription_t* const subscription =
       (self->owner == &rx->p2p_port) ? NULL : (udpard_rx_subscription_t*)self->owner;
     const udpard_rx_ack_mandate_t mandate = {
@@ -1143,6 +1144,7 @@ static void rx_session_on_ack_mandate(const rx_session_t* const self,
 /// The payload ownership is transferred to the application.
 static void rx_session_on_message(const rx_session_t* const self, udpard_rx_t* const rx, rx_slot_t* const slot)
 {
+    UDPARD_ASSERT(self->owner->invoked);
     udpard_rx_subscription_t* const subscription =
       (self->owner == &rx->p2p_port) ? NULL : (udpard_rx_subscription_t*)self->owner;
     const udpard_rx_transfer_t transfer = {
@@ -1309,6 +1311,58 @@ static void rx_session_ordered_scan_slots(rx_session_t* const self,
     }
 }
 
+/// Finds an existing in-progress slot with the specified transfer-ID, or allocates a new one.
+/// Allocation always succeeds so the result is never NULL, but it may cause early ejection of an interned DONE slot.
+static rx_slot_t* rx_session_get_slot(rx_session_t* const self,
+                                      udpard_rx_t* const  rx,
+                                      const udpard_us_t   ts,
+                                      const uint64_t      transfer_id)
+{
+    // First, check if one is in progress already; resume it if so.
+    for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
+        if ((self->slots[i].state == rx_slot_busy) && (self->slots[i].transfer_id == transfer_id)) {
+            return &self->slots[i];
+        }
+    }
+    // This appears to be a new transfer, so we will need to allocate a new slot for it.
+    for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
+        if (self->slots[i].state == rx_slot_idle) {
+            return &self->slots[i];
+        }
+    }
+    // All slots are currently occupied; find the oldest slot to sacrifice, which may be busy or done.
+    rx_slot_t*  slot      = NULL;
+    udpard_us_t oldest_ts = HEAT_DEATH;
+    for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
+        UDPARD_ASSERT(self->slots[i].state != rx_slot_idle); // Checked this already.
+        if (self->slots[i].ts_max < oldest_ts) {
+            oldest_ts = self->slots[i].ts_max;
+            slot      = &self->slots[i];
+        }
+    }
+    UDPARD_ASSERT((slot != NULL) && ((slot->state == rx_slot_busy) || (slot->state == rx_slot_done)));
+    // If it's busy, it is probably just a stale transfer, so it's a no-brainer to evict it.
+    // If it's done, we have to force the reordering window to close early to free up a slot without transfer loss.
+    if (slot->state == rx_slot_busy) {
+        rx_slot_reset(slot, self->owner->memory.fragment); // Just a stale transfer, it's probably dead anyway.
+    } else {
+        UDPARD_ASSERT(slot->state == rx_slot_done);
+        // The oldest slot is DONE; we cannot just reset it, we must force an early ejection.
+        // The slot to eject will be chosen based on the transfer-ID, which may not be the oldest slot.
+        // Then we repeat the search looking for any IDLE slot, which must succeed now.
+        rx_session_ordered_scan_slots(self, rx, ts, true); // A slot will be ejected (we don't know which one).
+        slot = NULL;
+        for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
+            if (self->slots[i].state == rx_slot_idle) {
+                slot = &self->slots[i];
+                break;
+            }
+        }
+    }
+    UDPARD_ASSERT((slot != NULL) && (slot->state == rx_slot_idle));
+    return slot;
+}
+
 typedef enum
 {
     rx_session_transfer_new,          ///< Should be accepted --- part of a transfer not yet received.
@@ -1342,6 +1396,7 @@ static void rx_session_update(rx_session_t* const        self,
                               const udpard_mem_deleter_t payload_deleter,
                               const uint_fast8_t         ifindex)
 {
+    UDPARD_ASSERT(self->owner->invoked);
     UDPARD_ASSERT(self->remote.uid == frame.meta.sender_uid);
     UDPARD_ASSERT(frame.meta.topic_hash == self->owner->topic_hash); // must be checked by the caller beforehand
 
@@ -1378,54 +1433,10 @@ static void rx_session_update(rx_session_t* const        self,
     }
 
     // It appears that we need to accept this frame. We need to find a suitable slot for that.
-    rx_slot_t* slot = NULL;
-    for (size_t i = 0; i < RX_SLOT_COUNT; i++) { // First, check if one is in progress already; resume it if so.
-        if ((self->slots[i].state == rx_slot_busy) && (self->slots[i].transfer_id == frame.meta.transfer_id)) {
-            slot = &self->slots[i];
-            break;
-        }
-    }
-    if (slot == NULL) { // This appears to be a new transfer, so we will need to allocate a new slot for it.
-        for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
-            if (self->slots[i].state == rx_slot_idle) {
-                slot = &self->slots[i];
-                break;
-            }
-        }
-    }
-    if (slot == NULL) { // All slots are currently occupied; sacrifice the oldest slot, which may be busy or done.
-        udpard_us_t oldest_ts = HEAT_DEATH;
-        for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
-            UDPARD_ASSERT(self->slots[i].state != rx_slot_idle); // Checked this already.
-            if (self->slots[i].ts_max < oldest_ts) {
-                oldest_ts = self->slots[i].ts_max;
-                slot      = &self->slots[i];
-            }
-        }
-        // If it's busy, it is probably just a stale transfer, so it's a no-brainer to evict it.
-        // If it's done, we have to force the reordering window to close early to free up a slot without transfer loss.
-        UDPARD_ASSERT((slot != NULL) && ((slot->state == rx_slot_busy) || (slot->state == rx_slot_done)));
-        if (slot->state == rx_slot_done) {
-            rx_session_ordered_scan_slots(self, rx, ts, true); // A slot will be ejected (maybe another one).
-            slot = NULL; // Repeat the search. It is certain that now we have at least one idle slot.
-            for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
-                if (self->slots[i].state == rx_slot_idle) {
-                    slot = &self->slots[i];
-                    break;
-                }
-            }
-        } else {
-            UDPARD_ASSERT(slot->state == rx_slot_busy);
-            rx_slot_reset(slot, self->owner->memory.fragment); // Just a stale transfer, it's probably dead anyway.
-        }
-        UDPARD_ASSERT((slot != NULL) && (slot->state == rx_slot_idle));
-    }
-    UDPARD_ASSERT(slot != NULL);
+    rx_slot_t* const slot = rx_session_get_slot(self, rx, ts, frame.meta.transfer_id);
+    UDPARD_ASSERT((slot != NULL) && (slot->state != rx_slot_done));
     UDPARD_ASSERT((slot->state == rx_slot_idle) ||
                   ((slot->state == rx_slot_busy) && (slot->transfer_id == frame.meta.transfer_id)));
-    UDPARD_ASSERT(slot->state != rx_slot_done);
-
-    // Update the slot state and check if it completes the transfer.
     rx_slot_update(slot,
                    ts,
                    self->owner->memory.fragment,
@@ -1471,6 +1482,7 @@ bool udpard_rx_new(udpard_rx_t* const                 self,
             .reordering_window           = UDPARD_REORDERING_WINDOW_UNORDERED,
             .memory                      = p2p_port_memory,
             .index_session_by_remote_uid = NULL,
+            .invoked                     = false,
         };
         self->list_session_by_animation   = (udpard_list_t){ NULL, NULL };
         self->index_session_by_reordering = NULL;
@@ -1487,6 +1499,8 @@ bool udpard_rx_new(udpard_rx_t* const                 self,
 
 void udpard_rx_poll(udpard_rx_t* const self, const udpard_us_t now)
 {
+    UDPARD_ASSERT(!self->p2p_port.invoked);
+    self->p2p_port.invoked = true;
     // Retire timed out sessions. We retire at most one per poll to avoid burstiness because session retirement
     // may potentially free up a lot of memory at once.
     {
@@ -1505,4 +1519,5 @@ void udpard_rx_poll(udpard_rx_t* const self, const udpard_us_t now)
         }
         rx_session_ordered_scan_slots(ses, self, now, false);
     }
+    self->p2p_port.invoked = false;
 }

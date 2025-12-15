@@ -2063,14 +2063,17 @@ static void test_session_ordered(void)
     rx.user                     = &cb_result;
 
     // Construct the session instance.
-    udpard_us_t         now        = 0;
-    const uint64_t      remote_uid = 0xA1B2C3D4E5F60718ULL;
-    udpard_rx_port_t    port       = { .topic_hash                  = 0x4E81E200CB479D4CULL,
-                                       .extent                      = 1000,
-                                       .reordering_window           = 20 * KILO,
-                                       .memory                      = rx_mem,
-                                       .index_session_by_remote_uid = NULL };
-    rx_session_t* const ses        = rx_session_new(&port, &rx.list_session_by_animation, remote_uid, now);
+    udpard_us_t      now        = 0;
+    const uint64_t   remote_uid = 0xA1B2C3D4E5F60718ULL;
+    udpard_rx_port_t port       = {
+              .topic_hash                  = 0x4E81E200CB479D4CULL,
+              .extent                      = 1000,
+              .reordering_window           = 20 * KILO,
+              .memory                      = rx_mem,
+              .index_session_by_remote_uid = NULL,
+              .invoked                     = true,
+    };
+    rx_session_t* const ses = rx_session_new(&port, &rx.list_session_by_animation, remote_uid, now);
 
     // Verify construction outcome.
     TEST_ASSERT_NOT_NULL(ses);
