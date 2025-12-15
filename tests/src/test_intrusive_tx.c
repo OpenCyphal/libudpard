@@ -671,7 +671,7 @@ static void test_tx_publish(void)
     TEST_ASSERT_EQUAL(2000000, frame->deadline);
     TEST_ASSERT_EQUAL(udpard_prio_nominal, frame->priority);
     // Verify the destination is the correct multicast endpoint
-    const udpard_udpip_ep_t expected_ep = make_topic_ep(123);
+    const udpard_udpip_ep_t expected_ep = udpard_make_subject_endpoint(123);
     TEST_ASSERT_EQUAL(expected_ep.ip, frame->destination.ip);
     TEST_ASSERT_EQUAL(expected_ep.port, frame->destination.port);
     udpard_tx_pop(&tx, frame);
@@ -692,9 +692,9 @@ static void test_tx_p2p(void)
     const uint32_t enqueued = udpard_tx_p2p(&tx,
                                             1000000,               // now
                                             2000000,               // deadline
+                                            udpard_prio_high,      // priority
                                             0xFEDCBA9876543210ULL, // remote_uid
                                             (udpard_udpip_ep_t){ .ip = 0xC0A80101, .port = 9999 },
-                                            udpard_prio_high,      // priority
                                             0x0BADC0DE0BADC0DEULL, // transfer_id
                                             (udpard_bytes_t){ .size = interstellar_war_size, .data = interstellar_war },
                                             true, // ack_required
@@ -800,9 +800,9 @@ static void test_tx_deadline_at_current_time(void)
     enqueued = udpard_tx_p2p(&tx,
                              2000000, // now
                              1999999, // deadline in the past
+                             udpard_prio_high,
                              0xFEDCBA9876543210ULL,
                              (udpard_udpip_ep_t){ .ip = 0xC0A80101, .port = 9999 },
-                             udpard_prio_high,
                              0x0BADC0DE0BADC0DEULL,
                              (udpard_bytes_t){ .size = test_payload_size, .data = test_payload },
                              false,
@@ -870,9 +870,9 @@ static void test_tx_invalid_params(void)
                       udpard_tx_p2p(&tx,
                                     1000000,
                                     2000000,
+                                    udpard_prio_high,
                                     0, // remote_uid cannot be 0
                                     (udpard_udpip_ep_t){ .ip = 0xC0A80101, .port = 9999 },
-                                    udpard_prio_high,
                                     0x0BADC0DE0BADC0DEULL,
                                     (udpard_bytes_t){ .size = 10, .data = "test" },
                                     false,
@@ -881,9 +881,9 @@ static void test_tx_invalid_params(void)
                       udpard_tx_p2p(&tx,
                                     1000000,
                                     2000000,
+                                    udpard_prio_high,
                                     0xFEDCBA9876543210ULL,
                                     (udpard_udpip_ep_t){ .ip = 0, .port = 9999 }, // ip cannot be 0
-                                    udpard_prio_high,
                                     0x0BADC0DE0BADC0DEULL,
                                     (udpard_bytes_t){ .size = 10, .data = "test" },
                                     false,

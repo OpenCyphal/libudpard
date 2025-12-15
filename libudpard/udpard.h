@@ -197,6 +197,11 @@ typedef struct udpard_remote_t
     udpard_udpip_ep_t endpoints[UDPARD_NETWORK_INTERFACE_COUNT_MAX]; ///< Zeros in unavailable ifaces.
 } udpard_remote_t;
 
+/// Returns the destination multicast UDP/IP endpoint for the given subject ID.
+/// The application may use this function when setting up subscription sockets.
+/// If the subject-ID exceeds the allowed range, the excessive bits are masked out.
+udpard_udpip_ep_t udpard_make_subject_endpoint(const uint32_t subject_id);
+
 /// The semantics are similar to malloc/free.
 /// Consider using O1Heap: https://github.com/pavel-kirienko/o1heap. Alternatively, some applications may prefer to
 /// use a set of fixed-size block pool allocators (see the high-level overview for details); for example:
@@ -456,12 +461,13 @@ uint32_t udpard_tx_publish(udpard_tx_t* const   self,
 /// Similar to udpard_tx_publish, but for P2P transfers between specific nodes.
 /// This can only be sent in a response to a published message; the RX pipeline will provide the discovered return
 /// endpoint for this particular remote node.
+/// The destination UID may seem redundant but it is needed to filter out incorrectly addressed transfers.
 uint32_t udpard_tx_p2p(udpard_tx_t* const      self,
                        const udpard_us_t       now,
                        const udpard_us_t       deadline,
+                       const udpard_prio_t     priority,
                        const uint64_t          remote_uid,
                        const udpard_udpip_ep_t remote_ep,
-                       const udpard_prio_t     priority,
                        const uint64_t          transfer_id,
                        const udpard_bytes_t    payload,
                        const bool              ack_required,

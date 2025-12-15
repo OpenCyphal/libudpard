@@ -66,11 +66,6 @@ typedef unsigned char byte_t; ///< For compatibility with platforms where byte s
 #define IPv4_MCAST_PREFIX      0xEF000000UL
 #define IPv4_MCAST_SUFFIX_MASK 0x007FFFFFUL
 
-static udpard_udpip_ep_t make_topic_ep(const uint32_t subject_id)
-{
-    return (udpard_udpip_ep_t){ .ip = IPv4_MCAST_PREFIX | (subject_id & IPv4_MCAST_SUFFIX_MASK), .port = UDP_PORT };
-}
-
 static size_t      smaller(const size_t a, const size_t b) { return (a < b) ? a : b; }
 static size_t      larger(const size_t a, const size_t b) { return (a > b) ? a : b; }
 static int64_t     min_i64(const int64_t a, const int64_t b) { return (a < b) ? a : b; }
@@ -119,6 +114,11 @@ static int32_t cavl_compare_fragment_end(const void* const user, const udpard_tr
     if (u < v) { return -1; }
     if (u > v) { return +1; }
     return 0; // clang-format on
+}
+
+udpard_udpip_ep_t udpard_make_subject_endpoint(const uint32_t subject_id)
+{
+    return (udpard_udpip_ep_t){ .ip = IPv4_MCAST_PREFIX | (subject_id & IPv4_MCAST_SUFFIX_MASK), .port = UDP_PORT };
 }
 
 // NOLINTNEXTLINE(misc-no-recursion)
@@ -612,7 +612,7 @@ uint32_t udpard_tx_publish(udpard_tx_t* const   self,
             .sender_uid            = self->local_uid,
             .topic_hash            = topic_hash,
         };
-        out = tx_push(self, deadline, meta, make_topic_ep(subject_id), payload, user_transfer_reference);
+        out = tx_push(self, deadline, meta, udpard_make_subject_endpoint(subject_id), payload, user_transfer_reference);
     }
     return out;
 }
@@ -620,9 +620,9 @@ uint32_t udpard_tx_publish(udpard_tx_t* const   self,
 uint32_t udpard_tx_p2p(udpard_tx_t* const      self,
                        const udpard_us_t       now,
                        const udpard_us_t       deadline,
+                       const udpard_prio_t     priority,
                        const uint64_t          remote_uid,
                        const udpard_udpip_ep_t remote_ep,
-                       const udpard_prio_t     priority,
                        const uint64_t          transfer_id,
                        const udpard_bytes_t    payload,
                        const bool              ack_required,
