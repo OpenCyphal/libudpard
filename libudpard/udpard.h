@@ -504,7 +504,16 @@ typedef struct udpard_rx_memory_resources_t
     udpard_mem_resource_t fragment;
 } udpard_rx_memory_resources_t;
 
-/// The transfer reassembly state machine can operate in several modes described below.
+/// The transfer reassembly state machine can operate in several modes described below. First, a brief summary:
+///
+/// Mode       Guarantees                       Limitations                         Reordering window setting
+/// -----------------------------------------−-------------------------------------------------------------------------
+/// ORDERED    Strictly increasing transfer-ID  May delay transfers                 Non-negative number of microseconds
+/// UNORDERED  Unique transfer-ID               Ordering not guaranteed             UDPARD_REORDERING_WINDOW_UNORDERED
+/// STATELESS  Constant time, constant memory   Single-frame only, duplicates       UDPARD_REORDERING_WINDOW_STATELESS
+///
+/// If not sure, choose the ORDERED mode with a ~5 ms reordering window for all topics except for request-response
+/// RPC-style, in which case choose UNORDERED. The STATELESS mode is chiefly intended just for the heartbeat topic.
 ///
 ///     ORDERED
 ///
@@ -751,27 +760,25 @@ void udpard_rx_subscription_free(udpard_rx_subscription_t* const self);
 ///
 /// The function takes ownership of the passed datagram payload buffer. The library will either store it as a
 /// fragment of the reassembled transfer payload or free it using the corresponding memory resource
-/// (see UdpardRxMemoryResources) if the datagram is not needed for reassembly. Because of the ownership transfer,
-/// the datagram payload buffer has to be mutable (non-const).
-/// One exception is that if the "self" pointer is invalid, the library will be unable to process or free the datagram,
-/// which may lead to a memory leak in the application; hence, the caller should always check that the "self" pointer
-/// is always valid.
+/// (see udpard_rx_memory_resources_t) if the datagram is not needed for reassembly. Because of the ownership transfer,
+/// the datagram payload buffer has to be mutable (non-const). The ownership transfer does not take place if
+/// any of the arguments are invalid; the function returns false in that case and the caller must clean up.
 ///
-/// The function invokes the dynamic memory manager in the following cases only (refer to UdpardRxPort for details):
+/// The function invokes the dynamic memory manager in the following cases only (refer to udpard_rx_port_t):
 ///
 ///     1. A new session state instance is allocated when a new session is initiated.
 ///
 ///     2. A new transfer fragment handle is allocated when a new transfer fragment is accepted.
 ///
-///     3. A new return path discovery instance is allocated when a new remote UID is observed.
+///     3. Allocated objects may occasionally be deallocated to clean up stale transfers and sessions when publishers
+///        disappear. This behavior does not increase the worst case execution time and does not improve the worst
+///        case memory consumption, so a deterministic application need not consider this behavior in its resource
+///        analysis. This behavior is implemented for the benefit of applications where rigorous characterization is
+///        unnecessary.
 ///
-///     4. Allocated objects may occasionally be deallocated at the discretion of the library.
-///        This behavior does not increase the worst case execution time and does not improve the worst case memory
-///        consumption, so a deterministic application need not consider this behavior in its resource analysis.
-///        This behavior is implemented for the benefit of applications where rigorous characterization is unnecessary.
-///
-/// The time complexity is O(log n) where n is the number of remote notes publishing on this subject (topic).
-/// No data copy takes place. Malformed frames are discarded in constant time.
+/// The time complexity is O(log n + log k) where n is the number of remote notes publishing on this subject (topic),
+/// and k is the number of fragments retained in memory for the corresponding in-progress transfer.
+/// No data copying takes place.
 ///
 /// Returns true on successful processing, false if any of the arguments are invalid.
 bool udpard_rx_subscription_receive(udpard_rx_t* const              rx,

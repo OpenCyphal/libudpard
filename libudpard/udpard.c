@@ -1523,13 +1523,17 @@ static void rx_session_update(rx_session_t* const        self,
     (ordered ? rx_session_update_ordered : rx_session_update_unordered)(self, rx, ts, frame, payload_deleter);
 }
 
+// ---------------------------------------------  RX PORT  ---------------------------------------------
+
+// TODO
+
+// ---------------------------------------------  RX PUBLIC API  ---------------------------------------------
+
 static bool rx_validate_memory_resources(const udpard_rx_memory_resources_t memory)
 {
     return (memory.session.alloc != NULL) && (memory.session.free != NULL) && //
            (memory.fragment.alloc != NULL) && (memory.fragment.free != NULL);
 }
-
-// ---------------------------------------------  RX PUBLIC API  ---------------------------------------------
 
 bool udpard_rx_new(udpard_rx_t* const                 self,
                    const uint64_t                     local_uid,
