@@ -158,14 +158,14 @@ static inline void instrumented_allocator_reset(instrumented_allocator_t* const 
 
 static inline udpard_mem_resource_t instrumented_allocator_make_resource(const instrumented_allocator_t* const self)
 {
-    return (udpard_mem_resource_t){ .user  = (void*)self,
-                                    .free  = &instrumented_allocator_free,
-                                    .alloc = &instrumented_allocator_alloc };
+    const udpard_mem_resource_t result = { (void*)self, &instrumented_allocator_free, &instrumented_allocator_alloc };
+    return result;
 }
 
 static inline udpard_mem_deleter_t instrumented_allocator_make_deleter(const instrumented_allocator_t* const self)
 {
-    return (udpard_mem_deleter_t){ .user = (void*)self, .free = &instrumented_allocator_free };
+    const udpard_mem_deleter_t result = { (void*)self, &instrumented_allocator_free };
+    return result;
 }
 
 static inline void seed_prng(void)

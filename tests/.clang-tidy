@@ -50,6 +50,7 @@ Checks: >-
   -performance-avoid-endl,
   -cppcoreguidelines-avoid-do-while,
   -*DeprecatedOrUnsafeBufferHandling,
+  -*-prefer-static-over-anonymous-namespace,
 WarningsAsErrors: '*'
 HeaderFilterRegex: '.*\.hpp'
 FormatStyle: file

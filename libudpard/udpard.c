@@ -6,8 +6,8 @@
 // ReSharper disable CppDFATimeOver
 
 #include "udpard.h"
-#include <string.h>
 #include <assert.h>
+#include <string.h>
 
 /// Define this macro to include build configuration header.
 /// Usage example with CMake: "-DUDPARD_CONFIG_HEADER=\"${CMAKE_CURRENT_SOURCE_DIR}/my_udpard_config.h\""
@@ -18,7 +18,6 @@
 /// By default, this macro resolves to the standard assert(). The user can redefine this if necessary.
 /// To disable assertion checks completely, make it expand into `(void)(0)`.
 #ifndef UDPARD_ASSERT
-// Intentional violation of MISRA: inclusion not at the top of the file to eliminate unnecessary dependency on assert.h.
 // Intentional violation of MISRA: assertion macro cannot be replaced with a function definition.
 #define UDPARD_ASSERT(x) assert(x) // NOSONAR
 #endif
@@ -122,6 +121,7 @@ static int32_t cavl_compare_fragment_end(const void* const user, const udpard_tr
     return 0; // clang-format on
 }
 
+// NOLINTNEXTLINE(misc-no-recursion)
 void udpard_fragment_free_all(udpard_fragment_t* const frag, const udpard_mem_resource_t fragment_memory_resource)
 {
     if (frag != NULL) {

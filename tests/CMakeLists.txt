@@ -20,7 +20,7 @@ set(ENABLE_COVERAGE OFF CACHE BOOL "enable code coverage measurement")
 set(library_dir "${CMAKE_SOURCE_DIR}/libudpard")
 set(unity_root "${CMAKE_SOURCE_DIR}/submodules/unity")
 
-include_directories(${CMAKE_SOURCE_DIR}/lib/cavl)
+include_directories(SYSTEM ${CMAKE_SOURCE_DIR}/lib/cavl)
 
 # TODO FIXME: remove this later
 add_compile_options(-Wno-unused-function)
@@ -91,6 +91,7 @@ gen_test_matrix(test_intrusive_header "src/test_intrusive_header.c")
 gen_test_matrix(test_intrusive_misc "src/test_intrusive_misc.c")
 gen_test_matrix(test_intrusive_tx "src/test_intrusive_tx.c")
 gen_test_matrix(test_intrusive_rx "src/test_intrusive_rx.c")
+gen_test_matrix(test_public "src/test_public.cpp;${library_dir}/udpard.c")
 
 # Coverage targets. Usage:
 #   cmake -DENABLE_COVERAGE=ON ..
