@@ -154,6 +154,109 @@ void test_udpard_fragment_seek()
     TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
 }
 
+void test_udpard_fragment_gather()
+{
+    instrumented_allocator_t alloc_frag{};
+    instrumented_allocator_new(&alloc_frag);
+    const udpard_mem_resource_t mem_frag = instrumented_allocator_make_resource(&alloc_frag);
+
+    instrumented_allocator_t alloc_payload{};
+    instrumented_allocator_new(&alloc_payload);
+    const udpard_mem_resource_t mem_payload = instrumented_allocator_make_resource(&alloc_payload);
+    const udpard_mem_deleter_t  del_payload = instrumented_allocator_make_deleter(&alloc_payload);
+
+    // Test 1: NULL fragment returns 0.
+    char buf[100];  // NOLINT(*-avoid-c-arrays)
+    TEST_ASSERT_EQUAL_size_t(0, udpard_fragment_gather(nullptr, sizeof(buf), static_cast<void*>(buf)));
+
+    // Test 2: NULL destination returns 0.
+    udpard_fragment_t* single = make_test_fragment(mem_frag, mem_payload, del_payload, 0, 5, "hello");
+    TEST_ASSERT_NOT_NULL(single);
+    single->index_offset.up    = nullptr;
+    single->index_offset.lr[0] = nullptr;
+    single->index_offset.lr[1] = nullptr;
+    single->index_offset.bf    = 0;
+    TEST_ASSERT_EQUAL_size_t(0, udpard_fragment_gather(single, sizeof(buf), nullptr));
+
+    // Test 3: Single fragment - gather all.
+    (void) std::memset(static_cast<void*>(buf), 0, sizeof(buf));
+    TEST_ASSERT_EQUAL_size_t(5, udpard_fragment_gather(single, sizeof(buf), static_cast<void*>(buf)));
+    TEST_ASSERT_EQUAL_MEMORY("hello", buf, 5);
+
+    // Test 4: Single fragment - truncation (destination smaller than fragment).
+    (void) std::memset(static_cast<void*>(buf), 0, sizeof(buf));
+    TEST_ASSERT_EQUAL_size_t(3, udpard_fragment_gather(single, 3, static_cast<void*>(buf)));
+    TEST_ASSERT_EQUAL_MEMORY("hel", buf, 3);
+
+    // Cleanup single fragment.
+    mem_payload.free(mem_payload.user, single->origin.size, single->origin.data);
+    mem_frag.free(mem_frag.user, sizeof(udpard_fragment_t), single);
+
+    // Test 5: Multiple fragments forming a tree.
+    // Create tree: root at offset 5 ("MID"), left at offset 0 ("ABCDE"), right at offset 10 ("WXYZ")
+    // Total payload when gathered: "ABCDE" + "MID" + "WXYZ" = "ABCDEMIDWXYZ" (12 bytes)
+    udpard_fragment_t* root  = make_test_fragment(mem_frag, mem_payload, del_payload, 5, 3, "MID");
+    udpard_fragment_t* left  = make_test_fragment(mem_frag, mem_payload, del_payload, 0, 5, "ABCDE");
+    udpard_fragment_t* right = make_test_fragment(mem_frag, mem_payload, del_payload, 10, 4, "WXYZ");
+    TEST_ASSERT_NOT_NULL(root);
+    TEST_ASSERT_NOT_NULL(left);
+    TEST_ASSERT_NOT_NULL(right);
+
+    // Build tree structure.
+    root->index_offset.up    = nullptr;
+    root->index_offset.lr[0] = &left->index_offset;
+    root->index_offset.lr[1] = &right->index_offset;
+    root->index_offset.bf    = 0;
+
+    left->index_offset.up    = &root->index_offset;
+    left->index_offset.lr[0] = nullptr;
+    left->index_offset.lr[1] = nullptr;
+    left->index_offset.bf    = 0;
+
+    right->index_offset.up    = &root->index_offset;
+    right->index_offset.lr[0] = nullptr;
+    right->index_offset.lr[1] = nullptr;
+    right->index_offset.bf    = 0;
+
+    // Gather from root - should collect all fragments in order.
+    (void) std::memset(static_cast<void*>(buf), 0, sizeof(buf));
+    TEST_ASSERT_EQUAL_size_t(12, udpard_fragment_gather(root, sizeof(buf), static_cast<void*>(buf)));
+    TEST_ASSERT_EQUAL_MEMORY("ABCDEMIDWXYZ", buf, 12);
+
+    // Gather from left child - should still collect all fragments (traverses to root first).
+    (void) std::memset(static_cast<void*>(buf), 0, sizeof(buf));
+    TEST_ASSERT_EQUAL_size_t(12, udpard_fragment_gather(left, sizeof(buf), static_cast<void*>(buf)));
+    TEST_ASSERT_EQUAL_MEMORY("ABCDEMIDWXYZ", buf, 12);
+
+    // Gather from right child - should still collect all fragments.
+    (void) std::memset(static_cast<void*>(buf), 0, sizeof(buf));
+    TEST_ASSERT_EQUAL_size_t(12, udpard_fragment_gather(right, sizeof(buf), static_cast<void*>(buf)));
+    TEST_ASSERT_EQUAL_MEMORY("ABCDEMIDWXYZ", buf, 12);
+
+    // Test 6: Truncation with multiple fragments - buffer smaller than total.
+    (void) std::memset(static_cast<void*>(buf), 0, sizeof(buf));
+    TEST_ASSERT_EQUAL_size_t(7, udpard_fragment_gather(root, 7, static_cast<void*>(buf)));
+    TEST_ASSERT_EQUAL_MEMORY("ABCDEMI", buf, 7);
+
+    // Test 7: Truncation mid-fragment.
+    (void) std::memset(static_cast<void*>(buf), 0, sizeof(buf));
+    TEST_ASSERT_EQUAL_size_t(3, udpard_fragment_gather(root, 3, static_cast<void*>(buf)));
+    TEST_ASSERT_EQUAL_MEMORY("ABC", buf, 3);
+
+    // Test 8: Zero-size destination.
+    TEST_ASSERT_EQUAL_size_t(0, udpard_fragment_gather(root, 0, static_cast<void*>(buf)));
+
+    // Cleanup.
+    mem_payload.free(mem_payload.user, left->origin.size, left->origin.data);
+    mem_frag.free(mem_frag.user, sizeof(udpard_fragment_t), left);
+    mem_payload.free(mem_payload.user, root->origin.size, root->origin.data);
+    mem_frag.free(mem_frag.user, sizeof(udpard_fragment_t), root);
+    mem_payload.free(mem_payload.user, right->origin.size, right->origin.data);
+    mem_frag.free(mem_frag.user, sizeof(udpard_fragment_t), right);
+    TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
+}
+
 } // namespace
 
 extern "C" void setUp() {}
@@ -164,5 +267,6 @@ int main()
 {
     UNITY_BEGIN();
     RUN_TEST(test_udpard_fragment_seek);
+    RUN_TEST(test_udpard_fragment_gather);
     return UNITY_END();
 }

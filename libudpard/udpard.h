@@ -278,11 +278,20 @@ typedef struct udpard_fragment_t
 void udpard_fragment_free_all(udpard_fragment_t* const frag, const udpard_mem_resource_t fragment_memory_resource);
 
 /// Given any fragment in a transfer, returns the fragment that contains the given payload offset.
-/// Returns NULL if the offset points beyond the stored payload.
+/// Returns NULL if the offset points beyond the stored payload, or if any_frag is NULL.
 /// This is also the idiomatic way to find the head of the fragment list when invoked with offset zero.
 /// This function accepts any node in the fragment tree, not necessarily the head or the root, and
 /// has a logarithmic complexity in the number of fragments, which makes it very efficient.
 udpard_fragment_t* udpard_fragment_seek(udpard_fragment_t* any_frag, const size_t offset);
+
+/// Given any fragment in a transfer, copies the entire transfer payload into the specified contiguous buffer.
+/// If the total size of all fragments combined exceeds the size of the destination buffer,
+/// copying will stop early after the buffer is filled, thus truncating the fragmented data short.
+/// The function has no effect and returns zero if the destination buffer is NULL.
+/// Returns the number of bytes copied into the contiguous destination buffer.
+size_t udpard_fragment_gather(const udpard_fragment_t* any_frag,
+                              const size_t             destination_size_bytes,
+                              void* const              destination);
 
 // =====================================================================================================================
 // =================================================    TX PIPELINE    =================================================

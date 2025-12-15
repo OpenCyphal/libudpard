@@ -146,19 +146,45 @@ void udpard_fragment_free_all(udpard_fragment_t* const frag, const udpard_mem_re
 
 udpard_fragment_t* udpard_fragment_seek(udpard_fragment_t* any_frag, const size_t offset)
 {
-    while (any_frag->index_offset.up != NULL) { // Only if the given node is not already the root.
-        any_frag = (udpard_fragment_t*)any_frag->index_offset.up;
-    }
-    if (offset == 0) { // Common fast path.
-        return (udpard_fragment_t*)cavl2_min(&any_frag->index_offset);
-    }
-    udpard_fragment_t* const f =
-      (udpard_fragment_t*)cavl2_predecessor(&any_frag->index_offset, &offset, &cavl_compare_fragment_offset);
-    if ((f != NULL) && ((f->offset + f->view.size) > offset)) {
-        UDPARD_ASSERT(f->offset <= offset);
-        return f;
+    if (any_frag != NULL) {
+        while (any_frag->index_offset.up != NULL) { // Only if the given node is not already the root.
+            any_frag = (udpard_fragment_t*)any_frag->index_offset.up;
+        }
+        if (offset == 0) { // Common fast path.
+            return (udpard_fragment_t*)cavl2_min(&any_frag->index_offset);
+        }
+        udpard_fragment_t* const f =
+          (udpard_fragment_t*)cavl2_predecessor(&any_frag->index_offset, &offset, &cavl_compare_fragment_offset);
+        if ((f != NULL) && ((f->offset + f->view.size) > offset)) {
+            UDPARD_ASSERT(f->offset <= offset);
+            return f;
+        }
     }
     return NULL;
+}
+
+size_t udpard_fragment_gather(const udpard_fragment_t* any_frag,
+                              const size_t             destination_size_bytes,
+                              void* const              destination)
+{
+    size_t offset = 0;
+    if ((any_frag != NULL) && (destination != NULL)) {
+        while (any_frag->index_offset.up != NULL) { // Locate the root.
+            any_frag = (const udpard_fragment_t*)any_frag->index_offset.up;
+        }
+        for (const udpard_fragment_t* frag =
+               (const udpard_fragment_t*)cavl2_min((udpard_tree_t*)&any_frag->index_offset);
+             (frag != NULL) && (offset < destination_size_bytes);
+             frag = (const udpard_fragment_t*)cavl2_next_greater((udpard_tree_t*)&frag->index_offset)) {
+            UDPARD_ASSERT(frag->offset == offset);
+            UDPARD_ASSERT(frag->view.data != NULL);
+            const size_t to_copy = smaller(frag->view.size, destination_size_bytes - offset);
+            // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
+            (void)memcpy((byte_t*)destination + offset, frag->view.data, to_copy);
+            offset += to_copy;
+        }
+    }
+    return offset;
 }
 
 // ---------------------------------------------  CRC  ---------------------------------------------
