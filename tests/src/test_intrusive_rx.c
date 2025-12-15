@@ -2650,6 +2650,214 @@ static void test_session_ordered(void)
     instrumented_allocator_reset(&alloc_payload);
 }
 
+static void test_session_unordered(void)
+{
+    // Initialize the memory resources.
+    instrumented_allocator_t alloc_frag = { 0 };
+    instrumented_allocator_new(&alloc_frag);
+    const udpard_mem_resource_t mem_frag = instrumented_allocator_make_resource(&alloc_frag);
+
+    instrumented_allocator_t alloc_session = { 0 };
+    instrumented_allocator_new(&alloc_session);
+    const udpard_mem_resource_t mem_session = instrumented_allocator_make_resource(&alloc_session);
+
+    instrumented_allocator_t alloc_payload = { 0 };
+    instrumented_allocator_new(&alloc_payload);
+    const udpard_mem_resource_t mem_payload = instrumented_allocator_make_resource(&alloc_payload);
+    const udpard_mem_deleter_t  del_payload = instrumented_allocator_make_deleter(&alloc_payload);
+
+    const udpard_rx_memory_resources_t rx_mem = { .fragment = mem_frag, .session = mem_session };
+
+    // Initialize the shared RX instance.
+    const uint64_t local_uid = 0xC3C8E4974254E1F5ULL;
+    udpard_rx_t    rx;
+    TEST_ASSERT(udpard_rx_new(&rx, local_uid, rx_mem, &on_message, &on_collision, &on_ack_mandate));
+    callback_result_t cb_result = { 0 };
+    rx.user                     = &cb_result;
+    TEST_ASSERT_EQUAL(local_uid, rx.p2p_port.topic_hash);
+    TEST_ASSERT_EQUAL(UDPARD_REORDERING_WINDOW_UNORDERED, rx.p2p_port.reordering_window);
+
+    // Construct the session instance using the p2p port.
+    udpard_us_t    now        = 0;
+    const uint64_t remote_uid = 0xA1B2C3D4E5F60718ULL;
+    rx.p2p_port.invoked       = true; // simulate being invoked
+    rx_session_t* const ses   = rx_session_new(&rx.p2p_port, &rx.list_session_by_animation, remote_uid, now);
+
+    // Verify construction outcome.
+    TEST_ASSERT_NOT_NULL(ses);
+    TEST_ASSERT_EQUAL_PTR(rx.list_session_by_animation.head, &ses->list_by_animation);
+    TEST_ASSERT_EQUAL_PTR(rx.p2p_port.index_session_by_remote_uid, &ses->index_remote_uid);
+    TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
+
+    // Feed a valid single-frame transfer and ensure immediate ejection (no reordering delay).
+    meta_t meta = { .priority              = udpard_prio_high,
+                    .flag_ack              = true,
+                    .transfer_payload_size = 5,
+                    .transfer_id           = 100,
+                    .sender_uid            = remote_uid,
+                    .topic_hash            = local_uid }; // P2P uses UID as the topic hash
+    now += 1000;
+    rx_session_update(ses,
+                      &rx,
+                      now,
+                      (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1234 },
+                      make_frame(meta, mem_payload, "hello", 0, 5),
+                      del_payload,
+                      0);
+
+    // Transfer is ejected immediately in UNORDERED mode.
+    TEST_ASSERT_EQUAL(1, cb_result.message.count);
+    TEST_ASSERT_EQUAL_PTR(&rx, cb_result.rx);
+    TEST_ASSERT_NULL(cb_result.sub); // p2p transfers have NULL subscription
+    TEST_ASSERT_EQUAL(1000, cb_result.message.history[0].timestamp);
+    TEST_ASSERT_EQUAL(udpard_prio_high, cb_result.message.history[0].priority);
+    TEST_ASSERT_EQUAL(100, cb_result.message.history[0].transfer_id);
+    TEST_ASSERT(transfer_payload_verify(&cb_result.message.history[0], 5, "hello", 5));
+
+    // ACK mandate should be generated.
+    TEST_ASSERT_EQUAL(1, cb_result.ack_mandate.count);
+    TEST_ASSERT_EQUAL(100, cb_result.ack_mandate.am.transfer_id);
+    TEST_ASSERT_EQUAL_size_t(5, cb_result.ack_mandate.am.payload_head.size);
+    TEST_ASSERT_EQUAL_MEMORY("hello", cb_result.ack_mandate.am.payload_head.data, 5);
+
+    // Free the transfer payload.
+    udpard_fragment_free_all(cb_result.message.history[0].payload_head, mem_frag);
+    TEST_ASSERT_EQUAL(0, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments);
+
+    // Feed out-of-order transfers: 103, then 102. Both should be ejected immediately in UNORDERED mode.
+    meta.transfer_id           = 103;
+    meta.transfer_payload_size = 6;
+    meta.priority              = udpard_prio_low;
+    now += 1000;
+    rx_session_update(ses,
+                      &rx,
+                      now,
+                      (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1234 },
+                      make_frame(meta, mem_payload, "tid103", 0, 6),
+                      del_payload,
+                      0);
+    TEST_ASSERT_EQUAL(2, cb_result.message.count);
+    TEST_ASSERT_EQUAL(103, cb_result.message.history[0].transfer_id);
+    TEST_ASSERT(transfer_payload_verify(&cb_result.message.history[0], 6, "tid103", 6));
+    udpard_fragment_free_all(cb_result.message.history[0].payload_head, mem_frag);
+
+    meta.transfer_id = 102;
+    meta.priority    = udpard_prio_nominal;
+    now += 1000;
+    rx_session_update(ses,
+                      &rx,
+                      now,
+                      (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1234 },
+                      make_frame(meta, mem_payload, "tid102", 0, 6),
+                      del_payload,
+                      0);
+    // In UNORDERED mode, 102 is accepted even though it's "late" (arrives after 103).
+    TEST_ASSERT_EQUAL(3, cb_result.message.count);
+    TEST_ASSERT_EQUAL(102, cb_result.message.history[0].transfer_id);
+    TEST_ASSERT(transfer_payload_verify(&cb_result.message.history[0], 6, "tid102", 6));
+    udpard_fragment_free_all(cb_result.message.history[0].payload_head, mem_frag);
+
+    // Verify that duplicates are still rejected.
+    meta.transfer_id = 103; // repeat of a received transfer
+    now += 1000;
+    rx_session_update(ses,
+                      &rx,
+                      now,
+                      (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1234 },
+                      make_frame(meta, mem_payload, "dup103", 0, 6),
+                      del_payload,
+                      0);
+    TEST_ASSERT_EQUAL(3, cb_result.message.count);           // no new message
+    TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments); // payload was freed
+
+    // Repeat duplicate should still trigger ACK if requested on first frame.
+    TEST_ASSERT_EQUAL(4, cb_result.ack_mandate.count); // ACK generated for duplicate
+    TEST_ASSERT_EQUAL(103, cb_result.ack_mandate.am.transfer_id);
+
+    // Test multi-frame transfer in UNORDERED mode.
+    meta.transfer_id           = 200;
+    meta.transfer_payload_size = 10;
+    meta.priority              = udpard_prio_fast;
+    meta.flag_ack              = true;
+    now += 1000;
+    const udpard_us_t ts_200 = now;
+    // Send second frame first.
+    rx_session_update(ses,
+                      &rx,
+                      now,
+                      (udpard_udpip_ep_t){ .ip = 0x0A000002, .port = 0x5678 },
+                      make_frame(meta, mem_payload, "0123456789", 5, 5),
+                      del_payload,
+                      1);
+    TEST_ASSERT_EQUAL(3, cb_result.message.count); // not complete yet
+    TEST_ASSERT_EQUAL(1, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL(1, alloc_payload.allocated_fragments);
+
+    // Send first frame to complete the transfer.
+    now += 500;
+    rx_session_update(ses,
+                      &rx,
+                      now,
+                      (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1234 },
+                      make_frame(meta, mem_payload, "0123456789", 0, 5),
+                      del_payload,
+                      0);
+    // Transfer is completed and ejected immediately.
+    TEST_ASSERT_EQUAL(4, cb_result.message.count);
+    TEST_ASSERT_EQUAL(ts_200, cb_result.message.history[0].timestamp); // earliest frame timestamp
+    TEST_ASSERT_EQUAL(udpard_prio_fast, cb_result.message.history[0].priority);
+    TEST_ASSERT_EQUAL(200, cb_result.message.history[0].transfer_id);
+    TEST_ASSERT(transfer_payload_verify(&cb_result.message.history[0], 10, "0123456789", 10));
+    // Return path discovered from both interfaces.
+    TEST_ASSERT_EQUAL(0x0A000001, cb_result.message.history[0].remote.endpoints[0].ip);
+    TEST_ASSERT_EQUAL(0x0A000002, cb_result.message.history[0].remote.endpoints[1].ip);
+    TEST_ASSERT_EQUAL(0x1234, cb_result.message.history[0].remote.endpoints[0].port);
+    TEST_ASSERT_EQUAL(0x5678, cb_result.message.history[0].remote.endpoints[1].port);
+    udpard_fragment_free_all(cb_result.message.history[0].payload_head, mem_frag);
+
+    // ACK mandate generated upon completion.
+    TEST_ASSERT_EQUAL(5, cb_result.ack_mandate.count);
+    TEST_ASSERT_EQUAL(200, cb_result.ack_mandate.am.transfer_id);
+
+    // Verify that polling doesn't affect UNORDERED mode (no reordering window processing).
+    TEST_ASSERT_EQUAL(0, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments);
+    rx.p2p_port.invoked = false;
+    udpard_rx_poll(&rx, now + 1000000);            // advance time significantly
+    TEST_ASSERT_EQUAL(4, cb_result.message.count); // no change
+    rx.p2p_port.invoked = true;
+
+    // Test that transfer-ID window works correctly in UNORDERED mode.
+    // Transfers far outside the window (very old) should still be rejected as duplicates if within the window,
+    // but truly old ones outside the window are treated as new (since they wrapped around).
+    // The head is now at 200 (most recently ejected). Sending 200 again should be rejected as duplicate.
+    meta.transfer_id           = 200;
+    meta.transfer_payload_size = 5;
+    now += 1000;
+    rx_session_update(ses,
+                      &rx,
+                      now,
+                      (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1234 },
+                      make_frame(meta, mem_payload, "dup00", 0, 5),
+                      del_payload,
+                      0);
+    TEST_ASSERT_EQUAL(4, cb_result.message.count);           // duplicate rejected, count unchanged
+    TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments); // payload was freed
+
+    // Verify session cleanup on timeout.
+    now += SESSION_LIFETIME;
+    rx.p2p_port.invoked = false;
+    udpard_rx_poll(&rx, now);
+    TEST_ASSERT_EQUAL(0, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, alloc_session.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments);
+
+    instrumented_allocator_reset(&alloc_frag);
+    instrumented_allocator_reset(&alloc_session);
+    instrumented_allocator_reset(&alloc_payload);
+}
+
 void setUp(void) {}
 
 void tearDown(void) {}
@@ -2669,6 +2877,7 @@ int main(void)
     RUN_TEST(test_rx_slot_update);
 
     RUN_TEST(test_session_ordered);
+    RUN_TEST(test_session_unordered);
 
     return UNITY_END();
 }
