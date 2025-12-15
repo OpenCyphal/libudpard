@@ -1124,6 +1124,42 @@ typedef struct
     rx_slot_t slots[RX_SLOT_COUNT];
 } rx_session_t;
 
+static void rx_session_on_ack_mandate(const rx_session_t* const self,
+                                      udpard_rx_t* const        rx,
+                                      const udpard_prio_t       priority,
+                                      const uint64_t            transfer_id,
+                                      const udpard_bytes_t      payload_head)
+{
+    udpard_rx_subscription_t* const subscription =
+      (self->owner == &rx->p2p_port) ? NULL : (udpard_rx_subscription_t*)self->owner;
+    const udpard_rx_ack_mandate_t mandate = {
+        .remote = self->remote, .priority = priority, .transfer_id = transfer_id, .payload_head = payload_head
+    };
+    UDPARD_ASSERT(payload_head.data != NULL || payload_head.size == 0U);
+    UDPARD_ASSERT(rx->on_ack_mandate != NULL);
+    rx->on_ack_mandate(rx, subscription, mandate);
+}
+
+/// The payload ownership is transferred to the application.
+static void rx_session_on_message(const rx_session_t* const self, udpard_rx_t* const rx, rx_slot_t* const slot)
+{
+    udpard_rx_subscription_t* const subscription =
+      (self->owner == &rx->p2p_port) ? NULL : (udpard_rx_subscription_t*)self->owner;
+    const udpard_rx_transfer_t transfer = {
+        .timestamp           = slot->ts_min,
+        .priority            = slot->priority,
+        .transfer_id         = slot->transfer_id,
+        .remote              = self->remote,
+        .payload_size_stored = slot->covered_prefix,
+        .payload_size_wire   = slot->total_size,
+        .payload_head        = (udpard_fragment_t*)cavl2_min(slot->fragments),
+        .payload_root        = (udpard_fragment_t*)slot->fragments,
+    };
+    slot->fragments = NULL; // Transfer ownership to the application.
+    UDPARD_ASSERT(rx->on_message != NULL);
+    rx->on_message(rx, subscription, transfer);
+}
+
 static int32_t cavl_compare_rx_session_remote_uid(const void* const user, const udpard_tree_t* const node)
 {
     const uint64_t uid_a = *(const uint64_t*)user;
@@ -1244,21 +1280,6 @@ static void rx_session_ordered_scan_slots(rx_session_t* const self,
             break; // No more slots can be ejected at this time.
         }
 
-        // Invoke the reception callback, transferring the payload ownership to the application.
-        UDPARD_ASSERT((slot != NULL) && (slot->state == rx_slot_done));
-        udpard_rx_subscription_t* const subscription = (self->owner == &rx->p2p_port) // P2P special case
-                                                         ? NULL
-                                                         : (udpard_rx_subscription_t*)self->owner;
-        const udpard_rx_transfer_t      transfer     = { .timestamp           = slot->ts_min,
-                                                         .priority            = slot->priority,
-                                                         .transfer_id         = slot->transfer_id,
-                                                         .remote              = self->remote,
-                                                         .payload_size_stored = slot->covered_prefix,
-                                                         .payload_size_wire   = slot->total_size,
-                                                         .payload_head = (udpard_fragment_t*)cavl2_min(slot->fragments),
-                                                         .payload_root = (udpard_fragment_t*)slot->fragments };
-        rx->on_message(rx, subscription, transfer);
-
         // Slide the transfer-ID window to prevent duplicates and out-of-order transfers.
         // Mark the current transfer as received.
         // We always pick the next transfer to eject with the nearest transfer-ID, which guarantees that the other
@@ -1267,8 +1288,10 @@ static void rx_session_ordered_scan_slots(rx_session_t* const self,
         rx_transfer_id_window_slide(&self->received, slot->transfer_id);
         rx_transfer_id_window_set(&self->received, slot->transfer_id);
 
-        // Reset the slot, but don't free the payload because it's been moved to the application.
-        slot->fragments = NULL;
+        // Invoke the reception callback, transferring the payload ownership to the application, then reset the slot.
+        UDPARD_ASSERT((slot != NULL) && (slot->state == rx_slot_done));
+        rx_session_on_message(self, rx, slot);
+        UDPARD_ASSERT(slot->fragments == NULL); // Payload ownership transferred to the application.
         rx_slot_reset(slot, self->owner->memory.fragment);
     }
 
@@ -1321,9 +1344,6 @@ static void rx_session_update(rx_session_t* const        self,
 {
     UDPARD_ASSERT(self->remote.uid == frame.meta.sender_uid);
     UDPARD_ASSERT(frame.meta.topic_hash == self->owner->topic_hash); // must be checked by the caller beforehand
-    udpard_rx_subscription_t* const subscription = (self->owner == &rx->p2p_port) // P2P is a single special case port.
-                                                     ? NULL
-                                                     : (udpard_rx_subscription_t*)self->owner;
 
     // Animate the session to prevent it from being retired.
     enlist_head(&rx->list_session_by_animation, &self->list_by_animation);
@@ -1348,11 +1368,7 @@ static void rx_session_update(rx_session_t* const        self,
         // - We don't want to flood the network with duplicate ACKs for every fragment of a transfer.
         // - The application may need to look at the head of the transfer to handle acks, which is in the first frame.
         if ((status == rx_session_transfer_acknowledged) && frame.meta.flag_ack && (frame.base.offset == 0U)) {
-            const udpard_rx_ack_mandate_t mandate = { .remote       = self->remote,
-                                                      .priority     = frame.meta.priority,
-                                                      .transfer_id  = frame.meta.transfer_id,
-                                                      .payload_head = frame.base.payload };
-            rx->on_ack_mandate(rx, subscription, mandate);
+            rx_session_on_ack_mandate(self, rx, frame.meta.priority, frame.meta.transfer_id, frame.base.payload);
         }
         // If the transfer is lost, we will never acknowledge it because we haven't received it,
         // but some other subscriber might!
@@ -1421,16 +1437,11 @@ static void rx_session_update(rx_session_t* const        self,
     if (slot->state == rx_slot_done) {
         UDPARD_ASSERT(rx_session_transfer_acknowledged == rx_session_check_transfer_status(self, slot->transfer_id));
         if (frame.meta.flag_ack) {
-            const udpard_rx_ack_mandate_t mandate = {
-                .remote       = self->remote,
-                .priority     = slot->priority,
-                .transfer_id  = frame.meta.transfer_id,
-                .payload_head = ((udpard_fragment_t*)cavl2_min(slot->fragments))->view,
-            };
-            rx->on_ack_mandate(rx, subscription, mandate);
+            rx_session_on_ack_mandate(
+              self, rx, slot->priority, slot->transfer_id, ((udpard_fragment_t*)cavl2_min(slot->fragments))->view);
         }
-        // The final ejection procedure is a little complicated because we need to manage the reordering window
-        // and possible obsolescence of other in-progress slots.
+        // In the ORDERED mode, the final ejection procedure is somewhat convoluted because we need to manage the
+        // reordering window and possible obsolescence of other in-progress slots.
         rx_session_ordered_scan_slots(self, rx, ts, false);
     }
 }
