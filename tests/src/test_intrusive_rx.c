@@ -2025,6 +2025,9 @@ static void on_collision(udpard_rx_t* const rx, udpard_rx_subscription_t* const 
 
 static void on_ack_mandate(udpard_rx_t* const rx, udpard_rx_subscription_t* const sub, const udpard_rx_ack_mandate_t am)
 {
+    printf("on_ack_mandate: transfer_id=%llu payload_head_size=%zu\n",
+           (unsigned long long)am.transfer_id,
+           am.payload_head.size);
     callback_result_t* const cb_result = (callback_result_t* const)rx->user;
     cb_result->rx                      = rx;
     cb_result->sub                     = sub;
