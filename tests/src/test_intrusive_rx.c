@@ -3,6 +3,8 @@
 /// Copyright Amazon.com Inc. or its affiliates.
 /// SPDX-License-Identifier: MIT
 
+// ReSharper disable CppDFATimeOver
+
 #include <udpard.c> // NOLINT(bugprone-suspicious-include)
 #include "helpers.h"
 #include <unity.h>
@@ -62,8 +64,8 @@ static bool transfer_payload_verify(udpard_rx_transfer_t* const transfer,
                                     const void* const           payload,
                                     const size_t                payload_size_wire)
 {
-    udpard_fragment_t* frag   = transfer->payload_head;
-    size_t             offset = 0;
+    const udpard_fragment_t* frag   = transfer->payload_head;
+    size_t                   offset = 0;
     while (frag != NULL) {
         if (frag->offset != offset) {
             return false;
@@ -2040,7 +2042,7 @@ static void on_ack_mandate(udpard_rx_t* const rx, udpard_rx_port_t* const port, 
 }
 
 /// Tests the ORDERED reassembly mode (strictly increasing transfer-ID sequence).
-static void test_session_ordered(void)
+static void test_rx_session_ordered(void)
 {
     // Initialize the memory resources.
     instrumented_allocator_t alloc_frag = { 0 };
@@ -2659,7 +2661,7 @@ static void test_session_ordered(void)
     instrumented_allocator_reset(&alloc_payload);
 }
 
-static void test_session_unordered(void)
+static void test_rx_session_unordered(void)
 {
     // Initialize the memory resources.
     instrumented_allocator_t alloc_frag = { 0 };
@@ -2863,6 +2865,36 @@ static void test_session_unordered(void)
     TEST_ASSERT_EQUAL(4, cb_result.message.count);           // duplicate rejected, count unchanged
     TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments); // payload was freed
 
+    // Populate all slots with stale in-progress transfers, then verify they are reclaimed on timeout.
+    meta.transfer_payload_size = 4;
+    meta.priority              = udpard_prio_nominal;
+    meta.flag_ack              = false;
+    for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
+        meta.transfer_id = 300 + i;
+        now += 1;
+        rx_session_update(ses,
+                          &rx,
+                          now,
+                          (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1234 },
+                          make_frame(meta, mem_payload, "OLD!", 0, 2),
+                          del_payload,
+                          0);
+    }
+    TEST_ASSERT_EQUAL(RX_SLOT_COUNT, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL(RX_SLOT_COUNT, alloc_payload.allocated_fragments);
+    now += SESSION_LIFETIME + 10;
+    meta.transfer_id = 400;
+    rx_session_update(ses,
+                      &rx,
+                      now,
+                      (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1234 },
+                      make_frame(meta, mem_payload, "NEW!", 0, 2),
+                      del_payload,
+                      0);
+    TEST_ASSERT_EQUAL(4, cb_result.message.count);
+    TEST_ASSERT_EQUAL(1, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL(1, alloc_payload.allocated_fragments);
+
     // Verify session cleanup on timeout.
     now += SESSION_LIFETIME;
     rx.p2p_port.invoked = false;
@@ -2881,7 +2913,7 @@ static void test_session_unordered(void)
 /// Tests ports in ORDERED, UNORDERED, and STATELESS modes.
 /// The UNORDERED port is the p2p_port in the rx instance; the other modes are tested on separate port instances.
 /// All transfers are single-frame transfers for simplicity, since we already have dedicated lower-level tests.
-static void test_port(void)
+static void test_rx_port(void)
 {
     // Initialize the memory resources.
     instrumented_allocator_t alloc_frag = { 0 };
@@ -3257,7 +3289,7 @@ static void test_port(void)
 }
 
 /// Starts a few transfers on multiple ports, lets them expire, and ensures cleanup in udpard_rx_poll().
-static void test_port_timeouts(void)
+static void test_rx_port_timeouts(void)
 {
     instrumented_allocator_t alloc_frag = { 0 };
     instrumented_allocator_new(&alloc_frag);
@@ -3421,6 +3453,99 @@ static void test_port_timeouts(void)
     TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
 }
 
+/// Ensures udpard_rx_free walks and clears all sessions across ports.
+static void test_rx_free_loop(void)
+{
+    instrumented_allocator_t alloc_frag = { 0 };
+    instrumented_allocator_new(&alloc_frag);
+    const udpard_mem_resource_t mem_frag = instrumented_allocator_make_resource(&alloc_frag);
+
+    instrumented_allocator_t alloc_session = { 0 };
+    instrumented_allocator_new(&alloc_session);
+    const udpard_mem_resource_t mem_session = instrumented_allocator_make_resource(&alloc_session);
+
+    instrumented_allocator_t alloc_payload = { 0 };
+    instrumented_allocator_new(&alloc_payload);
+    const udpard_mem_resource_t mem_payload = instrumented_allocator_make_resource(&alloc_payload);
+    const udpard_mem_deleter_t  del_payload = instrumented_allocator_make_deleter(&alloc_payload);
+
+    const udpard_rx_memory_resources_t rx_mem = { .fragment = mem_frag, .session = mem_session };
+
+    udpard_rx_t       rx;
+    callback_result_t cb_result = { 0 };
+    TEST_ASSERT(udpard_rx_new(&rx, 0xCAFED00DCAFED00DULL, rx_mem, &on_message, &on_collision, &on_ack_mandate));
+    rx.user = &cb_result;
+
+    udpard_rx_port_t port_extra;
+    const uint64_t   topic_hash_extra = 0xDEADBEEFF00D1234ULL;
+    TEST_ASSERT(udpard_rx_port_new(&port_extra, topic_hash_extra, 1000, 5000, rx_mem));
+
+    udpard_us_t now = 0;
+
+    // Incomplete transfer on the p2p port.
+    {
+        const char*      payload = "INCOMPLETE";
+        meta_t           meta    = { .priority              = udpard_prio_slow,
+                                     .flag_ack              = false,
+                                     .transfer_payload_size = (uint32_t)strlen(payload),
+                                     .transfer_id           = 10,
+                                     .sender_uid            = 0xAAAAULL,
+                                     .topic_hash            = rx.p2p_port.topic_hash };
+        const rx_frame_t frame   = make_frame(meta, mem_payload, payload, 0, 4);
+        byte_t           dgram[HEADER_SIZE_BYTES + 4];
+        header_serialize(dgram, meta, 0, 0, frame.base.crc);
+        memcpy(dgram + HEADER_SIZE_BYTES, payload, 4);
+        mem_free(mem_payload, frame.base.origin.size, frame.base.origin.data);
+        void* push_payload = mem_payload.alloc(mem_payload.user, sizeof(dgram));
+        memcpy(push_payload, dgram, sizeof(dgram));
+        now += 1000;
+        TEST_ASSERT(udpard_rx_port_push(&rx,
+                                        &rx.p2p_port,
+                                        now,
+                                        (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1234 },
+                                        (udpard_bytes_mut_t){ .data = push_payload, .size = sizeof(dgram) },
+                                        del_payload,
+                                        0));
+    }
+
+    // Incomplete transfer on the extra port.
+    {
+        const char*      payload = "FRAGMENTS";
+        meta_t           meta    = { .priority              = udpard_prio_fast,
+                                     .flag_ack              = false,
+                                     .transfer_payload_size = (uint32_t)strlen(payload),
+                                     .transfer_id           = 20,
+                                     .sender_uid            = 0xBBBBULL,
+                                     .topic_hash            = topic_hash_extra };
+        const rx_frame_t frame   = make_frame(meta, mem_payload, payload, 0, 3);
+        byte_t           dgram[HEADER_SIZE_BYTES + 3];
+        header_serialize(dgram, meta, 0, 0, frame.base.crc);
+        memcpy(dgram + HEADER_SIZE_BYTES, payload, 3);
+        mem_free(mem_payload, frame.base.origin.size, frame.base.origin.data);
+        void* push_payload = mem_payload.alloc(mem_payload.user, sizeof(dgram));
+        memcpy(push_payload, dgram, sizeof(dgram));
+        now += 1000;
+        TEST_ASSERT(udpard_rx_port_push(&rx,
+                                        &port_extra,
+                                        now,
+                                        (udpard_udpip_ep_t){ .ip = 0x0A000002, .port = 0x5678 },
+                                        (udpard_bytes_mut_t){ .data = push_payload, .size = sizeof(dgram) },
+                                        del_payload,
+                                        1));
+    }
+
+    TEST_ASSERT(alloc_session.allocated_fragments >= 2);
+    TEST_ASSERT(alloc_frag.allocated_fragments >= 2);
+    udpard_rx_free(&rx);
+    TEST_ASSERT_EQUAL_size_t(0, alloc_session.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
+
+    instrumented_allocator_reset(&alloc_frag);
+    instrumented_allocator_reset(&alloc_session);
+    instrumented_allocator_reset(&alloc_payload);
+}
+
 void setUp(void) {}
 
 void tearDown(void) {}
@@ -3439,11 +3564,13 @@ int main(void)
 
     RUN_TEST(test_rx_slot_update);
 
-    RUN_TEST(test_session_ordered);
-    RUN_TEST(test_session_unordered);
+    RUN_TEST(test_rx_session_ordered);
+    RUN_TEST(test_rx_session_unordered);
 
-    RUN_TEST(test_port);
-    RUN_TEST(test_port_timeouts);
+    RUN_TEST(test_rx_port);
+    RUN_TEST(test_rx_port_timeouts);
+
+    RUN_TEST(test_rx_free_loop);
 
     return UNITY_END();
 }

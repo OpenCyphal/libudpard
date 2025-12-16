@@ -27,11 +27,11 @@ static void test_header_v2(void)
     // We don't validate the exact byte layout anymore since we compute prefix_crc dynamically
     // Just verify deserialization works correctly
 
-    meta_t             meta_out;
-    udpard_bytes_t     payload_out;
-    uint32_t           frame_index          = 0;
-    uint32_t           frame_payload_offset = 0;
-    uint32_t           prefix_crc           = 0;
+    meta_t         meta_out;
+    udpard_bytes_t payload_out;
+    uint32_t       frame_index          = 0;
+    uint32_t       frame_payload_offset = 0;
+    uint32_t       prefix_crc           = 0;
     TEST_ASSERT(header_deserialize((udpard_bytes_mut_t){ .size = sizeof(buffer), .data = buffer },
                                    &meta_out,
                                    &frame_index,
@@ -85,11 +85,11 @@ static void test_header_deserialize_edge_cases(void)
         .topic_hash            = 0xAAAAAAAAAAAAAAAAULL,
     };
 
-    meta_t             meta_out;
-    udpard_bytes_t     payload_out;
-    uint32_t           frame_index          = 0;
-    uint32_t           frame_payload_offset = 0;
-    uint32_t           prefix_crc           = 0;
+    meta_t         meta_out;
+    udpard_bytes_t payload_out;
+    uint32_t       frame_index          = 0;
+    uint32_t       frame_payload_offset = 0;
+    uint32_t       prefix_crc           = 0;
 
     // Test invalid version (version != 2)
     memset(&buffer[HEADER_SIZE_BYTES], 0, sizeof(buffer) - HEADER_SIZE_BYTES); // Initialize payload
