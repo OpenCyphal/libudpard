@@ -7,83 +7,25 @@
 ///
 /// LibUDPard is a compact implementation of the Cyphal/UDP protocol for high-integrity real-time embedded systems.
 /// It is designed for use in robust deterministic embedded systems equipped with at least 64K ROM and RAM.
-/// The codebase is compliant with a large subset of MISRA C, has full test coverage, and is validated by at least
-/// two static analyzers. The library is designed to be compatible with any conventional target platform and
-/// instruction set architecture, from 8 to 64 bit, little- and big-endian, RTOS-based or baremetal,
-/// as long as there is a standards-compliant ISO C99 compiler available.
-///
-/// The library offers a very low-level API that may be cumbersome to use in many applications.
-/// It is intended to be paired with a higher-layer protocol engine that implements the named topic abstractions etc.
+/// The codebase is compliant with a large subset of MISRA C and is fully covered by unit and end-to-end tests.
+/// The library is designed to be compatible with any conventional target platform, from 8 to 64 bit, little- and
+/// big-endian, RTOS-based or baremetal, as long as there is a standards-compliant ISO C99+ compiler available.
 ///
 /// The library is intended to be integrated into the end application by simply copying its source files into the
 /// source tree of the project; it does not require any special compilation options and should work out of the box.
 /// There are build-time configuration parameters defined near the top of udpard.c, but they are optional to use.
 ///
-/// To use the library, the application needs to provide an implementation of the UDP/IP stack with IGMP support.
+/// To use the library, the application needs to provide a UDP/IPv4 stack supporting IGMP and ARP.
 /// POSIX-based systems may use the standard Berkeley sockets API, while more constrained embedded systems may choose
-/// to rely either on a third-party solution like LwIP or a custom UDP/IP stack implementation.
-///
-///
-/// The transmission pipeline is used to publish messages and send P2P transfers to the network through a
-/// particular redundant interface. A Cyphal node with R redundant network interfaces needs to instantiate
-/// R transmission pipelines, one per interface, unless the application is not interested in sending data at all.
-/// The transmission pipeline contains a prioritized queue of UDP datagrams scheduled for transmission via its
-/// network interface.
-///
-/// Each transmission pipeline instance requires one socket (or a similar abstraction provided by the underlying
-/// UDP/IP stack) that is not connected to any specific remote endpoint (i.e., usable with sendto(),
-/// speaking in terms of Berkeley sockets). In the case of redundant interfaces, each socket may need to be configured
-/// to emit data through its specific interface.
-///
-/// Graphically, the transmission pipeline is arranged as follows:
-///
-///                             +---> TX PIPELINE ---> UDP SOCKET ---> REDUNDANT INTERFACE A
-///                             |
-///     SERIALIZED TRANSFERS ---+---> TX PIPELINE ---> UDP SOCKET ---> REDUNDANT INTERFACE B
-///                             |
-///                             +---> ...
-///
-/// The library supports configurable DSCP marking of the outgoing UDP datagrams as a function of Cyphal transfer
-/// priority level. This is configured separately per TX pipeline instance (i.e., per network interface).
-/// The maximum transmission unit (MTU) can also be configured separately per TX pipeline instance.
-/// Applications that are interested in maximizing their wire compatibility should not change the default MTU setting.
-///
-///
-/// The reception pipelines are used to subscribe to subjects (aka topics) and to receive P2P transfers.
-/// The reception pipeline is able to accept datagrams with arbitrary MTU, frames delivered out-of-order (OOO) with
-/// arbitrary duplication, including duplication of non-adjacent frames, and/or frames interleaved between adjacent
-/// transfers. The support for OOO reassembly is particularly interesting when simple repetition coding FEC is used.
-///
-/// The application should instantiate one subscription instance per subject it needs to receive messages from,
-/// irrespective of the number of redundant interfaces. There needs to be one socket (or a similar abstraction
-/// provided by the underlying UDP/IP stack) per subscription instance per redundant interface,
-/// each socket bound to the same UDP/IP endpoint (IP address and UDP port) which is selected by the library when
-/// the subscription is created.
-/// The application needs to listen to all these sockets simultaneously and pass the received UDP datagrams to the
-/// corresponding subscription instance as they arrive, thus unifying the datagrams received from all redundant
-/// interface sockets into a single stream.
-/// At the output, subscription instances provide reassembled and deduplicated stream of Cyphal transfers ready for
-/// deserialization.
-///
-/// Graphically, the subscription pipeline is arranged as shown below.
-/// Remember that the application with S topic subscriptions would have S such pipelines, one per subscription.
-///
-///     REDUNDANT INTERFACE A ---> UDP SOCKET ---+
-///                                              |
-///     REDUNDANT INTERFACE B ---> UDP SOCKET ---+---> SUBSCRIPTION ---> SERIALIZED TRANSFERS
-///                                              |
-///                                       ... ---+
+/// to rely either on a third-party solution like LwIP or a custom UDP/IP stack.
 ///
 /// The library can be used either with a regular heap (preferably constant-time) or with a collection of fixed-size
-/// block pool allocators (in safety-certified systems). It is up to the application to choose the desired memory
-/// management strategy; the library is interfaced with the memory managers via a special memory resource abstraction.
-///
-/// Typically, if block pool allocators are used, the following block sizes should be served:
-///
-///     - MTU sized blocks for the TX and RX pipelines (typically at most 1.5 KB unless jumbo frames are used).
-///     - sizeof(udpard_tx_item_t) blocks for the TX pipeline.
-///     - sizeof(rx_session_t) blocks for the RX pipeline.
-///     - sizeof(udpard_fragment_t) blocks for the RX pipeline.
+/// block pool allocators (may be preferable in safety-certified systems).
+/// If block pool allocators are used, the following block sizes should be served:
+/// - MTU-sized blocks for the TX and RX pipelines (typically at most 1.5 KB unless jumbo frames are used).
+/// - sizeof(udpard_tx_item_t) blocks for the TX pipeline.
+/// - sizeof(rx_session_t) blocks for the RX pipeline.
+/// - sizeof(udpard_fragment_t) blocks for the RX pipeline.
 ///
 /// --------------------------------------------------------------------------------------------------------------------
 ///
@@ -181,7 +123,7 @@ typedef struct udpard_udpip_ep_t
 } udpard_udpip_ep_t;
 
 /// The remote information can be used for sending P2P responses back to the sender, if needed.
-/// The reassembly stack will attempt to discover the sender's UDP/IP endpoint per redundant interface
+/// The RX pipeline will attempt to discover the sender's UDP/IP endpoint per redundant interface
 /// based on the source address of the received UDP datagrams. If the sender's endpoint could not be discovered
 /// for a certain interface, the corresponding entry in the origin array will be zeroed.
 /// Note that this allows the sender to change its network interface address dynamically.
@@ -293,6 +235,30 @@ size_t udpard_fragment_gather(const udpard_fragment_t* any_frag,
 // =================================================    TX PIPELINE    =================================================
 // =====================================================================================================================
 
+/// The transmission (TX) pipeline is used to publish messages and send P2P transfers to the network through a
+/// particular redundant interface. A Cyphal node with R redundant network interfaces needs to instantiate
+/// R transmission pipelines, one per interface, unless the application is not interested in sending data at all.
+/// The transmission pipeline contains a prioritized queue of UDP datagrams scheduled for transmission via its
+/// network interface.
+///
+/// Each transmission pipeline instance requires one socket (or a similar abstraction provided by the underlying
+/// UDP/IP stack) that is not connected to any specific remote endpoint (i.e., usable with sendto(),
+/// speaking in terms of Berkeley sockets). In the case of redundant interfaces, each socket may need to be configured
+/// to emit data through its specific interface (using bind() in Berkeley sockets terminology).
+///
+/// Graphically, the transmission pipeline is arranged as follows:
+///
+///                +---> TX PIPELINE ---> UDP SOCKET ---> REDUNDANT INTERFACE A
+///                |
+///     PAYLOAD ---+---> TX PIPELINE ---> UDP SOCKET ---> REDUNDANT INTERFACE B
+///                |
+///                +---> ...
+///
+/// The library supports configurable DSCP marking of the outgoing UDP datagrams as a function of Cyphal transfer
+/// priority level. This is configured separately per TX pipeline instance (i.e., per network interface).
+/// The maximum transmission unit (MTU) can also be configured separately per TX pipeline instance.
+/// Applications that are interested in maximizing their wire compatibility should not change the default MTU setting.
+
 /// A TX queue uses these memory resources for allocating the enqueued items (UDP datagrams).
 /// There are exactly two allocations per enqueued item:
 /// - the first for bookkeeping purposes (UdpardTxItem)
@@ -373,7 +339,7 @@ typedef struct udpard_tx_item_t
     udpard_tree_t index_prio;
     udpard_tree_t index_deadline;
 
-    /// Points to the next frame in this transfer or NULL. This field is mostly intended for own needs of the library.
+    /// Points to the next frame in this transfer or NULL.
     /// Normally, the application would not use it because transfer frame ordering is orthogonal to global TX ordering.
     /// It can be useful though for pulling pending frames from the TX queue if at least one frame of their transfer
     /// failed to transmit; the idea is that if at least one frame is missing, the transfer will not be received by
@@ -487,20 +453,32 @@ void udpard_tx_free(const udpard_tx_mem_resources_t memory, udpard_tx_item_t* co
 // =================================================    RX PIPELINE    =================================================
 // =====================================================================================================================
 
-/// These are used to serve the memory needs of the library to keep state while reassembling incoming transfers.
-/// Several memory resources are provided to enable fine control over the allocated memory if necessary; however,
-/// simple applications may choose to use the same memory resource implemented via malloc()/free() for all of them.
-typedef struct udpard_rx_mem_resources_t
-{
-    /// Provides memory for the session instances described below.
-    /// Each instance is fixed-size, so a trivial zero-fragmentation block allocator is sufficient.
-    udpard_mem_resource_t session;
-
-    /// The fragment handles are allocated per payload fragment; each handle contains a pointer to its fragment.
-    /// Each instance is of a very small fixed size, so a trivial zero-fragmentation block allocator is sufficient.
-    udpard_mem_resource_t fragment;
-} udpard_rx_mem_resources_t;
-
+/// The reception (RX) pipeline is used to subscribe to subjects and to receive P2P transfers.
+/// The reception pipeline is highly robust and is able to accept datagrams with arbitrary MTU,
+/// frames delivered out-of-order (OOO) with arbitrary duplication, and/or frames interleaved between transfers.
+/// The support for OOO reassembly is particularly interesting when simple repetition coding FEC is used.
+/// All redundant interfaces are pooled together into a single RX stream per RX port,
+/// thus providing seamless failover and great resilience against packet loss on any of the interfaces.
+///
+/// The application should instantiate one RX port instance per subject it needs to receive messages from,
+/// irrespective of the number of redundant interfaces. There needs to be one socket (or a similar abstraction
+/// provided by the underlying UDP/IP stack) per RX port instance per redundant interface,
+/// each socket bound to the same UDP/IP endpoint (IP address and UDP port) obtained using udpard_make_subject_endpoint.
+/// The application needs to listen to all these sockets simultaneously and pass the received UDP datagrams to the
+/// corresponding RX port instance as they arrive.
+///
+/// P2P transfers are handled in a similar way, except that the application does not need to create a separate P2P
+/// instance and instead use udpard_rx_t::p2p_port for receiving P2P transfers.
+///
+/// Graphically, the subscription pipeline is arranged as shown below.
+/// Remember that the application with S RX ports would have S such pipelines, one per port.
+///
+///     REDUNDANT INTERFACE A ---> UDP SOCKET ---+
+///                                              |
+///     REDUNDANT INTERFACE B ---> UDP SOCKET ---+---> RX PORT ---> TRANSFERS
+///                                              |
+///                                       ... ---+
+///
 /// The transfer reassembly state machine can operate in several modes described below. First, a brief summary:
 ///
 /// Mode       Guarantees                       Limitations                         Reordering window setting
@@ -552,8 +530,23 @@ typedef struct udpard_rx_mem_resources_t
 /// publishers where unordered and duplicated messages are acceptable, such as the heartbeat topic.
 ///
 /// The UNORDERED mode is used if the reordering window duration is set to UDPARD_REORDERING_WINDOW_STATELESS.
+
 #define UDPARD_RX_REORDERING_WINDOW_UNORDERED ((udpard_us_t)(-1))
 #define UDPARD_RX_REORDERING_WINDOW_STATELESS ((udpard_us_t)(-2))
+
+/// These are used to serve the memory needs of the library to keep state while reassembling incoming transfers.
+/// Several memory resources are provided to enable fine control over the allocated memory if necessary; however,
+/// simple applications may choose to use the same memory resource implemented via malloc()/free() for all of them.
+typedef struct udpard_rx_mem_resources_t
+{
+    /// Provides memory for the session instances described below.
+    /// Each instance is fixed-size, so a trivial zero-fragmentation block allocator is sufficient.
+    udpard_mem_resource_t session;
+
+    /// The fragment handles are allocated per payload fragment; each handle contains a pointer to its fragment.
+    /// Each instance is of a very small fixed size, so a trivial zero-fragmentation block allocator is sufficient.
+    udpard_mem_resource_t fragment;
+} udpard_rx_mem_resources_t;
 
 /// This type represents an open input port, such as a subscription to a topic.
 typedef struct udpard_rx_port_t
@@ -740,7 +733,7 @@ void udpard_rx_poll(udpard_rx_t* const self, const udpard_us_t now);
 /// The topic hash is needed to detect and ignore transfers that use different topics on the same subject-ID.
 /// The collision callback is invoked if a topic hash collision is detected.
 ///
-/// If not sure, set the reordering window to 1 millisecond.
+/// If not sure, set the reordering window to ~5 milliseconds.
 ///
 /// The return value is true on success, false if any of the arguments are invalid.
 /// The time complexity is constant. This function does not invoke the dynamic memory manager.
@@ -770,7 +763,7 @@ void udpard_rx_port_free(udpard_rx_t* const rx, udpard_rx_port_t* const port);
 /// 2. A new transfer fragment handle is allocated when a new transfer fragment is accepted.
 /// 3. Allocated objects may occasionally be deallocated to clean up stale transfers and sessions.
 ///
-/// The time complexity is O(log n + log k) where n is the number of remote notes publishing on this subject (topic),
+/// The time complexity is O(log n + log k) where n is the number of remote notes publishing on this subject,
 /// and k is the number of fragments retained in memory for the corresponding in-progress transfer.
 /// No data copying takes place.
 ///
