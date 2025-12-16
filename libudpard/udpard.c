@@ -332,12 +332,12 @@ static byte_t* header_serialize(byte_t* const  buffer,
     return ptr;
 }
 
-static bool header_deserialize(const udpard_bytes_mut_t  dgram_payload,
-                               meta_t* const             out_meta,
-                               uint32_t* const           frame_index,
-                               uint32_t* const           frame_payload_offset,
-                               uint32_t* const           prefix_crc,
-                               udpard_bytes_mut_t* const out_payload)
+static bool header_deserialize(const udpard_bytes_mut_t dgram_payload,
+                               meta_t* const            out_meta,
+                               uint32_t* const          frame_index,
+                               uint32_t* const          frame_payload_offset,
+                               uint32_t* const          prefix_crc,
+                               udpard_bytes_t* const    out_payload)
 {
     UDPARD_ASSERT(out_payload != NULL);
     bool ok = (dgram_payload.size >= HEADER_SIZE_BYTES) && (dgram_payload.data != NULL) && //
@@ -1744,16 +1744,14 @@ bool udpard_rx_port_push(udpard_rx_t* const         rx,
     if (ok) {
         port->invoked = true;
         // Parse and validate the frame.
-        udpard_bytes_mut_t payload     = { 0 };
-        rx_frame_t         frame       = { 0 };
-        uint32_t           frame_index = 0;
-        uint32_t           offset_32   = 0;
-        const bool         frame_valid =
-          header_deserialize(datagram_payload, &frame.meta, &frame_index, &offset_32, &frame.base.crc, &payload);
+        rx_frame_t frame       = { 0 };
+        uint32_t   frame_index = 0;
+        uint32_t   offset_32   = 0;
+        const bool frame_valid = header_deserialize(
+          datagram_payload, &frame.meta, &frame_index, &offset_32, &frame.base.crc, &frame.base.payload);
         frame.base.offset = (size_t)offset_32;
-        (void)frame_index; // currently not used by this reassembler implementation.
-        UDPARD_ASSERT((frame.base.origin.data == datagram_payload.data) &&
-                      (frame.base.origin.size == datagram_payload.size));
+        (void)frame_index;                    // currently not used by this reassembler implementation.
+        frame.base.origin = datagram_payload; // Take ownership of the payload.
         // Process the frame.
         if (frame_valid) {
             if (frame.meta.topic_hash == port->topic_hash) {

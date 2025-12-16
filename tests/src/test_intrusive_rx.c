@@ -2876,6 +2876,45 @@ static void test_session_unordered(void)
     instrumented_allocator_reset(&alloc_payload);
 }
 
+// ---------------------------------------------  PORT  ---------------------------------------------
+
+/// Tests ports in ORDERED, UNORDERED, and STATELESS modes.
+/// The UNORDERED port is the p2p_port in the rx instance; the other modes are tested on separate port instances.
+/// All transfers are single-frame transfers for simplicity, since we already have dedicated lower-level tests.
+static void test_port(void)
+{
+    // Initialize the memory resources.
+    instrumented_allocator_t alloc_frag = { 0 };
+    instrumented_allocator_new(&alloc_frag);
+    const udpard_mem_resource_t mem_frag = instrumented_allocator_make_resource(&alloc_frag);
+
+    instrumented_allocator_t alloc_session = { 0 };
+    instrumented_allocator_new(&alloc_session);
+    const udpard_mem_resource_t mem_session = instrumented_allocator_make_resource(&alloc_session);
+
+    instrumented_allocator_t alloc_payload = { 0 };
+    instrumented_allocator_new(&alloc_payload);
+    const udpard_mem_resource_t mem_payload = instrumented_allocator_make_resource(&alloc_payload);
+    const udpard_mem_deleter_t  del_payload = instrumented_allocator_make_deleter(&alloc_payload);
+
+    const udpard_rx_memory_resources_t rx_mem = { .fragment = mem_frag, .session = mem_session };
+
+    // Initialize the shared RX instance.
+    const uint64_t local_uid = 0x6EC164169C3088B4ULL;
+    udpard_rx_t    rx;
+    TEST_ASSERT(udpard_rx_new(&rx, local_uid, rx_mem, &on_message, &on_collision, &on_ack_mandate));
+    callback_result_t cb_result = { 0 };
+    rx.user                     = &cb_result;
+    TEST_ASSERT_EQUAL(local_uid, rx.p2p_port.topic_hash);
+    TEST_ASSERT_EQUAL(UDPARD_REORDERING_WINDOW_UNORDERED, rx.p2p_port.reordering_window);
+
+    // TODO continue: init two ports, one ORDERED, one STATELESS. Feed frames from different remote nodes into each.
+    // Verify the callbacks: on message, on ack, on collision.
+    // Feed bad frames and verify they are rejected with no memory leaks.
+    (void)mem_payload;  // TODO: Will be used when test is completed
+    (void)del_payload;  // TODO: Will be used when test is completed
+}
+
 void setUp(void) {}
 
 void tearDown(void) {}
@@ -2896,6 +2935,8 @@ int main(void)
 
     RUN_TEST(test_session_ordered);
     RUN_TEST(test_session_unordered);
+
+    RUN_TEST(test_port);
 
     return UNITY_END();
 }

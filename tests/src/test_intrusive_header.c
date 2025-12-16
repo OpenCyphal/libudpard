@@ -28,7 +28,7 @@ static void test_header_v2(void)
     // Just verify deserialization works correctly
 
     meta_t             meta_out;
-    udpard_bytes_mut_t payload_out;
+    udpard_bytes_t     payload_out;
     uint32_t           frame_index          = 0;
     uint32_t           frame_payload_offset = 0;
     uint32_t           prefix_crc           = 0;
@@ -86,7 +86,7 @@ static void test_header_deserialize_edge_cases(void)
     };
 
     meta_t             meta_out;
-    udpard_bytes_mut_t payload_out;
+    udpard_bytes_t     payload_out;
     uint32_t           frame_index          = 0;
     uint32_t           frame_payload_offset = 0;
     uint32_t           prefix_crc           = 0;
