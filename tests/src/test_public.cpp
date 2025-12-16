@@ -32,7 +32,6 @@ udpard_fragment_t* make_test_fragment(const udpard_mem_resource_t& fragment_memo
         std::memcpy(payload_data, data, size);
     }
     std::memset(frag, 0, sizeof(*frag));
-    frag->next            = nullptr;
     frag->view.data       = payload_data;
     frag->view.size       = size;
     frag->origin.data     = payload_data;
@@ -59,7 +58,6 @@ void test_udpard_fragment_seek()
     // we can only test simple cases with manually constructed tree structures.
     udpard_fragment_t* single = make_test_fragment(mem_frag, mem_payload, del_payload, 0, 5, "hello");
     TEST_ASSERT_NOT_NULL(single);
-    single->next = nullptr;
     // Initialize the tree node to null (no parent, no children) - this makes it a standalone root
     single->index_offset.up    = nullptr;
     single->index_offset.lr[0] = nullptr;
@@ -112,11 +110,6 @@ void test_udpard_fragment_seek()
     right->index_offset.lr[0] = nullptr;
     right->index_offset.lr[1] = nullptr;
     right->index_offset.bf    = 0;
-
-    // Link fragments in order using next pointer
-    left->next  = root;
-    root->next  = right;
-    right->next = nullptr;
 
     // Test seeking from the left child (non-root) - should traverse up to root first.
     // Seeking to offset 0 should find the left fragment.

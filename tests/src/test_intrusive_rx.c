@@ -64,8 +64,8 @@ static bool transfer_payload_verify(udpard_rx_transfer_t* const transfer,
                                     const void* const           payload,
                                     const size_t                payload_size_wire)
 {
-    const udpard_fragment_t* frag   = transfer->payload_head;
-    size_t                   offset = 0;
+    udpard_fragment_t* frag   = udpard_fragment_seek(transfer->payload, 0);
+    size_t             offset = 0;
     while (frag != NULL) {
         if (frag->offset != offset) {
             return false;
@@ -77,7 +77,7 @@ static bool transfer_payload_verify(udpard_rx_transfer_t* const transfer,
             return false;
         }
         offset += frag->view.size;
-        frag = frag->next;
+        frag = udpard_fragment_next(frag);
     }
     return (transfer->payload_size_wire == payload_size_wire) && (offset == payload_size_stored);
 }
@@ -119,7 +119,8 @@ static bool fragment_tree_verify(udpard_tree_t* const root,
     }
     // Scan the payload tree.
     size_t offset = 0;
-    for (const udpard_fragment_t* it = (udpard_fragment_t*)cavl2_min(root); it != NULL; it = it->next) {
+    for (udpard_fragment_t* it = (udpard_fragment_t*)cavl2_min(root); it != NULL;
+         it                    = (udpard_fragment_t*)cavl2_next_greater(&it->index_offset)) {
         if (it->offset != offset) {
             return false;
         }
@@ -348,7 +349,7 @@ static void test_rx_fragment_tree_update_a(void)
         TEST_ASSERT_EQUAL_size_t(0, alloc_payload.count_free);
         // Free the tree (as in freedom).
         TEST_ASSERT(fragment_tree_verify(root, 12, "abc\0def\0xyz", 0x2758cbe6UL));
-        udpard_fragment_free_all((udpard_fragment_t*)root, mem_frag);
+        udpard_fragment_free_all(udpard_fragment_seek((udpard_fragment_t*)root, 0), mem_frag);
         // Check the heap.
         TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
         TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
@@ -2159,7 +2160,7 @@ static void test_rx_session_ordered(void)
     TEST_ASSERT_EQUAL_MEMORY("01234", cb_result.ack_mandate.am.payload_head.data, 5);
 
     // Free the transfer payload.
-    udpard_fragment_free_all(cb_result.message.history[0].payload_head, mem_frag);
+    udpard_fragment_free_all(cb_result.message.history[0].payload, mem_frag);
     TEST_ASSERT_EQUAL(0, alloc_frag.allocated_fragments);
     TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
     TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments);
@@ -2493,7 +2494,7 @@ static void test_rx_session_ordered(void)
     TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
     TEST_ASSERT_EQUAL(5, alloc_payload.allocated_fragments);
     for (size_t i = 0; i < 4; i++) {
-        udpard_fragment_free_all(cb_result.message.history[i].payload_head, mem_frag);
+        udpard_fragment_free_all(cb_result.message.history[i].payload, mem_frag);
     }
     TEST_ASSERT_EQUAL(1, alloc_frag.allocated_fragments); // 500 is still there
     TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
@@ -2535,7 +2536,7 @@ static void test_rx_session_ordered(void)
     TEST_ASSERT_EQUAL(udpard_prio_optional, cb_result.message.history[0].priority);
     TEST_ASSERT_EQUAL(500, cb_result.message.history[0].transfer_id);
     TEST_ASSERT(transfer_payload_verify(&cb_result.message.history[0], 10, "9876543210", 10));
-    udpard_fragment_free_all(cb_result.message.history[0].payload_head, mem_frag);
+    udpard_fragment_free_all(cb_result.message.history[0].payload, mem_frag);
     // All transfers processed, nothing is interned.
     TEST_ASSERT_EQUAL(6, cb_result.message.count);
     TEST_ASSERT_EQUAL(4, cb_result.ack_mandate.count);
@@ -2594,7 +2595,7 @@ static void test_rx_session_ordered(void)
         TEST_ASSERT_EQUAL(udpard_prio_optional, tr->priority);
         TEST_ASSERT_EQUAL(1000 + i, tr->transfer_id);
         TEST_ASSERT(transfer_payload_verify(tr, 2, (char[]){ '0', (char)('0' + i) }, 2));
-        udpard_fragment_free_all(tr->payload_head, mem_frag);
+        udpard_fragment_free_all(tr->payload, mem_frag);
     }
     TEST_ASSERT_EQUAL(14, cb_result.message.count);
     TEST_ASSERT_EQUAL(4, cb_result.ack_mandate.count);
@@ -2638,12 +2639,12 @@ static void test_rx_session_ordered(void)
     TEST_ASSERT_EQUAL_INT64(ts_3000, cb_result.message.history[1].timestamp);
     TEST_ASSERT_EQUAL(3000, cb_result.message.history[1].transfer_id);
     TEST_ASSERT(transfer_payload_verify(&cb_result.message.history[1], 2, "30", 2));
-    udpard_fragment_free_all(cb_result.message.history[1].payload_head, mem_frag);
+    udpard_fragment_free_all(cb_result.message.history[1].payload, mem_frag);
     // Now 3001.
     TEST_ASSERT_EQUAL_INT64(ts_3000 + 1, cb_result.message.history[0].timestamp);
     TEST_ASSERT_EQUAL(3001, cb_result.message.history[0].transfer_id);
     TEST_ASSERT(transfer_payload_verify(&cb_result.message.history[0], 2, "31", 2));
-    udpard_fragment_free_all(cb_result.message.history[0].payload_head, mem_frag);
+    udpard_fragment_free_all(cb_result.message.history[0].payload, mem_frag);
     // We still have 3002..3007 in progress. They will be freed once the session has expired.
     TEST_ASSERT_EQUAL(16, cb_result.message.count);
     TEST_ASSERT_EQUAL(4, cb_result.ack_mandate.count);
@@ -2741,7 +2742,7 @@ static void test_rx_session_unordered(void)
     TEST_ASSERT_EQUAL_MEMORY("hello", cb_result.ack_mandate.am.payload_head.data, 5);
 
     // Free the transfer payload.
-    udpard_fragment_free_all(cb_result.message.history[0].payload_head, mem_frag);
+    udpard_fragment_free_all(cb_result.message.history[0].payload, mem_frag);
     TEST_ASSERT_EQUAL(0, alloc_frag.allocated_fragments);
     TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments);
 
@@ -2760,7 +2761,7 @@ static void test_rx_session_unordered(void)
     TEST_ASSERT_EQUAL(2, cb_result.message.count);
     TEST_ASSERT_EQUAL(103, cb_result.message.history[0].transfer_id);
     TEST_ASSERT(transfer_payload_verify(&cb_result.message.history[0], 6, "tid103", 6));
-    udpard_fragment_free_all(cb_result.message.history[0].payload_head, mem_frag);
+    udpard_fragment_free_all(cb_result.message.history[0].payload, mem_frag);
 
     meta.transfer_id = 102;
     meta.priority    = udpard_prio_nominal;
@@ -2776,7 +2777,7 @@ static void test_rx_session_unordered(void)
     TEST_ASSERT_EQUAL(3, cb_result.message.count);
     TEST_ASSERT_EQUAL(102, cb_result.message.history[0].transfer_id);
     TEST_ASSERT(transfer_payload_verify(&cb_result.message.history[0], 6, "tid102", 6));
-    udpard_fragment_free_all(cb_result.message.history[0].payload_head, mem_frag);
+    udpard_fragment_free_all(cb_result.message.history[0].payload, mem_frag);
 
     // Verify that duplicates are still rejected.
     meta.transfer_id = 103; // repeat of a received transfer
@@ -2834,7 +2835,7 @@ static void test_rx_session_unordered(void)
     TEST_ASSERT_EQUAL(0x0A000002, cb_result.message.history[0].remote.endpoints[1].ip);
     TEST_ASSERT_EQUAL(0x1234, cb_result.message.history[0].remote.endpoints[0].port);
     TEST_ASSERT_EQUAL(0x5678, cb_result.message.history[0].remote.endpoints[1].port);
-    udpard_fragment_free_all(cb_result.message.history[0].payload_head, mem_frag);
+    udpard_fragment_free_all(cb_result.message.history[0].payload, mem_frag);
 
     // ACK mandate generated upon completion.
     TEST_ASSERT_EQUAL(5, cb_result.ack_mandate.count);
@@ -2997,7 +2998,7 @@ static void test_rx_port(void)
         TEST_ASSERT_EQUAL(transfer_id, cb_result.ack_mandate.am.transfer_id);
 
         // Clean up.
-        udpard_fragment_free_all(cb_result.message.history[0].payload_head, mem_frag);
+        udpard_fragment_free_all(cb_result.message.history[0].payload, mem_frag);
         cb_result.message.count     = 0;
         cb_result.ack_mandate.count = 0;
     }
@@ -3042,7 +3043,7 @@ static void test_rx_port(void)
         // No ACK for stateless mode without flag_ack.
         TEST_ASSERT_EQUAL(0, cb_result.ack_mandate.count);
 
-        udpard_fragment_free_all(cb_result.message.history[0].payload_head, mem_frag);
+        udpard_fragment_free_all(cb_result.message.history[0].payload, mem_frag);
         cb_result.message.count = 0;
     }
 
@@ -3109,7 +3110,7 @@ static void test_rx_port(void)
 
         TEST_ASSERT_EQUAL(1, cb_result.ack_mandate.count);
 
-        udpard_fragment_free_all(cb_result.message.history[0].payload_head, mem_frag);
+        udpard_fragment_free_all(cb_result.message.history[0].payload, mem_frag);
         cb_result.message.count     = 0;
         cb_result.ack_mandate.count = 0;
     }
@@ -3437,7 +3438,7 @@ static void test_rx_port_timeouts(void)
     // The late arrival should have ejected the earlier completed transfers.
     TEST_ASSERT(cb_result.message.count >= 1);
     for (size_t i = 0; i < cb_result.message.count; i++) {
-        udpard_fragment_free_all(cb_result.message.history[i].payload_head, mem_frag);
+        udpard_fragment_free_all(cb_result.message.history[i].payload, mem_frag);
     }
     cb_result.message.count = 0;
 

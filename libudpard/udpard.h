@@ -166,36 +166,27 @@ typedef struct udpard_mem_resource_t
     udpard_mem_alloc_t alloc;
 } udpard_mem_resource_t;
 
-/// This type represents payload as an ordered sequence of its fragments to eliminate data copying.
-/// To free a fragmented payload buffer, the application needs to traverse the list and free each fragment's payload
-/// as well as the payload structure itself, assuming that it is also heap-allocated.
-/// The model is as follows:
-///
-///     udpard_fragment_t:
-///         next   ---> udpard_fragment_t...
-///         origin ---> (the free()able payload data buffer)
-///         view   ---> (somewhere inside the payload data buffer)
-///
-/// Payloads of received transfers are represented using this type, where each fragment corresponds to a frame.
-/// The application can either consume them directly or to copy the data into a contiguous buffer beforehand
-/// at the expense of extra time and memory utilization.
+/// This type represents payload as a binary tree of its fragments ordered by offset to eliminate data copying.
+/// The fragments are guaranteed to be non-redundant and non-overlapping; therefore, they are also ordered by their
+/// end offsets.
+/// See the helper functions below for managing the fragment tree.
 typedef struct udpard_fragment_t
 {
-    /// The index_offset BST orders fragments by their offset within the full payload buffer.
+    /// The index_offset BST orders fragments by their offset (and also end=offset+size) within the transfer payload.
     /// It must be the first member.
-    /// The linked list links all fragments by their offset in ascending order, for convenience.
-    udpard_tree_t             index_offset;
-    struct udpard_fragment_t* next;
+    udpard_tree_t index_offset;
+
+    /// Offset of this fragment's payload within the full payload buffer. The ordering key for the index_offset tree.
+    size_t offset;
 
     /// Contains the actual data to be used by the application.
-    /// The memory pointed to by this fragment shall not be freed by the application.
+    /// The memory pointed to by this fragment shall not be freed nor mutated by the application.
     udpard_bytes_t view;
 
     /// Points to the base buffer that contains this fragment.
     /// The application can use this pointer to free the outer buffer after the payload has been consumed.
+    /// This memory must not be accessed by the application for any purpose other than freeing it.
     udpard_bytes_mut_t origin;
-
-    size_t offset; ///< Offset of this fragment's payload within the full payload buffer.
 
     /// When the fragment is no longer needed, this deleter shall be used to free the origin buffer.
     /// We provide a dedicated deleter per fragment to allow NIC drivers to manage the memory directly,
@@ -221,6 +212,11 @@ void udpard_fragment_free_all(udpard_fragment_t* const frag, const udpard_mem_re
 /// This function accepts any node in the fragment tree, not necessarily the head or the root, and
 /// has a logarithmic complexity in the number of fragments, which makes it very efficient.
 udpard_fragment_t* udpard_fragment_seek(udpard_fragment_t* any_frag, const size_t offset);
+
+/// Given any fragment in a transfer, returns the next fragment in strictly ascending order of offsets.
+/// Returns NULL if there is no next fragment or if the given fragment is NULL.
+/// The complexity is amortized-constant.
+udpard_fragment_t* udpard_fragment_next(udpard_fragment_t* const frag);
 
 /// Given any fragment in a transfer, copies the entire transfer payload into the specified contiguous buffer.
 /// If the total size of all fragments combined exceeds the size of the destination buffer,
@@ -638,14 +634,9 @@ typedef struct udpard_rx_transfer_t
     /// the excess payload as it has already been discarded. Cannot be less than payload_size_stored.
     size_t payload_size_wire;
 
-    /// The payload is stored in a tree, which is also linked-listed for convenience.
-    /// Hence we have two pointers to the same payload tree: one points to the leftmost tree node aka the 1st fragment;
-    /// the other points to the root of the tree. The head can be used if sequential access is desired,
-    /// while the root can be used for logarithmic-time seeking of fragments by their offset within the payload
-    /// using udpard_fragment_seek().
-    /// Either can be used with udpard_fragment_free_all() to free the entire payload.
-    udpard_fragment_t* payload_head;
-    udpard_fragment_t* payload_root;
+    /// The payload is stored in a tree of fragments ordered by their offset within the payload.
+    /// See udpard_fragment_t and its helper functions for managing the fragment tree.
+    udpard_fragment_t* payload;
 } udpard_rx_transfer_t;
 
 /// Emitted when the stack detects the need to send a reception acknowledgment back to the remote node.

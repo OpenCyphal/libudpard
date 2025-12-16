@@ -165,6 +165,11 @@ udpard_fragment_t* udpard_fragment_seek(udpard_fragment_t* any_frag, const size_
     return NULL;
 }
 
+udpard_fragment_t* udpard_fragment_next(udpard_fragment_t* const frag)
+{
+    return (frag != NULL) ? ((udpard_fragment_t*)cavl2_next_greater(&frag->index_offset)) : NULL;
+}
+
 size_t udpard_fragment_gather(const udpard_fragment_t* any_frag,
                               const size_t             destination_size_bytes,
                               void* const              destination)
@@ -174,16 +179,15 @@ size_t udpard_fragment_gather(const udpard_fragment_t* any_frag,
         while (any_frag->index_offset.up != NULL) { // Locate the root.
             any_frag = (const udpard_fragment_t*)any_frag->index_offset.up;
         }
-        for (const udpard_fragment_t* frag =
-               (const udpard_fragment_t*)cavl2_min((udpard_tree_t*)&any_frag->index_offset);
-             (frag != NULL) && (offset < destination_size_bytes);
-             frag = (const udpard_fragment_t*)cavl2_next_greater((udpard_tree_t*)&frag->index_offset)) {
+        udpard_fragment_t* frag = (udpard_fragment_t*)cavl2_min((udpard_tree_t*)&any_frag->index_offset);
+        while ((frag != NULL) && (offset < destination_size_bytes)) {
             UDPARD_ASSERT(frag->offset == offset);
             UDPARD_ASSERT(frag->view.data != NULL);
             const size_t to_copy = smaller(frag->view.size, destination_size_bytes - offset);
             // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
             (void)memcpy((byte_t*)destination + offset, frag->view.data, to_copy);
             offset += to_copy;
+            frag = udpard_fragment_next(frag);
         }
     }
     return offset;
@@ -779,12 +783,11 @@ static udpard_fragment_t* rx_fragment_new(const udpard_mem_resource_t memory,
     if (mew != NULL) {
         mem_zero(sizeof(*mew), mew);
         mew->index_offset    = (udpard_tree_t){ NULL, { NULL, NULL }, 0 };
-        mew->next            = NULL;
+        mew->offset          = frame.offset;
         mew->view.data       = frame.payload.data;
         mew->view.size       = frame.payload.size;
         mew->origin.data     = frame.origin.data;
         mew->origin.size     = frame.origin.size;
-        mew->offset          = frame.offset;
         mew->payload_deleter = payload_deleter;
     }
     return mew;
@@ -932,9 +935,8 @@ static rx_fragment_tree_update_result_t rx_fragment_tree_update(udpard_tree_t** 
 /// because each fragment's offset is changed within the bounds that preserve the ordering.
 static bool rx_fragment_tree_finalize(udpard_tree_t* const root, const uint32_t crc_expected)
 {
-    uint32_t           crc_computed = CRC_INITIAL;
-    size_t             offset       = 0;
-    udpard_fragment_t* prev         = NULL;
+    uint32_t crc_computed = CRC_INITIAL;
+    size_t   offset       = 0;
     for (udpard_tree_t* p = cavl2_min(root); p != NULL; p = cavl2_next_greater(p)) {
         udpard_fragment_t* const frag = (udpard_fragment_t*)p;
         UDPARD_ASSERT(frag->offset <= offset); // The tree reassembler cannot leave gaps.
@@ -946,11 +948,6 @@ static bool rx_fragment_tree_finalize(udpard_tree_t* const root, const uint32_t 
         frag->view.size -= trim;
         offset += frag->view.size;
         crc_computed = crc_add(crc_computed, frag->view.size, frag->view.data);
-        if (prev != NULL) {
-            prev->next = frag;
-        }
-        frag->next = NULL;
-        prev       = frag;
     }
     return (crc_computed ^ CRC_OUTPUT_XOR) == crc_expected;
 }
@@ -1174,8 +1171,7 @@ static void rx_session_on_message(const rx_session_t* const self, udpard_rx_t* c
         .remote              = self->remote,
         .payload_size_stored = slot->covered_prefix,
         .payload_size_wire   = slot->total_size,
-        .payload_head        = (udpard_fragment_t*)cavl2_min(slot->fragments),
-        .payload_root        = (udpard_fragment_t*)slot->fragments,
+        .payload             = (udpard_fragment_t*)slot->fragments,
     };
     slot->fragments = NULL; // Transfer ownership to the application.
     UDPARD_ASSERT(rx->on_message != NULL);
@@ -1688,8 +1684,7 @@ static void rx_port_accept_stateless(udpard_rx_t* const         rx,
                 .remote              = remote,
                 .payload_size_stored = required_size,
                 .payload_size_wire   = frame.meta.transfer_payload_size,
-                .payload_head        = frag,
-                .payload_root        = frag,
+                .payload             = frag,
             };
             rx->on_message(rx, port, transfer);
         } else {
