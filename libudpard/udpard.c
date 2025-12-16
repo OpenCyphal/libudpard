@@ -116,6 +116,8 @@ static int32_t cavl_compare_fragment_end(const void* const user, const udpard_tr
     return 0; // clang-format on
 }
 
+static bool validate_ep(const udpard_udpip_ep_t ep) { return (ep.port != 0) && (ep.ip != 0) && (ep.ip != UINT32_MAX); }
+
 udpard_udpip_ep_t udpard_make_subject_endpoint(const uint32_t subject_id)
 {
     return (udpard_udpip_ep_t){ .ip = IPv4_MCAST_PREFIX | (subject_id & IPv4_MCAST_SUFFIX_MASK), .port = UDP_PORT };
@@ -1646,4 +1648,51 @@ void udpard_rx_port_free(udpard_rx_t* const rx, udpard_rx_port_t* const port)
                             &rx->index_session_by_reordering);
         }
     }
+}
+
+bool udpard_rx_port_push(udpard_rx_t* const         rx,
+                         udpard_rx_port_t* const    port,
+                         const udpard_us_t          timestamp,
+                         const udpard_udpip_ep_t    source_ep,
+                         const udpard_bytes_mut_t   datagram_payload,
+                         const udpard_mem_deleter_t payload_deleter,
+                         const uint_fast8_t         redundant_iface_index)
+{
+    const bool ok = (rx != NULL) && (port != NULL) && (timestamp >= 0) && validate_ep(source_ep) &&
+                    (datagram_payload.data != NULL) && (payload_deleter.free != NULL) &&
+                    (redundant_iface_index < UDPARD_NETWORK_INTERFACE_COUNT_MAX) && (!port->invoked);
+    if (ok) {
+        port->invoked = true;
+
+        // Parse and validate the frame.
+        udpard_bytes_mut_t payload     = { 0 };
+        rx_frame_t         frame       = { 0 };
+        uint32_t           frame_index = 0;
+        uint32_t           offset_32   = 0;
+        const bool         frame_valid =
+          header_deserialize(datagram_payload, &frame.meta, &frame_index, &offset_32, &frame.base.crc, &payload);
+        frame.base.offset = (size_t)offset_32;
+        (void)frame_index; // currently not used by this reassembler implementation.
+
+        // Process the frame.
+        if (frame_valid) {
+            if (frame.meta.topic_hash == port->topic_hash) {
+                if (port->reordering_window != UDPARD_REORDERING_WINDOW_STATELESS) {
+                    (void)NULL; // TODO FIXME
+                } else {
+                    (void)NULL; // TODO FIXME
+                }
+            } else { // Collisions are discovered early so that we don't attempt to allocate sessions for them.
+                mem_free_payload(payload_deleter, datagram_payload);
+                udpard_remote_t remote                  = { .uid = frame.meta.sender_uid, .endpoints = { 0 } };
+                remote.endpoints[redundant_iface_index] = source_ep;
+                rx->on_collision(rx, port, remote);
+            }
+        } else {
+            mem_free_payload(payload_deleter, datagram_payload);
+            ++rx->errors_frame_malformed;
+        }
+        port->invoked = false;
+    }
+    return ok;
 }
