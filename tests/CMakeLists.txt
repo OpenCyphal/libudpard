@@ -22,9 +22,6 @@ set(unity_root "${CMAKE_SOURCE_DIR}/submodules/unity")
 
 include_directories(SYSTEM ${CMAKE_SOURCE_DIR}/lib/cavl)
 
-# TODO FIXME: remove this later
-add_compile_options(-Wno-unused-function)
-
 # Use -DNO_STATIC_ANALYSIS=1 to suppress static analysis.
 # If not suppressed, the tools used here shall be available, otherwise the build will fail.
 if (NOT NO_STATIC_ANALYSIS)

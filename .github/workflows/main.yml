@@ -110,7 +110,7 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     env:
-      flags: -Wall -Wextra -Werror -pedantic -Wconversion -Wtype-limits -Wcast-align -Wfatal-errors -Wno-unused-function
+      flags: -Wall -Wextra -Werror -pedantic -Wconversion -Wtype-limits -Wcast-align -Wfatal-errors
     strategy:
       matrix:
         std: [ 'c99', 'c11', 'gnu99', 'gnu11' ]

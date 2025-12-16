@@ -798,6 +798,26 @@ static size_t rx_fragment_tree_update_covered_prefix(udpard_tree_t* const root,
     return out;
 }
 
+/// If NULL, the payload ownership could not be transferred due to OOM. The caller still owns the payload.
+static udpard_fragment_t* rx_fragment_new(const udpard_mem_resource_t memory,
+                                          const udpard_mem_deleter_t  payload_deleter,
+                                          const rx_frame_base_t       frame)
+{
+    udpard_fragment_t* const mew = mem_alloc(memory, sizeof(udpard_fragment_t));
+    if (mew != NULL) {
+        mem_zero(sizeof(*mew), mew);
+        mew->index_offset    = (udpard_tree_t){ NULL, { NULL, NULL }, 0 };
+        mew->next            = NULL;
+        mew->view.data       = frame.payload.data;
+        mew->view.size       = frame.payload.size;
+        mew->origin.data     = frame.origin.data;
+        mew->origin.size     = frame.origin.size;
+        mew->offset          = frame.offset;
+        mew->payload_deleter = payload_deleter;
+    }
+    return mew;
+}
+
 typedef enum
 {
     rx_fragment_tree_rejected, ///< The newly received fragment was not needed for the tree and was freed.
@@ -884,19 +904,11 @@ static rx_fragment_tree_update_result_t rx_fragment_tree_update(udpard_tree_t** 
     }
 
     // Ensure we can allocate the fragment header for the new frame before pruning the tree to avoid data loss.
-    udpard_fragment_t* const mew = mem_alloc(fragment_memory, sizeof(udpard_fragment_t));
+    udpard_fragment_t* const mew = rx_fragment_new(fragment_memory, payload_deleter, frame);
     if (mew == NULL) {
         mem_free_payload(payload_deleter, frame.origin);
         return rx_fragment_tree_oom; // Cannot allocate fragment header. Maybe we will succeed later.
     }
-    mem_zero(sizeof(*mew), mew);
-    mew->next            = NULL;
-    mew->view.data       = frame.payload.data;
-    mew->view.size       = frame.payload.size;
-    mew->origin.data     = frame.origin.data;
-    mew->origin.size     = frame.origin.size;
-    mew->offset          = frame.offset;
-    mew->payload_deleter = payload_deleter;
 
     // The addition of a new fragment that joins adjacent fragments together into a larger contiguous block may
     // render smaller fragments crossing its boundaries redundant.
@@ -1648,6 +1660,76 @@ void udpard_rx_port_free(udpard_rx_t* const rx, udpard_rx_port_t* const port)
     }
 }
 
+/// Takes ownership of the frame payload.
+static void rx_port_accept_stateful(udpard_rx_t* const         rx,
+                                    udpard_rx_port_t* const    port,
+                                    const udpard_us_t          timestamp,
+                                    const udpard_udpip_ep_t    source_ep,
+                                    const rx_frame_t           frame,
+                                    const udpard_mem_deleter_t payload_deleter,
+                                    const uint_fast8_t         redundant_iface_index)
+{
+    rx_session_factory_args_t fac_args = {
+        .owner                 = port,
+        .sessions_by_animation = &rx->list_session_by_animation,
+        .remote_uid            = frame.meta.sender_uid,
+        .now                   = timestamp,
+    };
+    rx_session_t* const ses = // Will find an existing one or create a new one.
+      (rx_session_t*)cavl2_find_or_insert(&port->index_session_by_remote_uid,
+                                          &frame.meta.sender_uid,
+                                          &cavl_compare_rx_session_by_remote_uid,
+                                          &fac_args,
+                                          &cavl_factory_rx_session_by_remote_uid);
+    if (ses != NULL) {
+        rx_session_update(ses, rx, timestamp, source_ep, frame, payload_deleter, redundant_iface_index);
+    } else {
+        mem_free_payload(payload_deleter, frame.base.origin);
+        ++rx->errors_oom;
+    }
+}
+
+/// Takes ownership of the frame payload.
+static void rx_port_accept_stateless(udpard_rx_t* const         rx,
+                                     udpard_rx_port_t* const    port,
+                                     const udpard_us_t          timestamp,
+                                     const udpard_udpip_ep_t    source_ep,
+                                     const rx_frame_t           frame,
+                                     const udpard_mem_deleter_t payload_deleter,
+                                     const uint_fast8_t         redundant_iface_index)
+{
+    const size_t required_size = smaller(port->extent, frame.meta.transfer_payload_size);
+    const bool   full_transfer = (frame.base.offset == 0) && (frame.base.payload.size >= required_size);
+    if (full_transfer) {
+        // The fragment allocation is only needed to uphold the callback protocol.
+        // Maybe we could do something about it in the future to avoid this allocation.
+        udpard_fragment_t* const frag = rx_fragment_new(port->memory.fragment, payload_deleter, frame.base);
+        if (frag != NULL) {
+            udpard_remote_t remote                  = { .uid = frame.meta.sender_uid };
+            remote.endpoints[redundant_iface_index] = source_ep;
+            // The CRC is validated by the frame parser for the first frame of any transfer. It is certainly correct.
+            UDPARD_ASSERT(frame.base.crc == crc_full(frame.base.payload.size, frame.base.payload.data));
+            const udpard_rx_transfer_t transfer = {
+                .timestamp           = timestamp,
+                .priority            = frame.meta.priority,
+                .transfer_id         = frame.meta.transfer_id,
+                .remote              = remote,
+                .payload_size_stored = required_size,
+                .payload_size_wire   = frame.meta.transfer_payload_size,
+                .payload_head        = frag,
+                .payload_root        = frag,
+            };
+            rx->on_message(rx, port, transfer);
+        } else {
+            mem_free_payload(payload_deleter, frame.base.origin);
+            ++rx->errors_oom;
+        }
+    } else {
+        mem_free_payload(payload_deleter, frame.base.origin);
+        ++rx->errors_transfer_malformed; // The stateless mode expects only single-frame transfers.
+    }
+}
+
 bool udpard_rx_port_push(udpard_rx_t* const         rx,
                          udpard_rx_port_t* const    port,
                          const udpard_us_t          timestamp,
@@ -1661,7 +1743,6 @@ bool udpard_rx_port_push(udpard_rx_t* const         rx,
                     (redundant_iface_index < UDPARD_NETWORK_INTERFACE_COUNT_MAX) && (!port->invoked);
     if (ok) {
         port->invoked = true;
-
         // Parse and validate the frame.
         udpard_bytes_mut_t payload     = { 0 };
         rx_frame_t         frame       = { 0 };
@@ -1671,41 +1752,22 @@ bool udpard_rx_port_push(udpard_rx_t* const         rx,
           header_deserialize(datagram_payload, &frame.meta, &frame_index, &offset_32, &frame.base.crc, &payload);
         frame.base.offset = (size_t)offset_32;
         (void)frame_index; // currently not used by this reassembler implementation.
-
+        UDPARD_ASSERT((frame.base.origin.data == datagram_payload.data) &&
+                      (frame.base.origin.size == datagram_payload.size));
         // Process the frame.
         if (frame_valid) {
             if (frame.meta.topic_hash == port->topic_hash) {
-                if (port->reordering_window != UDPARD_REORDERING_WINDOW_STATELESS) {
-                    // The normal reassembly mode, either ORDERED or UNORDERED. Requires state per remote sender.
-                    rx_session_factory_args_t fac_args = {
-                        .owner                 = port,
-                        .sessions_by_animation = &rx->list_session_by_animation,
-                        .remote_uid            = frame.meta.sender_uid,
-                        .now                   = timestamp,
-                    };
-                    rx_session_t* const ses = // Will find an existing one or create a new one.
-                      (rx_session_t*)cavl2_find_or_insert(&port->index_session_by_remote_uid,
-                                                          &frame.meta.sender_uid,
-                                                          &cavl_compare_rx_session_by_remote_uid,
-                                                          &fac_args,
-                                                          &cavl_factory_rx_session_by_remote_uid);
-                    if (ses != NULL) {
-                        rx_session_update(ses, rx, timestamp, source_ep, frame, payload_deleter, redundant_iface_index);
-                    } else {
-                        mem_free_payload(payload_deleter, datagram_payload);
-                        ++rx->errors_oom;
-                    }
-                } else {
-                    (void)NULL; // TODO FIXME
-                }
+                const bool stateful = (port->reordering_window != UDPARD_REORDERING_WINDOW_STATELESS);
+                (stateful ? rx_port_accept_stateful : rx_port_accept_stateless)(
+                  rx, port, timestamp, source_ep, frame, payload_deleter, redundant_iface_index);
             } else { // Collisions are discovered early so that we don't attempt to allocate sessions for them.
-                mem_free_payload(payload_deleter, datagram_payload);
+                mem_free_payload(payload_deleter, frame.base.origin);
                 udpard_remote_t remote                  = { .uid = frame.meta.sender_uid };
                 remote.endpoints[redundant_iface_index] = source_ep;
                 rx->on_collision(rx, port, remote);
             }
         } else {
-            mem_free_payload(payload_deleter, datagram_payload);
+            mem_free_payload(payload_deleter, frame.base.origin);
             ++rx->errors_frame_malformed;
         }
         port->invoked = false;

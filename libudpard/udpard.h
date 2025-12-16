@@ -559,10 +559,9 @@ typedef struct udpard_rx_memory_resources_t
 ///     STATELESS
 ///
 /// Only single-frame transfers are accepted (where the entire payload fits into a single datagram,
-/// or the extent does not exceed the MTU). No attempt to enforce ordering is made.
-/// A minimal attempt to remove duplicates is made using a simple short constant-time constant-memory arrival log;
-/// this is usually sufficient to remove duplicates arriving from redundant interfaces.
+/// or the extent does not exceed the MTU). No attempt to enforce ordering or remove duplicates is made.
 /// The return path is only discovered for the one interface that delivered the transfer.
+/// Transfers arriving from N interfaces are duplicated N times.
 ///
 /// The stateless mode does not allocate any dynamic memory for the port at all and does not contain any
 /// variable-complexity processing logic, enabling great scalability for topics with a very large number of
