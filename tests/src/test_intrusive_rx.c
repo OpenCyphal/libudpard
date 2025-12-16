@@ -82,7 +82,7 @@ static bool transfer_payload_verify(udpard_rx_transfer_t* const transfer,
     return (transfer->payload_size_wire == payload_size_wire) && (offset == payload_size_stored);
 }
 
-// ---------------------------------------------  FRAGMENT TREE  ---------------------------------------------
+// ---------------------------------------------  RX FRAGMENT TREE  ---------------------------------------------
 
 static udpard_fragment_t* fragment_at(udpard_tree_t* const root, uint32_t index)
 {
@@ -1163,7 +1163,7 @@ static void test_rx_fragment_tree_oom(void)
     instrumented_allocator_reset(&alloc_payload);
 }
 
-// ---------------------------------------------  TRANSFER-ID WINDOW  ---------------------------------------------
+// ---------------------------------------------  RX TRANSFER-ID WINDOW  ---------------------------------------------
 
 static void test_rx_transfer_id_forward_distance(void)
 {
@@ -1610,7 +1610,7 @@ static void test_rx_transfer_id_window_manip(void)
     TEST_ASSERT_FALSE(rx_transfer_id_window_contains(&obj, 1001)); // ahead (outside)
 }
 
-// ---------------------------------------------  SLOT  ---------------------------------------------
+// ---------------------------------------------  RX SLOT  ---------------------------------------------
 
 static void test_rx_slot_update(void)
 {
@@ -1971,7 +1971,7 @@ static void test_rx_slot_update(void)
     TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
 }
 
-// ---------------------------------------------  SESSION  ---------------------------------------------
+// ---------------------------------------------  RX SESSION  ---------------------------------------------
 
 typedef struct
 {
@@ -2908,7 +2908,7 @@ static void test_rx_session_unordered(void)
     instrumented_allocator_reset(&alloc_payload);
 }
 
-// ---------------------------------------------  PORT  ---------------------------------------------
+// ---------------------------------------------  RX PORT  ---------------------------------------------
 
 /// Tests ports in ORDERED, UNORDERED, and STATELESS modes.
 /// The UNORDERED port is the p2p_port in the rx instance; the other modes are tested on separate port instances.
@@ -3453,6 +3453,93 @@ static void test_rx_port_timeouts(void)
     TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
 }
 
+static void test_rx_port_oom(void)
+{
+    instrumented_allocator_t alloc_frag = { 0 };
+    instrumented_allocator_new(&alloc_frag);
+    instrumented_allocator_t alloc_session = { 0 };
+    instrumented_allocator_new(&alloc_session);
+    instrumented_allocator_t alloc_payload = { 0 };
+    instrumented_allocator_new(&alloc_payload);
+    alloc_session.limit_fragments                  = 0;
+    alloc_frag.limit_fragments                     = 0;
+    const udpard_mem_resource_t        mem_frag    = instrumented_allocator_make_resource(&alloc_frag);
+    const udpard_mem_resource_t        mem_session = instrumented_allocator_make_resource(&alloc_session);
+    const udpard_mem_resource_t        mem_payload = instrumented_allocator_make_resource(&alloc_payload);
+    const udpard_mem_deleter_t         del_payload = instrumented_allocator_make_deleter(&alloc_payload);
+    const udpard_rx_memory_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
+    udpard_rx_t                        rx;
+    callback_result_t                  cb_result = { 0 };
+    TEST_ASSERT(udpard_rx_new(&rx, 0x5555ULL, rx_mem, &on_message, &on_collision, &on_ack_mandate));
+    rx.user = &cb_result;
+    udpard_rx_port_t port_ordered;
+    udpard_rx_port_t port_stateless;
+    TEST_ASSERT(udpard_rx_port_new(&port_ordered, 0xAAAALL, 100, 20000, rx_mem));
+    TEST_ASSERT(udpard_rx_port_new(&port_stateless, 0xBBBBLL, 100, UDPARD_REORDERING_WINDOW_STATELESS, rx_mem));
+    udpard_us_t      now             = 0;
+    const byte_t     payload_state[] = { 's', 't', 'a', 't', 'e', 'f', 'u', 'l' };
+    const size_t     payload_len     = sizeof(payload_state);
+    meta_t           meta_state      = { .priority              = udpard_prio_nominal,
+                                         .flag_ack              = false,
+                                         .transfer_payload_size = (uint32_t)payload_len,
+                                         .transfer_id           = 1,
+                                         .sender_uid            = 0x1111ULL,
+                                         .topic_hash            = 0xAAAALL };
+    const rx_frame_t frame_state     = make_frame(meta_state, mem_payload, payload_state, 0, payload_len);
+    byte_t           dgram_state[HEADER_SIZE_BYTES + payload_len];
+    header_serialize(dgram_state, meta_state, 0, 0, frame_state.base.crc);
+    memcpy(dgram_state + HEADER_SIZE_BYTES, payload_state, payload_len);
+    mem_free(mem_payload, frame_state.base.origin.size, frame_state.base.origin.data);
+    void* push_state = mem_payload.alloc(mem_payload.user, sizeof(dgram_state));
+    memcpy(push_state, dgram_state, sizeof(dgram_state));
+    const uint64_t errors_before = rx.errors_oom;
+    TEST_ASSERT(udpard_rx_port_push(&rx,
+                                    &port_ordered,
+                                    now,
+                                    (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1234 },
+                                    (udpard_bytes_mut_t){ .data = push_state, .size = sizeof(dgram_state) },
+                                    del_payload,
+                                    0));
+    TEST_ASSERT_EQUAL(errors_before + 1, rx.errors_oom);
+    TEST_ASSERT_EQUAL(0, cb_result.message.count);
+    const byte_t     payload_stateless[] = { 's', 't', 'a', 't', 'e', 'l', 'e', 's', 's' };
+    const size_t     payload_stat_len    = sizeof(payload_stateless);
+    meta_t           meta_stateless      = { .priority              = udpard_prio_slow,
+                                             .flag_ack              = false,
+                                             .transfer_payload_size = (uint32_t)payload_stat_len,
+                                             .transfer_id           = 2,
+                                             .sender_uid            = 0x2222ULL,
+                                             .topic_hash            = 0xBBBBLL };
+    const rx_frame_t frame_stateless = make_frame(meta_stateless, mem_payload, payload_stateless, 0, payload_stat_len);
+    byte_t           dgram_stateless[HEADER_SIZE_BYTES + payload_stat_len];
+    header_serialize(dgram_stateless, meta_stateless, 0, 0, frame_stateless.base.crc);
+    memcpy(dgram_stateless + HEADER_SIZE_BYTES, payload_stateless, payload_stat_len);
+    mem_free(mem_payload, frame_stateless.base.origin.size, frame_stateless.base.origin.data);
+    void* push_stateless = mem_payload.alloc(mem_payload.user, sizeof(dgram_stateless));
+    memcpy(push_stateless, dgram_stateless, sizeof(dgram_stateless));
+    now += 1000;
+    TEST_ASSERT(udpard_rx_port_push(&rx,
+                                    &port_stateless,
+                                    now,
+                                    (udpard_udpip_ep_t){ .ip = 0x0A000002, .port = 0x5678 },
+                                    (udpard_bytes_mut_t){ .data = push_stateless, .size = sizeof(dgram_stateless) },
+                                    del_payload,
+                                    1));
+    TEST_ASSERT_EQUAL(errors_before + 2, rx.errors_oom);
+    TEST_ASSERT_EQUAL(0, cb_result.message.count);
+    udpard_rx_port_free(&rx, &port_ordered);
+    udpard_rx_port_free(&rx, &port_stateless);
+    udpard_rx_free(&rx);
+    TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0, alloc_session.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
+    instrumented_allocator_reset(&alloc_frag);
+    instrumented_allocator_reset(&alloc_session);
+    instrumented_allocator_reset(&alloc_payload);
+}
+
+// ---------------------------------------------  RX  ---------------------------------------------
+
 /// Ensures udpard_rx_free walks and clears all sessions across ports.
 static void test_rx_free_loop(void)
 {
@@ -3569,6 +3656,7 @@ int main(void)
 
     RUN_TEST(test_rx_port);
     RUN_TEST(test_rx_port_timeouts);
+    RUN_TEST(test_rx_port_oom);
 
     RUN_TEST(test_rx_free_loop);
 
