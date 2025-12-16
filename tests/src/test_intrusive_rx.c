@@ -2908,11 +2908,352 @@ static void test_port(void)
     TEST_ASSERT_EQUAL(local_uid, rx.p2p_port.topic_hash);
     TEST_ASSERT_EQUAL(UDPARD_REORDERING_WINDOW_UNORDERED, rx.p2p_port.reordering_window);
 
-    // TODO continue: init two ports, one ORDERED, one STATELESS. Feed frames from different remote nodes into each.
-    // Verify the callbacks: on message, on ack, on collision.
-    // Feed bad frames and verify they are rejected with no memory leaks.
-    (void)mem_payload;  // TODO: Will be used when test is completed
-    (void)del_payload;  // TODO: Will be used when test is completed
+    // Initialize two ports: one ORDERED, one STATELESS.
+    udpard_rx_port_t port_ordered;
+    const uint64_t   topic_hash_ordered = 0x1234567890ABCDEFULL;
+    TEST_ASSERT(udpard_rx_port_new(&port_ordered, topic_hash_ordered, 1000, 10 * KILO, rx_mem));
+
+    udpard_rx_port_t port_stateless;
+    const uint64_t   topic_hash_stateless = 0xFEDCBA0987654321ULL;
+    TEST_ASSERT(
+      udpard_rx_port_new(&port_stateless, topic_hash_stateless, 500, UDPARD_REORDERING_WINDOW_STATELESS, rx_mem));
+
+    udpard_us_t now = 0;
+
+    // Test 1: Send a valid single-frame transfer to the ORDERED port.
+    {
+        const uint64_t   remote_uid  = 0xAABBCCDDEEFF0011ULL;
+        const uint64_t   transfer_id = 100;
+        const char*      payload_str = "Hello World";
+        const size_t     payload_len = strlen(payload_str) + 1; // include null terminator
+        meta_t           meta        = { .priority              = udpard_prio_nominal,
+                                         .flag_ack              = true,
+                                         .transfer_payload_size = (uint32_t)payload_len,
+                                         .transfer_id           = transfer_id,
+                                         .sender_uid            = remote_uid,
+                                         .topic_hash            = topic_hash_ordered };
+        const rx_frame_t frame       = make_frame(meta, mem_payload, payload_str, 0, payload_len);
+
+        // Serialize the frame into a datagram.
+        byte_t dgram[HEADER_SIZE_BYTES + payload_len];
+        header_serialize(dgram, meta, 0, 0, frame.base.crc);
+        memcpy(dgram + HEADER_SIZE_BYTES, payload_str, payload_len);
+        mem_free_payload(del_payload, frame.base.origin);
+
+        // Allocate payload for the push.
+        void* push_payload = mem_payload.alloc(mem_payload.user, sizeof(dgram));
+        memcpy(push_payload, dgram, sizeof(dgram));
+
+        now += 1000;
+        TEST_ASSERT(udpard_rx_port_push(&rx,
+                                        &port_ordered,
+                                        now,
+                                        (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1234 },
+                                        (udpard_bytes_mut_t){ .data = push_payload, .size = sizeof(dgram) },
+                                        del_payload,
+                                        0));
+
+        // Verify the callback was invoked.
+        TEST_ASSERT_EQUAL(1, cb_result.message.count);
+        TEST_ASSERT_EQUAL(transfer_id, cb_result.message.history[0].transfer_id);
+        TEST_ASSERT_EQUAL(remote_uid, cb_result.message.history[0].remote.uid);
+        TEST_ASSERT_EQUAL(payload_len, cb_result.message.history[0].payload_size_stored);
+        TEST_ASSERT(transfer_payload_verify(&cb_result.message.history[0], payload_len, payload_str, payload_len));
+
+        // Verify ACK was mandated.
+        TEST_ASSERT_EQUAL(1, cb_result.ack_mandate.count);
+        TEST_ASSERT_EQUAL(transfer_id, cb_result.ack_mandate.am.transfer_id);
+
+        // Clean up.
+        udpard_fragment_free_all(cb_result.message.history[0].payload_head, mem_frag);
+        cb_result.message.count     = 0;
+        cb_result.ack_mandate.count = 0;
+    }
+
+    // Test 2: Send a valid single-frame transfer to the STATELESS port.
+    {
+        const uint64_t   remote_uid  = 0x1122334455667788ULL;
+        const uint64_t   transfer_id = 200;
+        const char*      payload_str = "Stateless";
+        const size_t     payload_len = strlen(payload_str) + 1;
+        meta_t           meta        = { .priority              = udpard_prio_high,
+                                         .flag_ack              = false,
+                                         .transfer_payload_size = (uint32_t)payload_len,
+                                         .transfer_id           = transfer_id,
+                                         .sender_uid            = remote_uid,
+                                         .topic_hash            = topic_hash_stateless };
+        const rx_frame_t frame       = make_frame(meta, mem_payload, payload_str, 0, payload_len);
+
+        byte_t dgram[HEADER_SIZE_BYTES + payload_len];
+        header_serialize(dgram, meta, 0, 0, frame.base.crc);
+        memcpy(dgram + HEADER_SIZE_BYTES, payload_str, payload_len);
+        mem_free_payload(del_payload, frame.base.origin);
+
+        void* push_payload = mem_payload.alloc(mem_payload.user, sizeof(dgram));
+        memcpy(push_payload, dgram, sizeof(dgram));
+
+        now += 1000;
+        TEST_ASSERT(udpard_rx_port_push(&rx,
+                                        &port_stateless,
+                                        now,
+                                        (udpard_udpip_ep_t){ .ip = 0x0B000001, .port = 0x5678 },
+                                        (udpard_bytes_mut_t){ .data = push_payload, .size = sizeof(dgram) },
+                                        del_payload,
+                                        1));
+
+        TEST_ASSERT_EQUAL(1, cb_result.message.count);
+        TEST_ASSERT_EQUAL(transfer_id, cb_result.message.history[0].transfer_id);
+        TEST_ASSERT_EQUAL(remote_uid, cb_result.message.history[0].remote.uid);
+        TEST_ASSERT_EQUAL(payload_len, cb_result.message.history[0].payload_size_stored);
+        TEST_ASSERT(transfer_payload_verify(&cb_result.message.history[0], payload_len, payload_str, payload_len));
+
+        // No ACK for stateless mode without flag_ack.
+        TEST_ASSERT_EQUAL(0, cb_result.ack_mandate.count);
+
+        udpard_fragment_free_all(cb_result.message.history[0].payload_head, mem_frag);
+        cb_result.message.count = 0;
+    }
+
+    // Test 3: Send a multi-frame transfer to the ORDERED port.
+    {
+        const uint64_t remote_uid   = 0xAABBCCDDEEFF0011ULL;
+        const uint64_t transfer_id  = 101;
+        const char*    full_payload = "0123456789ABCDEFGHIJ";
+        const size_t   payload_len  = 20;
+        meta_t         meta         = { .priority              = udpard_prio_nominal,
+                                        .flag_ack              = true,
+                                        .transfer_payload_size = (uint32_t)payload_len,
+                                        .transfer_id           = transfer_id,
+                                        .sender_uid            = remote_uid,
+                                        .topic_hash            = topic_hash_ordered };
+
+        // Frame 1: offset 0, 10 bytes.
+        {
+            const rx_frame_t frame = make_frame(meta, mem_payload, full_payload, 0, 10);
+            byte_t           dgram[HEADER_SIZE_BYTES + 10];
+            header_serialize(dgram, meta, 0, 0, frame.base.crc);
+            memcpy(dgram + HEADER_SIZE_BYTES, full_payload, 10);
+            mem_free_payload(del_payload, frame.base.origin);
+
+            void* push_payload = mem_payload.alloc(mem_payload.user, sizeof(dgram));
+            memcpy(push_payload, dgram, sizeof(dgram));
+
+            now += 1000;
+            TEST_ASSERT(udpard_rx_port_push(&rx,
+                                            &port_ordered,
+                                            now,
+                                            (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1234 },
+                                            (udpard_bytes_mut_t){ .data = push_payload, .size = sizeof(dgram) },
+                                            del_payload,
+                                            0));
+        }
+
+        // Frame 2: offset 10, 10 bytes.
+        {
+            const rx_frame_t frame = make_frame(meta, mem_payload, full_payload, 10, 10);
+            byte_t           dgram[HEADER_SIZE_BYTES + 10];
+            header_serialize(dgram, meta, 1, 10, frame.base.crc);
+            memcpy(dgram + HEADER_SIZE_BYTES, full_payload + 10, 10);
+            mem_free_payload(del_payload, frame.base.origin);
+
+            void* push_payload = mem_payload.alloc(mem_payload.user, sizeof(dgram));
+            memcpy(push_payload, dgram, sizeof(dgram));
+
+            now += 1000;
+            TEST_ASSERT(udpard_rx_port_push(&rx,
+                                            &port_ordered,
+                                            now,
+                                            (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1234 },
+                                            (udpard_bytes_mut_t){ .data = push_payload, .size = sizeof(dgram) },
+                                            del_payload,
+                                            0));
+        }
+
+        // Verify the transfer was received.
+        TEST_ASSERT_EQUAL(1, cb_result.message.count);
+        TEST_ASSERT_EQUAL(transfer_id, cb_result.message.history[0].transfer_id);
+        TEST_ASSERT_EQUAL(payload_len, cb_result.message.history[0].payload_size_stored);
+        TEST_ASSERT(transfer_payload_verify(&cb_result.message.history[0], payload_len, full_payload, payload_len));
+
+        TEST_ASSERT_EQUAL(1, cb_result.ack_mandate.count);
+
+        udpard_fragment_free_all(cb_result.message.history[0].payload_head, mem_frag);
+        cb_result.message.count     = 0;
+        cb_result.ack_mandate.count = 0;
+    }
+
+    // Test 4: Send a frame with wrong topic hash (collision).
+    {
+        const uint64_t   remote_uid  = 0x9988776655443322ULL;
+        const uint64_t   transfer_id = 300;
+        const char*      payload_str = "Collision";
+        const size_t     payload_len = strlen(payload_str) + 1;
+        const uint64_t   wrong_hash  = topic_hash_ordered + 1; // Different hash
+        meta_t           meta        = { .priority              = udpard_prio_nominal,
+                                         .flag_ack              = false,
+                                         .transfer_payload_size = (uint32_t)payload_len,
+                                         .transfer_id           = transfer_id,
+                                         .sender_uid            = remote_uid,
+                                         .topic_hash            = wrong_hash };
+        const rx_frame_t frame       = make_frame(meta, mem_payload, payload_str, 0, payload_len);
+
+        byte_t dgram[HEADER_SIZE_BYTES + payload_len];
+        header_serialize(dgram, meta, 0, 0, frame.base.crc);
+        memcpy(dgram + HEADER_SIZE_BYTES, payload_str, payload_len);
+        mem_free_payload(del_payload, frame.base.origin);
+
+        void* push_payload = mem_payload.alloc(mem_payload.user, sizeof(dgram));
+        memcpy(push_payload, dgram, sizeof(dgram));
+
+        now += 1000;
+        TEST_ASSERT(udpard_rx_port_push(&rx,
+                                        &port_ordered,
+                                        now,
+                                        (udpard_udpip_ep_t){ .ip = 0x0C000001, .port = 0x9999 },
+                                        (udpard_bytes_mut_t){ .data = push_payload, .size = sizeof(dgram) },
+                                        del_payload,
+                                        2));
+
+        // Verify collision callback was invoked.
+        TEST_ASSERT_EQUAL(1, cb_result.collision.count);
+        TEST_ASSERT_EQUAL(remote_uid, cb_result.collision.remote.uid);
+
+        // No message should have been received.
+        TEST_ASSERT_EQUAL(0, cb_result.message.count);
+
+        cb_result.collision.count = 0;
+    }
+
+    // Test 5: Send a malformed frame (bad CRC in header).
+    {
+        const uint64_t errors_before = rx.errors_frame_malformed;
+        byte_t         bad_dgram[HEADER_SIZE_BYTES + 10];
+        memset(bad_dgram, 0xAA, sizeof(bad_dgram)); // Garbage data
+
+        void* push_payload = mem_payload.alloc(mem_payload.user, sizeof(bad_dgram));
+        memcpy(push_payload, bad_dgram, sizeof(bad_dgram));
+
+        now += 1000;
+        TEST_ASSERT(udpard_rx_port_push(&rx,
+                                        &port_ordered,
+                                        now,
+                                        (udpard_udpip_ep_t){ .ip = 0x0D000001, .port = 0xAAAA },
+                                        (udpard_bytes_mut_t){ .data = push_payload, .size = sizeof(bad_dgram) },
+                                        del_payload,
+                                        0));
+
+        // Verify error counter was incremented.
+        TEST_ASSERT_EQUAL(errors_before + 1, rx.errors_frame_malformed);
+
+        // No callbacks should have been invoked.
+        TEST_ASSERT_EQUAL(0, cb_result.message.count);
+        TEST_ASSERT_EQUAL(0, cb_result.collision.count);
+        TEST_ASSERT_EQUAL(0, cb_result.ack_mandate.count);
+    }
+
+    // Test 6: Send a multi-frame transfer to STATELESS port (should be rejected).
+    {
+        const uint64_t errors_before = rx.errors_transfer_malformed;
+        const uint64_t remote_uid    = 0x1122334455667788ULL;
+        const uint64_t transfer_id   = 201;
+        const char*    payload_str   = "MultiFrameStateless";
+        const size_t   payload_len   = strlen(payload_str) + 1;
+        meta_t         meta          = { .priority              = udpard_prio_high,
+                                         .flag_ack              = false,
+                                         .transfer_payload_size = (uint32_t)payload_len,
+                                         .transfer_id           = transfer_id,
+                                         .sender_uid            = remote_uid,
+                                         .topic_hash            = topic_hash_stateless };
+
+        // Send only the first frame (offset 0, partial payload).
+        const rx_frame_t frame = make_frame(meta, mem_payload, payload_str, 0, 10);
+        byte_t           dgram[HEADER_SIZE_BYTES + 10];
+        header_serialize(dgram, meta, 0, 0, frame.base.crc);
+        memcpy(dgram + HEADER_SIZE_BYTES, payload_str, 10);
+        mem_free_payload(del_payload, frame.base.origin);
+
+        void* push_payload = mem_payload.alloc(mem_payload.user, sizeof(dgram));
+        memcpy(push_payload, dgram, sizeof(dgram));
+
+        now += 1000;
+        TEST_ASSERT(udpard_rx_port_push(&rx,
+                                        &port_stateless,
+                                        now,
+                                        (udpard_udpip_ep_t){ .ip = 0x0B000001, .port = 0x5678 },
+                                        (udpard_bytes_mut_t){ .data = push_payload, .size = sizeof(dgram) },
+                                        del_payload,
+                                        1));
+
+        // STATELESS mode rejects multi-frame transfers.
+        TEST_ASSERT_EQUAL(errors_before + 1, rx.errors_transfer_malformed);
+        TEST_ASSERT_EQUAL(0, cb_result.message.count);
+    }
+
+    // Test 7: Verify invalid API calls return false.
+    {
+        void* dummy_payload = mem_payload.alloc(mem_payload.user, 100);
+        memset(dummy_payload, 0, 100);
+        // Null rx pointer.
+        TEST_ASSERT_FALSE(udpard_rx_port_push(NULL,
+                                              &port_ordered,
+                                              now,
+                                              (udpard_udpip_ep_t){ .ip = 0x01020304, .port = 1234 },
+                                              (udpard_bytes_mut_t){ .data = dummy_payload, .size = 100 },
+                                              del_payload,
+                                              0));
+        // Null port pointer.
+        TEST_ASSERT_FALSE(udpard_rx_port_push(&rx,
+                                              NULL,
+                                              now,
+                                              (udpard_udpip_ep_t){ .ip = 0x01020304, .port = 1234 },
+                                              (udpard_bytes_mut_t){ .data = dummy_payload, .size = 100 },
+                                              del_payload,
+                                              0));
+        // Invalid endpoint (ip = 0).
+        TEST_ASSERT_FALSE(udpard_rx_port_push(&rx,
+                                              &port_ordered,
+                                              now,
+                                              (udpard_udpip_ep_t){ .ip = 0, .port = 1234 },
+                                              (udpard_bytes_mut_t){ .data = dummy_payload, .size = 100 },
+                                              del_payload,
+                                              0));
+        // Invalid endpoint (port = 0).
+        TEST_ASSERT_FALSE(udpard_rx_port_push(&rx,
+                                              &port_ordered,
+                                              now,
+                                              (udpard_udpip_ep_t){ .ip = 0x01020304, .port = 0 },
+                                              (udpard_bytes_mut_t){ .data = dummy_payload, .size = 100 },
+                                              del_payload,
+                                              0));
+        // Null datagram payload.
+        TEST_ASSERT_FALSE(udpard_rx_port_push(&rx,
+                                              &port_ordered,
+                                              now,
+                                              (udpard_udpip_ep_t){ .ip = 0x01020304, .port = 1234 },
+                                              (udpard_bytes_mut_t){ .data = NULL, .size = 100 },
+                                              del_payload,
+                                              0));
+        // Invalid interface index.
+        TEST_ASSERT_FALSE(udpard_rx_port_push(&rx,
+                                              &port_ordered,
+                                              now,
+                                              (udpard_udpip_ep_t){ .ip = 0x01020304, .port = 1234 },
+                                              (udpard_bytes_mut_t){ .data = dummy_payload, .size = 100 },
+                                              del_payload,
+                                              UDPARD_NETWORK_INTERFACE_COUNT_MAX));
+        // Free the dummy payload since all calls failed.
+        mem_free(mem_payload, 100, dummy_payload);
+    }
+
+    // Cleanup.
+    udpard_rx_port_free(&rx, &port_ordered);
+    udpard_rx_port_free(&rx, &port_stateless);
+    udpard_rx_free(&rx);
+
+    // Verify no memory leaks.
+    TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0, alloc_session.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
 }
 
 void setUp(void) {}
