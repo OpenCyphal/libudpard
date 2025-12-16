@@ -124,24 +124,24 @@ udpard_udpip_ep_t udpard_make_subject_endpoint(const uint32_t subject_id)
 }
 
 // NOLINTNEXTLINE(misc-no-recursion)
-void udpard_fragment_free_all(udpard_fragment_t* const frag, const udpard_mem_resource_t fragment_memory_resource)
+void udpard_fragment_free_all(udpard_fragment_t* const frag, const udpard_mem_resource_t fragment_mem_resource)
 {
     if (frag != NULL) {
         // Descend the tree
         for (uint_fast8_t i = 0; i < 2; i++) {
             if (frag->index_offset.lr[i] != NULL) {
                 frag->index_offset.lr[i]->up = NULL; // Prevent backtrack ascension from this branch
-                udpard_fragment_free_all((udpard_fragment_t*)frag->index_offset.lr[i], fragment_memory_resource);
+                udpard_fragment_free_all((udpard_fragment_t*)frag->index_offset.lr[i], fragment_mem_resource);
                 frag->index_offset.lr[i] = NULL; // Avoid dangly pointers even if we're headed for imminent destruction
             }
         }
         // Delete this fragment
         udpard_fragment_t* const parent = (udpard_fragment_t*)frag->index_offset.up;
         mem_free_payload(frag->payload_deleter, frag->origin);
-        mem_free(fragment_memory_resource, sizeof(udpard_fragment_t), frag);
+        mem_free(fragment_mem_resource, sizeof(udpard_fragment_t), frag);
         if (parent != NULL) {
             parent->index_offset.lr[parent->index_offset.lr[1] == (udpard_tree_t*)frag] = NULL;
-            udpard_fragment_free_all(parent, fragment_memory_resource); // tail call hopefully
+            udpard_fragment_free_all(parent, fragment_mem_resource); // tail call hopefully
         }
     }
 }
@@ -1559,21 +1559,21 @@ static void rx_session_update(rx_session_t* const        self,
 
 // ---------------------------------------------  RX PUBLIC API  ---------------------------------------------
 
-static bool rx_validate_memory_resources(const udpard_rx_memory_resources_t memory)
+static bool rx_validate_mem_resources(const udpard_rx_mem_resources_t memory)
 {
     return (memory.session.alloc != NULL) && (memory.session.free != NULL) && //
            (memory.fragment.alloc != NULL) && (memory.fragment.free != NULL);
 }
 
-bool udpard_rx_new(udpard_rx_t* const                 self,
-                   const uint64_t                     local_uid,
-                   const udpard_rx_memory_resources_t p2p_port_memory,
-                   const udpard_rx_on_message_t       on_message,
-                   const udpard_rx_on_collision_t     on_collision,
-                   const udpard_rx_on_ack_mandate_t   on_ack_mandate)
+bool udpard_rx_new(udpard_rx_t* const               self,
+                   const uint64_t                   local_uid,
+                   const udpard_rx_mem_resources_t  p2p_port_memory,
+                   const udpard_rx_on_message_t     on_message,
+                   const udpard_rx_on_collision_t   on_collision,
+                   const udpard_rx_on_ack_mandate_t on_ack_mandate)
 {
-    bool ok = (self != NULL) && (local_uid > 0) && rx_validate_memory_resources(p2p_port_memory) &&
-              (on_message != NULL) && (on_collision != NULL) && (on_ack_mandate != NULL);
+    bool ok = (self != NULL) && (local_uid > 0) && rx_validate_mem_resources(p2p_port_memory) && (on_message != NULL) &&
+              (on_collision != NULL) && (on_ack_mandate != NULL);
     if (ok) {
         mem_zero(sizeof(*self), self);
         self->list_session_by_animation   = (udpard_list_t){ NULL, NULL };
@@ -1585,8 +1585,8 @@ bool udpard_rx_new(udpard_rx_t* const                 self,
         self->errors_frame_malformed      = 0;
         self->errors_transfer_malformed   = 0;
         self->user                        = NULL;
-        ok =
-          udpard_rx_port_new(&self->p2p_port, local_uid, SIZE_MAX, UDPARD_REORDERING_WINDOW_UNORDERED, p2p_port_memory);
+        ok                                = udpard_rx_port_new(
+          &self->p2p_port, local_uid, SIZE_MAX, UDPARD_RX_REORDERING_WINDOW_UNORDERED, p2p_port_memory);
     }
     return ok;
 }
@@ -1626,16 +1626,16 @@ void udpard_rx_poll(udpard_rx_t* const self, const udpard_us_t now)
     self->p2p_port.invoked = false;
 }
 
-bool udpard_rx_port_new(udpard_rx_port_t* const            self,
-                        const uint64_t                     topic_hash,
-                        const size_t                       extent,
-                        const udpard_us_t                  reordering_window,
-                        const udpard_rx_memory_resources_t memory)
+bool udpard_rx_port_new(udpard_rx_port_t* const         self,
+                        const uint64_t                  topic_hash,
+                        const size_t                    extent,
+                        const udpard_us_t               reordering_window,
+                        const udpard_rx_mem_resources_t memory)
 {
     const bool win_ok = (reordering_window >= 0) || //
-                        (reordering_window == UDPARD_REORDERING_WINDOW_UNORDERED) ||
-                        (reordering_window == UDPARD_REORDERING_WINDOW_STATELESS);
-    const bool ok = (self != NULL) && rx_validate_memory_resources(memory) && win_ok;
+                        (reordering_window == UDPARD_RX_REORDERING_WINDOW_UNORDERED) ||
+                        (reordering_window == UDPARD_RX_REORDERING_WINDOW_STATELESS);
+    const bool ok = (self != NULL) && rx_validate_mem_resources(memory) && win_ok;
     if (ok) {
         mem_zero(sizeof(*self), self);
         self->topic_hash                  = topic_hash;
@@ -1755,7 +1755,7 @@ bool udpard_rx_port_push(udpard_rx_t* const         rx,
         // Process the frame.
         if (frame_valid) {
             if (frame.meta.topic_hash == port->topic_hash) {
-                const bool stateful = (port->reordering_window != UDPARD_REORDERING_WINDOW_STATELESS);
+                const bool stateful = (port->reordering_window != UDPARD_RX_REORDERING_WINDOW_STATELESS);
                 (stateful ? rx_port_accept_stateful : rx_port_accept_stateless)(
                   rx, port, timestamp, source_ep, frame, payload_deleter, redundant_iface_index);
             } else { // Collisions are discovered early so that we don't attempt to allocate sessions for them.

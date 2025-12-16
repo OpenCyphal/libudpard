@@ -275,7 +275,7 @@ typedef struct udpard_fragment_t
 /// or if the memory resource implementation does not require deallocation size.
 ///
 /// If any of the arguments are NULL, the function has no effect. The complexity is linear in the number of fragments.
-void udpard_fragment_free_all(udpard_fragment_t* const frag, const udpard_mem_resource_t fragment_memory_resource);
+void udpard_fragment_free_all(udpard_fragment_t* const frag, const udpard_mem_resource_t fragment_mem_resource);
 
 /// Given any fragment in a transfer, returns the fragment that contains the given payload offset.
 /// Returns NULL if the offset points beyond the stored payload, or if any_frag is NULL.
@@ -506,7 +506,7 @@ void udpard_tx_free(const udpard_tx_mem_resources_t memory, udpard_tx_item_t* co
 /// These are used to serve the memory needs of the library to keep state while reassembling incoming transfers.
 /// Several memory resources are provided to enable fine control over the allocated memory if necessary; however,
 /// simple applications may choose to use the same memory resource implemented via malloc()/free() for all of them.
-typedef struct udpard_rx_memory_resources_t
+typedef struct udpard_rx_mem_resources_t
 {
     /// Provides memory for the session instances described below.
     /// Each instance is fixed-size, so a trivial zero-fragmentation block allocator is sufficient.
@@ -515,7 +515,7 @@ typedef struct udpard_rx_memory_resources_t
     /// The fragment handles are allocated per payload fragment; each handle contains a pointer to its fragment.
     /// Each instance is of a very small fixed size, so a trivial zero-fragmentation block allocator is sufficient.
     udpard_mem_resource_t fragment;
-} udpard_rx_memory_resources_t;
+} udpard_rx_mem_resources_t;
 
 /// The transfer reassembly state machine can operate in several modes described below. First, a brief summary:
 ///
@@ -568,8 +568,8 @@ typedef struct udpard_rx_memory_resources_t
 /// publishers where unordered and duplicated messages are acceptable, such as the heartbeat topic.
 ///
 /// The UNORDERED mode is used if the reordering window duration is set to UDPARD_REORDERING_WINDOW_STATELESS.
-#define UDPARD_REORDERING_WINDOW_UNORDERED ((udpard_us_t)(-1))
-#define UDPARD_REORDERING_WINDOW_STATELESS ((udpard_us_t)(-2))
+#define UDPARD_RX_REORDERING_WINDOW_UNORDERED ((udpard_us_t)(-1))
+#define UDPARD_RX_REORDERING_WINDOW_STATELESS ((udpard_us_t)(-2))
 
 /// This type represents an open input port, such as a subscription to a topic.
 typedef struct udpard_rx_port_t
@@ -581,11 +581,11 @@ typedef struct udpard_rx_port_t
     /// The total size of the received payload may still exceed this extent setting by some small margin.
     size_t extent;
 
-    /// See UDPARD_REORDERING_WINDOW_... above.
+    /// See UDPARD_RX_REORDERING_WINDOW_... above.
     /// Behavior undefined if the reassembly mode is switched on a live port with ongoing transfers.
     udpard_us_t reordering_window;
 
-    udpard_rx_memory_resources_t memory;
+    udpard_rx_mem_resources_t memory;
 
     /// Libudpard creates a new session instance per remote UID that emits transfers matching this port.
     /// For example, if the local node is subscribed to a certain subject and there are X nodes publishing
@@ -719,12 +719,12 @@ typedef struct udpard_rx_t
 /// The application does not need to initialize the P2P port itself; it is initialized automatically.
 /// The application must push the datagrams arriving to its P2P sockets into this port using udpard_rx_port_push().
 /// True on success, false if any of the arguments are invalid.
-bool udpard_rx_new(udpard_rx_t* const                 self,
-                   const uint64_t                     local_uid,
-                   const udpard_rx_memory_resources_t p2p_port_memory,
-                   const udpard_rx_on_message_t       on_message,
-                   const udpard_rx_on_collision_t     on_collision,
-                   const udpard_rx_on_ack_mandate_t   on_ack_mandate);
+bool udpard_rx_new(udpard_rx_t* const               self,
+                   const uint64_t                   local_uid,
+                   const udpard_rx_mem_resources_t  p2p_port_memory,
+                   const udpard_rx_on_message_t     on_message,
+                   const udpard_rx_on_collision_t   on_collision,
+                   const udpard_rx_on_ack_mandate_t on_ack_mandate);
 
 /// Returns all memory allocated for the entire RX stack, including all ports, sessions, slots, fragments, etc.
 /// It is safe to invoke this at any time, but the instance and its ports shall not be used again unless
@@ -760,11 +760,11 @@ void udpard_rx_poll(udpard_rx_t* const self, const udpard_us_t now);
 ///
 /// The return value is true on success, false if any of the arguments are invalid.
 /// The time complexity is constant. This function does not invoke the dynamic memory manager.
-bool udpard_rx_port_new(udpard_rx_port_t* const            self,
-                        const uint64_t                     topic_hash,
-                        const size_t                       extent,
-                        const udpard_us_t                  reordering_window,
-                        const udpard_rx_memory_resources_t memory);
+bool udpard_rx_port_new(udpard_rx_port_t* const         self,
+                        const uint64_t                  topic_hash,
+                        const size_t                    extent,
+                        const udpard_us_t               reordering_window,
+                        const udpard_rx_mem_resources_t memory);
 
 /// Returns all memory allocated for the sessions, slots, fragments, etc of the given port.
 /// Does not free the port itself and does not alter the RX instance aside from unlinking the port from it.
@@ -777,7 +777,7 @@ void udpard_rx_port_free(udpard_rx_t* const rx, udpard_rx_port_t* const port);
 ///
 /// The function takes ownership of the passed datagram payload buffer. The library will either store it as a
 /// fragment of the reassembled transfer payload or free it using the corresponding memory resource
-/// (see udpard_rx_memory_resources_t) if the datagram is not needed for reassembly. Because of the ownership transfer,
+/// (see udpard_rx_mem_resources_t) if the datagram is not needed for reassembly. Because of the ownership transfer,
 /// the datagram payload buffer has to be mutable (non-const). The ownership transfer does not take place if
 /// any of the arguments are invalid; the function returns false in that case and the caller must clean up.
 ///

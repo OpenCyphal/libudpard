@@ -2058,7 +2058,7 @@ static void test_rx_session_ordered(void)
     const udpard_mem_resource_t mem_payload = instrumented_allocator_make_resource(&alloc_payload);
     const udpard_mem_deleter_t  del_payload = instrumented_allocator_make_deleter(&alloc_payload);
 
-    const udpard_rx_memory_resources_t rx_mem = { .fragment = mem_frag, .session = mem_session };
+    const udpard_rx_mem_resources_t rx_mem = { .fragment = mem_frag, .session = mem_session };
 
     // Initialize the shared RX instance.
     const uint64_t local_uid = 0xC3C8E4974254E1F5ULL;
@@ -2677,7 +2677,7 @@ static void test_rx_session_unordered(void)
     const udpard_mem_resource_t mem_payload = instrumented_allocator_make_resource(&alloc_payload);
     const udpard_mem_deleter_t  del_payload = instrumented_allocator_make_deleter(&alloc_payload);
 
-    const udpard_rx_memory_resources_t rx_mem = { .fragment = mem_frag, .session = mem_session };
+    const udpard_rx_mem_resources_t rx_mem = { .fragment = mem_frag, .session = mem_session };
 
     // Initialize the shared RX instance.
     const uint64_t local_uid = 0xC3C8E4974254E1F5ULL;
@@ -2686,7 +2686,7 @@ static void test_rx_session_unordered(void)
     callback_result_t cb_result = { 0 };
     rx.user                     = &cb_result;
     TEST_ASSERT_EQUAL(local_uid, rx.p2p_port.topic_hash);
-    TEST_ASSERT_EQUAL(UDPARD_REORDERING_WINDOW_UNORDERED, rx.p2p_port.reordering_window);
+    TEST_ASSERT_EQUAL(UDPARD_RX_REORDERING_WINDOW_UNORDERED, rx.p2p_port.reordering_window);
 
     // Construct the session instance using the p2p port.
     udpard_us_t    now                 = 0;
@@ -2929,7 +2929,7 @@ static void test_rx_port(void)
     const udpard_mem_resource_t mem_payload = instrumented_allocator_make_resource(&alloc_payload);
     const udpard_mem_deleter_t  del_payload = instrumented_allocator_make_deleter(&alloc_payload);
 
-    const udpard_rx_memory_resources_t rx_mem = { .fragment = mem_frag, .session = mem_session };
+    const udpard_rx_mem_resources_t rx_mem = { .fragment = mem_frag, .session = mem_session };
 
     // Initialize the shared RX instance.
     const uint64_t local_uid = 0x6EC164169C3088B4ULL;
@@ -2938,7 +2938,7 @@ static void test_rx_port(void)
     callback_result_t cb_result = { 0 };
     rx.user                     = &cb_result;
     TEST_ASSERT_EQUAL(local_uid, rx.p2p_port.topic_hash);
-    TEST_ASSERT_EQUAL(UDPARD_REORDERING_WINDOW_UNORDERED, rx.p2p_port.reordering_window);
+    TEST_ASSERT_EQUAL(UDPARD_RX_REORDERING_WINDOW_UNORDERED, rx.p2p_port.reordering_window);
 
     // Initialize two ports: one ORDERED, one STATELESS.
     udpard_rx_port_t port_ordered;
@@ -2948,7 +2948,7 @@ static void test_rx_port(void)
     udpard_rx_port_t port_stateless;
     const uint64_t   topic_hash_stateless = 0xFEDCBA0987654321ULL;
     TEST_ASSERT(
-      udpard_rx_port_new(&port_stateless, topic_hash_stateless, 500, UDPARD_REORDERING_WINDOW_STATELESS, rx_mem));
+      udpard_rx_port_new(&port_stateless, topic_hash_stateless, 500, UDPARD_RX_REORDERING_WINDOW_STATELESS, rx_mem));
 
     udpard_us_t now = 0;
 
@@ -3301,9 +3301,9 @@ static void test_rx_port_timeouts(void)
 
     instrumented_allocator_t alloc_payload = { 0 };
     instrumented_allocator_new(&alloc_payload);
-    const udpard_mem_resource_t        mem_payload = instrumented_allocator_make_resource(&alloc_payload);
-    const udpard_mem_deleter_t         del_payload = instrumented_allocator_make_deleter(&alloc_payload);
-    const udpard_rx_memory_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
+    const udpard_mem_resource_t     mem_payload = instrumented_allocator_make_resource(&alloc_payload);
+    const udpard_mem_deleter_t      del_payload = instrumented_allocator_make_deleter(&alloc_payload);
+    const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
 
     udpard_rx_t       rx;
     callback_result_t cb_result = { 0 };
@@ -3461,21 +3461,21 @@ static void test_rx_port_oom(void)
     instrumented_allocator_new(&alloc_session);
     instrumented_allocator_t alloc_payload = { 0 };
     instrumented_allocator_new(&alloc_payload);
-    alloc_session.limit_fragments                  = 0;
-    alloc_frag.limit_fragments                     = 0;
-    const udpard_mem_resource_t        mem_frag    = instrumented_allocator_make_resource(&alloc_frag);
-    const udpard_mem_resource_t        mem_session = instrumented_allocator_make_resource(&alloc_session);
-    const udpard_mem_resource_t        mem_payload = instrumented_allocator_make_resource(&alloc_payload);
-    const udpard_mem_deleter_t         del_payload = instrumented_allocator_make_deleter(&alloc_payload);
-    const udpard_rx_memory_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
-    udpard_rx_t                        rx;
-    callback_result_t                  cb_result = { 0 };
+    alloc_session.limit_fragments               = 0;
+    alloc_frag.limit_fragments                  = 0;
+    const udpard_mem_resource_t     mem_frag    = instrumented_allocator_make_resource(&alloc_frag);
+    const udpard_mem_resource_t     mem_session = instrumented_allocator_make_resource(&alloc_session);
+    const udpard_mem_resource_t     mem_payload = instrumented_allocator_make_resource(&alloc_payload);
+    const udpard_mem_deleter_t      del_payload = instrumented_allocator_make_deleter(&alloc_payload);
+    const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
+    udpard_rx_t                     rx;
+    callback_result_t               cb_result = { 0 };
     TEST_ASSERT(udpard_rx_new(&rx, 0x5555ULL, rx_mem, &on_message, &on_collision, &on_ack_mandate));
     rx.user = &cb_result;
     udpard_rx_port_t port_ordered;
     udpard_rx_port_t port_stateless;
     TEST_ASSERT(udpard_rx_port_new(&port_ordered, 0xAAAALL, 100, 20000, rx_mem));
-    TEST_ASSERT(udpard_rx_port_new(&port_stateless, 0xBBBBLL, 100, UDPARD_REORDERING_WINDOW_STATELESS, rx_mem));
+    TEST_ASSERT(udpard_rx_port_new(&port_stateless, 0xBBBBLL, 100, UDPARD_RX_REORDERING_WINDOW_STATELESS, rx_mem));
     udpard_us_t      now             = 0;
     const byte_t     payload_state[] = { 's', 't', 'a', 't', 'e', 'f', 'u', 'l' };
     const size_t     payload_len     = sizeof(payload_state);
@@ -3556,7 +3556,7 @@ static void test_rx_free_loop(void)
     const udpard_mem_resource_t mem_payload = instrumented_allocator_make_resource(&alloc_payload);
     const udpard_mem_deleter_t  del_payload = instrumented_allocator_make_deleter(&alloc_payload);
 
-    const udpard_rx_memory_resources_t rx_mem = { .fragment = mem_frag, .session = mem_session };
+    const udpard_rx_mem_resources_t rx_mem = { .fragment = mem_frag, .session = mem_session };
 
     udpard_rx_t       rx;
     callback_result_t cb_result = { 0 };
