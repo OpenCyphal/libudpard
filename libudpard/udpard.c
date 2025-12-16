@@ -1676,11 +1676,11 @@ static void rx_port_accept_stateful(udpard_rx_t* const         rx,
         .now                   = timestamp,
     };
     rx_session_t* const ses = // Will find an existing one or create a new one.
-      (rx_session_t*)cavl2_find_or_insert(&port->index_session_by_remote_uid,
-                                          &frame.meta.sender_uid,
-                                          &cavl_compare_rx_session_by_remote_uid,
-                                          &fac_args,
-                                          &cavl_factory_rx_session_by_remote_uid);
+      (rx_session_t*)(void*)cavl2_find_or_insert(&port->index_session_by_remote_uid,
+                                                 &frame.meta.sender_uid,
+                                                 &cavl_compare_rx_session_by_remote_uid,
+                                                 &fac_args,
+                                                 &cavl_factory_rx_session_by_remote_uid);
     if (ses != NULL) {
         rx_session_update(ses, rx, timestamp, source_ep, frame, payload_deleter, redundant_iface_index);
     } else {

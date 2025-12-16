@@ -707,7 +707,7 @@ typedef struct udpard_rx_t
 
     uint64_t errors_oom;                ///< A frame could not be processed (transfer possibly dropped) due to OOM.
     uint64_t errors_frame_malformed;    ///< A received frame was malformed and thus dropped.
-    uint64_t errors_transfer_malformed; ///< A received transfer was malformed (e.g., CRC error) and thus dropped.
+    uint64_t errors_transfer_malformed; ///< A transfer could not be reassembled correctly.
 
     void* user; ///< Opaque pointer for the application use only. Not accessed by the library.
 } udpard_rx_t;
