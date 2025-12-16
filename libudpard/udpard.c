@@ -1198,7 +1198,7 @@ static void rx_session_on_message(const rx_session_t* const self, udpard_rx_t* c
     rx->on_message(rx, self->owner, transfer);
 }
 
-static int32_t cavl_compare_rx_session_remote_uid(const void* const user, const udpard_tree_t* const node)
+static int32_t cavl_compare_rx_session_by_remote_uid(const void* const user, const udpard_tree_t* const node)
 {
     const uint64_t uid_a = *(const uint64_t*)user;
     const uint64_t uid_b = ((const rx_session_t*)(const void*)node)->remote.uid; // clang-format off
@@ -1207,20 +1207,25 @@ static int32_t cavl_compare_rx_session_remote_uid(const void* const user, const 
     return 0; // clang-format on
 }
 
-static int32_t cavl_compare_rx_session_reordering_deadline(const void* const user, const udpard_tree_t* const node)
+static int32_t cavl_compare_rx_session_by_reordering_deadline(const void* const user, const udpard_tree_t* const node)
 {
     const udpard_us_t dl_a = *(const udpard_us_t*)user;
     const udpard_us_t dl_b = CAVL2_TO_OWNER(node, rx_session_t, index_reordering_window)->reordering_window_deadline;
     return (dl_a >= dl_b) ? +1 : -1;
 }
 
-/// Fully initializes a new session instance, making it ready to accept frames out of the box. NULL if OOM.
-static rx_session_t* rx_session_new(udpard_rx_port_t* const owner,
-                                    udpard_list_t* const    sessions_by_animation,
-                                    const uint64_t          remote_uid,
-                                    const udpard_us_t       now)
+typedef struct
 {
-    rx_session_t* out = mem_alloc(owner->memory.session, sizeof(rx_session_t));
+    udpard_rx_port_t* owner;
+    udpard_list_t*    sessions_by_animation;
+    uint64_t          remote_uid;
+    udpard_us_t       now;
+} rx_session_factory_args_t;
+
+static udpard_tree_t* cavl_factory_rx_session_by_remote_uid(void* const user)
+{
+    const rx_session_factory_args_t* const args = (const rx_session_factory_args_t*)user;
+    rx_session_t* const                    out  = mem_alloc(args->owner->memory.session, sizeof(rx_session_t));
     if (out != NULL) {
         mem_zero(sizeof(*out), out);
         out->index_remote_uid           = (udpard_tree_t){ NULL, { NULL, NULL }, 0 };
@@ -1229,22 +1234,15 @@ static rx_session_t* rx_session_new(udpard_rx_port_t* const owner,
         out->list_by_animation          = (udpard_list_member_t){ NULL, NULL };
         for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
             out->slots[i].fragments = NULL;
-            rx_slot_reset(&out->slots[i], owner->memory.fragment);
+            rx_slot_reset(&out->slots[i], args->owner->memory.fragment);
         }
-        out->remote.uid          = remote_uid;
-        out->owner               = owner;
-        out->last_animated_ts    = now;
-        const udpard_tree_t* res = cavl2_find_or_insert(&owner->index_session_by_remote_uid,
-                                                        &out->remote.uid,
-                                                        &cavl_compare_rx_session_remote_uid,
-                                                        &out->index_remote_uid,
-                                                        &cavl2_trivial_factory);
-        UDPARD_ASSERT(res == &out->index_remote_uid);
-        (void)res;
-        out->initialized = false;
-        enlist_head(sessions_by_animation, &out->list_by_animation);
+        out->remote.uid       = args->remote_uid;
+        out->owner            = args->owner;
+        out->last_animated_ts = args->now;
+        out->initialized      = false;
+        enlist_head(args->sessions_by_animation, &out->list_by_animation);
     }
-    return out;
+    return (udpard_tree_t*)out;
 }
 
 /// Removes the instance from all indexes and frees all associated memory.
@@ -1309,7 +1307,7 @@ static void rx_session_ordered_scan_slots(rx_session_t* const self,
                 self->reordering_window_deadline = slot->ts_min + self->owner->reordering_window;
                 const udpard_tree_t* res         = cavl2_find_or_insert(&rx->index_session_by_reordering,
                                                                 &self->reordering_window_deadline,
-                                                                &cavl_compare_rx_session_reordering_deadline,
+                                                                &cavl_compare_rx_session_by_reordering_deadline,
                                                                 &self->index_reordering_window,
                                                                 &cavl2_trivial_factory);
                 UDPARD_ASSERT(res == &self->index_reordering_window);
@@ -1678,13 +1676,31 @@ bool udpard_rx_port_push(udpard_rx_t* const         rx,
         if (frame_valid) {
             if (frame.meta.topic_hash == port->topic_hash) {
                 if (port->reordering_window != UDPARD_REORDERING_WINDOW_STATELESS) {
-                    (void)NULL; // TODO FIXME
+                    // The normal reassembly mode, either ORDERED or UNORDERED. Requires state per remote sender.
+                    rx_session_factory_args_t fac_args = {
+                        .owner                 = port,
+                        .sessions_by_animation = &rx->list_session_by_animation,
+                        .remote_uid            = frame.meta.sender_uid,
+                        .now                   = timestamp,
+                    };
+                    rx_session_t* const ses = // Will find an existing one or create a new one.
+                      (rx_session_t*)cavl2_find_or_insert(&port->index_session_by_remote_uid,
+                                                          &frame.meta.sender_uid,
+                                                          &cavl_compare_rx_session_by_remote_uid,
+                                                          &fac_args,
+                                                          &cavl_factory_rx_session_by_remote_uid);
+                    if (ses != NULL) {
+                        rx_session_update(ses, rx, timestamp, source_ep, frame, payload_deleter, redundant_iface_index);
+                    } else {
+                        mem_free_payload(payload_deleter, datagram_payload);
+                        ++rx->errors_oom;
+                    }
                 } else {
                     (void)NULL; // TODO FIXME
                 }
             } else { // Collisions are discovered early so that we don't attempt to allocate sessions for them.
                 mem_free_payload(payload_deleter, datagram_payload);
-                udpard_remote_t remote                  = { .uid = frame.meta.sender_uid, .endpoints = { 0 } };
+                udpard_remote_t remote                  = { .uid = frame.meta.sender_uid };
                 remote.endpoints[redundant_iface_index] = source_ep;
                 rx->on_collision(rx, port, remote);
             }

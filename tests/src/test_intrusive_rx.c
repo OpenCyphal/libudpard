@@ -2076,8 +2076,17 @@ static void test_session_ordered(void)
               .index_session_by_remote_uid = NULL,
               .invoked                     = true,
     };
-    rx_session_t* const ses = rx_session_new(&port, &rx.list_session_by_animation, remote_uid, now);
-
+    rx_session_factory_args_t fac_args = {
+        .owner                 = &port,
+        .sessions_by_animation = &rx.list_session_by_animation,
+        .remote_uid            = remote_uid,
+        .now                   = now,
+    };
+    rx_session_t* const ses = (rx_session_t*)cavl2_find_or_insert(&port.index_session_by_remote_uid,
+                                                                  &remote_uid,
+                                                                  &cavl_compare_rx_session_by_remote_uid,
+                                                                  &fac_args,
+                                                                  &cavl_factory_rx_session_by_remote_uid);
     // Verify construction outcome.
     TEST_ASSERT_NOT_NULL(ses);
     TEST_ASSERT_EQUAL_PTR(rx.list_session_by_animation.head, &ses->list_by_animation);
@@ -2678,11 +2687,20 @@ static void test_session_unordered(void)
     TEST_ASSERT_EQUAL(UDPARD_REORDERING_WINDOW_UNORDERED, rx.p2p_port.reordering_window);
 
     // Construct the session instance using the p2p port.
-    udpard_us_t    now        = 0;
-    const uint64_t remote_uid = 0xA1B2C3D4E5F60718ULL;
-    rx.p2p_port.invoked       = true; // simulate being invoked
-    rx_session_t* const ses   = rx_session_new(&rx.p2p_port, &rx.list_session_by_animation, remote_uid, now);
-
+    udpard_us_t    now                 = 0;
+    const uint64_t remote_uid          = 0xA1B2C3D4E5F60718ULL;
+    rx.p2p_port.invoked                = true; // simulate being invoked
+    rx_session_factory_args_t fac_args = {
+        .owner                 = &rx.p2p_port,
+        .sessions_by_animation = &rx.list_session_by_animation,
+        .remote_uid            = remote_uid,
+        .now                   = now,
+    };
+    rx_session_t* const ses = (rx_session_t*)cavl2_find_or_insert(&rx.p2p_port.index_session_by_remote_uid,
+                                                                  &remote_uid,
+                                                                  &cavl_compare_rx_session_by_remote_uid,
+                                                                  &fac_args,
+                                                                  &cavl_factory_rx_session_by_remote_uid);
     // Verify construction outcome.
     TEST_ASSERT_NOT_NULL(ses);
     TEST_ASSERT_EQUAL_PTR(rx.list_session_by_animation.head, &ses->list_by_animation);
