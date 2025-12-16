@@ -359,7 +359,7 @@ static void test_tx_push_prioritization(void)
         large_payload[i] = (byte_t)(i & 0xFFU);
     }
     // Push transfer A at nominal priority (3 frames)
-    meta_t meta_a = {
+    const meta_t meta_a = {
         .priority              = udpard_prio_nominal,
         .flag_ack              = false,
         .transfer_payload_size = (uint32_t)large_payload_size,
@@ -654,16 +654,16 @@ static void test_tx_publish(void)
     udpard_tx_t tx;
     TEST_ASSERT_TRUE(udpard_tx_new(&tx, 0x0123456789ABCDEFULL, 10, mem));
     const uint32_t enqueued =
-      udpard_tx_publish(&tx,
-                        1000000,               // now
-                        2000000,               // deadline
-                        udpard_prio_nominal,   // priority
-                        0x1122334455667788ULL, // topic_hash
-                        123,                   // subject_id
-                        0xBADC0FFEE0DDF00DULL, // transfer_id
-                        (udpard_bytes_t){ .size = detail_of_the_cosmos_size, .data = detail_of_the_cosmos },
-                        false, // ack_required
-                        NULL);
+      udpard_tx_push(&tx,
+                     1000000,               // now
+                     2000000,               // deadline
+                     udpard_prio_nominal,   // priority
+                     0x1122334455667788ULL, // topic_hash
+                     udpard_make_subject_endpoint(123),
+                     0xBADC0FFEE0DDF00DULL, // transfer_id
+                     (udpard_bytes_t){ .size = detail_of_the_cosmos_size, .data = detail_of_the_cosmos },
+                     false, // ack_required
+                     NULL);
     TEST_ASSERT_EQUAL(1, enqueued);
     TEST_ASSERT_EQUAL(1, tx.queue_size);
     udpard_tx_item_t* frame = udpard_tx_peek(&tx, 1000000);
@@ -689,16 +689,17 @@ static void test_tx_p2p(void)
     };
     udpard_tx_t tx;
     TEST_ASSERT_TRUE(udpard_tx_new(&tx, 0x0123456789ABCDEFULL, 10, mem));
-    const uint32_t enqueued = udpard_tx_p2p(&tx,
-                                            1000000,               // now
-                                            2000000,               // deadline
-                                            udpard_prio_high,      // priority
-                                            0xFEDCBA9876543210ULL, // remote_uid
-                                            (udpard_udpip_ep_t){ .ip = 0xC0A80101, .port = 9999 },
-                                            0x0BADC0DE0BADC0DEULL, // transfer_id
-                                            (udpard_bytes_t){ .size = interstellar_war_size, .data = interstellar_war },
-                                            true, // ack_required
-                                            NULL);
+    const uint32_t enqueued =
+      udpard_tx_push(&tx,
+                     1000000,               // now
+                     2000000,               // deadline
+                     udpard_prio_high,      // priority
+                     0xFEDCBA9876543210ULL, // remote_uid
+                     (udpard_udpip_ep_t){ .ip = 0xC0A80101, .port = 9999 },
+                     0x0BADC0DE0BADC0DEULL, // transfer_id
+                     (udpard_bytes_t){ .size = interstellar_war_size, .data = interstellar_war },
+                     true, // ack_required
+                     NULL);
     TEST_ASSERT_EQUAL(1, enqueued);
     TEST_ASSERT_EQUAL(1, tx.queue_size);
     udpard_tx_item_t* frame = udpard_tx_peek(&tx, 1000000);
@@ -747,7 +748,7 @@ static void test_tx_deadline_expiration(void)
     TEST_ASSERT_EQUAL(3, enqueued);
     TEST_ASSERT_EQUAL(3, tx.queue_size);
     // Try to peek with current time much later
-    udpard_tx_item_t* frame = udpard_tx_peek(&tx, 2000000);
+    const udpard_tx_item_t* const frame = udpard_tx_peek(&tx, 2000000);
     TEST_ASSERT_EQUAL(NULL, frame); // Should be purged
     TEST_ASSERT_EQUAL(0, tx.queue_size);
     TEST_ASSERT_EQUAL(3, tx.errors_expiration); // All 3 frames expired
@@ -771,42 +772,42 @@ static void test_tx_deadline_at_current_time(void)
         test_payload[i] = (byte_t)(i & 0xFFU);
     }
     // Test 1: Try to publish with deadline < now (should be rejected)
-    uint32_t enqueued = udpard_tx_publish(&tx,
-                                          1000000, // now
-                                          999999,  // deadline in the past
-                                          udpard_prio_nominal,
-                                          0x1122334455667788ULL,
-                                          123,
-                                          0xBADC0FFEE0DDF00DULL,
-                                          (udpard_bytes_t){ .size = test_payload_size, .data = test_payload },
-                                          false,
-                                          NULL);
+    uint32_t enqueued = udpard_tx_push(&tx,
+                                       1000000, // now
+                                       999999,  // deadline in the past
+                                       udpard_prio_nominal,
+                                       0x1122334455667788ULL,
+                                       udpard_make_subject_endpoint(123),
+                                       0xBADC0FFEE0DDF00DULL,
+                                       (udpard_bytes_t){ .size = test_payload_size, .data = test_payload },
+                                       false,
+                                       NULL);
     TEST_ASSERT_EQUAL(0, enqueued);      // Should return 0 (rejected)
     TEST_ASSERT_EQUAL(0, tx.queue_size); // Nothing enqueued
     // Test 2: Try to publish with deadline == now (should be accepted, as deadline >= now)
-    enqueued = udpard_tx_publish(&tx,
-                                 1000000, // now
-                                 1000000, // deadline equals now
-                                 udpard_prio_nominal,
-                                 0x1122334455667788ULL,
-                                 123,
-                                 0xBADC0FFEE0DDF00DULL,
-                                 (udpard_bytes_t){ .size = test_payload_size, .data = test_payload },
-                                 false,
-                                 NULL);
+    enqueued = udpard_tx_push(&tx,
+                              1000000, // now
+                              1000000, // deadline equals now
+                              udpard_prio_nominal,
+                              0x1122334455667788ULL,
+                              udpard_make_subject_endpoint(123),
+                              0xBADC0FFEE0DDF00DULL,
+                              (udpard_bytes_t){ .size = test_payload_size, .data = test_payload },
+                              false,
+                              NULL);
     TEST_ASSERT_EQUAL(1, enqueued);      // Should succeed
     TEST_ASSERT_EQUAL(1, tx.queue_size); // One frame enqueued
     // Test 3: Try p2p with deadline < now (should be rejected)
-    enqueued = udpard_tx_p2p(&tx,
-                             2000000, // now
-                             1999999, // deadline in the past
-                             udpard_prio_high,
-                             0xFEDCBA9876543210ULL,
-                             (udpard_udpip_ep_t){ .ip = 0xC0A80101, .port = 9999 },
-                             0x0BADC0DE0BADC0DEULL,
-                             (udpard_bytes_t){ .size = test_payload_size, .data = test_payload },
-                             false,
-                             NULL);
+    enqueued = udpard_tx_push(&tx,
+                              2000000, // now
+                              1999999, // deadline in the past
+                              udpard_prio_high,
+                              0xFEDCBA9876543210ULL,
+                              (udpard_udpip_ep_t){ .ip = 0xC0A80101, .port = 9999 },
+                              0x0BADC0DE0BADC0DEULL,
+                              (udpard_bytes_t){ .size = test_payload_size, .data = test_payload },
+                              false,
+                              NULL);
     TEST_ASSERT_EQUAL(0, enqueued);      // Should return 0 (rejected)
     TEST_ASSERT_EQUAL(1, tx.queue_size); // Still only 1 frame from test 2
     // Clean up
@@ -840,54 +841,43 @@ static void test_tx_invalid_params(void)
     TEST_ASSERT_TRUE(udpard_tx_new(&tx, 0x0123456789ABCDEFULL, 10, mem));
     // Test publish with NULL self
     TEST_ASSERT_EQUAL(0,
-                      udpard_tx_publish(NULL,
-                                        1000000,
-                                        2000000,
-                                        udpard_prio_nominal,
-                                        0x1122334455667788ULL,
-                                        123,
-                                        0xBADC0FFEE0DDF00DULL,
-                                        (udpard_bytes_t){ .size = 10, .data = "test" },
-                                        false,
-                                        NULL));
+                      udpard_tx_push(NULL,
+                                     1000000,
+                                     2000000,
+                                     udpard_prio_nominal,
+                                     0x1122334455667788ULL,
+                                     udpard_make_subject_endpoint(123),
+                                     0xBADC0FFEE0DDF00DULL,
+                                     (udpard_bytes_t){ .size = 10, .data = "test" },
+                                     false,
+                                     NULL));
     // Test publish with invalid priority
     // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange) - intentionally testing invalid value
     const uint_fast8_t invalid_priority = UDPARD_PRIORITY_MAX + 1;
     // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange) - intentionally testing invalid value
     TEST_ASSERT_EQUAL(0,
-                      udpard_tx_publish(&tx,
-                                        1000000,
-                                        2000000,
-                                        (udpard_prio_t)invalid_priority,
-                                        0x1122334455667788ULL,
-                                        123,
-                                        0xBADC0FFEE0DDF00DULL,
-                                        (udpard_bytes_t){ .size = 10, .data = "test" },
-                                        false,
-                                        NULL));
+                      udpard_tx_push(&tx,
+                                     1000000,
+                                     2000000,
+                                     (udpard_prio_t)invalid_priority,
+                                     0x1122334455667788ULL,
+                                     udpard_make_subject_endpoint(123),
+                                     0xBADC0FFEE0DDF00DULL,
+                                     (udpard_bytes_t){ .size = 10, .data = "test" },
+                                     false,
+                                     NULL));
     // Test p2p with invalid params
     TEST_ASSERT_EQUAL(0,
-                      udpard_tx_p2p(&tx,
-                                    1000000,
-                                    2000000,
-                                    udpard_prio_high,
-                                    0, // remote_uid cannot be 0
-                                    (udpard_udpip_ep_t){ .ip = 0xC0A80101, .port = 9999 },
-                                    0x0BADC0DE0BADC0DEULL,
-                                    (udpard_bytes_t){ .size = 10, .data = "test" },
-                                    false,
-                                    NULL));
-    TEST_ASSERT_EQUAL(0,
-                      udpard_tx_p2p(&tx,
-                                    1000000,
-                                    2000000,
-                                    udpard_prio_high,
-                                    0xFEDCBA9876543210ULL,
-                                    (udpard_udpip_ep_t){ .ip = 0, .port = 9999 }, // ip cannot be 0
-                                    0x0BADC0DE0BADC0DEULL,
-                                    (udpard_bytes_t){ .size = 10, .data = "test" },
-                                    false,
-                                    NULL));
+                      udpard_tx_push(&tx,
+                                     1000000,
+                                     2000000,
+                                     udpard_prio_high,
+                                     0xFEDCBA9876543210ULL,
+                                     (udpard_udpip_ep_t){ .ip = 0, .port = 9999 }, // ip cannot be 0
+                                     0x0BADC0DE0BADC0DEULL,
+                                     (udpard_bytes_t){ .size = 10, .data = "test" },
+                                     false,
+                                     NULL));
     TEST_ASSERT_EQUAL(0, alloc.allocated_fragments);
 }
 

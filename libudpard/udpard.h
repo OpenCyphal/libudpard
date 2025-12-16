@@ -74,20 +74,16 @@
 ///                                              |
 ///                                       ... ---+
 ///
-///
-///     Memory management
-///
 /// The library can be used either with a regular heap (preferably constant-time) or with a collection of fixed-size
 /// block pool allocators (in safety-certified systems). It is up to the application to choose the desired memory
 /// management strategy; the library is interfaced with the memory managers via a special memory resource abstraction.
 ///
 /// Typically, if block pool allocators are used, the following block sizes should be served:
 ///
-///     - MTU sized blocks for the TX and RX pipelines (usually less than 2048 bytes);
-///     - TX fragment item sized blocks for the TX pipeline (less than 128 bytes).
-///     - RX session object sized blocks for the RX pipeline (less than 512 bytes);
-///     - RX fragment handle sized blocks for the RX pipeline (less than 128 bytes).
-///     - udpard_remote_t sized blocks for the return path discovery.
+///     - MTU sized blocks for the TX and RX pipelines (typically at most 1.5 KB unless jumbo frames are used).
+///     - sizeof(udpard_tx_item_t) blocks for the TX pipeline.
+///     - sizeof(rx_session_t) blocks for the RX pipeline.
+///     - sizeof(udpard_fragment_t) blocks for the RX pipeline.
 ///
 /// --------------------------------------------------------------------------------------------------------------------
 ///
@@ -233,10 +229,10 @@ typedef struct udpard_mem_resource_t
 /// as well as the payload structure itself, assuming that it is also heap-allocated.
 /// The model is as follows:
 ///
-///     (payload header) ---> udpard_fragment_t:
-///                               next   ---> udpard_fragment_t...
-///                               origin ---> (the free()able payload data buffer)
-///                               view   ---> (somewhere inside the payload data buffer)
+///     udpard_fragment_t:
+///         next   ---> udpard_fragment_t...
+///         origin ---> (the free()able payload data buffer)
+///         view   ---> (somewhere inside the payload data buffer)
 ///
 /// Payloads of received transfers are represented using this type, where each fragment corresponds to a frame.
 /// The application can either consume them directly or to copy the data into a contiguous buffer beforehand
@@ -427,6 +423,9 @@ bool udpard_tx_new(udpard_tx_t* const              self,
 /// The MTU of the generated datagrams is dependent on the value of the MTU setting at the time when this function
 /// is invoked. The MTU setting can be changed arbitrarily between invocations.
 ///
+/// The topic hash is not defined for P2P transfers since there are no topics involved; in P2P, this parameter
+/// is used to pass the destination node's UID instead.
+///
 /// The transfer_id parameter will be used to populate the transfer_id field of the generated datagrams.
 /// The caller shall increment the transfer-ID counter after each successful invocation of this function
 /// per redundant interface; the same transfer published over redundant interfaces shall have the same transfer-ID.
@@ -456,31 +455,16 @@ bool udpard_tx_new(udpard_tx_t* const              self,
 ///
 /// The time complexity is O(p + log e), where p is the amount of payload in the transfer, and e is the number of
 /// transfers (not frames) already enqueued in the transmission queue.
-uint32_t udpard_tx_publish(udpard_tx_t* const   self,
-                           const udpard_us_t    now,
-                           const udpard_us_t    deadline,
-                           const udpard_prio_t  priority,
-                           const uint64_t       topic_hash,
-                           const uint32_t       subject_id,
-                           const uint64_t       transfer_id,
-                           const udpard_bytes_t payload,
-                           const bool           ack_required,
-                           void* const          user_transfer_reference);
-
-/// Similar to udpard_tx_publish, but for P2P transfers between specific nodes.
-/// This can only be sent in a response to a published message; the RX pipeline will provide the discovered return
-/// endpoint for this particular remote node.
-/// The destination UID may seem redundant but it is needed to filter out incorrectly addressed transfers.
-uint32_t udpard_tx_p2p(udpard_tx_t* const      self,
-                       const udpard_us_t       now,
-                       const udpard_us_t       deadline,
-                       const udpard_prio_t     priority,
-                       const uint64_t          remote_uid,
-                       const udpard_udpip_ep_t remote_ep,
-                       const uint64_t          transfer_id,
-                       const udpard_bytes_t    payload,
-                       const bool              ack_required,
-                       void* const             user_transfer_reference);
+uint32_t udpard_tx_push(udpard_tx_t* const      self,
+                        const udpard_us_t       now,
+                        const udpard_us_t       deadline,
+                        const udpard_prio_t     priority,
+                        const uint64_t          topic_hash, // For P2P transfers, this is the destination's UID.
+                        const udpard_udpip_ep_t remote_ep,
+                        const uint64_t          transfer_id,
+                        const udpard_bytes_t    payload,
+                        const bool              ack_required,
+                        void* const             user_transfer_reference);
 
 /// Purges all timed out items from the transmission queue automatically; returns the next item to be transmitted,
 /// if there is any, otherwise NULL. The returned item is not removed from the queue; use udpard_tx_pop() to do that.

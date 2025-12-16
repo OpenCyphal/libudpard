@@ -617,20 +617,21 @@ bool udpard_tx_new(udpard_tx_t* const              self,
     return ok;
 }
 
-uint32_t udpard_tx_publish(udpard_tx_t* const   self,
-                           const udpard_us_t    now,
-                           const udpard_us_t    deadline,
-                           const udpard_prio_t  priority,
-                           const uint64_t       topic_hash,
-                           const uint32_t       subject_id,
-                           const uint64_t       transfer_id,
-                           const udpard_bytes_t payload,
-                           const bool           ack_required,
-                           void* const          user_transfer_reference)
+uint32_t udpard_tx_push(udpard_tx_t* const      self,
+                        const udpard_us_t       now,
+                        const udpard_us_t       deadline,
+                        const udpard_prio_t     priority,
+                        const uint64_t          topic_hash,
+                        const udpard_udpip_ep_t remote_ep,
+                        const uint64_t          transfer_id,
+                        const udpard_bytes_t    payload,
+                        const bool              ack_required,
+                        void* const             user_transfer_reference)
 {
-    uint32_t out = 0;
-    if ((self != NULL) && (deadline >= now) && (self->local_uid != 0) && (priority <= UDPARD_PRIORITY_MAX) &&
-        ((payload.data != NULL) || (payload.size == 0U))) {
+    uint32_t   out = 0;
+    const bool ok  = (self != NULL) && (deadline >= now) && (self->local_uid != 0) && validate_ep(remote_ep) &&
+                    (priority <= UDPARD_PRIORITY_MAX) && ((payload.data != NULL) || (payload.size == 0U));
+    if (ok) {
         self->errors_expiration += tx_purge_expired(self, now);
         const meta_t meta = {
             .priority              = priority,
@@ -639,35 +640,6 @@ uint32_t udpard_tx_publish(udpard_tx_t* const   self,
             .transfer_id           = transfer_id,
             .sender_uid            = self->local_uid,
             .topic_hash            = topic_hash,
-        };
-        out = tx_push(self, deadline, meta, udpard_make_subject_endpoint(subject_id), payload, user_transfer_reference);
-    }
-    return out;
-}
-
-uint32_t udpard_tx_p2p(udpard_tx_t* const      self,
-                       const udpard_us_t       now,
-                       const udpard_us_t       deadline,
-                       const udpard_prio_t     priority,
-                       const uint64_t          remote_uid,
-                       const udpard_udpip_ep_t remote_ep,
-                       const uint64_t          transfer_id,
-                       const udpard_bytes_t    payload,
-                       const bool              ack_required,
-                       void* const             user_transfer_reference)
-{
-    uint32_t out = 0;
-    if ((self != NULL) && (deadline >= now) && (self->local_uid != 0) && (remote_uid != 0) && (remote_ep.ip != 0) &&
-        (remote_ep.port != 0) && (priority <= UDPARD_PRIORITY_MAX) &&
-        ((payload.data != NULL) || (payload.size == 0U))) {
-        self->errors_expiration += tx_purge_expired(self, now);
-        const meta_t meta = {
-            .priority              = priority,
-            .flag_ack              = ack_required,
-            .transfer_payload_size = (uint32_t)payload.size,
-            .transfer_id           = transfer_id,
-            .sender_uid            = self->local_uid,
-            .topic_hash            = remote_uid,
         };
         out = tx_push(self, deadline, meta, remote_ep, payload, user_transfer_reference);
     }
