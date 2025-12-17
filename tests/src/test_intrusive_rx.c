@@ -2905,7 +2905,7 @@ static void test_rx_session_unordered(void)
 }
 
 /// Ensure the reassembler can detect repeated transfers even after the window has moved past them.
-static void test_rx_session_history(void)
+static void test_rx_session_unordered_reject_old(void)
 {
     instrumented_allocator_t alloc_frag = { 0 };
     instrumented_allocator_new(&alloc_frag);
@@ -2939,6 +2939,8 @@ static void test_rx_session_history(void)
                                                                   &fac_args,
                                                                   &cavl_factory_rx_session_by_remote_uid);
     TEST_ASSERT_NOT_NULL(ses);
+
+    // Send transfer #10. It should be accepted.
     meta_t meta = { .priority              = udpard_prio_fast,
                     .flag_ack              = false,
                     .transfer_payload_size = 3,
@@ -2955,6 +2957,8 @@ static void test_rx_session_history(void)
                       0);
     TEST_ASSERT_EQUAL(1, cb_result.message.count);
     TEST_ASSERT_EQUAL(10, cb_result.message.history[0].transfer_id);
+
+    // Send transfer with a very different TID outside the window (a "jump"). It should be accepted also.
     const uint64_t jump_tid    = 10 + RX_TRANSFER_ID_WINDOW_BITS + 5U;
     meta.transfer_id           = jump_tid;
     meta.transfer_payload_size = 4;
@@ -2969,6 +2973,8 @@ static void test_rx_session_history(void)
     TEST_ASSERT_EQUAL(2, cb_result.message.count);
     TEST_ASSERT_EQUAL(jump_tid, cb_result.message.history[0].transfer_id);
     TEST_ASSERT_FALSE(rx_transfer_id_window_contains(&ses->tidwin, 10));
+
+    // Send transfer #10 again. It should be rejected as a duplicate.
     meta.transfer_id           = 10;
     meta.transfer_payload_size = 3;
     meta.flag_ack              = true;
@@ -2980,7 +2986,7 @@ static void test_rx_session_history(void)
                       make_frame(meta, mem_payload, "dup", 0, 3),
                       del_payload,
                       0);
-    TEST_ASSERT_EQUAL(2, cb_result.message.count);
+    TEST_ASSERT_EQUAL(2, cb_result.message.count); // no new message
     TEST_ASSERT_EQUAL(1, cb_result.ack_mandate.count);
     TEST_ASSERT_EQUAL(10, cb_result.ack_mandate.am.transfer_id);
     TEST_ASSERT_EQUAL_size_t(3, cb_result.ack_mandate.am.payload_head.size);
@@ -2996,7 +3002,7 @@ static void test_rx_session_history(void)
     instrumented_allocator_reset(&alloc_payload);
 }
 
-// Send transfers 1, 3, 10000, 2 in the ORDERED mode; ensure 2 is rejected because it's late after 3.
+/// Send transfers 1, 3, 10000, 2 in the ORDERED mode; ensure 2 is rejected because it's late after 3.
 static void test_rx_session_ordered_reject_stale_after_jump(void)
 {
     instrumented_allocator_t alloc_frag = { 0 };
@@ -3859,7 +3865,7 @@ int main(void)
 
     RUN_TEST(test_rx_session_ordered);
     RUN_TEST(test_rx_session_unordered);
-    RUN_TEST(test_rx_session_history);
+    RUN_TEST(test_rx_session_unordered_reject_old);
     RUN_TEST(test_rx_session_ordered_reject_stale_after_jump);
 
     RUN_TEST(test_rx_port);
