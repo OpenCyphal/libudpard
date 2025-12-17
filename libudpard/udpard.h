@@ -139,6 +139,7 @@ typedef struct udpard_remote_t
 /// Returns the destination multicast UDP/IP endpoint for the given subject ID.
 /// The application should use this function when setting up subscription sockets or sending transfers.
 /// If the subject-ID exceeds the allowed range, the excessive bits are masked out.
+/// For P2P ports use the unicast node address instead.
 udpard_udpip_ep_t udpard_make_subject_endpoint(const uint32_t subject_id);
 
 /// The semantics are similar to malloc/free.
@@ -241,9 +242,9 @@ size_t udpard_fragment_gather(const udpard_fragment_t* any_frag,
 ///
 /// Graphically, the transmission pipeline is arranged as follows:
 ///
-///                +---> TX PIPELINE ---> UDP SOCKET ---> REDUNDANT INTERFACE A
+///                +---> udpard_tx_t ---> UDP SOCKET ---> REDUNDANT INTERFACE A
 ///                |
-///     PAYLOAD ---+---> TX PIPELINE ---> UDP SOCKET ---> REDUNDANT INTERFACE B
+///     PAYLOAD ---+---> udpard_tx_t ---> UDP SOCKET ---> REDUNDANT INTERFACE B
 ///                |
 ///                +---> ...
 ///
@@ -465,12 +466,12 @@ void udpard_tx_free(const udpard_tx_mem_resources_t memory, udpard_tx_item_t* co
 /// P2P transfers are handled in a similar way, except that the topic hash is replaced with the destination node's UID,
 /// and the UDP/IP endpoints are unicast addresses instead of multicast addresses.
 ///
-/// Graphically, the subscription pipeline is arranged as shown below.
-/// Remember that the application with S RX ports would have S such pipelines, one per port.
+/// Graphically, the subscription pipeline is arranged per port as shown below.
+/// Remember that the application with N RX ports would have N such pipelines, one per port.
 ///
 ///     REDUNDANT INTERFACE A ---> UDP SOCKET ---+
 ///                                              |
-///     REDUNDANT INTERFACE B ---> UDP SOCKET ---+---> RX PORT ---> TRANSFERS
+///     REDUNDANT INTERFACE B ---> UDP SOCKET ---+---> udpard_rx_port_t ---> TRANSFERS
 ///                                              |
 ///                                       ... ---+
 ///
@@ -662,8 +663,6 @@ typedef void (*udpard_rx_on_ack_mandate_t)(struct udpard_rx_t*, udpard_rx_port_t
 
 typedef struct udpard_rx_t
 {
-    udpard_rx_port_t p2p_port; ///< A single port used for accepting all P2P transfers.
-
     udpard_list_t  list_session_by_animation;   ///< Oldest at the tail.
     udpard_tree_t* index_session_by_reordering; ///< Earliest reordering window closure on the left.
 
@@ -678,25 +677,13 @@ typedef struct udpard_rx_t
     void* user; ///< Opaque pointer for the application use only. Not accessed by the library.
 } udpard_rx_t;
 
-/// The extent of the P2P port is set to SIZE_MAX by default (no truncation at all).
-/// The application can alter it via udpard_rx_t::p2p_port.extent at any moment if needed; it takes effect immediately
-/// but may in some cases cause in-progress transfers to be lost, so it is best to do it once after initialization.
-/// The application does not need to initialize the P2P port itself; it is initialized automatically.
-/// The application must push the datagrams arriving to its P2P sockets into this port using udpard_rx_port_push().
+/// The RX instance holds no resources and can be destroyed at any time by simply freeing all its ports first
+/// using udpard_rx_port_free(), then discarding the instance itself.
 /// True on success, false if any of the arguments are invalid.
 bool udpard_rx_new(udpard_rx_t* const               self,
-                   const uint64_t                   local_uid,
-                   const udpard_rx_mem_resources_t  p2p_port_memory,
                    const udpard_rx_on_message_t     on_message,
                    const udpard_rx_on_collision_t   on_collision,
                    const udpard_rx_on_ack_mandate_t on_ack_mandate);
-
-/// Returns all memory allocated for the entire RX stack, including all ports, sessions, slots, fragments, etc.
-/// It is safe to invoke this at any time, but the instance and its ports shall not be used again unless
-/// re-initialized. Only memory that is allocated by the library is returned; the ports and the RX instance
-/// themselves are not freed.
-/// The function has no effect if the argument is NULL.
-void udpard_rx_free(udpard_rx_t* const self);
 
 /// Must be invoked at least every few milliseconds (more often is fine) to purge timed-out sessions and eject
 /// received transfers when the reordering window expires. If this is invoked simultaneously with rx subscription
@@ -720,13 +707,15 @@ void udpard_rx_poll(udpard_rx_t* const self, const udpard_us_t now);
 ///
 /// The topic hash is needed to detect and ignore transfers that use different topics on the same subject-ID.
 /// The collision callback is invoked if a topic hash collision is detected.
+/// For P2P ports, the topic hash is populated with the local node's UID instead.
 ///
-/// If not sure, set the reordering window to ~1 ms for most topics, but use UNORDERED for request-response topics.
+/// If not sure, set the reordering window to ~1 ms for most topics, but use UNORDERED for request-response topics
+/// and for P2P.
 ///
 /// The return value is true on success, false if any of the arguments are invalid.
 /// The time complexity is constant. This function does not invoke the dynamic memory manager.
 bool udpard_rx_port_new(udpard_rx_port_t* const         self,
-                        const uint64_t                  topic_hash,
+                        const uint64_t                  topic_hash, // For P2P ports, this is the local node's UID.
                         const size_t                    extent,
                         const udpard_us_t               reordering_window,
                         const udpard_rx_mem_resources_t memory);

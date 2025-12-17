@@ -1534,14 +1534,11 @@ static bool rx_validate_mem_resources(const udpard_rx_mem_resources_t memory)
 }
 
 bool udpard_rx_new(udpard_rx_t* const               self,
-                   const uint64_t                   local_uid,
-                   const udpard_rx_mem_resources_t  p2p_port_memory,
                    const udpard_rx_on_message_t     on_message,
                    const udpard_rx_on_collision_t   on_collision,
                    const udpard_rx_on_ack_mandate_t on_ack_mandate)
 {
-    bool ok = (self != NULL) && (local_uid > 0) && rx_validate_mem_resources(p2p_port_memory) && (on_message != NULL) &&
-              (on_collision != NULL) && (on_ack_mandate != NULL);
+    const bool ok = (self != NULL) && (on_message != NULL) && (on_collision != NULL) && (on_ack_mandate != NULL);
     if (ok) {
         mem_zero(sizeof(*self), self);
         self->list_session_by_animation   = (udpard_list_t){ NULL, NULL };
@@ -1553,26 +1550,12 @@ bool udpard_rx_new(udpard_rx_t* const               self,
         self->errors_frame_malformed      = 0;
         self->errors_transfer_malformed   = 0;
         self->user                        = NULL;
-        ok                                = udpard_rx_port_new(
-          &self->p2p_port, local_uid, SIZE_MAX, UDPARD_RX_REORDERING_WINDOW_UNORDERED, p2p_port_memory);
     }
     return ok;
 }
 
-void udpard_rx_free(udpard_rx_t* const self)
-{
-    if (self != NULL) {
-        while (self->list_session_by_animation.tail != NULL) {
-            udpard_rx_port_free(self,
-                                LIST_TAIL(self->list_session_by_animation, rx_session_t, list_by_animation)->owner);
-        }
-    }
-}
-
 void udpard_rx_poll(udpard_rx_t* const self, const udpard_us_t now)
 {
-    UDPARD_ASSERT(!self->p2p_port.invoked);
-    self->p2p_port.invoked = true;
     // Retire timed out sessions. We retire at most one per poll to avoid burstiness because session retirement
     // may potentially free up a lot of memory at once.
     {
@@ -1589,9 +1572,11 @@ void udpard_rx_poll(udpard_rx_t* const self, const udpard_us_t now)
         if ((ses == NULL) || (now < ses->reordering_window_deadline)) {
             break;
         }
+        UDPARD_ASSERT(!ses->owner->invoked);
+        ses->owner->invoked = true;
         rx_session_ordered_scan_slots(ses, self, now, false);
+        ses->owner->invoked = false;
     }
-    self->p2p_port.invoked = false;
 }
 
 bool udpard_rx_port_new(udpard_rx_port_t* const         self,
