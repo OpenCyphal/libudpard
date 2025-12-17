@@ -2076,7 +2076,6 @@ static void test_rx_session_ordered(void)
               .reordering_window           = 20 * KILO,
               .memory                      = rx_mem,
               .index_session_by_remote_uid = NULL,
-              .invoked                     = true,
     };
     rx_session_factory_args_t fac_args = {
         .owner                 = &port,
@@ -2690,14 +2689,13 @@ static void test_rx_session_unordered(void)
     TEST_ASSERT(udpard_rx_port_new(&p2p_port, local_uid, SIZE_MAX, UDPARD_RX_REORDERING_WINDOW_UNORDERED, rx_mem));
 
     // Construct the session instance using the p2p port.
-    udpard_us_t    now                 = 0;
-    const uint64_t remote_uid          = 0xA1B2C3D4E5F60718ULL;
-    p2p_port.invoked                   = true; // simulate being invoked
-    rx_session_factory_args_t fac_args = {
-        .owner                 = &p2p_port,
-        .sessions_by_animation = &rx.list_session_by_animation,
-        .remote_uid            = remote_uid,
-        .now                   = now,
+    udpard_us_t               now        = 0;
+    const uint64_t            remote_uid = 0xA1B2C3D4E5F60718ULL;
+    rx_session_factory_args_t fac_args   = {
+          .owner                 = &p2p_port,
+          .sessions_by_animation = &rx.list_session_by_animation,
+          .remote_uid            = remote_uid,
+          .now                   = now,
     };
     rx_session_t* const ses = (rx_session_t*)cavl2_find_or_insert(&p2p_port.index_session_by_remote_uid,
                                                                   &remote_uid,
@@ -2844,10 +2842,8 @@ static void test_rx_session_unordered(void)
     // Verify that polling doesn't affect UNORDERED mode (no reordering window processing).
     TEST_ASSERT_EQUAL(0, alloc_frag.allocated_fragments);
     TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments);
-    p2p_port.invoked = false;
     udpard_rx_poll(&rx, now + 1000000);            // advance time significantly
     TEST_ASSERT_EQUAL(4, cb_result.message.count); // no change
-    p2p_port.invoked = true;
 
     // Test that transfer-ID window works correctly in UNORDERED mode.
     // Transfers far outside the window (very old) should still be rejected as duplicates if within the window,
@@ -2898,7 +2894,6 @@ static void test_rx_session_unordered(void)
 
     // Verify session cleanup on timeout.
     now += SESSION_LIFETIME;
-    p2p_port.invoked = false;
     udpard_rx_poll(&rx, now);
     TEST_ASSERT_EQUAL(0, alloc_frag.allocated_fragments);
     TEST_ASSERT_EQUAL(0, alloc_session.allocated_fragments);

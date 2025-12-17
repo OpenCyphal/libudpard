@@ -598,9 +598,6 @@ typedef struct udpard_rx_port_t
 
     /// Opaque pointer for the application use only. Not accessed by the library.
     void* user;
-
-    /// Do not access. This is used to prevent accidental reentry from within the callbacks.
-    bool invoked;
 } udpard_rx_port_t;
 
 /// Represents a received Cyphal transfer.
