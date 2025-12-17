@@ -2062,9 +2062,8 @@ static void test_rx_session_ordered(void)
     const udpard_rx_mem_resources_t rx_mem = { .fragment = mem_frag, .session = mem_session };
 
     // Initialize the shared RX instance.
-    const uint64_t local_uid = 0xC3C8E4974254E1F5ULL;
-    udpard_rx_t    rx;
-    TEST_ASSERT(udpard_rx_new(&rx, local_uid, rx_mem, &on_message, &on_collision, &on_ack_mandate));
+    udpard_rx_t rx;
+    TEST_ASSERT(udpard_rx_new(&rx, &on_message, &on_collision, &on_ack_mandate));
     callback_result_t cb_result = { 0 };
     rx.user                     = &cb_result;
 
@@ -2681,25 +2680,26 @@ static void test_rx_session_unordered(void)
     const udpard_rx_mem_resources_t rx_mem = { .fragment = mem_frag, .session = mem_session };
 
     // Initialize the shared RX instance.
-    const uint64_t local_uid = 0xC3C8E4974254E1F5ULL;
-    udpard_rx_t    rx;
-    TEST_ASSERT(udpard_rx_new(&rx, local_uid, rx_mem, &on_message, &on_collision, &on_ack_mandate));
+    udpard_rx_t rx;
+    TEST_ASSERT(udpard_rx_new(&rx, &on_message, &on_collision, &on_ack_mandate));
     callback_result_t cb_result = { 0 };
     rx.user                     = &cb_result;
-    TEST_ASSERT_EQUAL(local_uid, rx.p2p_port.topic_hash);
-    TEST_ASSERT_EQUAL(UDPARD_RX_REORDERING_WINDOW_UNORDERED, rx.p2p_port.reordering_window);
+
+    const uint64_t   local_uid = 0xC3C8E4974254E1F5ULL;
+    udpard_rx_port_t p2p_port;
+    TEST_ASSERT(udpard_rx_port_new(&p2p_port, local_uid, SIZE_MAX, UDPARD_RX_REORDERING_WINDOW_UNORDERED, rx_mem));
 
     // Construct the session instance using the p2p port.
     udpard_us_t    now                 = 0;
     const uint64_t remote_uid          = 0xA1B2C3D4E5F60718ULL;
-    rx.p2p_port.invoked                = true; // simulate being invoked
+    p2p_port.invoked                   = true; // simulate being invoked
     rx_session_factory_args_t fac_args = {
-        .owner                 = &rx.p2p_port,
+        .owner                 = &p2p_port,
         .sessions_by_animation = &rx.list_session_by_animation,
         .remote_uid            = remote_uid,
         .now                   = now,
     };
-    rx_session_t* const ses = (rx_session_t*)cavl2_find_or_insert(&rx.p2p_port.index_session_by_remote_uid,
+    rx_session_t* const ses = (rx_session_t*)cavl2_find_or_insert(&p2p_port.index_session_by_remote_uid,
                                                                   &remote_uid,
                                                                   &cavl_compare_rx_session_by_remote_uid,
                                                                   &fac_args,
@@ -2707,7 +2707,7 @@ static void test_rx_session_unordered(void)
     // Verify construction outcome.
     TEST_ASSERT_NOT_NULL(ses);
     TEST_ASSERT_EQUAL_PTR(rx.list_session_by_animation.head, &ses->list_by_animation);
-    TEST_ASSERT_EQUAL_PTR(rx.p2p_port.index_session_by_remote_uid, &ses->index_remote_uid);
+    TEST_ASSERT_EQUAL_PTR(p2p_port.index_session_by_remote_uid, &ses->index_remote_uid);
     TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
 
     // Feed a valid single-frame transfer and ensure immediate ejection (no reordering delay).
@@ -2729,7 +2729,7 @@ static void test_rx_session_unordered(void)
     // Transfer is ejected immediately in UNORDERED mode.
     TEST_ASSERT_EQUAL(1, cb_result.message.count);
     TEST_ASSERT_EQUAL_PTR(&rx, cb_result.rx);
-    TEST_ASSERT_EQUAL_PTR(&rx.p2p_port, cb_result.port);
+    TEST_ASSERT_EQUAL_PTR(&p2p_port, cb_result.port);
     TEST_ASSERT_EQUAL(1000, cb_result.message.history[0].timestamp);
     TEST_ASSERT_EQUAL(udpard_prio_high, cb_result.message.history[0].priority);
     TEST_ASSERT_EQUAL(100, cb_result.message.history[0].transfer_id);
@@ -2844,10 +2844,10 @@ static void test_rx_session_unordered(void)
     // Verify that polling doesn't affect UNORDERED mode (no reordering window processing).
     TEST_ASSERT_EQUAL(0, alloc_frag.allocated_fragments);
     TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments);
-    rx.p2p_port.invoked = false;
+    p2p_port.invoked = false;
     udpard_rx_poll(&rx, now + 1000000);            // advance time significantly
     TEST_ASSERT_EQUAL(4, cb_result.message.count); // no change
-    rx.p2p_port.invoked = true;
+    p2p_port.invoked = true;
 
     // Test that transfer-ID window works correctly in UNORDERED mode.
     // Transfers far outside the window (very old) should still be rejected as duplicates if within the window,
@@ -2898,12 +2898,12 @@ static void test_rx_session_unordered(void)
 
     // Verify session cleanup on timeout.
     now += SESSION_LIFETIME;
-    rx.p2p_port.invoked = false;
+    p2p_port.invoked = false;
     udpard_rx_poll(&rx, now);
     TEST_ASSERT_EQUAL(0, alloc_frag.allocated_fragments);
     TEST_ASSERT_EQUAL(0, alloc_session.allocated_fragments);
     TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments);
-
+    udpard_rx_port_free(&rx, &p2p_port);
     instrumented_allocator_reset(&alloc_frag);
     instrumented_allocator_reset(&alloc_session);
     instrumented_allocator_reset(&alloc_payload);
@@ -2911,9 +2911,7 @@ static void test_rx_session_unordered(void)
 
 // ---------------------------------------------  RX PORT  ---------------------------------------------
 
-/// Tests ports in ORDERED, UNORDERED, and STATELESS modes.
-/// The UNORDERED port is the p2p_port in the rx instance; the other modes are tested on separate port instances.
-/// All transfers are single-frame transfers for simplicity, since we already have dedicated lower-level tests.
+/// Exercises udpard_rx_port_push() across ORDERED and STATELESS ports, covering single- and multi-frame transfers.
 static void test_rx_port(void)
 {
     // Initialize the memory resources.
@@ -2933,13 +2931,10 @@ static void test_rx_port(void)
     const udpard_rx_mem_resources_t rx_mem = { .fragment = mem_frag, .session = mem_session };
 
     // Initialize the shared RX instance.
-    const uint64_t local_uid = 0x6EC164169C3088B4ULL;
-    udpard_rx_t    rx;
-    TEST_ASSERT(udpard_rx_new(&rx, local_uid, rx_mem, &on_message, &on_collision, &on_ack_mandate));
+    udpard_rx_t rx;
+    TEST_ASSERT(udpard_rx_new(&rx, &on_message, &on_collision, &on_ack_mandate));
     callback_result_t cb_result = { 0 };
     rx.user                     = &cb_result;
-    TEST_ASSERT_EQUAL(local_uid, rx.p2p_port.topic_hash);
-    TEST_ASSERT_EQUAL(UDPARD_RX_REORDERING_WINDOW_UNORDERED, rx.p2p_port.reordering_window);
 
     // Initialize two ports: one ORDERED, one STATELESS.
     udpard_rx_port_t port_ordered;
@@ -3281,7 +3276,6 @@ static void test_rx_port(void)
     // Cleanup.
     udpard_rx_port_free(&rx, &port_ordered);
     udpard_rx_port_free(&rx, &port_stateless);
-    udpard_rx_free(&rx);
 
     // Verify no memory leaks.
     TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
@@ -3308,7 +3302,7 @@ static void test_rx_port_timeouts(void)
 
     udpard_rx_t       rx;
     callback_result_t cb_result = { 0 };
-    TEST_ASSERT(udpard_rx_new(&rx, 0x6EC164169C3088B4ULL, rx_mem, &on_message, &on_collision, &on_ack_mandate));
+    TEST_ASSERT(udpard_rx_new(&rx, &on_message, &on_collision, &on_ack_mandate));
     rx.user = &cb_result;
 
     udpard_rx_port_t port_a;
@@ -3447,7 +3441,8 @@ static void test_rx_port_timeouts(void)
     now += SESSION_LIFETIME + 1000;
     udpard_rx_poll(&rx, now);
 
-    udpard_rx_free(&rx);
+    udpard_rx_port_free(&rx, &port_a);
+    udpard_rx_port_free(&rx, &port_b);
 
     TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
     TEST_ASSERT_EQUAL_size_t(0, alloc_session.allocated_fragments);
@@ -3471,7 +3466,7 @@ static void test_rx_port_oom(void)
     const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
     udpard_rx_t                     rx;
     callback_result_t               cb_result = { 0 };
-    TEST_ASSERT(udpard_rx_new(&rx, 0x5555ULL, rx_mem, &on_message, &on_collision, &on_ack_mandate));
+    TEST_ASSERT(udpard_rx_new(&rx, &on_message, &on_collision, &on_ack_mandate));
     rx.user = &cb_result;
     udpard_rx_port_t port_ordered;
     udpard_rx_port_t port_stateless;
@@ -3528,7 +3523,8 @@ static void test_rx_port_oom(void)
                                     1));
     TEST_ASSERT_EQUAL(errors_before + 2, rx.errors_oom);
     TEST_ASSERT_EQUAL(0, cb_result.message.count);
-    udpard_rx_free(&rx); // Will free ports too
+    udpard_rx_port_free(&rx, &port_ordered);
+    udpard_rx_port_free(&rx, &port_stateless);
     TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
     TEST_ASSERT_EQUAL_size_t(0, alloc_session.allocated_fragments);
     TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
@@ -3537,10 +3533,8 @@ static void test_rx_port_oom(void)
     instrumented_allocator_reset(&alloc_payload);
 }
 
-// ---------------------------------------------  RX  ---------------------------------------------
-
-/// Ensures udpard_rx_free walks and clears all sessions across ports.
-static void test_rx_free_loop(void)
+/// Ensures udpard_rx_port_free walks and clears all sessions across ports.
+static void test_rx_port_free_loop(void)
 {
     instrumented_allocator_t alloc_frag = { 0 };
     instrumented_allocator_new(&alloc_frag);
@@ -3557,10 +3551,14 @@ static void test_rx_free_loop(void)
 
     const udpard_rx_mem_resources_t rx_mem = { .fragment = mem_frag, .session = mem_session };
 
+    const uint64_t    local_uid = 0xCAFED00DCAFED00DULL;
     udpard_rx_t       rx;
     callback_result_t cb_result = { 0 };
-    TEST_ASSERT(udpard_rx_new(&rx, 0xCAFED00DCAFED00DULL, rx_mem, &on_message, &on_collision, &on_ack_mandate));
+    TEST_ASSERT(udpard_rx_new(&rx, &on_message, &on_collision, &on_ack_mandate));
     rx.user = &cb_result;
+
+    udpard_rx_port_t port_p2p;
+    TEST_ASSERT(udpard_rx_port_new(&port_p2p, local_uid, SIZE_MAX, UDPARD_RX_REORDERING_WINDOW_UNORDERED, rx_mem));
 
     udpard_rx_port_t port_extra;
     const uint64_t   topic_hash_extra = 0xDEADBEEFF00D1234ULL;
@@ -3576,7 +3574,7 @@ static void test_rx_free_loop(void)
                                      .transfer_payload_size = (uint32_t)strlen(payload),
                                      .transfer_id           = 10,
                                      .sender_uid            = 0xAAAAULL,
-                                     .topic_hash            = rx.p2p_port.topic_hash };
+                                     .topic_hash            = port_p2p.topic_hash };
         const rx_frame_t frame   = make_frame(meta, mem_payload, payload, 0, 4);
         byte_t           dgram[HEADER_SIZE_BYTES + 4];
         header_serialize(dgram, meta, 0, 0, frame.base.crc);
@@ -3586,7 +3584,7 @@ static void test_rx_free_loop(void)
         memcpy(push_payload, dgram, sizeof(dgram));
         now += 1000;
         TEST_ASSERT(udpard_rx_port_push(&rx,
-                                        &rx.p2p_port,
+                                        &port_p2p,
                                         now,
                                         (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1234 },
                                         (udpard_bytes_mut_t){ .data = push_payload, .size = sizeof(dgram) },
@@ -3622,7 +3620,8 @@ static void test_rx_free_loop(void)
 
     TEST_ASSERT(alloc_session.allocated_fragments >= 2);
     TEST_ASSERT(alloc_frag.allocated_fragments >= 2);
-    udpard_rx_free(&rx);
+    udpard_rx_port_free(&rx, &port_p2p);
+    udpard_rx_port_free(&rx, &port_extra);
     TEST_ASSERT_EQUAL_size_t(0, alloc_session.allocated_fragments);
     TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
     TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
@@ -3656,8 +3655,7 @@ int main(void)
     RUN_TEST(test_rx_port);
     RUN_TEST(test_rx_port_timeouts);
     RUN_TEST(test_rx_port_oom);
-
-    RUN_TEST(test_rx_free_loop);
+    RUN_TEST(test_rx_port_free_loop);
 
     return UNITY_END();
 }
