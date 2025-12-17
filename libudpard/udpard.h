@@ -199,7 +199,7 @@ typedef struct udpard_fragment_t
 /// resource for the fragments is given explicitly, and the payload is freed using the payload_deleter per fragment.
 /// All fragments in the tree will be freed and invalidated.
 /// The passed fragment can be any fragment inside the tree (not necessarily the root).
-/// If any of the arguments are NULL, the function has no effect. The complexity is linear in the number of fragments.
+/// If the fragment argument is NULL, the function has no effect. The complexity is linear in the number of fragments.
 void udpard_fragment_free_all(udpard_fragment_t* const frag, const udpard_mem_resource_t fragment_mem_resource);
 
 /// Given any fragment in a transfer, returns the fragment that contains the given payload offset.
@@ -218,7 +218,7 @@ udpard_fragment_t* udpard_fragment_next(udpard_fragment_t* const frag);
 /// Given any fragment in a transfer, copies the entire transfer payload into the specified contiguous buffer.
 /// If the total size of all fragments combined exceeds the size of the destination buffer,
 /// copying will stop early after the buffer is filled, thus truncating the fragmented data short.
-/// The function has no effect and returns zero if the destination buffer is NULL.
+/// The function has no effect and returns zero if the destination buffer or fragment pointer is NULL.
 /// Returns the number of bytes copied into the contiguous destination buffer.
 size_t udpard_fragment_gather(const udpard_fragment_t* any_frag,
                               const size_t             destination_size_bytes,
@@ -261,11 +261,11 @@ size_t udpard_fragment_gather(const udpard_fragment_t* any_frag,
 /// If the application knows its MTU, it can use block allocation to avoid extrinsic fragmentation.
 typedef struct udpard_tx_mem_resources_t
 {
-    /// The fragment handles are allocated per payload fragment; each handle contains a pointer to its fragment.
-    /// Each instance is of a very small fixed size, so a trivial zero-fragmentation block allocator is enough.
+    /// The queue bookkeeping structures (udpard_tx_item_t) are allocated per datagram.
+    /// Each instance is a very small fixed-size object, so a trivial zero-fragmentation block allocator is enough.
     udpard_mem_resource_t fragment;
 
-    /// The payload fragments are allocated per payload frame; each payload fragment is at most MTU-sized buffer,
+    /// The UDP datagram payload buffers are allocated per frame; each buffer is at most MTU-sized,
     /// so a trivial zero-fragmentation MTU-sized block allocator is enough if MTU is known in advance.
     udpard_mem_resource_t payload;
 } udpard_tx_mem_resources_t;
@@ -386,7 +386,7 @@ bool udpard_tx_new(udpard_tx_t* const              self,
 /// is used to pass the destination node's UID instead. Setting it incorrectly will cause the destination node
 /// to reject the transfer as misaddressed.
 ///
-/// The transfer_id parameter is be used to populate the transfer_id field of the generated Cyphal/UDP frames.
+/// The transfer_id parameter is used to populate the transfer_id field of the generated Cyphal/UDP frames.
 /// The caller shall increment the transfer-ID counter after each successful invocation of this function
 /// per redundant interface; the same transfer published over redundant interfaces shall have the same transfer-ID.
 /// There shall be a separate transfer-ID counter per topic. The initial value shall be chosen randomly
@@ -737,8 +737,9 @@ bool udpard_rx_port_new(udpard_rx_port_t* const         self,
 /// The function has no effect if any of the arguments are NULL.
 void udpard_rx_port_free(udpard_rx_t* const rx, udpard_rx_port_t* const port);
 
-/// The timestamp value indicates the arrival time of the datagram. Often, naive software timestamping is adequate
-/// for these purposes, but some applications may require a greater accuracy (e.g., for time synchronization).
+/// The timestamp value indicates the arrival time of the datagram and shall be non-negative.
+/// Often, naive software timestamping is adequate for these purposes, but some applications may require
+/// a greater accuracy (e.g., for time synchronization).
 ///
 /// The function takes ownership of the passed datagram payload buffer. The library will either store it as a
 /// fragment of the reassembled transfer payload or free it using the corresponding memory resource
