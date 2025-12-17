@@ -62,10 +62,6 @@ typedef unsigned char byte_t; ///< For compatibility with platforms where byte s
 /// as new transfers. Must be a multiple of 64 bits.
 #define RX_TRANSFER_ID_WINDOW_BITS 512U
 
-/// Defines the number of most recently received transfer IDs for which the reception history is stored.
-/// This is used to avoid accepting duplicates that are outside of the RX_TRANSFER_ID_WINDOW_BITS range.
-#define RX_TRANSFER_ID_HISTORY_LENGTH 8U
-
 #define UDP_PORT               9382U
 #define IPv4_MCAST_PREFIX      0xEF000000UL
 #define IPv4_MCAST_SUFFIX_MASK 0x007FFFFFUL
@@ -1001,6 +997,15 @@ static void rx_transfer_id_window_slide(rx_transfer_id_window_t* const self, con
     self->head = new_head;
 }
 
+/// Copy the contents of one transfer-ID window to another.
+static void rx_transfer_id_window_copy(rx_transfer_id_window_t* const dst, const rx_transfer_id_window_t* const src)
+{
+    dst->head = src->head;
+    for (size_t i = 0; i < (RX_TRANSFER_ID_WINDOW_BITS / 64U); i++) {
+        dst->bitset[i] = src->bitset[i];
+    }
+}
+
 /// Mark the specified past transfer-ID as set. No effect if this transfer-ID is outside of the window.
 static void rx_transfer_id_window_set(rx_transfer_id_window_t* const self, const uint64_t transfer_id)
 {
@@ -1139,19 +1144,19 @@ typedef struct
     udpard_list_member_t list_by_animation;
     udpard_us_t          last_animated_ts;
 
-    /// To weed out duplicates and to retransmit lost ACKs, we keep track of which transfers have been received.
+    /// To weed out duplicates and to retransmit lost ACKs, we keep track of which transfers have been observed.
     ///
-    /// The window head points at the newest transfer-ID ejected to the application (which may not be the same as
+    /// A window head points at the newest transfer-ID ejected to the application (which may not be the same as
     /// the newest successfully received transfer-ID in case of interning). This is essential for the ORDERED mode
     /// because the head position tells us which transfers can no longer be accepted due to reordering window closure.
     ///
-    /// The history array stores the list of N recently received transfer-IDs, with the least recently used
-    /// being replaced first. This is used to support the edge case when the remote sends transfers with greatly
-    /// different transfer-ID values in a short time, causing large jumps in the transfer-ID window head;
-    /// this is important because the window can only store a relatively short range of transfer-IDs (a few hundred).
-    rx_transfer_id_window_t window;
-    uint64_t                history[RX_TRANSFER_ID_HISTORY_LENGTH];
-    uint_fast8_t            history_index;
+    /// We keep two such windows. This is needed to support the case when the remote node restarts
+    /// while there are some old transfers still in flight in the network. The old transfers may arrive after the
+    /// restart and must still be handled correctly with respect to duplicate rejection and ordering.
+    /// One example where more than one window is needed to uphold the ORDERED mode guarantees is when the remote
+    /// sends transfers #1, #3, #10000, then #2; transfer #2 shall be rejected because it is out of order.
+    rx_transfer_id_window_t tidwin;
+    rx_transfer_id_window_t tidwin_old;
 
     bool initialized; ///< Set after the first frame is seen.
 
@@ -1213,7 +1218,6 @@ static udpard_tree_t* cavl_factory_rx_session_by_remote_uid(void* const user)
         out->remote.uid       = args->remote_uid;
         out->owner            = args->owner;
         out->last_animated_ts = args->now;
-        out->history_index    = 0;
         out->initialized      = false;
         enlist_head(args->sessions_by_animation, &out->list_by_animation);
     }
@@ -1244,13 +1248,17 @@ static void rx_session_eject(rx_session_t* const self,
 {
     UDPARD_ASSERT(slot->state == rx_slot_done);
 
-    // Mark the transfer as ejected in the history.
+    // Update the history.
+    // The window is backed up if a large jump occurs, indicating that the remote node has restarted.
+    // The backup copy is needed to properly handle possibly delayed transfers from the old epoch.
     if (slide_window) {
-        rx_transfer_id_window_slide(&self->window, slot->transfer_id);
+        const uint64_t dist = rx_transfer_id_forward_distance(self->tidwin.head, slot->transfer_id);
+        if (dist > (RX_TRANSFER_ID_WINDOW_BITS / 2U)) {
+            rx_transfer_id_window_copy(&self->tidwin_old, &self->tidwin);
+        }
+        rx_transfer_id_window_slide(&self->tidwin, slot->transfer_id);
     }
-    rx_transfer_id_window_set(&self->window, slot->transfer_id);
-    self->history[self->history_index] = slot->transfer_id;
-    self->history_index                = (self->history_index + 1U) % RX_TRANSFER_ID_HISTORY_LENGTH;
+    rx_transfer_id_window_set(&self->tidwin, slot->transfer_id);
 
     // Construct the arguments and invoke the callback.
     const udpard_rx_transfer_t transfer = {
@@ -1288,7 +1296,7 @@ static void rx_session_ordered_scan_slots(rx_session_t* const self,
     // We need to repeat the scan because each ejection may open up the window for the next in-sequence transfer.
     for (size_t iter = 0; iter < RX_SLOT_COUNT; iter++) {
         // Find the slot closest to the next in-sequence transfer-ID.
-        const uint64_t tid_expected = self->window.head + 1U;
+        const uint64_t tid_expected = self->tidwin.head + 1U;
         uint64_t       min_tid_dist = UINT64_MAX;
         rx_slot_t*     slot         = NULL;
         for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
@@ -1330,14 +1338,16 @@ static void rx_session_ordered_scan_slots(rx_session_t* const self,
         // Some of the in-progress slots may be obsoleted by this move, which will be taken care of later.
         UDPARD_ASSERT((slot != NULL) && (slot->state == rx_slot_done));
         rx_session_eject(self, rx, slot, true);
-    }
 
-    // Having updated the state, ensure that in-progress slots, if any, have not ended up within the accepted window.
-    // This is essential for the ORDERED mode.
-    for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
-        if ((self->slots[i].state == rx_slot_busy) &&
-            rx_transfer_id_window_contains(&self->window, self->slots[i].transfer_id)) {
-            rx_slot_reset(&self->slots[i], self->owner->memory.fragment);
+        // Ensure that in-progress slots, if any, have not ended up within the accepted window after the update.
+        // This is essential for the ORDERED mode.
+        for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
+            slot = &self->slots[i];
+            if ((slot->state == rx_slot_busy) &&
+                (rx_transfer_id_window_contains(&self->tidwin, slot->transfer_id) ||
+                 rx_transfer_id_window_contains(&self->tidwin_old, slot->transfer_id))) {
+                rx_slot_reset(slot, self->owner->memory.fragment);
+            }
         }
     }
 }
@@ -1414,14 +1424,9 @@ static rx_session_transfer_status_t rx_session_get_transfer_status(const rx_sess
                                                                    const uint64_t            transfer_id)
 {
     // Check those that have been already ejected to the application.
-    if (rx_transfer_id_window_test(&self->window, transfer_id)) {
+    if (rx_transfer_id_window_test(&self->tidwin, transfer_id) ||
+        rx_transfer_id_window_test(&self->tidwin_old, transfer_id)) {
         return rx_session_transfer_ejected;
-    }
-    // Check the history in case of large transfer-ID jumps.
-    for (size_t i = 0; i < RX_TRANSFER_ID_HISTORY_LENGTH; i++) {
-        if (self->history[i] == transfer_id) {
-            return rx_session_transfer_ejected;
-        }
     }
     // Check interned transfers waiting for reordering window closure.
     for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
@@ -1430,8 +1435,11 @@ static rx_session_transfer_status_t rx_session_get_transfer_status(const rx_sess
         }
     }
     // The transfer is not received; check if it's within the dup transfer-ID window.
-    return rx_transfer_id_window_contains(&self->window, transfer_id) ? rx_session_transfer_late
-                                                                      : rx_session_transfer_new;
+    // If it is, then it cannot be ejected under the ORDERED mode any longer.
+    return (rx_transfer_id_window_contains(&self->tidwin, transfer_id) ||
+            rx_transfer_id_window_contains(&self->tidwin_old, transfer_id))
+             ? rx_session_transfer_late
+             : rx_session_transfer_new;
 }
 
 /// The ORDERED mode implementation. May delay incoming transfers to maintain strict transfer-ID ordering.
@@ -1538,10 +1546,8 @@ static void rx_session_update(rx_session_t* const        self,
     // Any transfers with prior transfer-ID values arriving later will be rejected, which is acceptable.
     if (!self->initialized) {
         self->initialized = true;
-        rx_transfer_id_window_slide(&self->window, frame.meta.transfer_id - 1U);
-        for (size_t i = 0; i < RX_TRANSFER_ID_HISTORY_LENGTH; i++) {
-            self->history[i] = frame.meta.transfer_id - 1U;
-        }
+        rx_transfer_id_window_slide(&self->tidwin, frame.meta.transfer_id - 1U);
+        rx_transfer_id_window_copy(&self->tidwin_old, &self->tidwin);
     }
 
     // Accept the frame depending on the selected reassembly mode.

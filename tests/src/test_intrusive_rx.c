@@ -2955,8 +2955,6 @@ static void test_rx_session_history(void)
                       0);
     TEST_ASSERT_EQUAL(1, cb_result.message.count);
     TEST_ASSERT_EQUAL(10, cb_result.message.history[0].transfer_id);
-    TEST_ASSERT_EQUAL(10, ses->history[0]);
-    TEST_ASSERT_EQUAL(1, ses->history_index);
     const uint64_t jump_tid    = 10 + RX_TRANSFER_ID_WINDOW_BITS + 5U;
     meta.transfer_id           = jump_tid;
     meta.transfer_payload_size = 4;
@@ -2970,8 +2968,7 @@ static void test_rx_session_history(void)
                       1);
     TEST_ASSERT_EQUAL(2, cb_result.message.count);
     TEST_ASSERT_EQUAL(jump_tid, cb_result.message.history[0].transfer_id);
-    TEST_ASSERT_EQUAL(jump_tid, ses->history[1]);
-    TEST_ASSERT_FALSE(rx_transfer_id_window_contains(&ses->window, 10));
+    TEST_ASSERT_FALSE(rx_transfer_id_window_contains(&ses->tidwin, 10));
     meta.transfer_id           = 10;
     meta.transfer_payload_size = 3;
     meta.flag_ack              = true;
