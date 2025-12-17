@@ -3002,6 +3002,78 @@ static void test_rx_session_unordered_reject_old(void)
     instrumented_allocator_reset(&alloc_payload);
 }
 
+/// UNORDERED mode should drop duplicates while accepting earlier arrivals regardless of ordering.
+static void test_rx_session_unordered_duplicates(void)
+{
+    instrumented_allocator_t alloc_frag = { 0 };
+    instrumented_allocator_new(&alloc_frag);
+    const udpard_mem_resource_t mem_frag      = instrumented_allocator_make_resource(&alloc_frag);
+    instrumented_allocator_t    alloc_session = { 0 };
+    instrumented_allocator_new(&alloc_session);
+    const udpard_mem_resource_t mem_session   = instrumented_allocator_make_resource(&alloc_session);
+    instrumented_allocator_t    alloc_payload = { 0 };
+    instrumented_allocator_new(&alloc_payload);
+    const udpard_mem_resource_t     mem_payload = instrumented_allocator_make_resource(&alloc_payload);
+    const udpard_mem_deleter_t      del_payload = instrumented_allocator_make_deleter(&alloc_payload);
+    const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
+    udpard_rx_t                     rx;
+    callback_result_t               cb_result = { 0 };
+    TEST_ASSERT(udpard_rx_new(&rx, &on_message, &on_collision, &on_ack_mandate));
+    rx.user = &cb_result;
+    udpard_rx_port_t port;
+    const uint64_t   topic_hash = 0x1111222233334444ULL;
+    TEST_ASSERT(udpard_rx_port_new(&port, topic_hash, SIZE_MAX, UDPARD_RX_REORDERING_WINDOW_UNORDERED, rx_mem));
+    const uint64_t            remote_uid = 0xAABBCCDDEEFF0011ULL;
+    rx_session_factory_args_t fac_args   = {
+          .owner                 = &port,
+          .sessions_by_animation = &rx.list_session_by_animation,
+          .remote_uid            = remote_uid,
+          .now                   = 0,
+    };
+    rx_session_t* const ses = (rx_session_t*)cavl2_find_or_insert(&port.index_session_by_remote_uid,
+                                                                  &remote_uid,
+                                                                  &cavl_compare_rx_session_by_remote_uid,
+                                                                  &fac_args,
+                                                                  &cavl_factory_rx_session_by_remote_uid);
+    TEST_ASSERT_NOT_NULL(ses);
+    // Feed a mix of fresh transfers followed by duplicates; only the first four should be accepted.
+    meta_t         meta   = { .priority              = udpard_prio_fast,
+                              .flag_ack              = false,
+                              .transfer_payload_size = 4,
+                              .transfer_id           = 1100,
+                              .sender_uid            = remote_uid,
+                              .topic_hash            = topic_hash };
+    udpard_us_t    now    = 0;
+    const uint64_t tids[] = { 1100, 1000, 4000, 4100, 1000, 1100 };
+    for (size_t i = 0; i < sizeof(tids) / sizeof(tids[0]); i++) {
+        meta.transfer_id = tids[i];
+        char payload[4]  = { (char)('A' + (int)(i % 26)), (char)('a' + (int)(i % 26)), 'X', '\0' };
+        now += 100;
+        rx_session_update(ses,
+                          &rx,
+                          now,
+                          (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1234 },
+                          make_frame(meta, mem_payload, payload, 0, 4),
+                          del_payload,
+                          0);
+    }
+    TEST_ASSERT_EQUAL(4, cb_result.message.count);
+    TEST_ASSERT_EQUAL(1100, cb_result.message.history[3].transfer_id);
+    TEST_ASSERT_EQUAL(1000, cb_result.message.history[2].transfer_id);
+    TEST_ASSERT_EQUAL(4000, cb_result.message.history[1].transfer_id);
+    TEST_ASSERT_EQUAL(4100, cb_result.message.history[0].transfer_id);
+    for (size_t i = 0; i < cb_result.message.count; i++) {
+        udpard_fragment_free_all(cb_result.message.history[i].payload, mem_frag);
+    }
+    TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
+    udpard_rx_port_free(&rx, &port);
+    TEST_ASSERT_EQUAL_size_t(0, alloc_session.allocated_fragments);
+    instrumented_allocator_reset(&alloc_frag);
+    instrumented_allocator_reset(&alloc_session);
+    instrumented_allocator_reset(&alloc_payload);
+}
+
 /// Send transfers 1, 3, 10000, 2 in the ORDERED mode; ensure 2 is rejected because it's late after 3.
 static void test_rx_session_ordered_reject_stale_after_jump(void)
 {
@@ -3117,6 +3189,77 @@ static void test_rx_session_ordered_reject_stale_after_jump(void)
     udpard_rx_port_free(&rx, &port);
     TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
     TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0, alloc_session.allocated_fragments);
+    instrumented_allocator_reset(&alloc_frag);
+    instrumented_allocator_reset(&alloc_session);
+    instrumented_allocator_reset(&alloc_payload);
+}
+
+/// ORDERED mode with zero reordering delay should accept only strictly increasing IDs.
+static void test_rx_session_ordered_zero_reordering_window(void)
+{
+    instrumented_allocator_t alloc_frag = { 0 };
+    instrumented_allocator_new(&alloc_frag);
+    const udpard_mem_resource_t mem_frag      = instrumented_allocator_make_resource(&alloc_frag);
+    instrumented_allocator_t    alloc_session = { 0 };
+    instrumented_allocator_new(&alloc_session);
+    const udpard_mem_resource_t mem_session   = instrumented_allocator_make_resource(&alloc_session);
+    instrumented_allocator_t    alloc_payload = { 0 };
+    instrumented_allocator_new(&alloc_payload);
+    const udpard_mem_resource_t     mem_payload = instrumented_allocator_make_resource(&alloc_payload);
+    const udpard_mem_deleter_t      del_payload = instrumented_allocator_make_deleter(&alloc_payload);
+    const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
+    udpard_rx_t                     rx;
+    callback_result_t               cb_result = { 0 };
+    TEST_ASSERT(udpard_rx_new(&rx, &on_message, &on_collision, &on_ack_mandate));
+    rx.user = &cb_result;
+    udpard_rx_port_t port;
+    const uint64_t   topic_hash = 0x9999888877776666ULL;
+    TEST_ASSERT(udpard_rx_port_new(&port, topic_hash, SIZE_MAX, 0, rx_mem));
+    const uint64_t            remote_uid = 0x0A0B0C0D0E0F1011ULL;
+    rx_session_factory_args_t fac_args   = {
+          .owner                 = &port,
+          .sessions_by_animation = &rx.list_session_by_animation,
+          .remote_uid            = remote_uid,
+          .now                   = 0,
+    };
+    rx_session_t* const ses = (rx_session_t*)cavl2_find_or_insert(&port.index_session_by_remote_uid,
+                                                                  &remote_uid,
+                                                                  &cavl_compare_rx_session_by_remote_uid,
+                                                                  &fac_args,
+                                                                  &cavl_factory_rx_session_by_remote_uid);
+    TEST_ASSERT_NOT_NULL(ses);
+    // Zero reordering window: out-of-order IDs are rejected, so only 120, 140, 1120 are accepted.
+    meta_t         meta   = { .priority              = udpard_prio_nominal,
+                              .flag_ack              = false,
+                              .transfer_payload_size = 3,
+                              .transfer_id           = 120,
+                              .sender_uid            = remote_uid,
+                              .topic_hash            = topic_hash };
+    udpard_us_t    now    = 0;
+    const uint64_t tids[] = { 120, 110, 140, 1120, 130 };
+    for (size_t i = 0; i < sizeof(tids) / sizeof(tids[0]); i++) {
+        meta.transfer_id = tids[i];
+        char payload[3]  = { (char)('k' + (int)i), (char)('K' + (int)i), '\0' };
+        now += 50;
+        rx_session_update(ses,
+                          &rx,
+                          now,
+                          (udpard_udpip_ep_t){ .ip = 0x0A000002, .port = 0x2222 },
+                          make_frame(meta, mem_payload, payload, 0, 3),
+                          del_payload,
+                          0);
+    }
+    TEST_ASSERT_EQUAL(3, cb_result.message.count);
+    TEST_ASSERT_EQUAL(1120, cb_result.message.history[0].transfer_id);
+    TEST_ASSERT_EQUAL(140, cb_result.message.history[1].transfer_id);
+    TEST_ASSERT_EQUAL(120, cb_result.message.history[2].transfer_id);
+    for (size_t i = 0; i < cb_result.message.count; i++) {
+        udpard_fragment_free_all(cb_result.message.history[i].payload, mem_frag);
+    }
+    TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
+    udpard_rx_port_free(&rx, &port);
     TEST_ASSERT_EQUAL_size_t(0, alloc_session.allocated_fragments);
     instrumented_allocator_reset(&alloc_frag);
     instrumented_allocator_reset(&alloc_session);
@@ -3867,6 +4010,8 @@ int main(void)
     RUN_TEST(test_rx_session_unordered);
     RUN_TEST(test_rx_session_unordered_reject_old);
     RUN_TEST(test_rx_session_ordered_reject_stale_after_jump);
+    RUN_TEST(test_rx_session_unordered_duplicates);
+    RUN_TEST(test_rx_session_ordered_zero_reordering_window);
 
     RUN_TEST(test_rx_port);
     RUN_TEST(test_rx_port_timeouts);
