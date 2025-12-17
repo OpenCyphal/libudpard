@@ -3528,9 +3528,7 @@ static void test_rx_port_oom(void)
                                     1));
     TEST_ASSERT_EQUAL(errors_before + 2, rx.errors_oom);
     TEST_ASSERT_EQUAL(0, cb_result.message.count);
-    udpard_rx_port_free(&rx, &port_ordered);
-    udpard_rx_port_free(&rx, &port_stateless);
-    udpard_rx_free(&rx);
+    udpard_rx_free(&rx); // Will free ports too
     TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
     TEST_ASSERT_EQUAL_size_t(0, alloc_session.allocated_fragments);
     TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
