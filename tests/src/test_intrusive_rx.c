@@ -2999,6 +2999,127 @@ static void test_rx_session_history(void)
     instrumented_allocator_reset(&alloc_payload);
 }
 
+// Send transfers 1, 3, 10000, 2 in the ORDERED mode; ensure 2 is rejected because it's late after 3.
+static void test_rx_session_ordered_reject_stale_after_jump(void)
+{
+    instrumented_allocator_t alloc_frag = { 0 };
+    instrumented_allocator_new(&alloc_frag);
+    const udpard_mem_resource_t mem_frag      = instrumented_allocator_make_resource(&alloc_frag);
+    instrumented_allocator_t    alloc_session = { 0 };
+    instrumented_allocator_new(&alloc_session);
+    const udpard_mem_resource_t mem_session   = instrumented_allocator_make_resource(&alloc_session);
+    instrumented_allocator_t    alloc_payload = { 0 };
+    instrumented_allocator_new(&alloc_payload);
+    const udpard_mem_resource_t     mem_payload = instrumented_allocator_make_resource(&alloc_payload);
+    const udpard_mem_deleter_t      del_payload = instrumented_allocator_make_deleter(&alloc_payload);
+    const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
+    udpard_rx_t                     rx;
+    TEST_ASSERT(udpard_rx_new(&rx, &on_message, &on_collision, &on_ack_mandate));
+    callback_result_t cb_result = { 0 };
+    rx.user                     = &cb_result;
+    udpard_rx_port_t port;
+    const uint64_t   topic_hash = 0x123456789ABCDEF0ULL;
+    TEST_ASSERT(udpard_rx_port_new(&port, topic_hash, 1000, 1000, rx_mem));
+    const uint64_t            remote_uid = 0xDEADBEEFDEADBEEFULL;
+    rx_session_factory_args_t fac_args   = {
+          .owner                 = &port,
+          .sessions_by_animation = &rx.list_session_by_animation,
+          .remote_uid            = remote_uid,
+          .now                   = 0,
+    };
+    rx_session_t* const ses = (rx_session_t*)cavl2_find_or_insert(&port.index_session_by_remote_uid,
+                                                                  &remote_uid,
+                                                                  &cavl_compare_rx_session_by_remote_uid,
+                                                                  &fac_args,
+                                                                  &cavl_factory_rx_session_by_remote_uid);
+    TEST_ASSERT_NOT_NULL(ses);
+
+    // Send transfer #1.
+    udpard_us_t now  = 0;
+    meta_t      meta = { .priority              = udpard_prio_nominal,
+                         .flag_ack              = true,
+                         .transfer_payload_size = 1,
+                         .transfer_id           = 1,
+                         .sender_uid            = remote_uid,
+                         .topic_hash            = topic_hash };
+    now += 100;
+    rx_session_update(ses,
+                      &rx,
+                      now,
+                      (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1111 },
+                      make_frame(meta, mem_payload, "a", 0, 1),
+                      del_payload,
+                      0);
+    TEST_ASSERT_EQUAL(1, cb_result.message.count);
+    TEST_ASSERT_EQUAL(1, cb_result.ack_mandate.count);
+
+    // Send transfer #3. Transfer #2 is missing, so this one is interned.
+    meta.transfer_id = 3;
+    now += 100;
+    rx_session_update(ses,
+                      &rx,
+                      now,
+                      (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1111 },
+                      make_frame(meta, mem_payload, "b", 0, 1),
+                      del_payload,
+                      0);
+    TEST_ASSERT_EQUAL(1, cb_result.message.count);
+    TEST_ASSERT_EQUAL(2, cb_result.ack_mandate.count); // all acked
+
+    // Send transfer #10000. The head is still at #1, so #10000 is interned as well.
+    meta.transfer_id           = 10000;
+    meta.transfer_payload_size = 1;
+    meta.flag_ack              = true;
+    now += 10;
+    rx_session_update(ses,
+                      &rx,
+                      now,
+                      (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1111 },
+                      make_frame(meta, mem_payload, "c", 0, 1),
+                      del_payload,
+                      0);
+    TEST_ASSERT_EQUAL(1, cb_result.message.count);     // 3 is still interned, 10000 interned too (but acked).
+    TEST_ASSERT_EQUAL(3, cb_result.ack_mandate.count); // all acked
+
+    // Some time has passed and the reordering window is now closed. All transfers ejected.
+    now += port.reordering_window + 100;
+    udpard_rx_poll(&rx, now);
+    TEST_ASSERT_EQUAL(3, cb_result.message.count); // 1, 3, 10000 have been ejected.
+    TEST_ASSERT_EQUAL(3, cb_result.ack_mandate.count);
+
+    // Send transfer #2. It is stale and must be rejected.
+    meta.transfer_id = 2;
+    meta.flag_ack    = true;
+    now += 10;
+    rx_session_update(ses,
+                      &rx,
+                      now,
+                      (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1111 },
+                      make_frame(meta, mem_payload, "d", 0, 1),
+                      del_payload,
+                      0);
+    TEST_ASSERT_EQUAL(3, cb_result.message.count);     // transfer 2 not ejected!
+    TEST_ASSERT_EQUAL(3, cb_result.ack_mandate.count); // transfer 2 must have been rejected!
+
+    // Make sure it's not ejected later.
+    now += port.reordering_window + 100;
+    udpard_rx_poll(&rx, now);
+    TEST_ASSERT_EQUAL(3, cb_result.message.count);
+    TEST_ASSERT_EQUAL(3, cb_result.ack_mandate.count);
+
+    // Clean up.
+    for (size_t i = 0; i < cb_result.message.count; i++) {
+        udpard_fragment_free_all(cb_result.message.history[i].payload, mem_frag);
+    }
+    udpard_rx_port_free(&rx, &port);
+    TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0, alloc_session.allocated_fragments);
+    instrumented_allocator_reset(&alloc_frag);
+    instrumented_allocator_reset(&alloc_session);
+    instrumented_allocator_reset(&alloc_payload);
+}
+
 // ---------------------------------------------  RX PORT  ---------------------------------------------
 
 /// Exercises udpard_rx_port_push() across ORDERED and STATELESS ports, covering single- and multi-frame transfers.
@@ -3742,6 +3863,7 @@ int main(void)
     RUN_TEST(test_rx_session_ordered);
     RUN_TEST(test_rx_session_unordered);
     RUN_TEST(test_rx_session_history);
+    RUN_TEST(test_rx_session_ordered_reject_stale_after_jump);
 
     RUN_TEST(test_rx_port);
     RUN_TEST(test_rx_port_timeouts);
