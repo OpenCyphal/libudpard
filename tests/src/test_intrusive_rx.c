@@ -2904,6 +2904,101 @@ static void test_rx_session_unordered(void)
     instrumented_allocator_reset(&alloc_payload);
 }
 
+/// Ensure the reassembler can detect repeated transfers even after the window has moved past them.
+static void test_rx_session_history(void)
+{
+    instrumented_allocator_t alloc_frag = { 0 };
+    instrumented_allocator_new(&alloc_frag);
+    const udpard_mem_resource_t mem_frag      = instrumented_allocator_make_resource(&alloc_frag);
+    instrumented_allocator_t    alloc_session = { 0 };
+    instrumented_allocator_new(&alloc_session);
+    const udpard_mem_resource_t mem_session   = instrumented_allocator_make_resource(&alloc_session);
+    instrumented_allocator_t    alloc_payload = { 0 };
+    instrumented_allocator_new(&alloc_payload);
+    const udpard_mem_resource_t     mem_payload = instrumented_allocator_make_resource(&alloc_payload);
+    const udpard_mem_deleter_t      del_payload = instrumented_allocator_make_deleter(&alloc_payload);
+    const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
+    udpard_rx_t                     rx;
+    callback_result_t               cb_result = { 0 };
+    TEST_ASSERT(udpard_rx_new(&rx, &on_message, &on_collision, &on_ack_mandate));
+    rx.user                    = &cb_result;
+    const uint64_t   local_uid = 0xF00DCAFEF00DCAFEULL;
+    udpard_rx_port_t port;
+    TEST_ASSERT(udpard_rx_port_new(&port, local_uid, SIZE_MAX, UDPARD_RX_REORDERING_WINDOW_UNORDERED, rx_mem));
+    udpard_us_t               now        = 0;
+    const uint64_t            remote_uid = 0xFACEB00CFACEB00CULL;
+    rx_session_factory_args_t fac_args   = {
+          .owner                 = &port,
+          .sessions_by_animation = &rx.list_session_by_animation,
+          .remote_uid            = remote_uid,
+          .now                   = now,
+    };
+    rx_session_t* const ses = (rx_session_t*)cavl2_find_or_insert(&port.index_session_by_remote_uid,
+                                                                  &remote_uid,
+                                                                  &cavl_compare_rx_session_by_remote_uid,
+                                                                  &fac_args,
+                                                                  &cavl_factory_rx_session_by_remote_uid);
+    TEST_ASSERT_NOT_NULL(ses);
+    meta_t meta = { .priority              = udpard_prio_fast,
+                    .flag_ack              = false,
+                    .transfer_payload_size = 3,
+                    .transfer_id           = 10,
+                    .sender_uid            = remote_uid,
+                    .topic_hash            = local_uid };
+    now += 1000;
+    rx_session_update(ses,
+                      &rx,
+                      now,
+                      (udpard_udpip_ep_t){ .ip = 0x0A00000A, .port = 0x0A00 },
+                      make_frame(meta, mem_payload, "old", 0, 3),
+                      del_payload,
+                      0);
+    TEST_ASSERT_EQUAL(1, cb_result.message.count);
+    TEST_ASSERT_EQUAL(10, cb_result.message.history[0].transfer_id);
+    TEST_ASSERT_EQUAL(10, ses->history[0]);
+    TEST_ASSERT_EQUAL(1, ses->history_index);
+    const uint64_t jump_tid    = 10 + RX_TRANSFER_ID_WINDOW_BITS + 5U;
+    meta.transfer_id           = jump_tid;
+    meta.transfer_payload_size = 4;
+    now += 1000;
+    rx_session_update(ses,
+                      &rx,
+                      now,
+                      (udpard_udpip_ep_t){ .ip = 0x0A00000B, .port = 0x0B00 },
+                      make_frame(meta, mem_payload, "jump", 0, 4),
+                      del_payload,
+                      1);
+    TEST_ASSERT_EQUAL(2, cb_result.message.count);
+    TEST_ASSERT_EQUAL(jump_tid, cb_result.message.history[0].transfer_id);
+    TEST_ASSERT_EQUAL(jump_tid, ses->history[1]);
+    TEST_ASSERT_FALSE(rx_transfer_id_window_contains(&ses->window, 10));
+    meta.transfer_id           = 10;
+    meta.transfer_payload_size = 3;
+    meta.flag_ack              = true;
+    now += 1000;
+    rx_session_update(ses,
+                      &rx,
+                      now,
+                      (udpard_udpip_ep_t){ .ip = 0x0A00000A, .port = 0x0A00 },
+                      make_frame(meta, mem_payload, "dup", 0, 3),
+                      del_payload,
+                      0);
+    TEST_ASSERT_EQUAL(2, cb_result.message.count);
+    TEST_ASSERT_EQUAL(1, cb_result.ack_mandate.count);
+    TEST_ASSERT_EQUAL(10, cb_result.ack_mandate.am.transfer_id);
+    TEST_ASSERT_EQUAL_size_t(3, cb_result.ack_mandate.am.payload_head.size);
+    TEST_ASSERT_EQUAL_MEMORY("dup", cb_result.ack_mandate.am.payload_head.data, 3);
+    udpard_fragment_free_all(cb_result.message.history[0].payload, mem_frag);
+    udpard_fragment_free_all(cb_result.message.history[1].payload, mem_frag);
+    TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
+    udpard_rx_port_free(&rx, &port);
+    TEST_ASSERT_EQUAL_size_t(0, alloc_session.allocated_fragments);
+    instrumented_allocator_reset(&alloc_frag);
+    instrumented_allocator_reset(&alloc_session);
+    instrumented_allocator_reset(&alloc_payload);
+}
+
 // ---------------------------------------------  RX PORT  ---------------------------------------------
 
 /// Exercises udpard_rx_port_push() across ORDERED and STATELESS ports, covering single- and multi-frame transfers.
@@ -3646,6 +3741,7 @@ int main(void)
 
     RUN_TEST(test_rx_session_ordered);
     RUN_TEST(test_rx_session_unordered);
+    RUN_TEST(test_rx_session_history);
 
     RUN_TEST(test_rx_port);
     RUN_TEST(test_rx_port_timeouts);
