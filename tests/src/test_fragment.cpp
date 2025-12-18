@@ -7,6 +7,7 @@
 #include "helpers.h"
 #include <unity.h>
 #include <cstring>
+#include <algorithm>
 
 namespace {
 

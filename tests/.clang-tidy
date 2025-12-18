@@ -51,6 +51,7 @@ Checks: >-
   -cppcoreguidelines-avoid-do-while,
   -*DeprecatedOrUnsafeBufferHandling,
   -*-prefer-static-over-anonymous-namespace,
+  -*-pro-bounds-avoid-unchecked-container-access,
 WarningsAsErrors: '*'
 HeaderFilterRegex: '.*\.hpp'
 FormatStyle: file
