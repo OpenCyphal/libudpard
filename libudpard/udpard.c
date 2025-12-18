@@ -149,17 +149,21 @@ void udpard_fragment_free_all(udpard_fragment_t* const frag, const udpard_mem_re
     }
 }
 
-udpard_fragment_t* udpard_fragment_seek(udpard_fragment_t* any_frag, const size_t offset)
+udpard_fragment_t* udpard_fragment_seek(udpard_fragment_t* frag, const size_t offset)
 {
-    if (any_frag != NULL) {
-        while (any_frag->index_offset.up != NULL) { // Only if the given node is not already the root.
-            any_frag = (udpard_fragment_t*)any_frag->index_offset.up;
+    if (frag != NULL) {
+        // Common case: if the offset is already within the provided fragment, return it as-is.
+        if ((frag->offset <= offset) && ((frag->offset + frag->view.size) > offset)) {
+            return frag;
+        }
+        while (frag->index_offset.up != NULL) { // Only if the given node is not already the root.
+            frag = (udpard_fragment_t*)frag->index_offset.up;
         }
         if (offset == 0) { // Common fast path.
-            return (udpard_fragment_t*)cavl2_min(&any_frag->index_offset);
+            return (udpard_fragment_t*)cavl2_min(&frag->index_offset);
         }
         udpard_fragment_t* const f =
-          (udpard_fragment_t*)cavl2_predecessor(&any_frag->index_offset, &offset, &cavl_compare_fragment_offset);
+          (udpard_fragment_t*)cavl2_predecessor(&frag->index_offset, &offset, &cavl_compare_fragment_offset);
         if ((f != NULL) && ((f->offset + f->view.size) > offset)) {
             UDPARD_ASSERT(f->offset <= offset);
             return f;
@@ -173,31 +177,31 @@ udpard_fragment_t* udpard_fragment_next(udpard_fragment_t* const frag)
     return (frag != NULL) ? ((udpard_fragment_t*)cavl2_next_greater(&frag->index_offset)) : NULL;
 }
 
-size_t udpard_fragment_gather(const udpard_fragment_t* any_frag,
-                              const size_t             offset,
-                              const size_t             size,
-                              void* const              destination)
+size_t udpard_fragment_gather(const udpard_fragment_t* const frag,
+                              const size_t                   offset,
+                              const size_t                   size,
+                              void* const                    destination)
 {
     size_t copied = 0;
-    if ((any_frag != NULL) && (destination != NULL)) {
-        udpard_fragment_t* frag   = udpard_fragment_seek((udpard_fragment_t*)any_frag, offset);
+    if ((frag != NULL) && (destination != NULL)) {
+        udpard_fragment_t* f      = udpard_fragment_seek((udpard_fragment_t*)frag, offset);
         size_t             cursor = offset;
         byte_t* const      out    = (byte_t*)destination;
         // Copy contiguous fragments starting at the requested offset.
-        while ((frag != NULL) && (copied < size)) {
-            UDPARD_ASSERT(frag->offset <= cursor);
-            UDPARD_ASSERT((frag->offset + frag->view.size) > cursor);
-            UDPARD_ASSERT(frag->view.data != NULL);
-            const size_t offset_in_frag = cursor - frag->offset;
-            const size_t available      = frag->view.size - offset_in_frag;
+        while ((f != NULL) && (copied < size)) {
+            UDPARD_ASSERT(f->offset <= cursor);
+            UDPARD_ASSERT((f->offset + f->view.size) > cursor);
+            UDPARD_ASSERT(f->view.data != NULL);
+            const size_t offset_in_frag = cursor - f->offset;
+            const size_t available      = f->view.size - offset_in_frag;
             const size_t to_copy        = smaller(available, size - copied);
             // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-            (void)memcpy(out + copied, ((const byte_t*)frag->view.data) + offset_in_frag, to_copy);
+            (void)memcpy(out + copied, ((const byte_t*)f->view.data) + offset_in_frag, to_copy);
             copied += to_copy;
             cursor += to_copy;
             if (copied < size) {
-                frag = udpard_fragment_next(frag);
-                UDPARD_ASSERT((frag == NULL) || (frag->offset == cursor));
+                f = udpard_fragment_next(f);
+                UDPARD_ASSERT((f == NULL) || (f->offset == cursor));
             }
         }
     }
