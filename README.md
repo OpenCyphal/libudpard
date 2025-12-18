@@ -1,12 +1,17 @@
-# Compact Cyphal/UDP in C
+<div align="center">
+
+# Cyphal/UDP transport in C
 
 [![Main Workflow](https://github.com/OpenCyphal-Garage/libudpard/actions/workflows/main.yml/badge.svg)](https://github.com/OpenCyphal-Garage/libudpard/actions/workflows/main.yml)
 [![Reliability Rating](https://sonarcloud.io/api/project_badges/measure?project=libudpard&metric=reliability_rating)](https://sonarcloud.io/summary?id=libudpard)
 [![Coverage](https://sonarcloud.io/api/project_badges/measure?project=libudpard&metric=coverage)](https://sonarcloud.io/summary?id=libudpard)
 [![Forum](https://img.shields.io/discourse/users.svg?server=https%3A%2F%2Fforum.opencyphal.org&color=1700b3)](https://forum.opencyphal.org)
 
-LibUDPard is a compact implementation of the Cyphal/UDP protocol in C99/C11 for high-integrity real-time
-embedded systems.
+</div>
+
+-----
+
+LibUDPard is a robust implementation of the Cyphal/UDP transport layer in C99/C11 for high-integrity real-time systems.
 
 [Cyphal](https://opencyphal.org) is an open technology for real-time intravehicular distributed computing and
 communication based on modern networking standards (Ethernet, CAN FD, etc.).
@@ -15,35 +20,22 @@ next-generation intelligent vehicles: manned and unmanned aircraft, spacecraft, 
 
 ## Features
 
-Some of the features listed here are intrinsic properties of Cyphal.
-
+- Zero-copy RX pipeline -- payload is moved from the NIC driver all the way to the application without copying.
 - Support for redundant network interfaces with seamless interface aggregation and zero fail-over delay.
-
-- Zero-copy data pipeline on reception --
-  payload is moved from the underlying NIC driver all the way to the application without copying.
-
-- Robust message reassembler with support for out-of-order and duplicate datagrams.
-
-- Support for repetition-coding forward error correction (FEC) for lossy links (e.g., wireless)
-  transparent to the application.
-
-- Compliance with automatically enforceable MISRA C rules (reach out to https://forum.opencyphal.org for details).
-
+- Robust message reassembler tolerant to highly distorted datagram streams (out-of-order, duplication, distinct MTU).
+- Packet loss mitigation via:
+  - repetition-coding FEC (transparent to the application);
+  - redundant interfaces (packet lost on one interface may be received on another, transparent to the application);
+  - positive acknowledgment with retransmission (retransmission not handled by the library).
+- No dependency on heap; the library can be used with fixed-size block pool allocators.
 - Detailed time complexity and memory requirement models for the benefit of real-time high-integrity applications.
-
-- No dependency on heap memory; the library can be used with fixed-size block pool allocators.
-
-- Compatibility with all conventional 8/16/32/64-bit platforms and extremely resource-constrained baremetal
-  environments starting from 64K ROM and 64K RAM.
-
-- Implemented in only 2k lines of code.
+- Runs on any 8/16/32/64-bit platform and extremely resource-constrained baremetal environments with ~100K ROM/RAM.
+- MISRA C compliance (reach out to <https://forum.opencyphal.org>).
+- Full implementation in a single C file with less than 2k lines of straightforward code!
 
 ## Usage
 
-The library implements the Cyphal/UDP protocol, which is a transport-layer entity.
-An application using this library will need to implement the presentation layer above the library,
-perhaps with the help of the [Nunavut transpiler](https://github.com/OpenCyphal/nunavut),
-and the network layer below the library using a third-party UDP/IP stack implementation with multicast/IGMP support
+An application using this library will need to provide a third-party UDP/IP stack with multicast/IGMP support
 (TCP not needed).
 In the most straightforward case, the network layer can be based on the standard Berkeley socket API
 or a lightweight embedded stack such as LwIP.
@@ -52,23 +44,28 @@ or a lightweight embedded stack such as LwIP.
 %%{init: {"fontFamily": "Ubuntu Mono, monospace", "flowchart": {"curve": "basis"}}}%%
 flowchart TD
     classDef OpenCyphal color:#00DAC6,fill:#1700b3,stroke:#00DAC6,stroke-width:2px,font-weight:600
-    Application <-->|messages,\nrequests,\nresponses| LibUDPard[fa:fa-code LibUDPard]
+    Application <-->|messages| LibUDPard[fa:fa-code LibUDPard]
     class LibUDPard OpenCyphal
-    LibUDPard <-->|multicast datagrams| UDP
+    LibUDPard <-->|datagrams| UDP
     subgraph domain_udpip["3rd-party UDP/IP+IGMP stack"]
         UDP <--> IP["IPv4, IGMPv1+"] <--> MAC
     end
     MAC <--> PHY
 ```
 
-To integrate the library into your application, simply copy the files under `libudpard/` into your project tree,
-or add this entire repository as a submodule.
-The library contains only one translation unit named `udpard.c`;
-no special compiler options are needed to build it.
-The library should be compatible with all conventional computer architectures where a standards-compliant C99 compiler
-is available.
+To integrate the library into your application, simply copy `udpard.c` and `udpard.h` from `libudpard/`
+into your project tree, or add this entire repository as a submodule;
+also ensure you have [`cavl2.h`](https://github.com/pavel-kirienko/cavl) somewhere in your include paths.
+
+The library contains only one translation unit named `udpard.c`; no special compiler options are needed to build it.
+The library should be compatible out of the box with all conventional computer architectures where a
+standards-compliant C99 compiler is available.
 
 **Read the API docs in [`libudpard/udpard.h`](libudpard/udpard.h).**
+
+## See also
+
+- [Nunavut transpiler](https://github.com/OpenCyphal/nunavut) for DSDL message (de)serialization.
 
 ## Revisions
 
