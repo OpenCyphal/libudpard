@@ -116,7 +116,10 @@ static int32_t cavl_compare_fragment_end(const void* const user, const udpard_tr
     return 0; // clang-format on
 }
 
-static bool validate_ep(const udpard_udpip_ep_t ep) { return (ep.port != 0) && (ep.ip != 0) && (ep.ip != UINT32_MAX); }
+bool udpard_is_valid_endpoint(const udpard_udpip_ep_t ep)
+{
+    return (ep.port != 0) && (ep.ip != 0) && (ep.ip != UINT32_MAX);
+}
 
 udpard_udpip_ep_t udpard_make_subject_endpoint(const uint32_t subject_id)
 {
@@ -633,8 +636,9 @@ uint32_t udpard_tx_push(udpard_tx_t* const      self,
                         void* const             user_transfer_reference)
 {
     uint32_t   out = 0;
-    const bool ok  = (self != NULL) && (deadline >= now) && (self->local_uid != 0) && validate_ep(remote_ep) &&
-                    (priority <= UDPARD_PRIORITY_MAX) && ((payload.data != NULL) || (payload.size == 0U));
+    const bool ok  = (self != NULL) && (deadline >= now) && (self->local_uid != 0) &&
+                    udpard_is_valid_endpoint(remote_ep) && (priority <= UDPARD_PRIORITY_MAX) &&
+                    ((payload.data != NULL) || (payload.size == 0U));
     if (ok) {
         self->errors_expiration += tx_purge_expired(self, now);
         const meta_t meta = {
@@ -1716,7 +1720,7 @@ bool udpard_rx_port_push(udpard_rx_t* const         rx,
                          const udpard_mem_deleter_t payload_deleter,
                          const uint_fast8_t         redundant_iface_index)
 {
-    const bool ok = (rx != NULL) && (port != NULL) && (timestamp >= 0) && validate_ep(source_ep) &&
+    const bool ok = (rx != NULL) && (port != NULL) && (timestamp >= 0) && udpard_is_valid_endpoint(source_ep) &&
                     (datagram_payload.data != NULL) && (payload_deleter.free != NULL) &&
                     (redundant_iface_index < UDPARD_NETWORK_INTERFACE_COUNT_MAX);
     if (ok) {

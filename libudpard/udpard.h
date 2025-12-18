@@ -139,6 +139,9 @@ typedef struct udpard_remote_t
     udpard_udpip_ep_t endpoints[UDPARD_NETWORK_INTERFACE_COUNT_MAX]; ///< Zeros in unavailable ifaces.
 } udpard_remote_t;
 
+/// Returns true if the given UDP/IP endpoint appears to be valid. Zero port or IP are considered invalid.
+bool udpard_is_valid_endpoint(const udpard_udpip_ep_t ep);
+
 /// Returns the destination multicast UDP/IP endpoint for the given subject ID.
 /// The application should use this function when setting up subscription sockets or sending transfers.
 /// If the subject-ID exceeds the allowed range, the excessive bits are masked out.
