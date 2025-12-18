@@ -174,26 +174,34 @@ udpard_fragment_t* udpard_fragment_next(udpard_fragment_t* const frag)
 }
 
 size_t udpard_fragment_gather(const udpard_fragment_t* any_frag,
-                              const size_t             destination_size_bytes,
+                              const size_t             offset,
+                              const size_t             size,
                               void* const              destination)
 {
-    size_t offset = 0;
+    size_t copied = 0;
     if ((any_frag != NULL) && (destination != NULL)) {
-        while (any_frag->index_offset.up != NULL) { // Locate the root.
-            any_frag = (const udpard_fragment_t*)any_frag->index_offset.up;
-        }
-        udpard_fragment_t* frag = (udpard_fragment_t*)cavl2_min((udpard_tree_t*)&any_frag->index_offset);
-        while ((frag != NULL) && (offset < destination_size_bytes)) {
-            UDPARD_ASSERT(frag->offset == offset);
+        udpard_fragment_t* frag   = udpard_fragment_seek((udpard_fragment_t*)any_frag, offset);
+        size_t             cursor = offset;
+        byte_t* const      out    = (byte_t*)destination;
+        // Copy contiguous fragments starting at the requested offset.
+        while ((frag != NULL) && (copied < size)) {
+            UDPARD_ASSERT(frag->offset <= cursor);
+            UDPARD_ASSERT((frag->offset + frag->view.size) > cursor);
             UDPARD_ASSERT(frag->view.data != NULL);
-            const size_t to_copy = smaller(frag->view.size, destination_size_bytes - offset);
+            const size_t offset_in_frag = cursor - frag->offset;
+            const size_t available      = frag->view.size - offset_in_frag;
+            const size_t to_copy        = smaller(available, size - copied);
             // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-            (void)memcpy((byte_t*)destination + offset, frag->view.data, to_copy);
-            offset += to_copy;
-            frag = udpard_fragment_next(frag);
+            (void)memcpy(out + copied, ((const byte_t*)frag->view.data) + offset_in_frag, to_copy);
+            copied += to_copy;
+            cursor += to_copy;
+            if (copied < size) {
+                frag = udpard_fragment_next(frag);
+                UDPARD_ASSERT((frag == NULL) || (frag->offset == cursor));
+            }
         }
     }
-    return offset;
+    return copied;
 }
 
 // ---------------------------------------------  CRC  ---------------------------------------------

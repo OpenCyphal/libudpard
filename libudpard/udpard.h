@@ -222,13 +222,14 @@ udpard_fragment_t* udpard_fragment_seek(udpard_fragment_t* any_frag, const size_
 /// The complexity is amortized-constant.
 udpard_fragment_t* udpard_fragment_next(udpard_fragment_t* const frag);
 
-/// Given any fragment in a transfer, copies the entire transfer payload into the specified contiguous buffer.
-/// If the total size of all fragments combined exceeds the size of the destination buffer,
-/// copying will stop early after the buffer is filled, thus truncating the fragmented data short.
-/// The function has no effect and returns zero if the destination buffer or fragment pointer is NULL.
-/// Returns the number of bytes copied into the contiguous destination buffer.
+/// Copies `size` bytes of payload stored in a fragment tree starting from `offset` into `destination`.
+/// The given fragment can be arbitrary; the function will seek the required starting fragment automatically.
+/// Returns the number of bytes copied into the contiguous destination buffer, which equals `size` unless
+/// `offset+size` exceeds the amount of data stored in the fragments.
+/// The function has no effect and returns zero if the destination buffer or fragment pointer are NULL.
 size_t udpard_fragment_gather(const udpard_fragment_t* any_frag,
-                              const size_t             destination_size_bytes,
+                              const size_t             offset,
+                              const size_t             size,
                               void* const              destination);
 
 // =====================================================================================================================
@@ -489,8 +490,8 @@ void udpard_tx_free(const udpard_tx_mem_resources_t memory, udpard_tx_item_t* co
 /// UNORDERED  Unique transfer-ID               Ordering not guaranteed            UDPARD_RX_REORDERING_WINDOW_UNORDERED
 /// STATELESS  Constant time, constant memory   1-frame only, dups, no responses   UDPARD_RX_REORDERING_WINDOW_STATELESS
 ///
-/// If not sure, choose the ORDERED mode with a ~1 ms reordering window for all topics except for request-response
-/// RPC-style topics, in which case choose UNORDERED. The STATELESS mode is chiefly intended for the heartbeat topic.
+/// If not sure, choose UNORDERED. The ORDERED mode is a good fit for ordering-sensitive use cases like state estimators
+/// and control loops, but it is not suitable for P2P. The STATELESS mode is chiefly intended for the heartbeat topic.
 ///
 ///     ORDERED
 ///
@@ -712,8 +713,8 @@ void udpard_rx_poll(udpard_rx_t* const self, const udpard_us_t now);
 /// The collision callback is invoked if a topic hash collision is detected.
 /// For P2P ports, the topic hash is populated with the local node's UID instead.
 ///
-/// If not sure, set the reordering window to ~1 ms for most topics, but use UNORDERED for request-response topics
-/// and for P2P.
+/// If not sure which reassembly mode to choose, consider UDPARD_RX_REORDERING_WINDOW_UNORDERED as the default choice.
+/// For ordering-sensitive use cases, such as state estimators and control loops, use ORDERED with a short window.
 ///
 /// The return value is true on success, false if any of the arguments are invalid.
 /// The time complexity is constant. This function does not invoke the dynamic memory manager.
