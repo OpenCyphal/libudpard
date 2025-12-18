@@ -23,11 +23,12 @@ next-generation intelligent vehicles: manned and unmanned aircraft, spacecraft, 
 - Zero-copy RX pipeline -- payload is moved from the NIC driver all the way to the application without copying.
 - Support for redundant network interfaces with seamless interface aggregation and zero fail-over delay.
 - Robust message reassembler tolerant to highly distorted datagram streams (out-of-order, duplication, distinct MTU).
+- Message ordering recovery for ordering-sensitive applications (e.g., state estimators, control loops).
 - Packet loss mitigation via:
   - repetition-coding FEC (transparent to the application);
   - redundant interfaces (packet lost on one interface may be received on another, transparent to the application);
   - positive acknowledgment with retransmission (retransmission not handled by the library).
-- No dependency on heap; the library can be used with fixed-size block pool allocators.
+- Heap not required; the library can be used with fixed-size block pool allocators.
 - Detailed time complexity and memory requirement models for the benefit of real-time high-integrity applications.
 - Runs on any 8/16/32/64-bit platform and extremely resource-constrained baremetal environments with ~100K ROM/RAM.
 - MISRA C compliance (reach out to <https://forum.opencyphal.org>).
