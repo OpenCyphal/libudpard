@@ -31,6 +31,9 @@ Checks: >-
   -misc-include-cleaner,
   -cppcoreguidelines-avoid-do-while,
   -*-magic-numbers,
+  -*-use-enum-class,
+  -*-use-trailing-return-type,
+  -*-deprecated-headers,
 CheckOptions:
   - key:   readability-function-cognitive-complexity.Threshold
     value: '99'

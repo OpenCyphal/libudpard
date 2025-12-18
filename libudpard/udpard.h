@@ -35,6 +35,8 @@
 /// SPDX-License-Identifier: MIT
 /// Author: Pavel Kirienko <pavel@opencyphal.org>
 
+// ReSharper disable CppUnusedIncludeDirective
+
 #ifndef UDPARD_H_INCLUDED
 #define UDPARD_H_INCLUDED
 
@@ -69,6 +71,7 @@ extern "C"
 /// The library supports at most this many local redundant network interfaces.
 #define UDPARD_NETWORK_INTERFACE_COUNT_MAX 3U
 
+/// Timestamps supplied by the application must be non-negative monotonically increasing counts of microseconds.
 typedef int64_t udpard_us_t;
 
 #define UDPARD_PRIORITY_MAX 7U
