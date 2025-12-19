@@ -247,6 +247,13 @@ void test_udpard_fragment_gather()
     TEST_ASSERT_EQUAL_MEMORY("ABCDEMIDWXYZ", buf, 12);
     TEST_ASSERT_EQUAL_PTR(right, cursor);
 
+    // Gather starting exactly at the end of the current cursor fragment.
+    (void)std::memset(static_cast<void*>(buf), 0, sizeof(buf));
+    cursor = left;
+    TEST_ASSERT_EQUAL_size_t(7, udpard_fragment_gather(&cursor, 5, 7, static_cast<void*>(buf)));
+    TEST_ASSERT_EQUAL_MEMORY("MIDWXYZ", buf, 7);
+    TEST_ASSERT_EQUAL_PTR(right, cursor);
+
     // Test 7: Truncation with multiple fragments - buffer smaller than total.
     (void)std::memset(static_cast<void*>(buf), 0, sizeof(buf));
     cursor = root;
