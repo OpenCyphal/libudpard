@@ -142,6 +142,7 @@ void udpard_fragment_free_all(udpard_fragment_t* const frag, const udpard_mem_re
         udpard_fragment_t* const parent = (udpard_fragment_t*)frag->index_offset.up;
         mem_free_payload(frag->payload_deleter, frag->origin);
         mem_free(fragment_mem_resource, sizeof(udpard_fragment_t), frag);
+        // Ascend the tree.
         if (parent != NULL) {
             parent->index_offset.lr[parent->index_offset.lr[1] == (udpard_tree_t*)frag] = NULL;
             udpard_fragment_free_all(parent, fragment_mem_resource); // tail call hopefully
@@ -149,21 +150,17 @@ void udpard_fragment_free_all(udpard_fragment_t* const frag, const udpard_mem_re
     }
 }
 
-udpard_fragment_t* udpard_fragment_seek(udpard_fragment_t* frag, const size_t offset)
+udpard_fragment_t* udpard_fragment_seek(const udpard_fragment_t* frag, const size_t offset)
 {
     if (frag != NULL) {
-        // Common case: if the offset is already within the provided fragment, return it as-is.
-        if ((frag->offset <= offset) && ((frag->offset + frag->view.size) > offset)) {
-            return frag;
-        }
         while (frag->index_offset.up != NULL) { // Only if the given node is not already the root.
-            frag = (udpard_fragment_t*)frag->index_offset.up;
+            frag = (const udpard_fragment_t*)frag->index_offset.up;
         }
         if (offset == 0) { // Common fast path.
-            return (udpard_fragment_t*)cavl2_min(&frag->index_offset);
+            return (udpard_fragment_t*)cavl2_min((udpard_tree_t*)frag);
         }
         udpard_fragment_t* const f =
-          (udpard_fragment_t*)cavl2_predecessor(&frag->index_offset, &offset, &cavl_compare_fragment_offset);
+          (udpard_fragment_t*)cavl2_predecessor((udpard_tree_t*)frag, &offset, &cavl_compare_fragment_offset);
         if ((f != NULL) && ((f->offset + f->view.size) > offset)) {
             UDPARD_ASSERT(f->offset <= offset);
             return f;
@@ -172,38 +169,50 @@ udpard_fragment_t* udpard_fragment_seek(udpard_fragment_t* frag, const size_t of
     return NULL;
 }
 
-udpard_fragment_t* udpard_fragment_next(udpard_fragment_t* const frag)
+udpard_fragment_t* udpard_fragment_next(const udpard_fragment_t* frag)
 {
-    return (frag != NULL) ? ((udpard_fragment_t*)cavl2_next_greater(&frag->index_offset)) : NULL;
+    return (frag != NULL) ? ((udpard_fragment_t*)cavl2_next_greater((udpard_tree_t*)frag)) : NULL;
 }
 
-size_t udpard_fragment_gather(const udpard_fragment_t* const frag,
-                              const size_t                   offset,
-                              const size_t                   size,
-                              void* const                    destination)
+size_t udpard_fragment_gather(const udpard_fragment_t** cursor,
+                              const size_t              offset,
+                              const size_t              size,
+                              void* const               destination)
 {
     size_t copied = 0;
-    if ((frag != NULL) && (destination != NULL)) {
-        udpard_fragment_t* f      = udpard_fragment_seek((udpard_fragment_t*)frag, offset);
-        size_t             cursor = offset;
-        byte_t* const      out    = (byte_t*)destination;
-        // Copy contiguous fragments starting at the requested offset.
-        while ((f != NULL) && (copied < size)) {
-            UDPARD_ASSERT(f->offset <= cursor);
-            UDPARD_ASSERT((f->offset + f->view.size) > cursor);
-            UDPARD_ASSERT(f->view.data != NULL);
-            const size_t offset_in_frag = cursor - f->offset;
-            const size_t available      = f->view.size - offset_in_frag;
-            const size_t to_copy        = smaller(available, size - copied);
-            // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-            (void)memcpy(out + copied, ((const byte_t*)f->view.data) + offset_in_frag, to_copy);
-            copied += to_copy;
-            cursor += to_copy;
-            if (copied < size) {
-                f = udpard_fragment_next(f);
-                UDPARD_ASSERT((f == NULL) || (f->offset == cursor));
-            }
+    if ((cursor != NULL) && (*cursor != NULL) && (destination != NULL)) {
+        const size_t             end_offset = (*cursor)->offset + (*cursor)->view.size;
+        const udpard_fragment_t* f          = NULL;
+        if ((offset < (*cursor)->offset) || (offset > end_offset)) {
+            f = udpard_fragment_seek(*cursor, offset);
+        } else if (offset == end_offset) { // Common case during sequential access.
+            f = udpard_fragment_next(*cursor);
+        } else {
+            f = *cursor;
         }
+        if ((f != NULL) && (size > 0U)) {
+            const udpard_fragment_t* last = f;
+            size_t                   pos  = offset;
+            byte_t* const            out  = (byte_t*)destination;
+            while ((f != NULL) && (copied < size)) { // Copy contiguous fragments starting at the requested offset.
+                UDPARD_ASSERT(f->offset <= pos);
+                UDPARD_ASSERT(pos < (f->offset + f->view.size));
+                UDPARD_ASSERT(f->view.data != NULL);
+                const size_t bias    = pos - f->offset;
+                const size_t to_copy = smaller(f->view.size - bias, size - copied);
+                // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
+                (void)memcpy(out + copied, ((const byte_t*)f->view.data) + bias, to_copy);
+                copied += to_copy;
+                pos += to_copy;
+                last = f;
+                if (copied < size) {
+                    f = udpard_fragment_next(f);
+                    UDPARD_ASSERT((f == NULL) || (f->offset == pos));
+                }
+            }
+            *cursor = last; // Keep iterator non-NULL.
+        }
+        UDPARD_ASSERT(NULL != *cursor);
     }
     return copied;
 }

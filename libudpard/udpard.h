@@ -214,23 +214,24 @@ void udpard_fragment_free_all(udpard_fragment_t* const frag, const udpard_mem_re
 /// This is also the idiomatic way to find the head of the fragment list when invoked with offset zero.
 /// This function accepts any node in the fragment tree, not necessarily the head or the root, and
 /// has a logarithmic complexity in the number of fragments, which makes it very efficient.
-udpard_fragment_t* udpard_fragment_seek(udpard_fragment_t* frag, const size_t offset);
+udpard_fragment_t* udpard_fragment_seek(const udpard_fragment_t* frag, const size_t offset);
 
 /// Given any fragment in a transfer, returns the next fragment in strictly ascending order of offsets.
 /// The offset of the next fragment always equals the sum of the offset and size of the current fragment.
 /// Returns NULL if there is no next fragment or if the given fragment is NULL.
 /// The complexity is amortized-constant.
-udpard_fragment_t* udpard_fragment_next(udpard_fragment_t* const frag);
+udpard_fragment_t* udpard_fragment_next(const udpard_fragment_t* frag);
 
 /// Copies `size` bytes of payload stored in a fragment tree starting from `offset` into `destination`.
-/// The given fragment can be arbitrary; the function will seek the required starting fragment automatically.
+/// The cursor pointer is an iterator updated to the last fragment touched, enabling very efficient sequential
+/// access without repeated searches; it is never set to NULL.
 /// Returns the number of bytes copied into the contiguous destination buffer, which equals `size` unless
 /// `offset+size` exceeds the amount of data stored in the fragments.
-/// The function has no effect and returns zero if the destination buffer or fragment pointer are NULL.
-size_t udpard_fragment_gather(const udpard_fragment_t* const frag,
-                              const size_t                   offset,
-                              const size_t                   size,
-                              void* const                    destination);
+/// The function has no effect and returns zero if the destination buffer or iterator pointer are NULL.
+size_t udpard_fragment_gather(const udpard_fragment_t** cursor,
+                              const size_t              offset,
+                              const size_t              size,
+                              void* const               destination);
 
 // =====================================================================================================================
 // =================================================    TX PIPELINE    =================================================
