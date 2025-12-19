@@ -58,10 +58,15 @@ typedef unsigned char byte_t; ///< For compatibility with platforms where byte s
 
 /// The number of most recent transfers to keep in the history for ACK retransmission and duplicate detection.
 /// Should be a power of two to allow replacement of modulo operation with a bitwise AND.
+///
+/// Implementation node: we used to store bitmask windows instead of a full list of recent transfer-IDs, but they
+/// were found to offer no advantage except in the perfect scenario of non-restarting senders, and an increased
+/// implementation complexity (more branches, more lines of code), so they were replaced with a simple list.
+/// The list works equally well given a non-contiguous transfer-ID stream, unlike the bitmask, thus more robust.
 #define RX_TRANSFER_HISTORY_COUNT 16U
 
 /// In the ORDERED reassembly mode, with the most recently received transfer-ID N, the library will reject
-/// transfers with transfer-ID less than or equal to N - ORDERING_WINDOW (modulo 2^64) as late.
+/// transfers with transfer-ID less than or equal to N-ORDERING_WINDOW (modulo 2^64) as late.
 #define RX_TRANSFER_ORDERING_WINDOW 1024U
 
 #define UDP_PORT               9382U
@@ -1280,7 +1285,6 @@ static void rx_session_ordered_scan_slots(rx_session_t* const self,
                 }
             }
         }
-
         // The slot needs to be ejected if it's in-sequence, if it's reordering window is closed, or if we're
         // asked to force an ejection and we haven't done so yet.
         // The reordering window timeout implies that earlier transfers will be dropped if ORDERED mode is used.
@@ -1303,14 +1307,12 @@ static void rx_session_ordered_scan_slots(rx_session_t* const self,
             }
             break; // No more slots can be ejected at this time.
         }
-
         // We always pick the next transfer to eject with the nearest transfer-ID, which guarantees that the other
         // DONE transfers will not end up being late.
         // Some of the in-progress slots may be obsoleted by this move, which will be taken care of later.
         UDPARD_ASSERT((slot != NULL) && (slot->state == rx_slot_done));
         rx_session_eject(self, rx, slot);
     }
-
     // Ensure that in-progress slots, if any, have not ended up within the accepted window after the update.
     // We can release them early to avoid holding the payload buffers that won't be used anyway.
     for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
@@ -1387,6 +1389,7 @@ static void rx_session_update_ordered(rx_session_t* const        self,
                                       const rx_frame_t           frame,
                                       const udpard_mem_deleter_t payload_deleter)
 {
+    // The queries here may be a bit time-consuming. If this becomes a problem, there are many ways to optimize this.
     const bool is_ejected         = rx_session_is_transfer_ejected(self, frame.meta.transfer_id);
     const bool is_late_or_ejected = rx_session_is_transfer_late_or_ejected(self, frame.meta.transfer_id);
     const bool is_interned        = rx_session_is_transfer_interned(self, frame.meta.transfer_id);
@@ -1413,6 +1416,9 @@ static void rx_session_update_ordered(rx_session_t* const        self,
             rx_session_ordered_scan_slots(self, rx, ts, false);
         }
     } else { // retransmit ACK if needed
+        // Note: transfers that are no longer retained in the history will not solicit an ACK response,
+        // meaning that the sender will not get a confirmation if the retransmitted transfer is too old.
+        // We assume that RX_TRANSFER_HISTORY_COUNT is enough to cover all sensible use cases.
         if ((is_interned || is_ejected) && frame.meta.flag_ack && (frame.base.offset == 0U)) {
             rx_session_on_ack_mandate(self, rx, frame.meta.priority, frame.meta.transfer_id, frame.base.payload);
         }

@@ -487,7 +487,7 @@ void udpard_tx_free(const udpard_tx_mem_resources_t memory, udpard_tx_item_t* co
 ///
 /// Mode       Guarantees                       Limitations                        Reordering window setting
 /// -----------------------------------------−--------------------------------------------------------------------------
-/// ORDERED    Strictly increasing transfer-ID  May delay transfers                Non-negative number of microseconds
+/// ORDERED    Strictly increasing transfer-ID  May delay transfers, CPU heavier   Non-negative number of microseconds
 /// UNORDERED  Unique transfer-ID               Ordering not guaranteed            UDPARD_RX_REORDERING_WINDOW_UNORDERED
 /// STATELESS  Constant time, constant memory   1-frame only, dups, no responses   UDPARD_RX_REORDERING_WINDOW_STATELESS
 ///
@@ -505,6 +505,8 @@ void udpard_tx_free(const udpard_tx_mem_resources_t memory, udpard_tx_item_t* co
 /// however, if 3 does not arrive within the configured reordering window,
 /// the application will receive 1 2 4 5, and transfer 3 will be permanently lost even if it arrives later
 /// because accepting it without violating the strictly increasing transfer-ID constraint is not possible.
+///
+/// This mode requires much more bookkeeping which results in a greater processing load per received fragment/transfer.
 ///
 /// The ORDERED mode is used if the reordering window is non-negative. Zero is not really a special case, it
 /// simply means that out-of-order transfers are not waited for at all (declared permanently lost immediately).
