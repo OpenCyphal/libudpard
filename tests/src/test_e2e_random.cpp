@@ -87,7 +87,7 @@ void on_message(udpard_rx_t* const rx, udpard_rx_port_t* const port, const udpar
     TEST_ASSERT(it != ctx->expected.end());
 
     // Gather fragments into a contiguous buffer so we can compare the stored prefix (payload may be truncated).
-    std::vector<uint8_t>  assembled(transfer.payload_size_stored);
+    std::vector<uint8_t>     assembled(transfer.payload_size_stored);
     const udpard_fragment_t* payload_cursor = transfer.payload;
     const size_t gathered = udpard_fragment_gather(&payload_cursor, 0, transfer.payload_size_stored, assembled.data());
     TEST_ASSERT_EQUAL_size_t(transfer.payload_size_stored, gathered);
