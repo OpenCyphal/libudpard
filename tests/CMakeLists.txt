@@ -90,6 +90,7 @@ gen_test_matrix(test_intrusive_tx "src/test_intrusive_tx.c")
 gen_test_matrix(test_intrusive_rx "src/test_intrusive_rx.c")
 gen_test_matrix(test_fragment "src/test_fragment.cpp;${library_dir}/udpard.c")
 gen_test_matrix(test_e2e_random "src/test_e2e_random.cpp;${library_dir}/udpard.c")
+gen_test_matrix(test_e2e_edge "src/test_e2e_edge.cpp;${library_dir}/udpard.c")
 
 # Coverage targets. Usage:
 #   cmake -DENABLE_COVERAGE=ON ..
