@@ -133,7 +133,7 @@ void test_udpard_rx_unordered_duplicates()
     Fixture     fix{ UDPARD_RX_REORDERING_WINDOW_UNORDERED };
     udpard_us_t now = 0;
 
-    const std::array<uint64_t, 6> ids{ 100, 200, 10100, 10200, 200, 100 };
+    const std::array<uint64_t, 6> ids{ 100, 20000, 10100, 5000, 20000, 100 };
     for (const auto id : ids) {
         fix.push_single(now, id);
         udpard_rx_poll(&fix.rx, now);
@@ -141,7 +141,7 @@ void test_udpard_rx_unordered_duplicates()
     }
     udpard_rx_poll(&fix.rx, now + 100);
 
-    const std::array<uint64_t, 4> expected{ 100, 200, 10100, 10200 };
+    const std::array<uint64_t, 4> expected{ 100, 20000, 10100, 5000 };
     TEST_ASSERT_EQUAL_size_t(expected.size(), fix.ctx.ids.size());
     for (size_t i = 0; i < expected.size(); i++) {
         TEST_ASSERT_EQUAL_UINT64(expected[i], fix.ctx.ids[i]);
