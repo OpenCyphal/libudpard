@@ -74,6 +74,11 @@ extern "C"
 /// Timestamps supplied by the application must be non-negative monotonically increasing counts of microseconds.
 typedef int64_t udpard_us_t;
 
+/// The subject-ID only affects the formation of the multicast UDP/IP endpoint address.
+/// In IPv4 networks, it is limited to 23 bits only due to the limited MAC multicast address space.
+/// In IPv6 networks, 32 bits are supported.
+#define UDPARD_IPv4_SUBJECT_ID_MAX 0x7FFFFFUL
+
 #define UDPARD_PRIORITY_MAX 7U
 
 typedef enum udpard_prio_t

@@ -69,9 +69,8 @@ typedef unsigned char byte_t; ///< For compatibility with platforms where byte s
 /// transfers with transfer-ID less than or equal to N-ORDERING_WINDOW (modulo 2^64) as late.
 #define RX_TRANSFER_ORDERING_WINDOW 1024U
 
-#define UDP_PORT               9382U
-#define IPv4_MCAST_PREFIX      0xEF000000UL
-#define IPv4_MCAST_SUFFIX_MASK 0x007FFFFFUL
+#define UDP_PORT          9382U
+#define IPv4_MCAST_PREFIX 0xEF000000UL
 
 static size_t      smaller(const size_t a, const size_t b) { return (a < b) ? a : b; }
 static size_t      larger(const size_t a, const size_t b) { return (a > b) ? a : b; }
@@ -130,7 +129,9 @@ bool udpard_is_valid_endpoint(const udpard_udpip_ep_t ep)
 
 udpard_udpip_ep_t udpard_make_subject_endpoint(const uint32_t subject_id)
 {
-    return (udpard_udpip_ep_t){ .ip = IPv4_MCAST_PREFIX | (subject_id & IPv4_MCAST_SUFFIX_MASK), .port = UDP_PORT };
+    static_assert((UDPARD_IPv4_SUBJECT_ID_MAX & (UDPARD_IPv4_SUBJECT_ID_MAX + 1)) == 0,
+                  "UDPARD_IPv4_SUBJECT_ID_MAX must be one less than a power of 2");
+    return (udpard_udpip_ep_t){ .ip = IPv4_MCAST_PREFIX | (subject_id & UDPARD_IPv4_SUBJECT_ID_MAX), .port = UDP_PORT };
 }
 
 // NOLINTNEXTLINE(misc-no-recursion)
