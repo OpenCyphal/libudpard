@@ -13,9 +13,10 @@
 
 namespace {
 
-void on_message(udpard_rx_t* rx, udpard_rx_port_t* port, udpard_rx_transfer_t transfer);
-void on_collision(udpard_rx_t* rx, udpard_rx_port_t* port, udpard_remote_t remote);
-void on_ack_mandate(udpard_rx_t* rx, udpard_rx_port_t* port, udpard_rx_ack_mandate_t am);
+void                              on_message(udpard_rx_t* rx, udpard_rx_port_t* port, udpard_rx_transfer_t transfer);
+void                              on_collision(udpard_rx_t* rx, udpard_rx_port_t* port, udpard_remote_t remote);
+void                              on_ack_mandate(udpard_rx_t* rx, udpard_rx_port_t* port, udpard_rx_ack_mandate_t am);
+constexpr udpard_rx_port_vtable_t callbacks{ &on_message, &on_collision, &on_ack_mandate };
 
 struct Context
 {
@@ -61,11 +62,11 @@ struct Fixture
         dest               = udpard_make_subject_endpoint(222U);
 
         TEST_ASSERT_TRUE(udpard_tx_new(&tx, 0x0A0B0C0D0E0F1011ULL, 16, tx_mem));
-        TEST_ASSERT_TRUE(udpard_rx_new(&rx, &on_message, &on_collision, &on_ack_mandate));
+        TEST_ASSERT_TRUE(udpard_rx_new(&rx));
         ctx.expected_uid = tx.local_uid;
         ctx.source       = source;
         rx.user          = &ctx;
-        TEST_ASSERT_TRUE(udpard_rx_port_new(&port, topic_hash, 1024, reordering_window, rx_mem));
+        TEST_ASSERT_TRUE(udpard_rx_port_new(&port, topic_hash, 1024, reordering_window, rx_mem, &callbacks));
     }
 
     ~Fixture()

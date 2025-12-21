@@ -1639,6 +1639,7 @@ static void on_ack_mandate(udpard_rx_t* const rx, udpard_rx_port_t* const port, 
     memcpy(cb_result->ack_mandate.payload_head_storage, am.payload_head.data, am.payload_head.size);
     cb_result->ack_mandate.am.payload_head.data = cb_result->ack_mandate.payload_head_storage;
 }
+static const udpard_rx_port_vtable_t callbacks = { &on_message, &on_collision, &on_ack_mandate };
 
 /// Tests the ORDERED reassembly mode (strictly increasing transfer-ID sequence).
 static void test_rx_session_ordered(void)
@@ -1661,20 +1662,15 @@ static void test_rx_session_ordered(void)
 
     // Initialize the shared RX instance.
     udpard_rx_t rx;
-    TEST_ASSERT(udpard_rx_new(&rx, &on_message, &on_collision, &on_ack_mandate));
+    TEST_ASSERT(udpard_rx_new(&rx));
     callback_result_t cb_result = { 0 };
     rx.user                     = &cb_result;
 
     // Construct the session instance.
     udpard_us_t      now        = 0;
     const uint64_t   remote_uid = 0xA1B2C3D4E5F60718ULL;
-    udpard_rx_port_t port       = {
-              .topic_hash                  = 0x4E81E200CB479D4CULL,
-              .extent                      = 1000,
-              .reordering_window           = 20 * KILO,
-              .memory                      = rx_mem,
-              .index_session_by_remote_uid = NULL,
-    };
+    udpard_rx_port_t port;
+    TEST_ASSERT(udpard_rx_port_new(&port, 0x4E81E200CB479D4CULL, 1000, 20 * KILO, rx_mem, &callbacks));
     rx_session_factory_args_t fac_args = {
         .owner                 = &port,
         .sessions_by_animation = &rx.list_session_by_animation,
@@ -2278,13 +2274,14 @@ static void test_rx_session_unordered(void)
 
     // Initialize the shared RX instance.
     udpard_rx_t rx;
-    TEST_ASSERT(udpard_rx_new(&rx, &on_message, &on_collision, &on_ack_mandate));
+    TEST_ASSERT(udpard_rx_new(&rx));
     callback_result_t cb_result = { 0 };
     rx.user                     = &cb_result;
 
     const uint64_t   local_uid = 0xC3C8E4974254E1F5ULL;
     udpard_rx_port_t p2p_port;
-    TEST_ASSERT(udpard_rx_port_new(&p2p_port, local_uid, SIZE_MAX, UDPARD_RX_REORDERING_WINDOW_UNORDERED, rx_mem));
+    TEST_ASSERT(
+      udpard_rx_port_new(&p2p_port, local_uid, SIZE_MAX, UDPARD_RX_REORDERING_WINDOW_UNORDERED, rx_mem, &callbacks));
 
     // Construct the session instance using the p2p port.
     udpard_us_t               now        = 0;
@@ -2518,11 +2515,12 @@ static void test_rx_session_unordered_reject_old(void)
     const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
     udpard_rx_t                     rx;
     callback_result_t               cb_result = { 0 };
-    TEST_ASSERT(udpard_rx_new(&rx, &on_message, &on_collision, &on_ack_mandate));
+    TEST_ASSERT(udpard_rx_new(&rx));
     rx.user                    = &cb_result;
     const uint64_t   local_uid = 0xF00DCAFEF00DCAFEULL;
     udpard_rx_port_t port;
-    TEST_ASSERT(udpard_rx_port_new(&port, local_uid, SIZE_MAX, UDPARD_RX_REORDERING_WINDOW_UNORDERED, rx_mem));
+    TEST_ASSERT(
+      udpard_rx_port_new(&port, local_uid, SIZE_MAX, UDPARD_RX_REORDERING_WINDOW_UNORDERED, rx_mem, &callbacks));
     udpard_us_t               now        = 0;
     const uint64_t            remote_uid = 0xFACEB00CFACEB00CULL;
     rx_session_factory_args_t fac_args   = {
@@ -2615,11 +2613,12 @@ static void test_rx_session_unordered_duplicates(void)
     const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
     udpard_rx_t                     rx;
     callback_result_t               cb_result = { 0 };
-    TEST_ASSERT(udpard_rx_new(&rx, &on_message, &on_collision, &on_ack_mandate));
+    TEST_ASSERT(udpard_rx_new(&rx));
     rx.user = &cb_result;
     udpard_rx_port_t port;
     const uint64_t   topic_hash = 0x1111222233334444ULL;
-    TEST_ASSERT(udpard_rx_port_new(&port, topic_hash, SIZE_MAX, UDPARD_RX_REORDERING_WINDOW_UNORDERED, rx_mem));
+    TEST_ASSERT(
+      udpard_rx_port_new(&port, topic_hash, SIZE_MAX, UDPARD_RX_REORDERING_WINDOW_UNORDERED, rx_mem, &callbacks));
     const uint64_t            remote_uid = 0xAABBCCDDEEFF0011ULL;
     rx_session_factory_args_t fac_args   = {
           .owner                 = &port,
@@ -2686,12 +2685,12 @@ static void test_rx_session_ordered_reject_stale_after_jump(void)
     const udpard_mem_deleter_t      del_payload = instrumented_allocator_make_deleter(&alloc_payload);
     const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
     udpard_rx_t                     rx;
-    TEST_ASSERT(udpard_rx_new(&rx, &on_message, &on_collision, &on_ack_mandate));
+    TEST_ASSERT(udpard_rx_new(&rx));
     callback_result_t cb_result = { 0 };
     rx.user                     = &cb_result;
     udpard_rx_port_t port;
     const uint64_t   topic_hash = 0x123456789ABCDEF0ULL;
-    TEST_ASSERT(udpard_rx_port_new(&port, topic_hash, 1000, 1000, rx_mem));
+    TEST_ASSERT(udpard_rx_port_new(&port, topic_hash, 1000, 1000, rx_mem, &callbacks));
     const uint64_t            remote_uid = 0xDEADBEEFDEADBEEFULL;
     rx_session_factory_args_t fac_args   = {
           .owner                 = &port,
@@ -2808,11 +2807,11 @@ static void test_rx_session_ordered_zero_reordering_window(void)
     const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
     udpard_rx_t                     rx;
     callback_result_t               cb_result = { 0 };
-    TEST_ASSERT(udpard_rx_new(&rx, &on_message, &on_collision, &on_ack_mandate));
+    TEST_ASSERT(udpard_rx_new(&rx));
     rx.user = &cb_result;
     udpard_rx_port_t port;
     const uint64_t   topic_hash = 0x9999888877776666ULL;
-    TEST_ASSERT(udpard_rx_port_new(&port, topic_hash, SIZE_MAX, 0, rx_mem));
+    TEST_ASSERT(udpard_rx_port_new(&port, topic_hash, SIZE_MAX, 0, rx_mem, &callbacks));
     const uint64_t            remote_uid = 0x0A0B0C0D0E0F1011ULL;
     rx_session_factory_args_t fac_args   = {
           .owner                 = &port,
@@ -2886,19 +2885,19 @@ static void test_rx_port(void)
 
     // Initialize the shared RX instance.
     udpard_rx_t rx;
-    TEST_ASSERT(udpard_rx_new(&rx, &on_message, &on_collision, &on_ack_mandate));
+    TEST_ASSERT(udpard_rx_new(&rx));
     callback_result_t cb_result = { 0 };
     rx.user                     = &cb_result;
 
     // Initialize two ports: one ORDERED, one STATELESS.
     udpard_rx_port_t port_ordered;
     const uint64_t   topic_hash_ordered = 0x1234567890ABCDEFULL;
-    TEST_ASSERT(udpard_rx_port_new(&port_ordered, topic_hash_ordered, 1000, 10 * KILO, rx_mem));
+    TEST_ASSERT(udpard_rx_port_new(&port_ordered, topic_hash_ordered, 1000, 10 * KILO, rx_mem, &callbacks));
 
     udpard_rx_port_t port_stateless;
     const uint64_t   topic_hash_stateless = 0xFEDCBA0987654321ULL;
     TEST_ASSERT(
-      udpard_rx_port_new(&port_stateless, topic_hash_stateless, 500, UDPARD_RX_REORDERING_WINDOW_STATELESS, rx_mem));
+      udpard_rx_port_new(&port_stateless, topic_hash_stateless, 500, UDPARD_RX_REORDERING_WINDOW_STATELESS, rx_mem, &callbacks));
 
     udpard_us_t now = 0;
 
@@ -3256,15 +3255,15 @@ static void test_rx_port_timeouts(void)
 
     udpard_rx_t       rx;
     callback_result_t cb_result = { 0 };
-    TEST_ASSERT(udpard_rx_new(&rx, &on_message, &on_collision, &on_ack_mandate));
+    TEST_ASSERT(udpard_rx_new(&rx));
     rx.user = &cb_result;
 
     udpard_rx_port_t port_a;
     udpard_rx_port_t port_b;
     const uint64_t   topic_hash_a = 0x1111111111111111ULL;
     const uint64_t   topic_hash_b = 0x2222222222222222ULL;
-    TEST_ASSERT(udpard_rx_port_new(&port_a, topic_hash_a, 1000, 20000, rx_mem));
-    TEST_ASSERT(udpard_rx_port_new(&port_b, topic_hash_b, 1000, 20000, rx_mem));
+    TEST_ASSERT(udpard_rx_port_new(&port_a, topic_hash_a, 1000, 20000, rx_mem, &callbacks));
+    TEST_ASSERT(udpard_rx_port_new(&port_b, topic_hash_b, 1000, 20000, rx_mem, &callbacks));
 
     udpard_us_t now = 1000;
 
@@ -3420,12 +3419,12 @@ static void test_rx_port_oom(void)
     const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
     udpard_rx_t                     rx;
     callback_result_t               cb_result = { 0 };
-    TEST_ASSERT(udpard_rx_new(&rx, &on_message, &on_collision, &on_ack_mandate));
+    TEST_ASSERT(udpard_rx_new(&rx));
     rx.user = &cb_result;
     udpard_rx_port_t port_ordered;
     udpard_rx_port_t port_stateless;
-    TEST_ASSERT(udpard_rx_port_new(&port_ordered, 0xAAAALL, 100, 20000, rx_mem));
-    TEST_ASSERT(udpard_rx_port_new(&port_stateless, 0xBBBBLL, 100, UDPARD_RX_REORDERING_WINDOW_STATELESS, rx_mem));
+    TEST_ASSERT(udpard_rx_port_new(&port_ordered, 0xAAAALL, 100, 20000, rx_mem, &callbacks));
+    TEST_ASSERT(udpard_rx_port_new(&port_stateless, 0xBBBBLL, 100, UDPARD_RX_REORDERING_WINDOW_STATELESS, rx_mem, &callbacks));
     udpard_us_t      now             = 0;
     const byte_t     payload_state[] = { 's', 't', 'a', 't', 'e', 'f', 'u', 'l' };
     const size_t     payload_len     = sizeof(payload_state);
@@ -3508,15 +3507,15 @@ static void test_rx_port_free_loop(void)
     const uint64_t    local_uid = 0xCAFED00DCAFED00DULL;
     udpard_rx_t       rx;
     callback_result_t cb_result = { 0 };
-    TEST_ASSERT(udpard_rx_new(&rx, &on_message, &on_collision, &on_ack_mandate));
+    TEST_ASSERT(udpard_rx_new(&rx));
     rx.user = &cb_result;
 
     udpard_rx_port_t port_p2p;
-    TEST_ASSERT(udpard_rx_port_new(&port_p2p, local_uid, SIZE_MAX, UDPARD_RX_REORDERING_WINDOW_UNORDERED, rx_mem));
+    TEST_ASSERT(udpard_rx_port_new(&port_p2p, local_uid, SIZE_MAX, UDPARD_RX_REORDERING_WINDOW_UNORDERED, rx_mem, &callbacks));
 
     udpard_rx_port_t port_extra;
     const uint64_t   topic_hash_extra = 0xDEADBEEFF00D1234ULL;
-    TEST_ASSERT(udpard_rx_port_new(&port_extra, topic_hash_extra, 1000, 5000, rx_mem));
+    TEST_ASSERT(udpard_rx_port_new(&port_extra, topic_hash_extra, 1000, 5000, rx_mem, &callbacks));
 
     udpard_us_t now = 0;
 

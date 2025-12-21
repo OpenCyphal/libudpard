@@ -549,6 +549,18 @@ void udpard_tx_free(const udpard_tx_mem_resources_t memory, udpard_tx_item_t* co
 #define UDPARD_RX_REORDERING_WINDOW_UNORDERED ((udpard_us_t)(-1))
 #define UDPARD_RX_REORDERING_WINDOW_STATELESS ((udpard_us_t)(-2))
 
+typedef struct udpard_rx_t
+{
+    udpard_list_t  list_session_by_animation;   ///< Oldest at the tail.
+    udpard_tree_t* index_session_by_reordering; ///< Earliest reordering window closure on the left.
+
+    uint64_t errors_oom;                ///< A frame could not be processed (transfer possibly dropped) due to OOM.
+    uint64_t errors_frame_malformed;    ///< A received frame was malformed and thus dropped.
+    uint64_t errors_transfer_malformed; ///< A transfer could not be reassembled correctly.
+
+    void* user; ///< Opaque pointer for the application use only. Not accessed by the library.
+} udpard_rx_t;
+
 /// These are used to serve the memory needs of the library to keep state while reassembling incoming transfers.
 /// Several memory resources are provided to enable fine control over the allocated memory if necessary; however,
 /// simple applications may choose to use the same memory resource implemented via malloc()/free() for all of them.
@@ -563,8 +575,30 @@ typedef struct udpard_rx_mem_resources_t
     udpard_mem_resource_t fragment;
 } udpard_rx_mem_resources_t;
 
+typedef struct udpard_rx_port_t        udpard_rx_port_t;
+typedef struct udpard_rx_transfer_t    udpard_rx_transfer_t;
+typedef struct udpard_rx_ack_mandate_t udpard_rx_ack_mandate_t;
+
+/// A new message is received on a port. The handler takes ownership of the payload; it must free it after use.
+typedef void (*udpard_rx_on_message_t)(udpard_rx_t*, udpard_rx_port_t*, udpard_rx_transfer_t);
+
+/// A topic hash collision is detected on a port.
+typedef void (*udpard_rx_on_collision_t)(udpard_rx_t*, udpard_rx_port_t*, udpard_remote_t);
+
+/// The application is required to send an acknowledgment back to the sender.
+typedef void (*udpard_rx_on_ack_mandate_t)(udpard_rx_t*, udpard_rx_port_t*, udpard_rx_ack_mandate_t);
+
+/// Provided by the application per port instance to specify the callbacks to be invoked on certain events.
+/// This design allows distinct callbacks per port, which is especially useful for the P2P port.
+typedef struct udpard_rx_port_vtable_t
+{
+    udpard_rx_on_message_t     on_message;
+    udpard_rx_on_collision_t   on_collision;
+    udpard_rx_on_ack_mandate_t on_ack_mandate;
+} udpard_rx_port_vtable_t;
+
 /// This type represents an open input port, such as a subscription to a topic.
-typedef struct udpard_rx_port_t
+struct udpard_rx_port_t
 {
     /// Mismatch will be filtered out and the collision notification callback invoked.
     /// For P2P ports, this is the destination node's UID (i.e., the local node's UID).
@@ -611,14 +645,16 @@ typedef struct udpard_rx_port_t
     /// which is easy to implement since each port gets a dedicated set of memory resources.
     udpard_tree_t* index_session_by_remote_uid;
 
+    const udpard_rx_port_vtable_t* vtable;
+
     /// Opaque pointer for the application use only. Not accessed by the library.
     void* user;
-} udpard_rx_port_t;
+};
 
 /// Represents a received Cyphal transfer.
 /// The payload is owned by this instance, so the application must free it after use using udpard_fragment_free_all()
 /// together with the port's fragment memory resource.
-typedef struct udpard_rx_transfer_t
+struct udpard_rx_transfer_t
 {
     udpard_us_t     timestamp;
     udpard_prio_t   priority;
@@ -648,10 +684,10 @@ typedef struct udpard_rx_transfer_t
     /// The payload is stored in a tree of fragments ordered by their offset within the payload.
     /// See udpard_fragment_t and its helper functions for managing the fragment tree.
     udpard_fragment_t* payload;
-} udpard_rx_transfer_t;
+};
 
 /// Emitted when the stack detects the need to send a reception acknowledgment back to the remote node.
-typedef struct udpard_rx_ack_mandate_t
+struct udpard_rx_ack_mandate_t
 {
     udpard_prio_t   priority;
     uint64_t        transfer_id;
@@ -659,43 +695,12 @@ typedef struct udpard_rx_ack_mandate_t
     /// View of the payload carried by the first frame of the transfer that is being confirmed.
     /// Valid until return from the callback.
     udpard_bytes_t payload_head;
-} udpard_rx_ack_mandate_t;
-
-struct udpard_rx_t;
-
-/// A new message is received from a topic, or a P2P message is received.
-/// The handler takes ownership of the payload; it must free it after use.
-typedef void (*udpard_rx_on_message_t)(struct udpard_rx_t*, udpard_rx_port_t*, udpard_rx_transfer_t);
-
-/// A topic hash collision is detected on a topic.
-typedef void (*udpard_rx_on_collision_t)(struct udpard_rx_t*, udpard_rx_port_t*, udpard_remote_t);
-
-/// The application is required to send an acknowledgment back to the sender.
-typedef void (*udpard_rx_on_ack_mandate_t)(struct udpard_rx_t*, udpard_rx_port_t*, udpard_rx_ack_mandate_t);
-
-typedef struct udpard_rx_t
-{
-    udpard_list_t  list_session_by_animation;   ///< Oldest at the tail.
-    udpard_tree_t* index_session_by_reordering; ///< Earliest reordering window closure on the left.
-
-    udpard_rx_on_message_t     on_message;
-    udpard_rx_on_collision_t   on_collision;
-    udpard_rx_on_ack_mandate_t on_ack_mandate;
-
-    uint64_t errors_oom;                ///< A frame could not be processed (transfer possibly dropped) due to OOM.
-    uint64_t errors_frame_malformed;    ///< A received frame was malformed and thus dropped.
-    uint64_t errors_transfer_malformed; ///< A transfer could not be reassembled correctly.
-
-    void* user; ///< Opaque pointer for the application use only. Not accessed by the library.
-} udpard_rx_t;
+};
 
 /// The RX instance holds no resources and can be destroyed at any time by simply freeing all its ports first
 /// using udpard_rx_port_free(), then discarding the instance itself.
 /// True on success, false if any of the arguments are invalid.
-bool udpard_rx_new(udpard_rx_t* const               self,
-                   const udpard_rx_on_message_t     on_message,
-                   const udpard_rx_on_collision_t   on_collision,
-                   const udpard_rx_on_ack_mandate_t on_ack_mandate);
+bool udpard_rx_new(udpard_rx_t* const self);
 
 /// Must be invoked at least every few milliseconds (more often is fine) to purge timed-out sessions and eject
 /// received transfers when the reordering window expires. If this is invoked simultaneously with rx subscription
@@ -724,13 +729,16 @@ void udpard_rx_poll(udpard_rx_t* const self, const udpard_us_t now);
 /// If not sure which reassembly mode to choose, consider UDPARD_RX_REORDERING_WINDOW_UNORDERED as the default choice.
 /// For ordering-sensitive use cases, such as state estimators and control loops, use ORDERED with a short window.
 ///
+/// The pointed-to vtable instance must outlive the port instance.
+///
 /// The return value is true on success, false if any of the arguments are invalid.
 /// The time complexity is constant. This function does not invoke the dynamic memory manager.
-bool udpard_rx_port_new(udpard_rx_port_t* const         self,
-                        const uint64_t                  topic_hash, // For P2P ports, this is the local node's UID.
-                        const size_t                    extent,
-                        const udpard_us_t               reordering_window,
-                        const udpard_rx_mem_resources_t memory);
+bool udpard_rx_port_new(udpard_rx_port_t* const              self,
+                        const uint64_t                       topic_hash, // For P2P ports, this is the local node's UID.
+                        const size_t                         extent,
+                        const udpard_us_t                    reordering_window,
+                        const udpard_rx_mem_resources_t      memory,
+                        const udpard_rx_port_vtable_t* const vtable);
 
 /// Returns all memory allocated for the sessions, slots, fragments, etc of the given port.
 /// Does not free the port itself and does not alter the RX instance aside from unlinking the port from it.

@@ -130,6 +130,7 @@ void on_ack_mandate(udpard_rx_t* const rx, udpard_rx_port_t* const port, const u
     (void)mandate;
     ctx->ack_mandates++;
 }
+constexpr udpard_rx_port_vtable_t callbacks{ &on_message, &on_collision, &on_ack_mandate };
 
 /// Randomized end-to-end TX/RX covering fragmentation, reordering, and extent-driven truncation.
 void test_udpard_tx_rx_end_to_end()
@@ -155,7 +156,7 @@ void test_udpard_tx_rx_end_to_end()
     const udpard_rx_mem_resources_t rx_mem{ .session  = instrumented_allocator_make_resource(&rx_alloc_session),
                                             .fragment = instrumented_allocator_make_resource(&rx_alloc_frag) };
     udpard_rx_t                     rx;
-    TEST_ASSERT_TRUE(udpard_rx_new(&rx, &on_message, &on_collision, &on_ack_mandate));
+    TEST_ASSERT_TRUE(udpard_rx_new(&rx));
 
     // Test parameters.
     constexpr std::array<uint64_t, 3>    topic_hashes{ 0x123456789ABCDEF0ULL,
@@ -169,7 +170,8 @@ void test_udpard_tx_rx_end_to_end()
     // Configure ports with varied extents and reordering windows to cover truncation and different RX modes.
     std::array<udpard_rx_port_t, 3> ports{};
     for (size_t i = 0; i < ports.size(); i++) {
-        TEST_ASSERT_TRUE(udpard_rx_port_new(&ports[i], topic_hashes[i], extents[i], reorder_windows[i], rx_mem));
+        TEST_ASSERT_TRUE(
+          udpard_rx_port_new(&ports[i], topic_hashes[i], extents[i], reorder_windows[i], rx_mem, &callbacks));
     }
 
     // Setup the context.
