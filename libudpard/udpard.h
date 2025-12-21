@@ -579,22 +579,16 @@ typedef struct udpard_rx_port_t        udpard_rx_port_t;
 typedef struct udpard_rx_transfer_t    udpard_rx_transfer_t;
 typedef struct udpard_rx_ack_mandate_t udpard_rx_ack_mandate_t;
 
-/// A new message is received on a port. The handler takes ownership of the payload; it must free it after use.
-typedef void (*udpard_rx_on_message_t)(udpard_rx_t*, udpard_rx_port_t*, udpard_rx_transfer_t);
-
-/// A topic hash collision is detected on a port.
-typedef void (*udpard_rx_on_collision_t)(udpard_rx_t*, udpard_rx_port_t*, udpard_remote_t);
-
-/// The application is required to send an acknowledgment back to the sender.
-typedef void (*udpard_rx_on_ack_mandate_t)(udpard_rx_t*, udpard_rx_port_t*, udpard_rx_ack_mandate_t);
-
 /// Provided by the application per port instance to specify the callbacks to be invoked on certain events.
 /// This design allows distinct callbacks per port, which is especially useful for the P2P port.
 typedef struct udpard_rx_port_vtable_t
 {
-    udpard_rx_on_message_t     on_message;
-    udpard_rx_on_collision_t   on_collision;
-    udpard_rx_on_ack_mandate_t on_ack_mandate;
+    /// A new message is received on a port. The handler takes ownership of the payload; it must free it after use.
+    void (*on_message)(udpard_rx_t*, udpard_rx_port_t*, udpard_rx_transfer_t);
+    /// A topic hash collision is detected on a port.
+    void (*on_collision)(udpard_rx_t*, udpard_rx_port_t*, udpard_remote_t);
+    /// The application is required to send an acknowledgment back to the sender.
+    void (*on_ack_mandate)(udpard_rx_t*, udpard_rx_port_t*, udpard_rx_ack_mandate_t);
 } udpard_rx_port_vtable_t;
 
 /// This type represents an open input port, such as a subscription to a topic.
