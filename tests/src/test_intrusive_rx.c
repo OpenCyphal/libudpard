@@ -56,6 +56,17 @@ static rx_frame_t make_frame(const meta_t                meta,
     base.crc             = crc_full(frame_payload_offset + frame_payload_size, (const uint8_t*)full_transfer_payload);
     return (rx_frame_t){ .base = base, .meta = meta };
 }
+/// A helper that creates a frame in static storage and returns a reference to it. This is a testing aid.
+static rx_frame_t* make_frame_ptr(const meta_t                meta,
+                                  const udpard_mem_resource_t mem_payload,
+                                  const void* const           full_transfer_payload,
+                                  const size_t                frame_payload_offset,
+                                  const size_t                frame_payload_size)
+{
+    static rx_frame_t frame;
+    frame = make_frame(meta, mem_payload, full_transfer_payload, frame_payload_offset, frame_payload_size);
+    return &frame;
+}
 
 /// Scans the transfer payload ensuring that its payload exactly matches the reference.
 /// The node can be any node in the tree.
@@ -64,8 +75,8 @@ static bool transfer_payload_verify(udpard_rx_transfer_t* const transfer,
                                     const void* const           payload,
                                     const size_t                payload_size_wire)
 {
-    udpard_fragment_t* frag   = udpard_fragment_seek(transfer->payload, 0);
-    size_t             offset = 0;
+    const udpard_fragment_t* frag   = udpard_fragment_seek(transfer->payload, 0);
+    size_t                   offset = 0;
     while (frag != NULL) {
         if (frag->offset != offset) {
             return false;
@@ -1193,7 +1204,7 @@ static void test_rx_slot_update(void)
 
         const udpard_us_t ts = 1000;
 
-        rx_slot_update(&slot, ts, mem_frag, del_payload, frame, 5, &errors_oom, &errors_transfer_malformed);
+        rx_slot_update(&slot, ts, mem_frag, del_payload, &frame, 5, &errors_oom, &errors_transfer_malformed);
 
         // Verify slot was initialized
         TEST_ASSERT_EQUAL(rx_slot_done, slot.state); // Single-frame transfer completes immediately
@@ -1222,7 +1233,7 @@ static void test_rx_slot_update(void)
         frame1.meta.transfer_payload_size = 10;
 
         const udpard_us_t ts1 = 2000;
-        rx_slot_update(&slot, ts1, mem_frag, del_payload, frame1, 10, &errors_oom, &errors_transfer_malformed);
+        rx_slot_update(&slot, ts1, mem_frag, del_payload, &frame1, 10, &errors_oom, &errors_transfer_malformed);
 
         TEST_ASSERT_EQUAL(rx_slot_busy, slot.state);
         TEST_ASSERT_EQUAL(ts1, slot.ts_min);
@@ -1239,7 +1250,7 @@ static void test_rx_slot_update(void)
         frame2.meta.transfer_payload_size = 10;
 
         const udpard_us_t ts2 = 3000; // Later than ts1
-        rx_slot_update(&slot, ts2, mem_frag, del_payload, frame2, 10, &errors_oom, &errors_transfer_malformed);
+        rx_slot_update(&slot, ts2, mem_frag, del_payload, &frame2, 10, &errors_oom, &errors_transfer_malformed);
 
         TEST_ASSERT_EQUAL(rx_slot_busy, slot.state);
         TEST_ASSERT_EQUAL(ts1, slot.ts_min);              // Unchanged (ts2 is later)
@@ -1256,7 +1267,7 @@ static void test_rx_slot_update(void)
         frame3.meta.transfer_payload_size = 10;
 
         const udpard_us_t ts3 = 1500; // Earlier than ts1
-        rx_slot_update(&slot, ts3, mem_frag, del_payload, frame3, 10, &errors_oom, &errors_transfer_malformed);
+        rx_slot_update(&slot, ts3, mem_frag, del_payload, &frame3, 10, &errors_oom, &errors_transfer_malformed);
 
         TEST_ASSERT_EQUAL(rx_slot_busy, slot.state);
         TEST_ASSERT_EQUAL(ts3, slot.ts_min);              // Updated to earlier time
@@ -1285,7 +1296,7 @@ static void test_rx_slot_update(void)
         frame.meta.transfer_id           = 789;
         frame.meta.transfer_payload_size = 5;
 
-        rx_slot_update(&slot, 5000, mem_frag, del_payload, frame, 5, &errors_oom, &errors_transfer_malformed);
+        rx_slot_update(&slot, 5000, mem_frag, del_payload, &frame, 5, &errors_oom, &errors_transfer_malformed);
 
         // Verify OOM error was counted
         TEST_ASSERT_EQUAL(1, errors_oom);
@@ -1313,7 +1324,7 @@ static void test_rx_slot_update(void)
         frame.meta.transfer_id           = 999;
         frame.meta.transfer_payload_size = 4;
 
-        rx_slot_update(&slot, 6000, mem_frag, del_payload, frame, 4, &errors_oom, &errors_transfer_malformed);
+        rx_slot_update(&slot, 6000, mem_frag, del_payload, &frame, 4, &errors_oom, &errors_transfer_malformed);
 
         // Verify malformed error was counted and slot was reset
         TEST_ASSERT_EQUAL(1, errors_transfer_malformed);
@@ -1345,7 +1356,7 @@ static void test_rx_slot_update(void)
         frame.meta.transfer_id           = 1111;
         frame.meta.transfer_payload_size = 4;
 
-        rx_slot_update(&slot, 7000, mem_frag, del_payload, frame, 4, &errors_oom, &errors_transfer_malformed);
+        rx_slot_update(&slot, 7000, mem_frag, del_payload, &frame, 4, &errors_oom, &errors_transfer_malformed);
 
         // Verify successful completion
         TEST_ASSERT_EQUAL(0, errors_transfer_malformed);
@@ -1372,7 +1383,7 @@ static void test_rx_slot_update(void)
         frame1.meta.transfer_id           = 2222;
         frame1.meta.transfer_payload_size = 20;
 
-        rx_slot_update(&slot, 8000, mem_frag, del_payload, frame1, 20, &errors_oom, &errors_transfer_malformed);
+        rx_slot_update(&slot, 8000, mem_frag, del_payload, &frame1, 20, &errors_oom, &errors_transfer_malformed);
 
         TEST_ASSERT_EQUAL(10, slot.crc_end);
         TEST_ASSERT_EQUAL(0xAAAAAAAA, slot.crc);
@@ -1384,7 +1395,7 @@ static void test_rx_slot_update(void)
         frame2.meta.transfer_id           = 2222;
         frame2.meta.transfer_payload_size = 20;
 
-        rx_slot_update(&slot, 8100, mem_frag, del_payload, frame2, 20, &errors_oom, &errors_transfer_malformed);
+        rx_slot_update(&slot, 8100, mem_frag, del_payload, &frame2, 20, &errors_oom, &errors_transfer_malformed);
 
         TEST_ASSERT_EQUAL(10, slot.crc_end);     // Unchanged
         TEST_ASSERT_EQUAL(0xAAAAAAAA, slot.crc); // Unchanged (frame2 didn't update it)
@@ -1396,7 +1407,7 @@ static void test_rx_slot_update(void)
         frame3.meta.transfer_id           = 2222;
         frame3.meta.transfer_payload_size = 20;
 
-        rx_slot_update(&slot, 8200, mem_frag, del_payload, frame3, 20, &errors_oom, &errors_transfer_malformed);
+        rx_slot_update(&slot, 8200, mem_frag, del_payload, &frame3, 20, &errors_oom, &errors_transfer_malformed);
 
         TEST_ASSERT_EQUAL(15, slot.crc_end);     // Updated
         TEST_ASSERT_EQUAL(0xCCCCCCCC, slot.crc); // Updated
@@ -1421,7 +1432,7 @@ static void test_rx_slot_update(void)
         frame1.meta.transfer_payload_size = 20;
         frame1.meta.priority              = udpard_prio_high;
 
-        rx_slot_update(&slot, 9000, mem_frag, del_payload, frame1, 20, &errors_oom, &errors_transfer_malformed);
+        rx_slot_update(&slot, 9000, mem_frag, del_payload, &frame1, 20, &errors_oom, &errors_transfer_malformed);
 
         TEST_ASSERT_EQUAL(rx_slot_busy, slot.state);
         TEST_ASSERT_EQUAL(20, slot.total_size);
@@ -1437,7 +1448,7 @@ static void test_rx_slot_update(void)
         frame2.meta.transfer_payload_size = 25; // DIFFERENT from frame1's 20
         frame2.meta.priority              = udpard_prio_high;
 
-        rx_slot_update(&slot, 9100, mem_frag, del_payload, frame2, 25, &errors_oom, &errors_transfer_malformed);
+        rx_slot_update(&slot, 9100, mem_frag, del_payload, &frame2, 25, &errors_oom, &errors_transfer_malformed);
 
         // Verify that the malformed error was counted and slot was reset
         TEST_ASSERT_EQUAL(1, errors_transfer_malformed);
@@ -1456,7 +1467,7 @@ static void test_rx_slot_update(void)
         frame3.meta.transfer_payload_size = 30;
         frame3.meta.priority              = udpard_prio_low;
 
-        rx_slot_update(&slot, 9200, mem_frag, del_payload, frame3, 30, &errors_oom, &errors_transfer_malformed);
+        rx_slot_update(&slot, 9200, mem_frag, del_payload, &frame3, 30, &errors_oom, &errors_transfer_malformed);
 
         TEST_ASSERT_EQUAL(rx_slot_busy, slot.state);
         TEST_ASSERT_EQUAL(30, slot.total_size);
@@ -1472,7 +1483,7 @@ static void test_rx_slot_update(void)
         frame4.meta.transfer_payload_size = 30;               // Same as frame3
         frame4.meta.priority              = udpard_prio_high; // DIFFERENT from frame3's udpard_prio_low
 
-        rx_slot_update(&slot, 9300, mem_frag, del_payload, frame4, 30, &errors_oom, &errors_transfer_malformed);
+        rx_slot_update(&slot, 9300, mem_frag, del_payload, &frame4, 30, &errors_oom, &errors_transfer_malformed);
 
         // Verify that the malformed error was counted and slot was reset
         TEST_ASSERT_EQUAL(1, errors_transfer_malformed);
@@ -1491,7 +1502,7 @@ static void test_rx_slot_update(void)
         frame5.meta.transfer_payload_size = 40;
         frame5.meta.priority              = udpard_prio_nominal;
 
-        rx_slot_update(&slot, 9400, mem_frag, del_payload, frame5, 40, &errors_oom, &errors_transfer_malformed);
+        rx_slot_update(&slot, 9400, mem_frag, del_payload, &frame5, 40, &errors_oom, &errors_transfer_malformed);
 
         TEST_ASSERT_EQUAL(rx_slot_busy, slot.state);
         TEST_ASSERT_EQUAL(40, slot.total_size);
@@ -1507,7 +1518,7 @@ static void test_rx_slot_update(void)
         frame6.meta.transfer_payload_size = 50;               // DIFFERENT from frame5's 40
         frame6.meta.priority              = udpard_prio_fast; // DIFFERENT from frame5's udpard_prio_nominal
 
-        rx_slot_update(&slot, 9500, mem_frag, del_payload, frame6, 50, &errors_oom, &errors_transfer_malformed);
+        rx_slot_update(&slot, 9500, mem_frag, del_payload, &frame6, 50, &errors_oom, &errors_transfer_malformed);
 
         // Verify that the malformed error was counted and slot was reset
         TEST_ASSERT_EQUAL(1, errors_transfer_malformed);
@@ -1701,7 +1712,7 @@ static void test_rx_session_ordered(void)
                       &rx,
                       now,
                       (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1234 },
-                      make_frame(meta, mem_payload, "0123456789", 5, 5),
+                      make_frame_ptr(meta, mem_payload, "0123456789", 5, 5),
                       del_payload,
                       0);
     now += 1000;
@@ -1709,7 +1720,7 @@ static void test_rx_session_ordered(void)
                       &rx,
                       now,
                       (udpard_udpip_ep_t){ .ip = 0x0A000002, .port = 0x4321 }, // different endpoint
-                      make_frame(meta, mem_payload, "0123456789", 0, 5),
+                      make_frame_ptr(meta, mem_payload, "0123456789", 0, 5),
                       del_payload,
                       2); // different interface
 
@@ -1767,7 +1778,7 @@ static void test_rx_session_ordered(void)
                       &rx,
                       now,
                       (udpard_udpip_ep_t){ .ip = 0x0A000003, .port = 0x1111 }, // different endpoint
-                      make_frame(meta, mem_payload, "abcdef", 0, 6),
+                      make_frame_ptr(meta, mem_payload, "abcdef", 0, 6),
                       del_payload,
                       1); // different interface
     TEST_ASSERT_EQUAL(0x0A000001, ses->remote.endpoints[0].ip);
@@ -1808,7 +1819,7 @@ static void test_rx_session_ordered(void)
                       &rx,
                       now,
                       (udpard_udpip_ep_t){ .ip = 0x0A000004, .port = 0x2222 }, // different endpoint
-                      make_frame(meta, mem_payload, "123", 0, 3),
+                      make_frame_ptr(meta, mem_payload, "123", 0, 3),
                       del_payload,
                       0);
     TEST_ASSERT_EQUAL(0x0A000004, ses->remote.endpoints[0].ip);
@@ -1835,7 +1846,7 @@ static void test_rx_session_ordered(void)
                       &rx,
                       now,
                       (udpard_udpip_ep_t){ .ip = 0x0A000004, .port = 0x2222 },
-                      make_frame(meta, mem_payload, "123456", 3, 3),
+                      make_frame_ptr(meta, mem_payload, "123456", 3, 3),
                       del_payload,
                       0);
     TEST_ASSERT_EQUAL(0x0A000004, ses->remote.endpoints[0].ip);
@@ -1863,7 +1874,7 @@ static void test_rx_session_ordered(void)
                       &rx,
                       now,
                       (udpard_udpip_ep_t){ .ip = 0x0A000005, .port = 0x3333 }, // different endpoint
-                      make_frame(meta, mem_payload, "123", 0, 3),
+                      make_frame_ptr(meta, mem_payload, "123", 0, 3),
                       del_payload,
                       2);
     TEST_ASSERT_EQUAL(0x0A000004, ses->remote.endpoints[0].ip);
@@ -1896,7 +1907,7 @@ static void test_rx_session_ordered(void)
                       &rx,
                       now,
                       (udpard_udpip_ep_t){ .ip = 0x0A000005, .port = 0x3333 },
-                      make_frame(meta, mem_payload, "abcdefghij", 0, 10),
+                      make_frame_ptr(meta, mem_payload, "abcdefghij", 0, 10),
                       del_payload,
                       2);
     // We are asked to send an ACK, but the application hasn't seen the transfer yet -- it is interned.
@@ -1932,7 +1943,7 @@ static void test_rx_session_ordered(void)
                       &rx,
                       now,
                       (udpard_udpip_ep_t){ .ip = 0x0A000005, .port = 0x3333 },
-                      make_frame(meta, mem_payload, "0123456789", 0, 10), // ignored anyway
+                      make_frame_ptr(meta, mem_payload, "0123456789", 0, 10),
                       del_payload,
                       2);
     // Nothing happened.
@@ -1957,7 +1968,7 @@ static void test_rx_session_ordered(void)
                       &rx,
                       now,
                       (udpard_udpip_ep_t){ .ip = 0x0A000005, .port = 0x3333 },
-                      make_frame(meta, mem_payload, "klmnopqrst", 0, 10),
+                      make_frame_ptr(meta, mem_payload, "klmnopqrst", 0, 10),
                       del_payload,
                       2);
     // Nothing happened, the transfer added to the interned set.
@@ -1982,7 +1993,7 @@ static void test_rx_session_ordered(void)
                       &rx,
                       now,
                       (udpard_udpip_ep_t){ .ip = 0x0A000005, .port = 0x3333 },
-                      make_frame(meta, mem_payload, "9876543210", 0, 10),
+                      make_frame_ptr(meta, mem_payload, "9876543210", 0, 10),
                       del_payload,
                       2);
     // ACK requested and the transfer is added to the interned set: 44, 45, 46.
@@ -2015,7 +2026,7 @@ static void test_rx_session_ordered(void)
                       &rx,
                       now,
                       (udpard_udpip_ep_t){ .ip = 0x0A000005, .port = 0x3333 },
-                      make_frame(meta, mem_payload, "9876543210", 0, 10),
+                      make_frame_ptr(meta, mem_payload, "9876543210", 0, 10),
                       del_payload,
                       2);
     // Nothing happened, the transfer added to the interned set.
@@ -2041,7 +2052,7 @@ static void test_rx_session_ordered(void)
                       &rx,
                       now,
                       (udpard_udpip_ep_t){ .ip = 0x0A000005, .port = 0x3333 },
-                      make_frame(meta, mem_payload, "0123443210", 0, 10),
+                      make_frame_ptr(meta, mem_payload, "0123443210", 0, 10),
                       del_payload,
                       2);
     // 4 transfers released.
@@ -2107,7 +2118,7 @@ static void test_rx_session_ordered(void)
                       &rx,
                       now,
                       (udpard_udpip_ep_t){ .ip = 0x0A000005, .port = 0x3333 },
-                      make_frame(meta, mem_payload, "abc", 0, 3), // incomplete
+                      make_frame_ptr(meta, mem_payload, "abc", 0, 3),
                       del_payload,
                       2);
     TEST_ASSERT_EQUAL(5, cb_result.message.count);
@@ -2153,7 +2164,7 @@ static void test_rx_session_ordered(void)
         meta.transfer_id = 1000 + i;
         now              = ts_1000 + (udpard_us_t)i;
         char data[2]     = { '0', (char)('0' + i) };
-        rx_session_update(ses, &rx, now, ep, make_frame(meta, mem_payload, data, 0, 2), del_payload, 2);
+        rx_session_update(ses, &rx, now, ep, make_frame_ptr(meta, mem_payload, data, 0, 2), del_payload, 2);
     }
     now = ts_1000 + 1000;
     // 8 transfers are interned.
@@ -2163,7 +2174,8 @@ static void test_rx_session_ordered(void)
     TEST_ASSERT_EQUAL(1, alloc_session.allocated_fragments);
     TEST_ASSERT_EQUAL(8, alloc_payload.allocated_fragments);
     // Pushing a repeat transfer doesn't do anything, it's just dropped.
-    rx_session_update(ses, &rx, now, ep, make_frame(meta, mem_payload, "zz", 0, 2), del_payload, 2);
+    // Duplicate, should be dropped.
+    rx_session_update(ses, &rx, now, ep, make_frame_ptr(meta, mem_payload, "zz", 0, 2), del_payload, 2);
     // Yeah, it's just dropped.
     TEST_ASSERT_EQUAL(6, cb_result.message.count);
     TEST_ASSERT_EQUAL(4, cb_result.ack_mandate.count);
@@ -2173,7 +2185,8 @@ static void test_rx_session_ordered(void)
     // Send another transfer. This time we make it multi-frame and incomplete. The entire interned set is released.
     meta.transfer_id = 2000;
     now += 1000;
-    rx_session_update(ses, &rx, now, ep, make_frame(meta, mem_payload, "20", 0, 1), del_payload, 2);
+    // Multi-frame incomplete payload to flush the interned set.
+    rx_session_update(ses, &rx, now, ep, make_frame_ptr(meta, mem_payload, "20", 0, 1), del_payload, 2);
     // We should get RX_SLOT_COUNT callbacks.
     TEST_ASSERT_EQUAL(14, cb_result.message.count);
     TEST_ASSERT_EQUAL(4, cb_result.ack_mandate.count);
@@ -2202,7 +2215,7 @@ static void test_rx_session_ordered(void)
     for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
         meta.transfer_id = 3000 + i;
         now              = ts_3000 + (udpard_us_t)i;
-        rx_session_update(ses, &rx, now, ep, make_frame(meta, mem_payload, "30", 0, 1), del_payload, 2);
+        rx_session_update(ses, &rx, now, ep, make_frame_ptr(meta, mem_payload, "30", 0, 1), del_payload, 2);
     }
     now = ts_3000 + 1000;
     // 8 transfers are in progress.
@@ -2214,10 +2227,10 @@ static void test_rx_session_ordered(void)
     // Complete 3001, 3000 out of order.
     meta.transfer_id = 3001;
     now += 1000;
-    rx_session_update(ses, &rx, now, ep, make_frame(meta, mem_payload, "31", 1, 1), del_payload, 2);
+    rx_session_update(ses, &rx, now, ep, make_frame_ptr(meta, mem_payload, "31", 1, 1), del_payload, 2);
     meta.transfer_id = 3000;
     now += 1000;
-    rx_session_update(ses, &rx, now, ep, make_frame(meta, mem_payload, "30", 1, 1), del_payload, 2);
+    rx_session_update(ses, &rx, now, ep, make_frame_ptr(meta, mem_payload, "30", 1, 1), del_payload, 2);
     // Wait for the reordering window to close on 3000. Then 3000 and 3001 will be ejected.
     now = ts_3000 + port.reordering_window;
     udpard_rx_poll(&rx, now);
@@ -2315,7 +2328,7 @@ static void test_rx_session_unordered(void)
                       &rx,
                       now,
                       (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1234 },
-                      make_frame(meta, mem_payload, "hello", 0, 5),
+                      make_frame_ptr(meta, mem_payload, "hello", 0, 5),
                       del_payload,
                       0);
 
@@ -2348,7 +2361,7 @@ static void test_rx_session_unordered(void)
                       &rx,
                       now,
                       (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1234 },
-                      make_frame(meta, mem_payload, "tid103", 0, 6),
+                      make_frame_ptr(meta, mem_payload, "tid103", 0, 6),
                       del_payload,
                       0);
     TEST_ASSERT_EQUAL(2, cb_result.message.count);
@@ -2363,7 +2376,7 @@ static void test_rx_session_unordered(void)
                       &rx,
                       now,
                       (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1234 },
-                      make_frame(meta, mem_payload, "tid102", 0, 6),
+                      make_frame_ptr(meta, mem_payload, "tid102", 0, 6),
                       del_payload,
                       0);
     // In UNORDERED mode, 102 is accepted even though it's "late" (arrives after 103).
@@ -2379,7 +2392,7 @@ static void test_rx_session_unordered(void)
                       &rx,
                       now,
                       (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1234 },
-                      make_frame(meta, mem_payload, "dup103", 0, 6),
+                      make_frame_ptr(meta, mem_payload, "dup103", 0, 6),
                       del_payload,
                       0);
     TEST_ASSERT_EQUAL(3, cb_result.message.count);           // no new message
@@ -2401,7 +2414,7 @@ static void test_rx_session_unordered(void)
                       &rx,
                       now,
                       (udpard_udpip_ep_t){ .ip = 0x0A000002, .port = 0x5678 },
-                      make_frame(meta, mem_payload, "0123456789", 5, 5),
+                      make_frame_ptr(meta, mem_payload, "0123456789", 5, 5),
                       del_payload,
                       1);
     TEST_ASSERT_EQUAL(3, cb_result.message.count); // not complete yet
@@ -2414,7 +2427,7 @@ static void test_rx_session_unordered(void)
                       &rx,
                       now,
                       (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1234 },
-                      make_frame(meta, mem_payload, "0123456789", 0, 5),
+                      make_frame_ptr(meta, mem_payload, "0123456789", 0, 5),
                       del_payload,
                       0);
     // Transfer is completed and ejected immediately.
@@ -2451,7 +2464,7 @@ static void test_rx_session_unordered(void)
                       &rx,
                       now,
                       (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1234 },
-                      make_frame(meta, mem_payload, "dup00", 0, 5),
+                      make_frame_ptr(meta, mem_payload, "dup00", 0, 5),
                       del_payload,
                       0);
     TEST_ASSERT_EQUAL(4, cb_result.message.count);           // duplicate rejected, count unchanged
@@ -2468,7 +2481,7 @@ static void test_rx_session_unordered(void)
                           &rx,
                           now,
                           (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1234 },
-                          make_frame(meta, mem_payload, "OLD!", 0, 2),
+                          make_frame_ptr(meta, mem_payload, "OLD!", 0, 2),
                           del_payload,
                           0);
     }
@@ -2480,7 +2493,7 @@ static void test_rx_session_unordered(void)
                       &rx,
                       now,
                       (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1234 },
-                      make_frame(meta, mem_payload, "NEW!", 0, 2),
+                      make_frame_ptr(meta, mem_payload, "NEW!", 0, 2),
                       del_payload,
                       0);
     TEST_ASSERT_EQUAL(4, cb_result.message.count);
@@ -2548,7 +2561,7 @@ static void test_rx_session_unordered_reject_old(void)
                       &rx,
                       now,
                       (udpard_udpip_ep_t){ .ip = 0x0A00000A, .port = 0x0A00 },
-                      make_frame(meta, mem_payload, "old", 0, 3),
+                      make_frame_ptr(meta, mem_payload, "old", 0, 3),
                       del_payload,
                       0);
     TEST_ASSERT_EQUAL(1, cb_result.message.count);
@@ -2563,7 +2576,7 @@ static void test_rx_session_unordered_reject_old(void)
                       &rx,
                       now,
                       (udpard_udpip_ep_t){ .ip = 0x0A00000B, .port = 0x0B00 },
-                      make_frame(meta, mem_payload, "jump", 0, 4),
+                      make_frame_ptr(meta, mem_payload, "jump", 0, 4),
                       del_payload,
                       1);
     TEST_ASSERT_EQUAL(2, cb_result.message.count);
@@ -2578,7 +2591,7 @@ static void test_rx_session_unordered_reject_old(void)
                       &rx,
                       now,
                       (udpard_udpip_ep_t){ .ip = 0x0A00000A, .port = 0x0A00 },
-                      make_frame(meta, mem_payload, "dup", 0, 3),
+                      make_frame_ptr(meta, mem_payload, "dup", 0, 3),
                       del_payload,
                       0);
     TEST_ASSERT_EQUAL(2, cb_result.message.count); // no new message
@@ -2649,7 +2662,7 @@ static void test_rx_session_unordered_duplicates(void)
                           &rx,
                           now,
                           (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1234 },
-                          make_frame(meta, mem_payload, payload, 0, 4),
+                          make_frame_ptr(meta, mem_payload, payload, 0, 4),
                           del_payload,
                           0);
     }
@@ -2718,7 +2731,7 @@ static void test_rx_session_ordered_reject_stale_after_jump(void)
                       &rx,
                       now,
                       (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1111 },
-                      make_frame(meta, mem_payload, "a", 0, 1),
+                      make_frame_ptr(meta, mem_payload, "a", 0, 1),
                       del_payload,
                       0);
     TEST_ASSERT_EQUAL(1, cb_result.message.count);
@@ -2731,7 +2744,7 @@ static void test_rx_session_ordered_reject_stale_after_jump(void)
                       &rx,
                       now,
                       (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1111 },
-                      make_frame(meta, mem_payload, "b", 0, 1),
+                      make_frame_ptr(meta, mem_payload, "b", 0, 1),
                       del_payload,
                       0);
     TEST_ASSERT_EQUAL(1, cb_result.message.count);
@@ -2746,7 +2759,7 @@ static void test_rx_session_ordered_reject_stale_after_jump(void)
                       &rx,
                       now,
                       (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1111 },
-                      make_frame(meta, mem_payload, "c", 0, 1),
+                      make_frame_ptr(meta, mem_payload, "c", 0, 1),
                       del_payload,
                       0);
     TEST_ASSERT_EQUAL(1, cb_result.message.count);     // 3 is still interned, 10000 interned too (but acked).
@@ -2766,7 +2779,7 @@ static void test_rx_session_ordered_reject_stale_after_jump(void)
                       &rx,
                       now,
                       (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1111 },
-                      make_frame(meta, mem_payload, "d", 0, 1),
+                      make_frame_ptr(meta, mem_payload, "d", 0, 1),
                       del_payload,
                       0);
     TEST_ASSERT_EQUAL(3, cb_result.message.count);     // transfer 2 not ejected!
@@ -2842,7 +2855,7 @@ static void test_rx_session_ordered_zero_reordering_window(void)
                           &rx,
                           now,
                           (udpard_udpip_ep_t){ .ip = 0x0A000002, .port = 0x2222 },
-                          make_frame(meta, mem_payload, payload, 0, 3),
+                          make_frame_ptr(meta, mem_payload, payload, 0, 3),
                           del_payload,
                           0);
     }
@@ -2903,23 +2916,23 @@ static void test_rx_port(void)
 
     // Test 1: Send a valid single-frame transfer to the ORDERED port.
     {
-        const uint64_t   remote_uid  = 0xAABBCCDDEEFF0011ULL;
-        const uint64_t   transfer_id = 100;
-        const char*      payload_str = "Hello World";
-        const size_t     payload_len = strlen(payload_str) + 1; // include null terminator
-        meta_t           meta        = { .priority              = udpard_prio_nominal,
-                                         .flag_ack              = true,
-                                         .transfer_payload_size = (uint32_t)payload_len,
-                                         .transfer_id           = transfer_id,
-                                         .sender_uid            = remote_uid,
-                                         .topic_hash            = topic_hash_ordered };
-        const rx_frame_t frame       = make_frame(meta, mem_payload, payload_str, 0, payload_len);
+        const uint64_t remote_uid  = 0xAABBCCDDEEFF0011ULL;
+        const uint64_t transfer_id = 100;
+        const char*    payload_str = "Hello World";
+        const size_t   payload_len = strlen(payload_str) + 1; // include null terminator
+        meta_t         meta        = { .priority              = udpard_prio_nominal,
+                                       .flag_ack              = true,
+                                       .transfer_payload_size = (uint32_t)payload_len,
+                                       .transfer_id           = transfer_id,
+                                       .sender_uid            = remote_uid,
+                                       .topic_hash            = topic_hash_ordered };
+        rx_frame_t*    frame       = make_frame_ptr(meta, mem_payload, payload_str, 0, payload_len);
 
         // Serialize the frame into a datagram.
         byte_t dgram[HEADER_SIZE_BYTES + payload_len];
-        header_serialize(dgram, meta, 0, 0, frame.base.crc);
+        header_serialize(dgram, meta, 0, 0, frame->base.crc);
         memcpy(dgram + HEADER_SIZE_BYTES, payload_str, payload_len);
-        mem_free_payload(del_payload, frame.base.origin);
+        mem_free_payload(del_payload, frame->base.origin);
 
         // Allocate payload for the push.
         void* push_payload = mem_payload.alloc(mem_payload.user, sizeof(dgram));
@@ -2953,22 +2966,22 @@ static void test_rx_port(void)
 
     // Test 2: Send a valid single-frame transfer to the STATELESS port.
     {
-        const uint64_t   remote_uid  = 0x1122334455667788ULL;
-        const uint64_t   transfer_id = 200;
-        const char*      payload_str = "Stateless";
-        const size_t     payload_len = strlen(payload_str) + 1;
-        meta_t           meta        = { .priority              = udpard_prio_high,
-                                         .flag_ack              = false,
-                                         .transfer_payload_size = (uint32_t)payload_len,
-                                         .transfer_id           = transfer_id,
-                                         .sender_uid            = remote_uid,
-                                         .topic_hash            = topic_hash_stateless };
-        const rx_frame_t frame       = make_frame(meta, mem_payload, payload_str, 0, payload_len);
+        const uint64_t remote_uid  = 0x1122334455667788ULL;
+        const uint64_t transfer_id = 200;
+        const char*    payload_str = "Stateless";
+        const size_t   payload_len = strlen(payload_str) + 1;
+        meta_t         meta        = { .priority              = udpard_prio_high,
+                                       .flag_ack              = false,
+                                       .transfer_payload_size = (uint32_t)payload_len,
+                                       .transfer_id           = transfer_id,
+                                       .sender_uid            = remote_uid,
+                                       .topic_hash            = topic_hash_stateless };
+        rx_frame_t*    frame       = make_frame_ptr(meta, mem_payload, payload_str, 0, payload_len);
 
         byte_t dgram[HEADER_SIZE_BYTES + payload_len];
-        header_serialize(dgram, meta, 0, 0, frame.base.crc);
+        header_serialize(dgram, meta, 0, 0, frame->base.crc);
         memcpy(dgram + HEADER_SIZE_BYTES, payload_str, payload_len);
-        mem_free_payload(del_payload, frame.base.origin);
+        mem_free_payload(del_payload, frame->base.origin);
 
         void* push_payload = mem_payload.alloc(mem_payload.user, sizeof(dgram));
         memcpy(push_payload, dgram, sizeof(dgram));
@@ -3010,11 +3023,11 @@ static void test_rx_port(void)
 
         // Frame 1: offset 0, 10 bytes.
         {
-            const rx_frame_t frame = make_frame(meta, mem_payload, full_payload, 0, 10);
-            byte_t           dgram[HEADER_SIZE_BYTES + 10];
-            header_serialize(dgram, meta, 0, 0, frame.base.crc);
+            rx_frame_t* frame = make_frame_ptr(meta, mem_payload, full_payload, 0, 10);
+            byte_t      dgram[HEADER_SIZE_BYTES + 10];
+            header_serialize(dgram, meta, 0, 0, frame->base.crc);
             memcpy(dgram + HEADER_SIZE_BYTES, full_payload, 10);
-            mem_free_payload(del_payload, frame.base.origin);
+            mem_free_payload(del_payload, frame->base.origin);
 
             void* push_payload = mem_payload.alloc(mem_payload.user, sizeof(dgram));
             memcpy(push_payload, dgram, sizeof(dgram));
@@ -3031,11 +3044,11 @@ static void test_rx_port(void)
 
         // Frame 2: offset 10, 10 bytes.
         {
-            const rx_frame_t frame = make_frame(meta, mem_payload, full_payload, 10, 10);
-            byte_t           dgram[HEADER_SIZE_BYTES + 10];
-            header_serialize(dgram, meta, 1, 10, frame.base.crc);
+            rx_frame_t* frame = make_frame_ptr(meta, mem_payload, full_payload, 10, 10);
+            byte_t      dgram[HEADER_SIZE_BYTES + 10];
+            header_serialize(dgram, meta, 1, 10, frame->base.crc);
             memcpy(dgram + HEADER_SIZE_BYTES, full_payload + 10, 10);
-            mem_free_payload(del_payload, frame.base.origin);
+            mem_free_payload(del_payload, frame->base.origin);
 
             void* push_payload = mem_payload.alloc(mem_payload.user, sizeof(dgram));
             memcpy(push_payload, dgram, sizeof(dgram));
@@ -3065,23 +3078,23 @@ static void test_rx_port(void)
 
     // Test 4: Send a frame with wrong topic hash (collision).
     {
-        const uint64_t   remote_uid  = 0x9988776655443322ULL;
-        const uint64_t   transfer_id = 300;
-        const char*      payload_str = "Collision";
-        const size_t     payload_len = strlen(payload_str) + 1;
-        const uint64_t   wrong_hash  = topic_hash_ordered + 1; // Different hash
-        meta_t           meta        = { .priority              = udpard_prio_nominal,
-                                         .flag_ack              = false,
-                                         .transfer_payload_size = (uint32_t)payload_len,
-                                         .transfer_id           = transfer_id,
-                                         .sender_uid            = remote_uid,
-                                         .topic_hash            = wrong_hash };
-        const rx_frame_t frame       = make_frame(meta, mem_payload, payload_str, 0, payload_len);
+        const uint64_t remote_uid  = 0x9988776655443322ULL;
+        const uint64_t transfer_id = 300;
+        const char*    payload_str = "Collision";
+        const size_t   payload_len = strlen(payload_str) + 1;
+        const uint64_t wrong_hash  = topic_hash_ordered + 1; // Different hash
+        meta_t         meta        = { .priority              = udpard_prio_nominal,
+                                       .flag_ack              = false,
+                                       .transfer_payload_size = (uint32_t)payload_len,
+                                       .transfer_id           = transfer_id,
+                                       .sender_uid            = remote_uid,
+                                       .topic_hash            = wrong_hash };
+        rx_frame_t*    frame       = make_frame_ptr(meta, mem_payload, payload_str, 0, payload_len);
 
         byte_t dgram[HEADER_SIZE_BYTES + payload_len];
-        header_serialize(dgram, meta, 0, 0, frame.base.crc);
+        header_serialize(dgram, meta, 0, 0, frame->base.crc);
         memcpy(dgram + HEADER_SIZE_BYTES, payload_str, payload_len);
-        mem_free_payload(del_payload, frame.base.origin);
+        mem_free_payload(del_payload, frame->base.origin);
 
         void* push_payload = mem_payload.alloc(mem_payload.user, sizeof(dgram));
         memcpy(push_payload, dgram, sizeof(dgram));
@@ -3147,11 +3160,11 @@ static void test_rx_port(void)
                                          .topic_hash            = topic_hash_stateless };
 
         // Send only the first frame (offset 0, partial payload).
-        const rx_frame_t frame = make_frame(meta, mem_payload, payload_str, 0, 10);
-        byte_t           dgram[HEADER_SIZE_BYTES + 10];
-        header_serialize(dgram, meta, 0, 0, frame.base.crc);
+        rx_frame_t* frame = make_frame_ptr(meta, mem_payload, payload_str, 0, 10);
+        byte_t      dgram[HEADER_SIZE_BYTES + 10];
+        header_serialize(dgram, meta, 0, 0, frame->base.crc);
         memcpy(dgram + HEADER_SIZE_BYTES, payload_str, 10);
-        mem_free_payload(del_payload, frame.base.origin);
+        mem_free_payload(del_payload, frame->base.origin);
 
         void* push_payload = mem_payload.alloc(mem_payload.user, sizeof(dgram));
         memcpy(push_payload, dgram, sizeof(dgram));
@@ -3269,18 +3282,18 @@ static void test_rx_port_timeouts(void)
 
     // Remote A: start transfer 10 (incomplete) and 11 (complete) so 11 arms the reordering timer.
     {
-        meta_t           meta  = { .priority              = udpard_prio_nominal,
-                                   .flag_ack              = false,
-                                   .transfer_payload_size = 10,
-                                   .transfer_id           = 10,
-                                   .sender_uid            = 0xAAAAULL,
-                                   .topic_hash            = topic_hash_a };
-        const rx_frame_t frame = make_frame(meta, mem_payload, "ABCDEFGHIJ", 0, 5);
-        byte_t           dgram[HEADER_SIZE_BYTES + 5];
-        header_serialize(dgram, meta, 0, 0, frame.base.crc);
+        meta_t      meta  = { .priority              = udpard_prio_nominal,
+                              .flag_ack              = false,
+                              .transfer_payload_size = 10,
+                              .transfer_id           = 10,
+                              .sender_uid            = 0xAAAAULL,
+                              .topic_hash            = topic_hash_a };
+        rx_frame_t* frame = make_frame_ptr(meta, mem_payload, "ABCDEFGHIJ", 0, 5);
+        byte_t      dgram[HEADER_SIZE_BYTES + 5];
+        header_serialize(dgram, meta, 0, 0, frame->base.crc);
         const byte_t payload_head[5] = { 'A', 'B', 'C', 'D', 'E' };
         memcpy(dgram + HEADER_SIZE_BYTES, payload_head, sizeof(payload_head));
-        mem_free(mem_payload, frame.base.origin.size, frame.base.origin.data);
+        mem_free(mem_payload, frame->base.origin.size, frame->base.origin.data);
         void* push_payload = mem_payload.alloc(mem_payload.user, sizeof(dgram));
         memcpy(push_payload, dgram, sizeof(dgram));
         TEST_ASSERT(udpard_rx_port_push(&rx,
@@ -3290,14 +3303,14 @@ static void test_rx_port_timeouts(void)
                                         (udpard_bytes_mut_t){ .data = push_payload, .size = sizeof(dgram) },
                                         del_payload,
                                         0));
-        meta.transfer_payload_size  = 4;
-        meta.transfer_id            = 11;
-        const rx_frame_t done_frame = make_frame(meta, mem_payload, "DONE", 0, 4);
-        byte_t           done_dgram[HEADER_SIZE_BYTES + 4];
-        header_serialize(done_dgram, meta, 0, 0, done_frame.base.crc);
+        meta.transfer_payload_size = 4;
+        meta.transfer_id           = 11;
+        rx_frame_t* done_frame     = make_frame_ptr(meta, mem_payload, "DONE", 0, 4);
+        byte_t      done_dgram[HEADER_SIZE_BYTES + 4];
+        header_serialize(done_dgram, meta, 0, 0, done_frame->base.crc);
         const byte_t done_payload[4] = { 'D', 'O', 'N', 'E' };
         memcpy(done_dgram + HEADER_SIZE_BYTES, done_payload, sizeof(done_payload));
-        mem_free(mem_payload, done_frame.base.origin.size, done_frame.base.origin.data);
+        mem_free(mem_payload, done_frame->base.origin.size, done_frame->base.origin.data);
         void* push_done = mem_payload.alloc(mem_payload.user, sizeof(done_dgram));
         memcpy(push_done, done_dgram, sizeof(done_dgram));
         now += 1000;
@@ -3312,18 +3325,18 @@ static void test_rx_port_timeouts(void)
 
     // Remote B mirrors the same pattern to populate the reordering deadline tree with another entry.
     {
-        meta_t           meta  = { .priority              = udpard_prio_nominal,
-                                   .flag_ack              = false,
-                                   .transfer_payload_size = 6,
-                                   .transfer_id           = 20,
-                                   .sender_uid            = 0xBBBBULL,
-                                   .topic_hash            = topic_hash_b };
-        const rx_frame_t frame = make_frame(meta, mem_payload, "QRSTUV", 0, 3);
-        byte_t           dgram[HEADER_SIZE_BYTES + 3];
-        header_serialize(dgram, meta, 0, 0, frame.base.crc);
+        meta_t      meta  = { .priority              = udpard_prio_nominal,
+                              .flag_ack              = false,
+                              .transfer_payload_size = 6,
+                              .transfer_id           = 20,
+                              .sender_uid            = 0xBBBBULL,
+                              .topic_hash            = topic_hash_b };
+        rx_frame_t* frame = make_frame_ptr(meta, mem_payload, "QRSTUV", 0, 3);
+        byte_t      dgram[HEADER_SIZE_BYTES + 3];
+        header_serialize(dgram, meta, 0, 0, frame->base.crc);
         const byte_t payload_head[3] = { 'Q', 'R', 'S' };
         memcpy(dgram + HEADER_SIZE_BYTES, payload_head, sizeof(payload_head));
-        mem_free(mem_payload, frame.base.origin.size, frame.base.origin.data);
+        mem_free(mem_payload, frame->base.origin.size, frame->base.origin.data);
         void* push_payload = mem_payload.alloc(mem_payload.user, sizeof(dgram));
         memcpy(push_payload, dgram, sizeof(dgram));
         now += 1000;
@@ -3334,14 +3347,14 @@ static void test_rx_port_timeouts(void)
                                         (udpard_bytes_mut_t){ .data = push_payload, .size = sizeof(dgram) },
                                         del_payload,
                                         0));
-        meta.transfer_payload_size  = 5;
-        meta.transfer_id            = 21;
-        const rx_frame_t done_frame = make_frame(meta, mem_payload, "READY", 0, 5);
-        byte_t           done_dgram[HEADER_SIZE_BYTES + 5];
-        header_serialize(done_dgram, meta, 0, 0, done_frame.base.crc);
+        meta.transfer_payload_size = 5;
+        meta.transfer_id           = 21;
+        rx_frame_t* done_frame     = make_frame_ptr(meta, mem_payload, "READY", 0, 5);
+        byte_t      done_dgram[HEADER_SIZE_BYTES + 5];
+        header_serialize(done_dgram, meta, 0, 0, done_frame->base.crc);
         const byte_t done_payload[5] = { 'R', 'E', 'A', 'D', 'Y' };
         memcpy(done_dgram + HEADER_SIZE_BYTES, done_payload, sizeof(done_payload));
-        mem_free(mem_payload, done_frame.base.origin.size, done_frame.base.origin.data);
+        mem_free(mem_payload, done_frame->base.origin.size, done_frame->base.origin.data);
         void* push_done = mem_payload.alloc(mem_payload.user, sizeof(done_dgram));
         memcpy(push_done, done_dgram, sizeof(done_dgram));
         now += 1000;
@@ -3359,18 +3372,18 @@ static void test_rx_port_timeouts(void)
     // Advance past the session lifetime so the busy slots will be reset on the next arrival.
     now += SESSION_LIFETIME + 5000;
     {
-        meta_t           meta  = { .priority              = udpard_prio_nominal,
-                                   .flag_ack              = false,
-                                   .transfer_payload_size = 3,
-                                   .transfer_id           = 30,
-                                   .sender_uid            = 0xAAAAULL,
-                                   .topic_hash            = topic_hash_a };
-        const rx_frame_t frame = make_frame(meta, mem_payload, "NEW", 0, 3);
-        byte_t           dgram[HEADER_SIZE_BYTES + 3];
-        header_serialize(dgram, meta, 0, 0, frame.base.crc);
+        meta_t      meta  = { .priority              = udpard_prio_nominal,
+                              .flag_ack              = false,
+                              .transfer_payload_size = 3,
+                              .transfer_id           = 30,
+                              .sender_uid            = 0xAAAAULL,
+                              .topic_hash            = topic_hash_a };
+        rx_frame_t* frame = make_frame_ptr(meta, mem_payload, "NEW", 0, 3);
+        byte_t      dgram[HEADER_SIZE_BYTES + 3];
+        header_serialize(dgram, meta, 0, 0, frame->base.crc);
         const byte_t payload_head[3] = { 'N', 'E', 'W' };
         memcpy(dgram + HEADER_SIZE_BYTES, payload_head, sizeof(payload_head));
-        mem_free(mem_payload, frame.base.origin.size, frame.base.origin.data);
+        mem_free(mem_payload, frame->base.origin.size, frame->base.origin.data);
         void* push_payload = mem_payload.alloc(mem_payload.user, sizeof(dgram));
         memcpy(push_payload, dgram, sizeof(dgram));
         TEST_ASSERT(udpard_rx_port_push(&rx,
@@ -3426,20 +3439,20 @@ static void test_rx_port_oom(void)
     TEST_ASSERT(udpard_rx_port_new(&port_ordered, 0xAAAALL, 100, 20000, rx_mem, &callbacks));
     TEST_ASSERT(
       udpard_rx_port_new(&port_stateless, 0xBBBBLL, 100, UDPARD_RX_REORDERING_WINDOW_STATELESS, rx_mem, &callbacks));
-    udpard_us_t      now             = 0;
-    const byte_t     payload_state[] = { 's', 't', 'a', 't', 'e', 'f', 'u', 'l' };
-    const size_t     payload_len     = sizeof(payload_state);
-    meta_t           meta_state      = { .priority              = udpard_prio_nominal,
-                                         .flag_ack              = false,
-                                         .transfer_payload_size = (uint32_t)payload_len,
-                                         .transfer_id           = 1,
-                                         .sender_uid            = 0x1111ULL,
-                                         .topic_hash            = 0xAAAALL };
-    const rx_frame_t frame_state     = make_frame(meta_state, mem_payload, payload_state, 0, payload_len);
-    byte_t           dgram_state[HEADER_SIZE_BYTES + payload_len];
-    header_serialize(dgram_state, meta_state, 0, 0, frame_state.base.crc);
+    udpard_us_t  now             = 0;
+    const byte_t payload_state[] = { 's', 't', 'a', 't', 'e', 'f', 'u', 'l' };
+    const size_t payload_len     = sizeof(payload_state);
+    meta_t       meta_state      = { .priority              = udpard_prio_nominal,
+                                     .flag_ack              = false,
+                                     .transfer_payload_size = (uint32_t)payload_len,
+                                     .transfer_id           = 1,
+                                     .sender_uid            = 0x1111ULL,
+                                     .topic_hash            = 0xAAAALL };
+    rx_frame_t*  frame_state     = make_frame_ptr(meta_state, mem_payload, payload_state, 0, payload_len);
+    byte_t       dgram_state[HEADER_SIZE_BYTES + payload_len];
+    header_serialize(dgram_state, meta_state, 0, 0, frame_state->base.crc);
     memcpy(dgram_state + HEADER_SIZE_BYTES, payload_state, payload_len);
-    mem_free(mem_payload, frame_state.base.origin.size, frame_state.base.origin.data);
+    mem_free(mem_payload, frame_state->base.origin.size, frame_state->base.origin.data);
     void* push_state = mem_payload.alloc(mem_payload.user, sizeof(dgram_state));
     memcpy(push_state, dgram_state, sizeof(dgram_state));
     const uint64_t errors_before = rx.errors_oom;
@@ -3452,19 +3465,19 @@ static void test_rx_port_oom(void)
                                     0));
     TEST_ASSERT_EQUAL(errors_before + 1, rx.errors_oom);
     TEST_ASSERT_EQUAL(0, cb_result.message.count);
-    const byte_t     payload_stateless[] = { 's', 't', 'a', 't', 'e', 'l', 'e', 's', 's' };
-    const size_t     payload_stat_len    = sizeof(payload_stateless);
-    meta_t           meta_stateless      = { .priority              = udpard_prio_slow,
-                                             .flag_ack              = false,
-                                             .transfer_payload_size = (uint32_t)payload_stat_len,
-                                             .transfer_id           = 2,
-                                             .sender_uid            = 0x2222ULL,
-                                             .topic_hash            = 0xBBBBLL };
-    const rx_frame_t frame_stateless = make_frame(meta_stateless, mem_payload, payload_stateless, 0, payload_stat_len);
-    byte_t           dgram_stateless[HEADER_SIZE_BYTES + payload_stat_len];
-    header_serialize(dgram_stateless, meta_stateless, 0, 0, frame_stateless.base.crc);
+    const byte_t payload_stateless[] = { 's', 't', 'a', 't', 'e', 'l', 'e', 's', 's' };
+    const size_t payload_stat_len    = sizeof(payload_stateless);
+    meta_t       meta_stateless      = { .priority              = udpard_prio_slow,
+                                         .flag_ack              = false,
+                                         .transfer_payload_size = (uint32_t)payload_stat_len,
+                                         .transfer_id           = 2,
+                                         .sender_uid            = 0x2222ULL,
+                                         .topic_hash            = 0xBBBBLL };
+    rx_frame_t*  frame_stateless = make_frame_ptr(meta_stateless, mem_payload, payload_stateless, 0, payload_stat_len);
+    byte_t       dgram_stateless[HEADER_SIZE_BYTES + payload_stat_len];
+    header_serialize(dgram_stateless, meta_stateless, 0, 0, frame_stateless->base.crc);
     memcpy(dgram_stateless + HEADER_SIZE_BYTES, payload_stateless, payload_stat_len);
-    mem_free(mem_payload, frame_stateless.base.origin.size, frame_stateless.base.origin.data);
+    mem_free(mem_payload, frame_stateless->base.origin.size, frame_stateless->base.origin.data);
     void* push_stateless = mem_payload.alloc(mem_payload.user, sizeof(dgram_stateless));
     memcpy(push_stateless, dgram_stateless, sizeof(dgram_stateless));
     now += 1000;
@@ -3523,18 +3536,18 @@ static void test_rx_port_free_loop(void)
 
     // Incomplete transfer on the p2p port.
     {
-        const char*      payload = "INCOMPLETE";
-        meta_t           meta    = { .priority              = udpard_prio_slow,
-                                     .flag_ack              = false,
-                                     .transfer_payload_size = (uint32_t)strlen(payload),
-                                     .transfer_id           = 10,
-                                     .sender_uid            = 0xAAAAULL,
-                                     .topic_hash            = port_p2p.topic_hash };
-        const rx_frame_t frame   = make_frame(meta, mem_payload, payload, 0, 4);
-        byte_t           dgram[HEADER_SIZE_BYTES + 4];
-        header_serialize(dgram, meta, 0, 0, frame.base.crc);
+        const char* payload = "INCOMPLETE";
+        meta_t      meta    = { .priority              = udpard_prio_slow,
+                                .flag_ack              = false,
+                                .transfer_payload_size = (uint32_t)strlen(payload),
+                                .transfer_id           = 10,
+                                .sender_uid            = 0xAAAAULL,
+                                .topic_hash            = port_p2p.topic_hash };
+        rx_frame_t* frame   = make_frame_ptr(meta, mem_payload, payload, 0, 4);
+        byte_t      dgram[HEADER_SIZE_BYTES + 4];
+        header_serialize(dgram, meta, 0, 0, frame->base.crc);
         memcpy(dgram + HEADER_SIZE_BYTES, payload, 4);
-        mem_free(mem_payload, frame.base.origin.size, frame.base.origin.data);
+        mem_free(mem_payload, frame->base.origin.size, frame->base.origin.data);
         void* push_payload = mem_payload.alloc(mem_payload.user, sizeof(dgram));
         memcpy(push_payload, dgram, sizeof(dgram));
         now += 1000;
@@ -3549,18 +3562,18 @@ static void test_rx_port_free_loop(void)
 
     // Incomplete transfer on the extra port.
     {
-        const char*      payload = "FRAGMENTS";
-        meta_t           meta    = { .priority              = udpard_prio_fast,
-                                     .flag_ack              = false,
-                                     .transfer_payload_size = (uint32_t)strlen(payload),
-                                     .transfer_id           = 20,
-                                     .sender_uid            = 0xBBBBULL,
-                                     .topic_hash            = topic_hash_extra };
-        const rx_frame_t frame   = make_frame(meta, mem_payload, payload, 0, 3);
-        byte_t           dgram[HEADER_SIZE_BYTES + 3];
-        header_serialize(dgram, meta, 0, 0, frame.base.crc);
+        const char* payload = "FRAGMENTS";
+        meta_t      meta    = { .priority              = udpard_prio_fast,
+                                .flag_ack              = false,
+                                .transfer_payload_size = (uint32_t)strlen(payload),
+                                .transfer_id           = 20,
+                                .sender_uid            = 0xBBBBULL,
+                                .topic_hash            = topic_hash_extra };
+        rx_frame_t* frame   = make_frame_ptr(meta, mem_payload, payload, 0, 3);
+        byte_t      dgram[HEADER_SIZE_BYTES + 3];
+        header_serialize(dgram, meta, 0, 0, frame->base.crc);
         memcpy(dgram + HEADER_SIZE_BYTES, payload, 3);
-        mem_free(mem_payload, frame.base.origin.size, frame.base.origin.data);
+        mem_free(mem_payload, frame->base.origin.size, frame->base.origin.data);
         void* push_payload = mem_payload.alloc(mem_payload.user, sizeof(dgram));
         memcpy(push_payload, dgram, sizeof(dgram));
         now += 1000;
