@@ -698,9 +698,8 @@ struct udpard_rx_ack_mandate_t
 };
 
 /// The RX instance holds no resources and can be destroyed at any time by simply freeing all its ports first
-/// using udpard_rx_port_free(), then discarding the instance itself.
-/// True on success, false if any of the arguments are invalid.
-bool udpard_rx_new(udpard_rx_t* const self);
+/// using udpard_rx_port_free(), then discarding the instance itself. The self pointer must not be NULL.
+void udpard_rx_new(udpard_rx_t* const self);
 
 /// Must be invoked at least every few milliseconds (more often is fine) to purge timed-out sessions and eject
 /// received transfers when the reordering window expires. If this is invoked simultaneously with rx subscription

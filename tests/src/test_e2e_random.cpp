@@ -156,7 +156,7 @@ void test_udpard_tx_rx_end_to_end()
     const udpard_rx_mem_resources_t rx_mem{ .session  = instrumented_allocator_make_resource(&rx_alloc_session),
                                             .fragment = instrumented_allocator_make_resource(&rx_alloc_frag) };
     udpard_rx_t                     rx;
-    TEST_ASSERT_TRUE(udpard_rx_new(&rx));
+    udpard_rx_new(&rx);
 
     // Test parameters.
     constexpr std::array<uint64_t, 3>    topic_hashes{ 0x123456789ABCDEF0ULL,

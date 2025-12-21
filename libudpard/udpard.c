@@ -1507,19 +1507,16 @@ static bool rx_validate_mem_resources(const udpard_rx_mem_resources_t memory)
            (memory.fragment.alloc != NULL) && (memory.fragment.free != NULL);
 }
 
-bool udpard_rx_new(udpard_rx_t* const self)
+void udpard_rx_new(udpard_rx_t* const self)
 {
-    const bool ok = (self != NULL);
-    if (ok) {
-        mem_zero(sizeof(*self), self);
-        self->list_session_by_animation   = (udpard_list_t){ NULL, NULL };
-        self->index_session_by_reordering = NULL;
-        self->errors_oom                  = 0;
-        self->errors_frame_malformed      = 0;
-        self->errors_transfer_malformed   = 0;
-        self->user                        = NULL;
-    }
-    return ok;
+    UDPARD_ASSERT(self != NULL);
+    mem_zero(sizeof(*self), self);
+    self->list_session_by_animation   = (udpard_list_t){ NULL, NULL };
+    self->index_session_by_reordering = NULL;
+    self->errors_oom                  = 0;
+    self->errors_frame_malformed      = 0;
+    self->errors_transfer_malformed   = 0;
+    self->user                        = NULL;
 }
 
 void udpard_rx_poll(udpard_rx_t* const self, const udpard_us_t now)

@@ -1662,7 +1662,7 @@ static void test_rx_session_ordered(void)
 
     // Initialize the shared RX instance.
     udpard_rx_t rx;
-    TEST_ASSERT(udpard_rx_new(&rx));
+    udpard_rx_new(&rx);
     callback_result_t cb_result = { 0 };
     rx.user                     = &cb_result;
 
@@ -2274,7 +2274,7 @@ static void test_rx_session_unordered(void)
 
     // Initialize the shared RX instance.
     udpard_rx_t rx;
-    TEST_ASSERT(udpard_rx_new(&rx));
+    udpard_rx_new(&rx);
     callback_result_t cb_result = { 0 };
     rx.user                     = &cb_result;
 
@@ -2515,7 +2515,7 @@ static void test_rx_session_unordered_reject_old(void)
     const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
     udpard_rx_t                     rx;
     callback_result_t               cb_result = { 0 };
-    TEST_ASSERT(udpard_rx_new(&rx));
+    udpard_rx_new(&rx);
     rx.user                    = &cb_result;
     const uint64_t   local_uid = 0xF00DCAFEF00DCAFEULL;
     udpard_rx_port_t port;
@@ -2613,7 +2613,7 @@ static void test_rx_session_unordered_duplicates(void)
     const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
     udpard_rx_t                     rx;
     callback_result_t               cb_result = { 0 };
-    TEST_ASSERT(udpard_rx_new(&rx));
+    udpard_rx_new(&rx);
     rx.user = &cb_result;
     udpard_rx_port_t port;
     const uint64_t   topic_hash = 0x1111222233334444ULL;
@@ -2685,7 +2685,7 @@ static void test_rx_session_ordered_reject_stale_after_jump(void)
     const udpard_mem_deleter_t      del_payload = instrumented_allocator_make_deleter(&alloc_payload);
     const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
     udpard_rx_t                     rx;
-    TEST_ASSERT(udpard_rx_new(&rx));
+    udpard_rx_new(&rx);
     callback_result_t cb_result = { 0 };
     rx.user                     = &cb_result;
     udpard_rx_port_t port;
@@ -2807,7 +2807,7 @@ static void test_rx_session_ordered_zero_reordering_window(void)
     const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
     udpard_rx_t                     rx;
     callback_result_t               cb_result = { 0 };
-    TEST_ASSERT(udpard_rx_new(&rx));
+    udpard_rx_new(&rx);
     rx.user = &cb_result;
     udpard_rx_port_t port;
     const uint64_t   topic_hash = 0x9999888877776666ULL;
@@ -2885,7 +2885,7 @@ static void test_rx_port(void)
 
     // Initialize the shared RX instance.
     udpard_rx_t rx;
-    TEST_ASSERT(udpard_rx_new(&rx));
+    udpard_rx_new(&rx);
     callback_result_t cb_result = { 0 };
     rx.user                     = &cb_result;
 
@@ -3255,7 +3255,7 @@ static void test_rx_port_timeouts(void)
 
     udpard_rx_t       rx;
     callback_result_t cb_result = { 0 };
-    TEST_ASSERT(udpard_rx_new(&rx));
+    udpard_rx_new(&rx);
     rx.user = &cb_result;
 
     udpard_rx_port_t port_a;
@@ -3419,7 +3419,7 @@ static void test_rx_port_oom(void)
     const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
     udpard_rx_t                     rx;
     callback_result_t               cb_result = { 0 };
-    TEST_ASSERT(udpard_rx_new(&rx));
+    udpard_rx_new(&rx);
     rx.user = &cb_result;
     udpard_rx_port_t port_ordered;
     udpard_rx_port_t port_stateless;
@@ -3507,7 +3507,7 @@ static void test_rx_port_free_loop(void)
     const uint64_t    local_uid = 0xCAFED00DCAFED00DULL;
     udpard_rx_t       rx;
     callback_result_t cb_result = { 0 };
-    TEST_ASSERT(udpard_rx_new(&rx));
+    udpard_rx_new(&rx);
     rx.user = &cb_result;
 
     udpard_rx_port_t port_p2p;

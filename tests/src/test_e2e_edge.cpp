@@ -62,7 +62,7 @@ struct Fixture
         dest               = udpard_make_subject_endpoint(222U);
 
         TEST_ASSERT_TRUE(udpard_tx_new(&tx, 0x0A0B0C0D0E0F1011ULL, 16, tx_mem));
-        TEST_ASSERT_TRUE(udpard_rx_new(&rx));
+        udpard_rx_new(&rx);
         ctx.expected_uid = tx.local_uid;
         ctx.source       = source;
         rx.user          = &ctx;
