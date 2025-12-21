@@ -645,7 +645,8 @@ struct udpard_rx_port_t
     /// which is easy to implement since each port gets a dedicated set of memory resources.
     udpard_tree_t* index_session_by_remote_uid;
 
-    const udpard_rx_port_vtable_t* vtable;
+    const udpard_rx_port_vtable_t*                vtable;
+    const struct udpard_rx_port_vtable_private_t* vtable_private;
 
     /// Opaque pointer for the application use only. Not accessed by the library.
     void* user;

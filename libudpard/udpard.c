@@ -776,7 +776,7 @@ typedef struct
 } rx_frame_base_t;
 
 /// Full frame state.
-typedef struct
+typedef struct rx_frame_t
 {
     rx_frame_base_t base;
     meta_t          meta;
@@ -1031,7 +1031,7 @@ static void rx_slot_update(rx_slot_t* const            slot,
                            const udpard_us_t           ts,
                            const udpard_mem_resource_t fragment_memory,
                            const udpard_mem_deleter_t  payload_deleter,
-                           const rx_frame_t            frame,
+                           rx_frame_t* const           frame,
                            const size_t                extent,
                            uint64_t* const             errors_oom,
                            uint64_t* const             errors_transfer_malformed)
@@ -1039,34 +1039,34 @@ static void rx_slot_update(rx_slot_t* const            slot,
     if (slot->state != rx_slot_busy) {
         rx_slot_reset(slot, fragment_memory);
         slot->state       = rx_slot_busy;
-        slot->transfer_id = frame.meta.transfer_id;
+        slot->transfer_id = frame->meta.transfer_id;
         slot->ts_min      = ts;
         slot->ts_max      = ts;
         // Some metadata is only needed to pass it over to the application once the transfer is done.
-        slot->total_size = frame.meta.transfer_payload_size;
-        slot->priority   = frame.meta.priority;
+        slot->total_size = frame->meta.transfer_payload_size;
+        slot->priority   = frame->meta.priority;
     }
     // Enforce consistent per-frame values throughout the transfer.
-    if ((slot->total_size != frame.meta.transfer_payload_size) || (slot->priority != frame.meta.priority)) {
+    if ((slot->total_size != frame->meta.transfer_payload_size) || (slot->priority != frame->meta.priority)) {
         ++*errors_transfer_malformed;
-        mem_free_payload(payload_deleter, frame.base.origin);
+        mem_free_payload(payload_deleter, frame->base.origin);
         rx_slot_reset(slot, fragment_memory);
         return;
     }
     const rx_fragment_tree_update_result_t tree_res = rx_fragment_tree_update(&slot->fragments,
                                                                               fragment_memory,
                                                                               payload_deleter,
-                                                                              frame.base,
-                                                                              frame.meta.transfer_payload_size,
+                                                                              frame->base,
+                                                                              frame->meta.transfer_payload_size,
                                                                               extent,
                                                                               &slot->covered_prefix);
     if ((tree_res == rx_fragment_tree_accepted) || (tree_res == rx_fragment_tree_done)) {
         slot->ts_max         = later(slot->ts_max, ts);
         slot->ts_min         = earlier(slot->ts_min, ts);
-        const size_t crc_end = frame.base.offset + frame.base.payload.size;
+        const size_t crc_end = frame->base.offset + frame->base.payload.size;
         if (crc_end >= slot->crc_end) {
             slot->crc_end = crc_end;
-            slot->crc     = frame.base.crc;
+            slot->crc     = frame->base.crc;
         }
     }
     if (tree_res == rx_fragment_tree_oom) {
@@ -1082,11 +1082,11 @@ static void rx_slot_update(rx_slot_t* const            slot,
     }
 }
 
-// ---------------------------------------------  SESSION  ---------------------------------------------
+// ---------------------------------------------  SESSION & PORT  ---------------------------------------------
 
 /// Keep in mind that we have a dedicated session object per remote node per port; this means that the states
 /// kept here are specific per remote node, as it should be.
-typedef struct
+typedef struct rx_session_t
 {
     udpard_tree_t   index_remote_uid; ///< Must be the first member.
     udpard_remote_t remote;           ///< Most recent discovered reverse path for P2P to the sender.
@@ -1110,6 +1110,21 @@ typedef struct
 
     rx_slot_t slots[RX_SLOT_COUNT];
 } rx_session_t;
+
+/// The reassembly strategy is composed once at initialization time by choosing a vtable with the desired behavior.
+typedef struct udpard_rx_port_vtable_private_t
+{
+    /// Takes ownership of the frame payload.
+    void (*accept)(udpard_rx_t*,
+                   udpard_rx_port_t*,
+                   udpard_us_t,
+                   udpard_udpip_ep_t,
+                   rx_frame_t*,
+                   udpard_mem_deleter_t,
+                   uint_fast8_t);
+    /// Takes ownership of the frame payload.
+    void (*update_session)(rx_session_t*, udpard_rx_t*, udpard_us_t, rx_frame_t*, udpard_mem_deleter_t);
+} udpard_rx_port_vtable_private_t;
 
 /// The number of times `from` must be incremented (modulo 2^64) to reach `to`.
 static uint64_t rx_transfer_id_forward_distance(const uint64_t from, const uint64_t to) { return to - from; }
@@ -1381,99 +1396,16 @@ static rx_slot_t* rx_session_get_slot(rx_session_t* const self,
     return slot;
 }
 
-/// The ORDERED mode implementation. May delay incoming transfers to maintain strict transfer-ID ordering.
-static void rx_session_update_ordered(rx_session_t* const        self,
-                                      udpard_rx_t* const         rx,
-                                      const udpard_us_t          ts,
-                                      const rx_frame_t           frame,
-                                      const udpard_mem_deleter_t payload_deleter)
-{
-    // The queries here may be a bit time-consuming. If this becomes a problem, there are many ways to optimize this.
-    const bool is_ejected         = rx_session_is_transfer_ejected(self, frame.meta.transfer_id);
-    const bool is_late_or_ejected = rx_session_is_transfer_late_or_ejected(self, frame.meta.transfer_id);
-    const bool is_interned        = rx_session_is_transfer_interned(self, frame.meta.transfer_id);
-    const bool is_new             = !is_late_or_ejected && !is_interned;
-    if (is_new) {
-        rx_slot_t* const slot = rx_session_get_slot(self, rx, ts, frame.meta.transfer_id);
-        UDPARD_ASSERT((slot != NULL) && (slot->state != rx_slot_done));
-        UDPARD_ASSERT((slot->state == rx_slot_idle) ||
-                      ((slot->state == rx_slot_busy) && (slot->transfer_id == frame.meta.transfer_id)));
-        rx_slot_update(slot,
-                       ts,
-                       self->port->memory.fragment,
-                       payload_deleter,
-                       frame,
-                       self->port->extent,
-                       &rx->errors_oom,
-                       &rx->errors_transfer_malformed);
-        if (slot->state == rx_slot_done) {
-            UDPARD_ASSERT(rx_session_is_transfer_interned(self, slot->transfer_id));
-            if (frame.meta.flag_ack) {
-                rx_session_on_ack_mandate(
-                  self, rx, slot->priority, slot->transfer_id, ((udpard_fragment_t*)cavl2_min(slot->fragments))->view);
-            }
-            rx_session_ordered_scan_slots(self, rx, ts, false);
-        }
-    } else { // retransmit ACK if needed
-        // Note: transfers that are no longer retained in the history will not solicit an ACK response,
-        // meaning that the sender will not get a confirmation if the retransmitted transfer is too old.
-        // We assume that RX_TRANSFER_HISTORY_COUNT is enough to cover all sensible use cases.
-        if ((is_interned || is_ejected) && frame.meta.flag_ack && (frame.base.offset == 0U)) {
-            rx_session_on_ack_mandate(self, rx, frame.meta.priority, frame.meta.transfer_id, frame.base.payload);
-        }
-        mem_free_payload(payload_deleter, frame.base.origin);
-    }
-}
-
-/// The UNORDERED mode implementation. Ejects every transfer immediately upon completion without delay.
-static void rx_session_update_unordered(rx_session_t* const        self,
-                                        udpard_rx_t* const         rx,
-                                        const udpard_us_t          ts,
-                                        const rx_frame_t           frame,
-                                        const udpard_mem_deleter_t payload_deleter)
-{
-    UDPARD_ASSERT(self->port->reordering_window < 0);
-    // We do not check interned transfers because in the UNORDERED mode they are never interned, always ejected ASAP.
-    // We don't care about the ordering, either; we just accept anything that looks new.
-    if (!rx_session_is_transfer_ejected(self, frame.meta.transfer_id)) {
-        rx_slot_t* const slot = rx_session_get_slot(self, rx, ts, frame.meta.transfer_id); // new or continuation
-        UDPARD_ASSERT((slot != NULL) && (slot->state != rx_slot_done));
-        UDPARD_ASSERT((slot->state == rx_slot_idle) ||
-                      ((slot->state == rx_slot_busy) && (slot->transfer_id == frame.meta.transfer_id)));
-        rx_slot_update(slot,
-                       ts,
-                       self->port->memory.fragment,
-                       payload_deleter,
-                       frame,
-                       self->port->extent,
-                       &rx->errors_oom,
-                       &rx->errors_transfer_malformed);
-        if (slot->state == rx_slot_done) {
-            if (frame.meta.flag_ack) {
-                rx_session_on_ack_mandate(
-                  self, rx, slot->priority, slot->transfer_id, ((udpard_fragment_t*)cavl2_min(slot->fragments))->view);
-            }
-            rx_session_eject(self, rx, slot);
-        }
-    } else { // retransmit ACK if needed
-        if (frame.meta.flag_ack && (frame.base.offset == 0U)) {
-            UDPARD_ASSERT(rx_session_is_transfer_ejected(self, frame.meta.transfer_id));
-            rx_session_on_ack_mandate(self, rx, frame.meta.priority, frame.meta.transfer_id, frame.base.payload);
-        }
-        mem_free_payload(payload_deleter, frame.base.origin);
-    }
-}
-
 static void rx_session_update(rx_session_t* const        self,
                               udpard_rx_t* const         rx,
                               const udpard_us_t          ts,
                               const udpard_udpip_ep_t    src_ep,
-                              const rx_frame_t           frame,
+                              rx_frame_t* const          frame,
                               const udpard_mem_deleter_t payload_deleter,
                               const uint_fast8_t         ifindex)
 {
-    UDPARD_ASSERT(self->remote.uid == frame.meta.sender_uid);
-    UDPARD_ASSERT(frame.meta.topic_hash == self->port->topic_hash); // must be checked by the caller beforehand
+    UDPARD_ASSERT(self->remote.uid == frame->meta.sender_uid);
+    UDPARD_ASSERT(frame->meta.topic_hash == self->port->topic_hash); // must be checked by the caller beforehand
 
     // Animate the session to prevent it from being retired.
     enlist_head(&rx->list_session_by_animation, &self->list_by_animation);
@@ -1490,14 +1422,168 @@ static void rx_session_update(rx_session_t* const        self,
         self->initialized     = true;
         self->history_current = 0;
         for (size_t i = 0; i < RX_TRANSFER_HISTORY_COUNT; i++) {
-            self->history[i] = frame.meta.transfer_id - 1U;
+            self->history[i] = frame->meta.transfer_id - 1U;
         }
     }
-
-    // Accept the frame depending on the selected reassembly mode.
-    const bool ordered = self->port->reordering_window >= 0;
-    (ordered ? rx_session_update_ordered : rx_session_update_unordered)(self, rx, ts, frame, payload_deleter);
+    self->port->vtable_private->update_session(self, rx, ts, frame, payload_deleter);
 }
+
+/// The ORDERED mode implementation. May delay incoming transfers to maintain strict transfer-ID ordering.
+static void rx_session_update_ordered(rx_session_t* const        self,
+                                      udpard_rx_t* const         rx,
+                                      const udpard_us_t          ts,
+                                      rx_frame_t* const          frame,
+                                      const udpard_mem_deleter_t payload_deleter)
+{
+    // The queries here may be a bit time-consuming. If this becomes a problem, there are many ways to optimize this.
+    const bool is_ejected         = rx_session_is_transfer_ejected(self, frame->meta.transfer_id);
+    const bool is_late_or_ejected = rx_session_is_transfer_late_or_ejected(self, frame->meta.transfer_id);
+    const bool is_interned        = rx_session_is_transfer_interned(self, frame->meta.transfer_id);
+    const bool is_new             = !is_late_or_ejected && !is_interned;
+    if (is_new) {
+        rx_slot_t* const slot = rx_session_get_slot(self, rx, ts, frame->meta.transfer_id);
+        UDPARD_ASSERT((slot != NULL) && (slot->state != rx_slot_done));
+        UDPARD_ASSERT((slot->state == rx_slot_idle) ||
+                      ((slot->state == rx_slot_busy) && (slot->transfer_id == frame->meta.transfer_id)));
+        rx_slot_update(slot,
+                       ts,
+                       self->port->memory.fragment,
+                       payload_deleter,
+                       frame,
+                       self->port->extent,
+                       &rx->errors_oom,
+                       &rx->errors_transfer_malformed);
+        if (slot->state == rx_slot_done) {
+            UDPARD_ASSERT(rx_session_is_transfer_interned(self, slot->transfer_id));
+            if (frame->meta.flag_ack) {
+                rx_session_on_ack_mandate(
+                  self, rx, slot->priority, slot->transfer_id, ((udpard_fragment_t*)cavl2_min(slot->fragments))->view);
+            }
+            rx_session_ordered_scan_slots(self, rx, ts, false);
+        }
+    } else { // retransmit ACK if needed
+        // Note: transfers that are no longer retained in the history will not solicit an ACK response,
+        // meaning that the sender will not get a confirmation if the retransmitted transfer is too old.
+        // We assume that RX_TRANSFER_HISTORY_COUNT is enough to cover all sensible use cases.
+        if ((is_interned || is_ejected) && frame->meta.flag_ack && (frame->base.offset == 0U)) {
+            rx_session_on_ack_mandate(self, rx, frame->meta.priority, frame->meta.transfer_id, frame->base.payload);
+        }
+        mem_free_payload(payload_deleter, frame->base.origin);
+    }
+}
+
+/// The UNORDERED mode implementation. Ejects every transfer immediately upon completion without delay.
+static void rx_session_update_unordered(rx_session_t* const        self,
+                                        udpard_rx_t* const         rx,
+                                        const udpard_us_t          ts,
+                                        rx_frame_t* const          frame,
+                                        const udpard_mem_deleter_t payload_deleter)
+{
+    UDPARD_ASSERT(self->port->reordering_window < 0);
+    // We do not check interned transfers because in the UNORDERED mode they are never interned, always ejected ASAP.
+    // We don't care about the ordering, either; we just accept anything that looks new.
+    if (!rx_session_is_transfer_ejected(self, frame->meta.transfer_id)) {
+        rx_slot_t* const slot = rx_session_get_slot(self, rx, ts, frame->meta.transfer_id); // new or continuation
+        UDPARD_ASSERT((slot != NULL) && (slot->state != rx_slot_done));
+        UDPARD_ASSERT((slot->state == rx_slot_idle) ||
+                      ((slot->state == rx_slot_busy) && (slot->transfer_id == frame->meta.transfer_id)));
+        rx_slot_update(slot,
+                       ts,
+                       self->port->memory.fragment,
+                       payload_deleter,
+                       frame,
+                       self->port->extent,
+                       &rx->errors_oom,
+                       &rx->errors_transfer_malformed);
+        if (slot->state == rx_slot_done) {
+            if (frame->meta.flag_ack) {
+                rx_session_on_ack_mandate(
+                  self, rx, slot->priority, slot->transfer_id, ((udpard_fragment_t*)cavl2_min(slot->fragments))->view);
+            }
+            rx_session_eject(self, rx, slot);
+        }
+    } else { // retransmit ACK if needed
+        if (frame->meta.flag_ack && (frame->base.offset == 0U)) {
+            UDPARD_ASSERT(rx_session_is_transfer_ejected(self, frame->meta.transfer_id));
+            rx_session_on_ack_mandate(self, rx, frame->meta.priority, frame->meta.transfer_id, frame->base.payload);
+        }
+        mem_free_payload(payload_deleter, frame->base.origin);
+    }
+}
+
+/// The stateful strategy maintains a dedicated session per remote node, indexed in a fast AVL tree.
+static void rx_port_accept_stateful(udpard_rx_t* const         rx,
+                                    udpard_rx_port_t* const    port,
+                                    const udpard_us_t          timestamp,
+                                    const udpard_udpip_ep_t    source_ep,
+                                    rx_frame_t* const          frame,
+                                    const udpard_mem_deleter_t payload_deleter,
+                                    const uint_fast8_t         redundant_iface_index)
+{
+    rx_session_factory_args_t fac_args = { .owner                 = port,
+                                           .sessions_by_animation = &rx->list_session_by_animation,
+                                           .remote_uid            = frame->meta.sender_uid,
+                                           .now                   = timestamp };
+    rx_session_t* const       ses      = // Will find an existing one or create a new one.
+      (rx_session_t*)(void*)cavl2_find_or_insert(&port->index_session_by_remote_uid,
+                                                 &frame->meta.sender_uid,
+                                                 &cavl_compare_rx_session_by_remote_uid,
+                                                 &fac_args,
+                                                 &cavl_factory_rx_session_by_remote_uid);
+    if (ses != NULL) {
+        rx_session_update(ses, rx, timestamp, source_ep, frame, payload_deleter, redundant_iface_index);
+    } else {
+        mem_free_payload(payload_deleter, frame->base.origin);
+        ++rx->errors_oom;
+    }
+}
+
+/// The stateless strategy accepts only single-frame transfers and does not maintain any session state.
+static void rx_port_accept_stateless(udpard_rx_t* const         rx,
+                                     udpard_rx_port_t* const    port,
+                                     const udpard_us_t          timestamp,
+                                     const udpard_udpip_ep_t    source_ep,
+                                     rx_frame_t* const          frame,
+                                     const udpard_mem_deleter_t payload_deleter,
+                                     const uint_fast8_t         redundant_iface_index)
+{
+    const size_t required_size = smaller(port->extent, frame->meta.transfer_payload_size);
+    const bool   full_transfer = (frame->base.offset == 0) && (frame->base.payload.size >= required_size);
+    if (full_transfer) {
+        // The fragment allocation is only needed to uphold the callback protocol.
+        // Maybe we could do something about it in the future to avoid this allocation.
+        udpard_fragment_t* const frag = rx_fragment_new(port->memory.fragment, payload_deleter, frame->base);
+        if (frag != NULL) {
+            udpard_remote_t remote                  = { .uid = frame->meta.sender_uid };
+            remote.endpoints[redundant_iface_index] = source_ep;
+            // The CRC is validated by the frame parser for the first frame of any transfer. It is certainly correct.
+            UDPARD_ASSERT(frame->base.crc == crc_full(frame->base.payload.size, frame->base.payload.data));
+            const udpard_rx_transfer_t transfer = {
+                .timestamp           = timestamp,
+                .priority            = frame->meta.priority,
+                .transfer_id         = frame->meta.transfer_id,
+                .remote              = remote,
+                .payload_size_stored = required_size,
+                .payload_size_wire   = frame->meta.transfer_payload_size,
+                .payload             = frag,
+            };
+            port->vtable->on_message(rx, port, transfer);
+        } else {
+            mem_free_payload(payload_deleter, frame->base.origin);
+            ++rx->errors_oom;
+        }
+    } else {
+        mem_free_payload(payload_deleter, frame->base.origin);
+        ++rx->errors_transfer_malformed; // The stateless mode expects only single-frame transfers.
+    }
+}
+
+static const udpard_rx_port_vtable_private_t rx_port_vtb_ordered   = { .accept         = rx_port_accept_stateful,
+                                                                       .update_session = rx_session_update_ordered };
+static const udpard_rx_port_vtable_private_t rx_port_vtb_unordered = { .accept         = rx_port_accept_stateful,
+                                                                       .update_session = rx_session_update_unordered };
+static const udpard_rx_port_vtable_private_t rx_port_vtb_stateless = { .accept         = rx_port_accept_stateless,
+                                                                       .update_session = NULL };
 
 // ---------------------------------------------  RX PUBLIC API  ---------------------------------------------
 
@@ -1562,6 +1648,13 @@ bool udpard_rx_port_new(udpard_rx_port_t* const              self,
         self->index_session_by_remote_uid = NULL;
         self->vtable                      = vtable;
         self->user                        = NULL;
+        if (reordering_window == UDPARD_RX_REORDERING_WINDOW_STATELESS) {
+            self->vtable_private = &rx_port_vtb_stateless;
+        } else if (reordering_window == UDPARD_RX_REORDERING_WINDOW_UNORDERED) {
+            self->vtable_private = &rx_port_vtb_unordered;
+        } else {
+            self->vtable_private = &rx_port_vtb_ordered;
+        }
     }
     return ok;
 }
@@ -1577,75 +1670,6 @@ void udpard_rx_port_free(udpard_rx_t* const rx, udpard_rx_port_t* const port)
     }
 }
 
-/// Takes ownership of the frame payload.
-static void rx_port_accept_stateful(udpard_rx_t* const         rx,
-                                    udpard_rx_port_t* const    port,
-                                    const udpard_us_t          timestamp,
-                                    const udpard_udpip_ep_t    source_ep,
-                                    const rx_frame_t           frame,
-                                    const udpard_mem_deleter_t payload_deleter,
-                                    const uint_fast8_t         redundant_iface_index)
-{
-    rx_session_factory_args_t fac_args = {
-        .owner                 = port,
-        .sessions_by_animation = &rx->list_session_by_animation,
-        .remote_uid            = frame.meta.sender_uid,
-        .now                   = timestamp,
-    };
-    rx_session_t* const ses = // Will find an existing one or create a new one.
-      (rx_session_t*)(void*)cavl2_find_or_insert(&port->index_session_by_remote_uid,
-                                                 &frame.meta.sender_uid,
-                                                 &cavl_compare_rx_session_by_remote_uid,
-                                                 &fac_args,
-                                                 &cavl_factory_rx_session_by_remote_uid);
-    if (ses != NULL) {
-        rx_session_update(ses, rx, timestamp, source_ep, frame, payload_deleter, redundant_iface_index);
-    } else {
-        mem_free_payload(payload_deleter, frame.base.origin);
-        ++rx->errors_oom;
-    }
-}
-
-/// Takes ownership of the frame payload.
-static void rx_port_accept_stateless(udpard_rx_t* const         rx,
-                                     udpard_rx_port_t* const    port,
-                                     const udpard_us_t          timestamp,
-                                     const udpard_udpip_ep_t    source_ep,
-                                     const rx_frame_t           frame,
-                                     const udpard_mem_deleter_t payload_deleter,
-                                     const uint_fast8_t         redundant_iface_index)
-{
-    const size_t required_size = smaller(port->extent, frame.meta.transfer_payload_size);
-    const bool   full_transfer = (frame.base.offset == 0) && (frame.base.payload.size >= required_size);
-    if (full_transfer) {
-        // The fragment allocation is only needed to uphold the callback protocol.
-        // Maybe we could do something about it in the future to avoid this allocation.
-        udpard_fragment_t* const frag = rx_fragment_new(port->memory.fragment, payload_deleter, frame.base);
-        if (frag != NULL) {
-            udpard_remote_t remote                  = { .uid = frame.meta.sender_uid };
-            remote.endpoints[redundant_iface_index] = source_ep;
-            // The CRC is validated by the frame parser for the first frame of any transfer. It is certainly correct.
-            UDPARD_ASSERT(frame.base.crc == crc_full(frame.base.payload.size, frame.base.payload.data));
-            const udpard_rx_transfer_t transfer = {
-                .timestamp           = timestamp,
-                .priority            = frame.meta.priority,
-                .transfer_id         = frame.meta.transfer_id,
-                .remote              = remote,
-                .payload_size_stored = required_size,
-                .payload_size_wire   = frame.meta.transfer_payload_size,
-                .payload             = frag,
-            };
-            port->vtable->on_message(rx, port, transfer);
-        } else {
-            mem_free_payload(payload_deleter, frame.base.origin);
-            ++rx->errors_oom;
-        }
-    } else {
-        mem_free_payload(payload_deleter, frame.base.origin);
-        ++rx->errors_transfer_malformed; // The stateless mode expects only single-frame transfers.
-    }
-}
-
 bool udpard_rx_port_push(udpard_rx_t* const         rx,
                          udpard_rx_port_t* const    port,
                          const udpard_us_t          timestamp,
@@ -1658,7 +1682,6 @@ bool udpard_rx_port_push(udpard_rx_t* const         rx,
                     (datagram_payload.data != NULL) && (payload_deleter.free != NULL) &&
                     (redundant_iface_index < UDPARD_NETWORK_INTERFACE_COUNT_MAX);
     if (ok) {
-        // Parse and validate the frame.
         rx_frame_t frame       = { 0 };
         uint32_t   frame_index = 0;
         uint32_t   offset_32   = 0;
@@ -1667,12 +1690,10 @@ bool udpard_rx_port_push(udpard_rx_t* const         rx,
         frame.base.offset = (size_t)offset_32;
         (void)frame_index;                    // currently not used by this reassembler implementation.
         frame.base.origin = datagram_payload; // Take ownership of the payload.
-        // Process the frame.
         if (frame_valid) {
             if (frame.meta.topic_hash == port->topic_hash) {
-                const bool stateful = (port->reordering_window != UDPARD_RX_REORDERING_WINDOW_STATELESS);
-                (stateful ? rx_port_accept_stateful : rx_port_accept_stateless)(
-                  rx, port, timestamp, source_ep, frame, payload_deleter, redundant_iface_index);
+                port->vtable_private->accept(
+                  rx, port, timestamp, source_ep, &frame, payload_deleter, redundant_iface_index);
             } else { // Collisions are discovered early so that we don't attempt to allocate sessions for them.
                 mem_free_payload(payload_deleter, frame.base.origin);
                 udpard_remote_t remote                  = { .uid = frame.meta.sender_uid };
