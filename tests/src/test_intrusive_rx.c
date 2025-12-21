@@ -2896,8 +2896,8 @@ static void test_rx_port(void)
 
     udpard_rx_port_t port_stateless;
     const uint64_t   topic_hash_stateless = 0xFEDCBA0987654321ULL;
-    TEST_ASSERT(
-      udpard_rx_port_new(&port_stateless, topic_hash_stateless, 500, UDPARD_RX_REORDERING_WINDOW_STATELESS, rx_mem, &callbacks));
+    TEST_ASSERT(udpard_rx_port_new(
+      &port_stateless, topic_hash_stateless, 500, UDPARD_RX_REORDERING_WINDOW_STATELESS, rx_mem, &callbacks));
 
     udpard_us_t now = 0;
 
@@ -3424,7 +3424,8 @@ static void test_rx_port_oom(void)
     udpard_rx_port_t port_ordered;
     udpard_rx_port_t port_stateless;
     TEST_ASSERT(udpard_rx_port_new(&port_ordered, 0xAAAALL, 100, 20000, rx_mem, &callbacks));
-    TEST_ASSERT(udpard_rx_port_new(&port_stateless, 0xBBBBLL, 100, UDPARD_RX_REORDERING_WINDOW_STATELESS, rx_mem, &callbacks));
+    TEST_ASSERT(
+      udpard_rx_port_new(&port_stateless, 0xBBBBLL, 100, UDPARD_RX_REORDERING_WINDOW_STATELESS, rx_mem, &callbacks));
     udpard_us_t      now             = 0;
     const byte_t     payload_state[] = { 's', 't', 'a', 't', 'e', 'f', 'u', 'l' };
     const size_t     payload_len     = sizeof(payload_state);
@@ -3511,7 +3512,8 @@ static void test_rx_port_free_loop(void)
     rx.user = &cb_result;
 
     udpard_rx_port_t port_p2p;
-    TEST_ASSERT(udpard_rx_port_new(&port_p2p, local_uid, SIZE_MAX, UDPARD_RX_REORDERING_WINDOW_UNORDERED, rx_mem, &callbacks));
+    TEST_ASSERT(
+      udpard_rx_port_new(&port_p2p, local_uid, SIZE_MAX, UDPARD_RX_REORDERING_WINDOW_UNORDERED, rx_mem, &callbacks));
 
     udpard_rx_port_t port_extra;
     const uint64_t   topic_hash_extra = 0xDEADBEEFF00D1234ULL;
