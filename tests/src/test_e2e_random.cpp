@@ -44,7 +44,6 @@ struct Context
     std::unordered_map<TransferKey, ExpectedPayload, TransferKeyHash> expected;
     size_t                                                            received         = 0;
     size_t                                                            collisions       = 0;
-    size_t                                                            ack_mandates     = 0;
     size_t                                                            truncated        = 0;
     uint64_t                                                          remote_uid       = 0;
     std::array<udpard_udpip_ep_t, UDPARD_NETWORK_INTERFACE_COUNT_MAX> remote_endpoints = {};
@@ -122,15 +121,7 @@ void on_collision(udpard_rx_t* const rx, udpard_rx_port_t* const port, const udp
     (void)remote;
     ctx->collisions++;
 }
-
-void on_ack_mandate(udpard_rx_t* const rx, udpard_rx_port_t* const port, const udpard_rx_ack_mandate_t mandate)
-{
-    auto* ctx = static_cast<Context*>(rx->user);
-    (void)port;
-    (void)mandate;
-    ctx->ack_mandates++;
-}
-constexpr udpard_rx_port_vtable_t callbacks{ &on_message, &on_collision, &on_ack_mandate };
+constexpr udpard_rx_port_vtable_t callbacks{ &on_message, &on_collision };
 
 /// Randomized end-to-end TX/RX covering fragmentation, reordering, and extent-driven truncation.
 void test_udpard_tx_rx_end_to_end()
@@ -156,7 +147,8 @@ void test_udpard_tx_rx_end_to_end()
     const udpard_rx_mem_resources_t rx_mem{ .session  = instrumented_allocator_make_resource(&rx_alloc_session),
                                             .fragment = instrumented_allocator_make_resource(&rx_alloc_frag) };
     udpard_rx_t                     rx;
-    udpard_rx_new(&rx);
+    std::array<udpard_tx_t*, UDPARD_NETWORK_INTERFACE_COUNT_MAX> rx_tx{};
+    udpard_rx_new(&rx, rx_tx.data(), 0);
 
     // Test parameters.
     constexpr std::array<uint64_t, 3>    topic_hashes{ 0x123456789ABCDEF0ULL,
@@ -266,7 +258,6 @@ void test_udpard_tx_rx_end_to_end()
     TEST_ASSERT_EQUAL_size_t(1000, ctx.received);
     TEST_ASSERT_TRUE(ctx.truncated > 0);
     TEST_ASSERT_EQUAL_size_t(0, ctx.collisions);
-    TEST_ASSERT_EQUAL_size_t(0, ctx.ack_mandates);
     for (auto& port : ports) {
         udpard_rx_port_free(&rx, &port);
     }

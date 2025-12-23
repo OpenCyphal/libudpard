@@ -15,14 +15,12 @@ namespace {
 
 void                              on_message(udpard_rx_t* rx, udpard_rx_port_t* port, udpard_rx_transfer_t transfer);
 void                              on_collision(udpard_rx_t* rx, udpard_rx_port_t* port, udpard_remote_t remote);
-void                              on_ack_mandate(udpard_rx_t* rx, udpard_rx_port_t* port, udpard_rx_ack_mandate_t am);
-constexpr udpard_rx_port_vtable_t callbacks{ &on_message, &on_collision, &on_ack_mandate };
+constexpr udpard_rx_port_vtable_t callbacks{ &on_message, &on_collision };
 
 struct Context
 {
     std::vector<uint64_t> ids;
     size_t                collisions   = 0;
-    size_t                ack_mandates = 0;
     uint64_t              expected_uid = 0;
     udpard_udpip_ep_t     source       = {};
 };
@@ -62,7 +60,8 @@ struct Fixture
         dest               = udpard_make_subject_endpoint(222U);
 
         TEST_ASSERT_TRUE(udpard_tx_new(&tx, 0x0A0B0C0D0E0F1011ULL, 16, tx_mem));
-        udpard_rx_new(&rx);
+        std::array<udpard_tx_t*, UDPARD_NETWORK_INTERFACE_COUNT_MAX> rx_tx{};
+        udpard_rx_new(&rx, rx_tx.data(), 0);
         ctx.expected_uid = tx.local_uid;
         ctx.source       = source;
         rx.user          = &ctx;
@@ -122,12 +121,6 @@ void on_collision(udpard_rx_t* const rx, udpard_rx_port_t* const /*port*/, const
     ctx->collisions++;
 }
 
-void on_ack_mandate(udpard_rx_t* const rx, udpard_rx_port_t* const /*port*/, const udpard_rx_ack_mandate_t /*am*/)
-{
-    auto* const ctx = static_cast<Context*>(rx->user);
-    ctx->ack_mandates++;
-}
-
 /// UNORDERED mode should drop duplicates while keeping arrival order.
 void test_udpard_rx_unordered_duplicates()
 {
@@ -148,7 +141,6 @@ void test_udpard_rx_unordered_duplicates()
         TEST_ASSERT_EQUAL_UINT64(expected[i], fix.ctx.ids[i]);
     }
     TEST_ASSERT_EQUAL_size_t(0, fix.ctx.collisions);
-    TEST_ASSERT_EQUAL_size_t(0, fix.ctx.ack_mandates);
 }
 
 /// ORDERED mode waits for the window, then rejects late arrivals.
@@ -190,7 +182,6 @@ void test_udpard_rx_ordered_out_of_order()
         TEST_ASSERT_EQUAL_UINT64(expected[i], fix.ctx.ids[i]);
     }
     TEST_ASSERT_EQUAL_size_t(0, fix.ctx.collisions);
-    TEST_ASSERT_EQUAL_size_t(0, fix.ctx.ack_mandates);
 }
 
 /// ORDERED mode after head advance should reject late IDs arriving after window expiry.
@@ -226,7 +217,6 @@ void test_udpard_rx_ordered_head_advanced_late()
         TEST_ASSERT_EQUAL_UINT64(expected[i], fix.ctx.ids[i]);
     }
     TEST_ASSERT_EQUAL_size_t(0, fix.ctx.collisions);
-    TEST_ASSERT_EQUAL_size_t(0, fix.ctx.ack_mandates);
 }
 
 } // namespace

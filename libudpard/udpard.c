@@ -757,6 +757,7 @@ static void tx_send_ack(udpard_rx_t* const    rx,
     ptr = serialize_u64(ptr, topic_hash);
     ptr = serialize_u64(ptr, transfer_id);
     UDPARD_ASSERT((ptr - header) == UDPARD_P2P_HEADER_BYTES);
+    (void)ptr;
     const udpard_bytes_t payload = { .size = UDPARD_P2P_HEADER_BYTES, .data = header };
 
     // Enqueue the ack transfer.
@@ -1734,6 +1735,7 @@ static void rx_p2p_on_message(udpard_rx_t* const rx, udpard_rx_port_t* const por
     ptr                  = deserialize_u64(ptr, &topic_hash);
     ptr                  = deserialize_u64(ptr, &transfer_id);
     UDPARD_ASSERT((ptr == (UDPARD_P2P_HEADER_BYTES + (byte_t*)frag0->view.data)));
+    (void)ptr;
 
     // Remove the header from the view.
     frag0->view.size -= UDPARD_P2P_HEADER_BYTES;
@@ -1770,7 +1772,7 @@ bool udpard_rx_port_new_p2p(udpard_rx_port_p2p_t* const              self,
                                                    .on_collision = rx_p2p_on_collision };
     if ((self != NULL) && (vtable != NULL) && (vtable->on_message != NULL)) {
         self->vtable = vtable;
-        return udpard_rx_port_new((udpard_rx_port_t*)&self, //
+        return udpard_rx_port_new((udpard_rx_port_t*)self, //
                                   local_uid,
                                   extent + UDPARD_P2P_HEADER_BYTES,
                                   UDPARD_RX_REORDERING_WINDOW_UNORDERED,
