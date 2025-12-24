@@ -107,6 +107,44 @@ static void mem_free_payload(const udpard_mem_deleter_t memory, const udpard_byt
     }
 }
 
+static byte_t* serialize_u32(byte_t* ptr, const uint32_t value)
+{
+    for (size_t i = 0; i < sizeof(value); i++) {
+        *ptr++ = (byte_t)((byte_t)(value >> (i * 8U)) & 0xFFU);
+    }
+    return ptr;
+}
+
+static byte_t* serialize_u64(byte_t* ptr, const uint64_t value)
+{
+    for (size_t i = 0; i < sizeof(value); i++) {
+        *ptr++ = (byte_t)((byte_t)(value >> (i * 8U)) & 0xFFU);
+    }
+    return ptr;
+}
+
+static const byte_t* deserialize_u32(const byte_t* ptr, uint32_t* const out_value)
+{
+    UDPARD_ASSERT((ptr != NULL) && (out_value != NULL));
+    *out_value = 0;
+    for (size_t i = 0; i < sizeof(*out_value); i++) {
+        *out_value |= (uint32_t)((uint32_t)*ptr << (i * 8U)); // NOLINT(google-readability-casting) NOSONAR
+        ptr++;
+    }
+    return ptr;
+}
+
+static const byte_t* deserialize_u64(const byte_t* ptr, uint64_t* const out_value)
+{
+    UDPARD_ASSERT((ptr != NULL) && (out_value != NULL));
+    *out_value = 0;
+    for (size_t i = 0; i < sizeof(*out_value); i++) {
+        *out_value |= ((uint64_t)*ptr << (i * 8U));
+        ptr++;
+    }
+    return ptr;
+}
+
 // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
 static void mem_zero(const size_t size, void* const data) { (void)memset(data, 0, size); }
 
@@ -290,6 +328,52 @@ static uint32_t crc_full(const size_t n_bytes, const void* const data)
     return crc_add(CRC_INITIAL, n_bytes, data) ^ CRC_OUTPUT_XOR;
 }
 
+// ---------------------------------------------  LIST CONTAINER  ---------------------------------------------
+
+/// No effect if not in the list.
+static void delist(udpard_list_t* const list, udpard_list_member_t* const member)
+{
+    if (member->next != NULL) {
+        member->next->prev = member->prev;
+    }
+    if (member->prev != NULL) {
+        member->prev->next = member->next;
+    }
+    if (list->head == member) {
+        list->head = member->next;
+    }
+    if (list->tail == member) {
+        list->tail = member->prev;
+    }
+    member->next = NULL;
+    member->prev = NULL;
+    assert((list->head != NULL) == (list->tail != NULL));
+}
+
+/// If the item is already in the list, it will be delisted first. Can be used for moving to the front.
+static void enlist_head(udpard_list_t* const list, udpard_list_member_t* const member)
+{
+    delist(list, member);
+    assert((member->next == NULL) && (member->prev == NULL));
+    assert((list->head != NULL) == (list->tail != NULL));
+    member->next = list->head;
+    if (list->head != NULL) {
+        list->head->prev = member;
+    }
+    list->head = member;
+    if (list->tail == NULL) {
+        list->tail = member;
+    }
+    assert((list->head != NULL) && (list->tail != NULL));
+}
+
+#define LIST_MEMBER(ptr, owner_type, owner_field) ((owner_type*)unbias_ptr((ptr), offsetof(owner_type, owner_field)))
+static void* unbias_ptr(const void* const ptr, const size_t offset)
+{
+    return (ptr == NULL) ? NULL : (void*)((char*)ptr - offset);
+}
+#define LIST_TAIL(list, owner_type, owner_field) LIST_MEMBER((list).tail, owner_type, owner_field)
+
 // ---------------------------------------------------------------------------------------------------------------------
 // ---------------------------------------------          HEADER           ---------------------------------------------
 // ---------------------------------------------------------------------------------------------------------------------
@@ -308,44 +392,6 @@ typedef struct
     uint64_t      sender_uid;
     uint64_t      topic_hash;
 } meta_t;
-
-static byte_t* serialize_u32(byte_t* ptr, const uint32_t value)
-{
-    for (size_t i = 0; i < sizeof(value); i++) {
-        *ptr++ = (byte_t)((byte_t)(value >> (i * 8U)) & 0xFFU);
-    }
-    return ptr;
-}
-
-static byte_t* serialize_u64(byte_t* ptr, const uint64_t value)
-{
-    for (size_t i = 0; i < sizeof(value); i++) {
-        *ptr++ = (byte_t)((byte_t)(value >> (i * 8U)) & 0xFFU);
-    }
-    return ptr;
-}
-
-static const byte_t* deserialize_u32(const byte_t* ptr, uint32_t* const out_value)
-{
-    UDPARD_ASSERT((ptr != NULL) && (out_value != NULL));
-    *out_value = 0;
-    for (size_t i = 0; i < sizeof(*out_value); i++) {
-        *out_value |= (uint32_t)((uint32_t)*ptr << (i * 8U)); // NOLINT(google-readability-casting) NOSONAR
-        ptr++;
-    }
-    return ptr;
-}
-
-static const byte_t* deserialize_u64(const byte_t* ptr, uint64_t* const out_value)
-{
-    UDPARD_ASSERT((ptr != NULL) && (out_value != NULL));
-    *out_value = 0;
-    for (size_t i = 0; i < sizeof(*out_value); i++) {
-        *out_value |= ((uint64_t)*ptr << (i * 8U));
-        ptr++;
-    }
-    return ptr;
-}
 
 static byte_t* header_serialize(byte_t* const  buffer,
                                 const meta_t   meta,
@@ -419,135 +465,89 @@ static bool header_deserialize(const udpard_bytes_mut_t dgram_payload,
     return ok;
 }
 
-// ---------------------------------------------  LIST CONTAINER  ---------------------------------------------
-
-/// No effect if not in the list.
-static void delist(udpard_list_t* const list, udpard_list_member_t* const member)
-{
-    if (member->next != NULL) {
-        member->next->prev = member->prev;
-    }
-    if (member->prev != NULL) {
-        member->prev->next = member->next;
-    }
-    if (list->head == member) {
-        list->head = member->next;
-    }
-    if (list->tail == member) {
-        list->tail = member->prev;
-    }
-    member->next = NULL;
-    member->prev = NULL;
-    assert((list->head != NULL) == (list->tail != NULL));
-}
-
-/// If the item is already in the list, it will be delisted first. Can be used for moving to the front.
-static void enlist_head(udpard_list_t* const list, udpard_list_member_t* const member)
-{
-    delist(list, member);
-    assert((member->next == NULL) && (member->prev == NULL));
-    assert((list->head != NULL) == (list->tail != NULL));
-    member->next = list->head;
-    if (list->head != NULL) {
-        list->head->prev = member;
-    }
-    list->head = member;
-    if (list->tail == NULL) {
-        list->tail = member;
-    }
-    assert((list->head != NULL) && (list->tail != NULL));
-}
-
-#define LIST_MEMBER(ptr, owner_type, owner_field) ((owner_type*)unbias_ptr((ptr), offsetof(owner_type, owner_field)))
-static void* unbias_ptr(const void* const ptr, const size_t offset)
-{
-    return (ptr == NULL) ? NULL : (void*)((char*)ptr - offset);
-}
-#define LIST_TAIL(list, owner_type, owner_field) LIST_MEMBER((list).tail, owner_type, owner_field)
-
 // ---------------------------------------------------------------------------------------------------------------------
 // ---------------------------------------------        TX PIPELINE        ---------------------------------------------
 // ---------------------------------------------------------------------------------------------------------------------
 
-typedef struct tx_item_t
+/// This may be allocated in the NIC DMA region so we keep overheads tight.
+/// An alternative approach would be to have a flex array of tx_frame_t* pointers in the tx_transfer_t.
+typedef struct tx_frame_t
 {
-    udpard_tree_t index_order;
-    udpard_tree_t index_deadline;
+    struct tx_frame_t* next;
+    byte_t             data[];
+} tx_frame_t;
 
-    struct tx_item_t* head; ///< Points to the frame where offset=0. Points to itself if this is the first frame.
-    struct tx_item_t* next; ///< Next frame in this transfer ordered by offset; NULL if last.
+typedef struct tx_transfer_t
+{
+    /// Various indexes this transfer is a member of.
+    udpard_tree_t index_schedule; ///< Transmission order: next to transmit on the left.
+    udpard_tree_t index_deadline; ///< Soonest to expire on the left.
+    udpard_tree_t index_id;       ///< Ordered by the topic hash and the transfer-ID.
 
-    udpard_us_t        deadline;
-    udpard_prio_t      priority;
-    udpard_udpip_ep_t  destination;
-    udpard_bytes_mut_t datagram_payload;
-    void*              user_transfer_reference;
-} tx_item_t;
+    /// We always keep a pointer to the head, plus a cursor that scans the frames during transmission.
+    /// Both are NULL if the payload is destroyed.
+    /// The head points to the first frame unless it is known that no (further) retransmissions are needed,
+    /// in which case the old head is deleted and the head points to the next frame to transmit.
+    tx_frame_t* head;
+    tx_frame_t* cursor;
+
+    /// Retransmission state.
+    uint16_t    retries;
+    udpard_us_t next_attempt_at;
+
+    /// All frames except for the last one share the same MTU, so there's no use keeping dedicated size per frame.
+    size_t mtu;
+    size_t mtu_last;
+
+    /// Constant transfer properties supplied by the client.
+    uint64_t          topic_hash;
+    uint64_t          transfer_id;
+    udpard_us_t       deadline;
+    bool              reliable;
+    udpard_prio_t     priority;
+    udpard_udpip_ep_t destination;
+    void*             user_transfer_reference;
+} tx_transfer_t;
 
 static bool tx_validate_mem_resources(const udpard_tx_mem_resources_t memory)
 {
-    return (memory.fragment.alloc != NULL) && (memory.fragment.free != NULL) && //
+    return (memory.meta.alloc != NULL) && (memory.meta.free != NULL) && //
            (memory.payload.alloc != NULL) && (memory.payload.free != NULL);
 }
 
 /// Frames with identical weight are processed in the FIFO order.
 static int32_t tx_cavl_compare_prio(const void* const user, const udpard_tree_t* const node)
 {
-    return (((int)*(const udpard_prio_t*)user) >= (int)CAVL2_TO_OWNER(node, tx_item_t, index_order)->priority) ? +1
-                                                                                                               : -1;
+    return (((int)*(const udpard_prio_t*)user) >= (int)CAVL2_TO_OWNER(node, tx_frame_t, index_order)->priority) ? +1
+                                                                                                                : -1;
 }
 
 static int32_t tx_cavl_compare_deadline(const void* const user, const udpard_tree_t* const node)
 {
-    return ((*(const udpard_us_t*)user) >= CAVL2_TO_OWNER(node, tx_item_t, index_deadline)->deadline) ? +1 : -1;
+    return ((*(const udpard_us_t*)user) >= CAVL2_TO_OWNER(node, tx_frame_t, index_deadline)->deadline) ? +1 : -1;
 }
 
-static tx_item_t* tx_item_new(const udpard_tx_mem_resources_t memory,
-                              const udpard_us_t               deadline,
-                              const udpard_prio_t             priority,
-                              const udpard_udpip_ep_t         endpoint,
-                              const size_t                    datagram_payload_size,
-                              void* const                     user_transfer_reference)
+static tx_frame_t* tx_frame_new(const udpard_tx_mem_resources_t memory, const size_t payload_size)
 {
-    tx_item_t* out = mem_alloc(memory.fragment, sizeof(tx_item_t));
+    tx_frame_t* const out = mem_alloc(memory.payload, sizeof(tx_frame_t) + payload_size);
     if (out != NULL) {
-        out->index_order    = (udpard_tree_t){ 0 };
-        out->index_deadline = (udpard_tree_t){ 0 };
-        UDPARD_ASSERT(priority <= UDPARD_PRIORITY_MAX);
-        out->priority                = priority;
-        out->head                    = out;  // First by default.
-        out->next                    = NULL; // Last by default.
-        out->deadline                = deadline;
-        out->destination             = endpoint;
-        out->user_transfer_reference = user_transfer_reference;
-        void* const payload_data     = mem_alloc(memory.payload, datagram_payload_size);
-        if (NULL != payload_data) {
-            out->datagram_payload.data = payload_data;
-            out->datagram_payload.size = datagram_payload_size;
-        } else {
-            mem_free(memory.fragment, sizeof(tx_item_t), out);
-            out = NULL;
-        }
+        out->next = NULL; // Last by default.
     }
     return out;
 }
 
 typedef struct
 {
-    tx_item_t* head;
-    tx_item_t* tail;
-    size_t     count;
+    tx_frame_t* head;
+    tx_frame_t* tail;
+    size_t      count;
 } tx_chain_t;
 
-/// Produces a chain of tx queue items for later insertion into the tx queue. The tail is NULL if OOM.
-/// The caller is responsible for freeing the memory allocated for the chain.
+/// The tail is NULL if OOM. The caller is responsible for freeing the memory allocated for the chain.
 static tx_chain_t tx_spool(const udpard_tx_mem_resources_t memory,
                            const size_t                    mtu,
-                           const udpard_us_t               deadline,
                            const meta_t                    meta,
-                           const udpard_udpip_ep_t         endpoint,
-                           const udpard_bytes_t            payload,
-                           void* const                     user_transfer_reference)
+                           const udpard_bytes_t            payload)
 {
     UDPARD_ASSERT(mtu > 0);
     UDPARD_ASSERT((payload.data != NULL) || (payload.size == 0U));
@@ -555,13 +555,8 @@ static tx_chain_t tx_spool(const udpard_tx_mem_resources_t memory,
     tx_chain_t out        = { NULL, NULL, 0 };
     size_t     offset     = 0U;
     do {
-        const size_t     progress = smaller(payload.size - offset, mtu);
-        tx_item_t* const item     = tx_item_new(memory, //
-                                            deadline,
-                                            meta.priority,
-                                            endpoint,
-                                            progress + HEADER_SIZE_BYTES,
-                                            user_transfer_reference);
+        const size_t      progress = smaller(payload.size - offset, mtu);
+        tx_frame_t* const item     = tx_frame_new(memory, progress + HEADER_SIZE_BYTES);
         if (NULL == out.head) {
             out.head = item;
         } else {
@@ -571,11 +566,10 @@ static tx_chain_t tx_spool(const udpard_tx_mem_resources_t memory,
         if (NULL == out.tail) {
             break;
         }
-        item->head                   = out.head; // All frames in a transfer have a pointer to the head.
         const byte_t* const read_ptr = ((const byte_t*)payload.data) + offset;
         prefix_crc                   = crc_add(prefix_crc, progress, read_ptr);
-        byte_t* const write_ptr      = header_serialize(
-          item->datagram_payload.data, meta, (uint32_t)out.count, (uint32_t)offset, prefix_crc ^ CRC_OUTPUT_XOR);
+        byte_t* const write_ptr =
+          header_serialize(item->data, meta, (uint32_t)out.count, (uint32_t)offset, prefix_crc ^ CRC_OUTPUT_XOR);
         (void)memcpy(write_ptr, read_ptr, progress); // NOLINT(*DeprecatedOrUnsafeBufferHandling)
         offset += progress;
         UDPARD_ASSERT(offset <= payload.size);
@@ -587,7 +581,7 @@ static tx_chain_t tx_spool(const udpard_tx_mem_resources_t memory,
 
 /// Derives the ack timeout for an outgoing transfer using an empirical formula.
 /// The number of retries is initially zero when the transfer is sent for the first time.
-static udpard_us_t tx_ack_timeout(const udpard_us_t baseline, const udpard_prio_t prio, const uint_fast8_t retries)
+static udpard_us_t tx_ack_timeout(const udpard_us_t baseline, const udpard_prio_t prio, const uint16_t retries)
 {
     return baseline * (1L << smaller((uint16_t)prio + retries, 15)); // NOLINT(*-signed-bitwise)
 }
@@ -608,7 +602,7 @@ static uint32_t tx_push(udpard_tx_t* const      tx,
     } else {
         const tx_chain_t chain = tx_spool(tx->memory, mtu, deadline, meta, endpoint, payload, user_transfer_reference);
         if (chain.tail != NULL) { // Insert the head into the tx index. Only the head, the rest is linked-listed.
-            tx_item_t* const head = chain.head;
+            tx_frame_t* const head = chain.head;
             UDPARD_ASSERT(frame_count == chain.count);
             const udpard_tree_t* res = cavl2_find_or_insert(
               &tx->index_order, &head->priority, &tx_cavl_compare_prio, &head->index_order, &cavl2_trivial_factory);
@@ -626,11 +620,11 @@ static uint32_t tx_push(udpard_tx_t* const      tx,
             out = (uint32_t)chain.count;
         } else { // The queue is large enough but we ran out of heap memory, so we have to unwind the chain.
             tx->errors_oom++;
-            tx_item_t* head = chain.head;
+            tx_frame_t* head = chain.head;
             while (head != NULL) {
-                tx_item_t* const next = head->next;
+                tx_frame_t* const next = head->next;
                 mem_free(tx->memory.payload, head->datagram_payload.size, head->datagram_payload.data);
-                mem_free(tx->memory.fragment, sizeof(tx_item_t), head);
+                mem_free(tx->memory.fragment, sizeof(tx_frame_t), head);
                 head = next;
             }
         }
@@ -642,7 +636,7 @@ static uint64_t tx_purge_expired(udpard_tx_t* const self, const udpard_us_t now)
 {
     uint64_t count = 0;
     for (udpard_tree_t* p = cavl2_min(self->index_deadline); p != NULL;) {
-        tx_item_t* const item = CAVL2_TO_OWNER(p, tx_item_t, index_deadline);
+        tx_frame_t* const item = CAVL2_TO_OWNER(p, tx_frame_t, index_deadline);
         if (item->deadline >= now) {
             break;
         }
@@ -651,11 +645,11 @@ static uint64_t tx_purge_expired(udpard_tx_t* const self, const udpard_us_t now)
         cavl2_remove(&self->index_deadline, &item->index_deadline);
         cavl2_remove(&self->index_order, &item->index_order);
         // Free the entire transfer chain.
-        tx_item_t* current = item;
+        tx_frame_t* current = item;
         while (current != NULL) {
-            tx_item_t* const next_in_transfer = current->next;
+            tx_frame_t* const next_in_transfer = current->next;
             mem_free(self->memory.payload, current->datagram_payload.size, current->datagram_payload.data);
-            mem_free(self->memory.fragment, sizeof(tx_item_t), current);
+            mem_free(self->memory.fragment, sizeof(tx_frame_t), current);
             current = next_in_transfer;
             count++;
             self->queue_size--;
@@ -758,11 +752,11 @@ uint32_t udpard_tx_push(udpard_tx_t* const      self,
                         void* const             user_transfer_reference)
 {
     uint32_t   out = 0;
-    const bool ok  = (self != NULL) && (deadline >= now) && (self->local_uid != 0) &&
+    const bool ok  = (self != NULL) && (deadline >= now) && (now >= 0) && (self->local_uid != 0) &&
                     udpard_is_valid_endpoint(remote_ep) && (priority <= UDPARD_PRIORITY_MAX) &&
                     ((payload.data != NULL) || (payload.size == 0U));
     if (ok) {
-        self->errors_expiration += tx_purge_expired(self, now);
+        udpard_tx_poll(self, now); // Free up expired transfers before attempting to enqueue a new one.
         const meta_t meta = {
             .priority              = priority,
             .flag_ack              = reliable,
@@ -792,7 +786,7 @@ void udpard_tx_free(udpard_tx_t* const self)
     if (self != NULL) {
         // TODO: do this for all items in the queue:
         // mem_free(memory.payload, item->datagram_payload.size, item->datagram_payload.data);
-        // mem_free(memory.fragment, sizeof(tx_item_t), item);
+        // mem_free(memory.fragment, sizeof(tx_frame_t), item);
     }
 }
 

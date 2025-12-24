@@ -294,12 +294,13 @@ typedef struct udpard_tx_t udpard_tx_t;
 /// If the application knows its MTU, it can use block allocation to avoid extrinsic fragmentation.
 typedef struct udpard_tx_mem_resources_t
 {
-    /// The queue bookkeeping structures (udpard_tx_item_t) are allocated per datagram.
-    /// Each instance is a very small fixed-size object, so a trivial zero-fragmentation block allocator is enough.
-    udpard_mem_resource_t fragment;
+    /// The queue bookkeeping structures are allocated per datagram.
+    /// Each instance is a small fixed-size object, so a trivial zero-fragmentation block allocator is enough.
+    udpard_mem_resource_t meta;
 
-    /// The UDP datagram payload buffers are allocated per frame; each buffer is at most MTU-sized,
-    /// so a trivial zero-fragmentation MTU-sized block allocator is enough if MTU is known in advance.
+    /// The UDP datagram payload buffers are allocated per frame; each buffer is of size at most
+    /// (MTU+sizeof(void*)+HEADER_SIZE) bytes, so a trivial zero-fragmentation MTU-sized+pointer block allocator
+    /// is enough if MTU is known in advance.
     udpard_mem_resource_t payload;
 } udpard_tx_mem_resources_t;
 
@@ -323,7 +324,8 @@ typedef struct udpard_tx_vtable_t
                                       const udpard_us_t        deadline,
                                       const uint_fast8_t       dscp,
                                       const udpard_udpip_ep_t  destination,
-                                      const udpard_bytes_mut_t datagram_payload,
+                                      const udpard_bytes_t     datagram_view,   ///< Transmit this. Do not free() this.
+                                      const udpard_bytes_mut_t datagram_origin, ///< free() only this.
                                       void* const              user_transfer_reference);
 
     /// Invoked from udpard_tx_poll() to report the result of reliable transfer transmission attempts.
@@ -450,7 +452,7 @@ uint32_t udpard_tx_push(udpard_tx_t* const      self,
                         const udpard_udpip_ep_t remote_ep,
                         const uint64_t          transfer_id,
                         const udpard_bytes_t    payload,
-                        const bool              reliable,
+                        const bool              reliable, // Will keep retransmitting until acked or deadline reached.
                         void* const             user_transfer_reference);
 
 /// This should be invoked whenever the socket/NIC of this queue becomes ready to accept new datagrams for transmission.
