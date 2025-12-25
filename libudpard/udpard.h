@@ -27,6 +27,10 @@
 /// - sizeof(rx_session_t) blocks for the RX pipeline.
 /// - sizeof(udpard_fragment_t) blocks for the RX pipeline.
 ///
+/// Suitable allocators may be found here:
+/// - Constant-time ultrafast deterministic heap: https://github.com/pavel-kirienko/o1heap
+/// - Single-header fixed-size block pool: https://gist.github.com/pavel-kirienko/daf89e0481e6eac0f1fa8a7614667f59
+///
 /// --------------------------------------------------------------------------------------------------------------------
 ///
 /// This software is distributed under the terms of the MIT License.
@@ -90,6 +94,9 @@ typedef int64_t udpard_us_t;
 
 /// See udpard_tx_t::ack_baseline_timeout.
 #define UDPARD_TX_ACK_BASELINE_TIMEOUT_DEFAULT_us 16000LL
+
+/// The maximum number of transmission attempts for a transfer is capped at this value irrespective of other settings.
+#define UDPARD_TX_RETRY_MAX 31U
 
 /// The subject-ID only affects the formation of the multicast UDP/IP endpoint address.
 /// In IPv4 networks, it is limited to 23 bits only due to the limited MAC multicast address space.
@@ -294,15 +301,28 @@ typedef struct udpard_tx_t udpard_tx_t;
 /// If the application knows its MTU, it can use block allocation to avoid extrinsic fragmentation.
 typedef struct udpard_tx_mem_resources_t
 {
-    /// The queue bookkeeping structures are allocated per datagram.
-    /// Each instance is a small fixed-size object, so a trivial zero-fragmentation block allocator is enough.
-    udpard_mem_resource_t meta;
+    /// The queue bookkeeping structures are allocated per outgoing transfer.
+    /// Each instance is sizeof(tx_transfer_t), so a trivial zero-fragmentation block allocator is enough.
+    udpard_mem_resource_t transfer;
 
     /// The UDP datagram payload buffers are allocated per frame; each buffer is of size at most
-    /// (MTU+sizeof(void*)+HEADER_SIZE) bytes, so a trivial zero-fragmentation MTU-sized+pointer block allocator
-    /// is enough if MTU is known in advance.
+    /// (HEADER_SIZE+MTU+sizeof(void*)) bytes, so a trivial block pool is enough if MTU is known in advance.
     udpard_mem_resource_t payload;
 } udpard_tx_mem_resources_t;
+
+/// Outcome notification for a reliable transfer previously scheduled for transmission.
+typedef struct udpard_tx_feedback_t
+{
+    uint64_t          topic_hash;
+    uint32_t          transfer_id;
+    udpard_udpip_ep_t remote_ep;
+
+    uint_fast8_t retries; ///< The number of attempts equals retries plus one.
+    bool         success; ///< False if no ack was received from the remote end before deadline expiration.
+
+    /// This is the same pointer that was passed to udpard_tx_push().
+    void* user_transfer_reference;
+} udpard_tx_feedback_t;
 
 /// The TX frame ejection handler returns one of these results to guide the udpard_tx_poll() logic.
 typedef enum udpard_tx_eject_result_t
@@ -312,33 +332,38 @@ typedef enum udpard_tx_eject_result_t
     udpard_tx_eject_failed,  ///< An unrecoverable error occurred while submitting the frame; drop it from the TX queue.
 } udpard_tx_eject_result_t;
 
+typedef struct udpard_tx_ejection_t
+{
+    udpard_us_t now;
+
+    /// Specifies when the frame should be considered expired and dropped if not yet transmitted;
+    /// it is optional to use depending on the implementation of the NIC driver (most traditional drivers ignore it).
+    udpard_us_t deadline;
+
+    uint_fast8_t      dscp;        ///< Set the DSCP field of the outgoing packet to this.
+    udpard_udpip_ep_t destination; ///< Unicast or multicast UDP/IP endpoint.
+
+    /// If the result is udpard_tx_eject_success, the application is responsible for freeing the datagram_origin.data
+    /// using self->memory.payload.free() at some point in the future (either within the callback or later),
+    /// unless datagram_origin.data is NULL, in which case the library will retain the ownership.
+    /// It may help to know that the view is a small fixed offset greater than the origin,
+    /// so both may not have to be kept, depending on the implementation.
+    udpard_bytes_t     datagram_view;   ///< Transmit this; do not free it.
+    udpard_bytes_mut_t datagram_origin; ///< Free this unless NULL.
+
+    /// This is the same pointer that was passed to udpard_tx_push().
+    void* user_transfer_reference;
+} udpard_tx_ejection_t;
+
 typedef struct udpard_tx_vtable_t
 {
     /// Invoked from udpard_tx_poll() to push outgoing UDP datagrams into the socket/NIC driver.
-    /// The deadline specifies when the frame should be considered expired and dropped if not yet transmitted;
-    /// it is optional to use depending on the implementation of the NIC driver (most traditional drivers ignore it).
-    /// If the result is udpard_tx_eject_success, the application is responsible for freeing the datagram_payload.data
-    /// using self->memory.payload.free() at some point in the future (either within the callback or later).
-    udpard_tx_eject_result_t (*eject)(udpard_tx_t* const       self,
-                                      const udpard_us_t        now,
-                                      const udpard_us_t        deadline,
-                                      const uint_fast8_t       dscp,
-                                      const udpard_udpip_ep_t  destination,
-                                      const udpard_bytes_t     datagram_view,   ///< Transmit this. Do not free() this.
-                                      const udpard_bytes_mut_t datagram_origin, ///< free() only this.
-                                      void* const              user_transfer_reference);
+    udpard_tx_eject_result_t (*eject)(udpard_tx_t*, udpard_tx_ejection_t);
 
     /// Invoked from udpard_tx_poll() to report the result of reliable transfer transmission attempts.
-    /// This is ALWAYS invoked EXACTLY ONCE per reliable transfer pushed via udpard_tx_push();
+    /// This is ALWAYS invoked EXACTLY ONCE per reliable transfer pushed via udpard_tx_push() successfully;
     /// this is NOT invoked for best-effort (non-reliable) transfers.
-    /// The user_transfer_reference is the same pointer that was passed to udpard_tx_push().
-    /// The 'ok' flag is true if the transfer has been successfully confirmed by the remote end, false if timed out.
-    void (*feedback)(udpard_tx_t* const      self,
-                     const uint64_t          topic_hash,
-                     const uint32_t          transfer_id,
-                     const udpard_udpip_ep_t remote_ep,
-                     void* const             user_transfer_reference,
-                     const bool              ok);
+    void (*feedback)(udpard_tx_t*, udpard_tx_feedback_t);
 } udpard_tx_vtable_t;
 
 /// The transmission pipeline is a prioritized transmission queue that keeps UDP datagrams (aka transport frames)

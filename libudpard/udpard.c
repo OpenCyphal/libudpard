@@ -470,12 +470,13 @@ static bool header_deserialize(const udpard_bytes_mut_t dgram_payload,
 // ---------------------------------------------------------------------------------------------------------------------
 
 /// This may be allocated in the NIC DMA region so we keep overheads tight.
-/// An alternative approach would be to have a flex array of tx_frame_t* pointers in the tx_transfer_t.
 typedef struct tx_frame_t
 {
     struct tx_frame_t* next;
     byte_t             data[];
 } tx_frame_t;
+
+static size_t tx_frame_size(const size_t mtu) { return sizeof(tx_frame_t) + mtu + HEADER_SIZE_BYTES; }
 
 typedef struct tx_transfer_t
 {
@@ -492,8 +493,8 @@ typedef struct tx_transfer_t
     tx_frame_t* cursor;
 
     /// Retransmission state.
-    uint16_t    retries;
-    udpard_us_t next_attempt_at;
+    uint_fast8_t retries;
+    udpard_us_t  next_attempt_at;
 
     /// All frames except for the last one share the same MTU, so there's no use keeping dedicated size per frame.
     size_t mtu;
@@ -511,7 +512,7 @@ typedef struct tx_transfer_t
 
 static bool tx_validate_mem_resources(const udpard_tx_mem_resources_t memory)
 {
-    return (memory.meta.alloc != NULL) && (memory.meta.free != NULL) && //
+    return (memory.transfer.alloc != NULL) && (memory.transfer.free != NULL) && //
            (memory.payload.alloc != NULL) && (memory.payload.free != NULL);
 }
 
@@ -527,63 +528,63 @@ static int32_t tx_cavl_compare_deadline(const void* const user, const udpard_tre
     return ((*(const udpard_us_t*)user) >= CAVL2_TO_OWNER(node, tx_frame_t, index_deadline)->deadline) ? +1 : -1;
 }
 
-static tx_frame_t* tx_frame_new(const udpard_tx_mem_resources_t memory, const size_t payload_size)
-{
-    tx_frame_t* const out = mem_alloc(memory.payload, sizeof(tx_frame_t) + payload_size);
-    if (out != NULL) {
-        out->next = NULL; // Last by default.
-    }
-    return out;
-}
-
-typedef struct
-{
-    tx_frame_t* head;
-    tx_frame_t* tail;
-    size_t      count;
-} tx_chain_t;
-
-/// The tail is NULL if OOM. The caller is responsible for freeing the memory allocated for the chain.
-static tx_chain_t tx_spool(const udpard_tx_mem_resources_t memory,
-                           const size_t                    mtu,
-                           const meta_t                    meta,
-                           const udpard_bytes_t            payload)
+/// Returns the head of the transfer chain; NULL on OOM.
+static tx_frame_t* tx_spool(const udpard_tx_mem_resources_t memory,
+                            const size_t                    mtu,
+                            const meta_t                    meta,
+                            const udpard_bytes_t            payload)
 {
     UDPARD_ASSERT(mtu > 0);
     UDPARD_ASSERT((payload.data != NULL) || (payload.size == 0U));
-    uint32_t   prefix_crc = CRC_INITIAL;
-    tx_chain_t out        = { NULL, NULL, 0 };
-    size_t     offset     = 0U;
+    uint32_t    prefix_crc  = CRC_INITIAL;
+    tx_frame_t* head        = NULL;
+    tx_frame_t* tail        = NULL;
+    size_t      frame_index = 0U;
+    size_t      offset      = 0U;
+    // Run the O(n) copy loop, where n is the payload size.
+    // The client doesn't have to ensure that the payload data survives beyond this function call.
     do {
-        const size_t      progress = smaller(payload.size - offset, mtu);
-        tx_frame_t* const item     = tx_frame_new(memory, progress + HEADER_SIZE_BYTES);
-        if (NULL == out.head) {
-            out.head = item;
-        } else {
-            out.tail->next = item;
+        // Compute the size of the next frame, allocate it and link it up in the chain.
+        const size_t progress = smaller(payload.size - offset, mtu);
+        {
+            tx_frame_t* const item = mem_alloc(memory.payload, sizeof(tx_frame_t) + progress + HEADER_SIZE_BYTES);
+            if (NULL == head) {
+                head = item;
+            } else {
+                tail->next = item;
+            }
+            tail = item;
         }
-        out.tail = item;
-        if (NULL == out.tail) {
+        // On OOM, deallocate the entire chain and quit.
+        if (NULL == tail) {
+            while (head != NULL) {
+                tx_frame_t* const next = head->next;
+                mem_free(memory.payload, tx_frame_size((head == tail) ? progress : mtu), head);
+                head = next;
+            }
             break;
         }
+        // Populate the frame contents.
+        tail->next                   = NULL;
         const byte_t* const read_ptr = ((const byte_t*)payload.data) + offset;
         prefix_crc                   = crc_add(prefix_crc, progress, read_ptr);
         byte_t* const write_ptr =
-          header_serialize(item->data, meta, (uint32_t)out.count, (uint32_t)offset, prefix_crc ^ CRC_OUTPUT_XOR);
+          header_serialize(tail->data, meta, (uint32_t)frame_index, (uint32_t)offset, prefix_crc ^ CRC_OUTPUT_XOR);
         (void)memcpy(write_ptr, read_ptr, progress); // NOLINT(*DeprecatedOrUnsafeBufferHandling)
+        // Advance the state.
+        ++frame_index;
         offset += progress;
         UDPARD_ASSERT(offset <= payload.size);
-        out.count++;
     } while (offset < payload.size);
-    UDPARD_ASSERT((offset == payload.size) || (out.tail == NULL));
-    return out;
+    UDPARD_ASSERT((offset == payload.size) || ((head == NULL) && (tail == NULL)));
+    return head;
 }
 
-/// Derives the ack timeout for an outgoing transfer using an empirical formula.
+/// Derives the ack timeout for an outgoing transfer.
 /// The number of retries is initially zero when the transfer is sent for the first time.
-static udpard_us_t tx_ack_timeout(const udpard_us_t baseline, const udpard_prio_t prio, const uint16_t retries)
+static udpard_us_t tx_ack_timeout(const udpard_us_t baseline, const udpard_prio_t prio, const uint_fast8_t retries)
 {
-    return baseline * (1L << smaller((uint16_t)prio + retries, 15)); // NOLINT(*-signed-bitwise)
+    return baseline * (1L << smaller((size_t)prio + retries, UDPARD_TX_RETRY_MAX)); // NOLINT(*-signed-bitwise)
 }
 
 static uint32_t tx_push(udpard_tx_t* const      tx,
@@ -594,39 +595,41 @@ static uint32_t tx_push(udpard_tx_t* const      tx,
                         void* const             user_transfer_reference)
 {
     UDPARD_ASSERT(tx != NULL);
-    uint32_t     out         = 0; // The number of frames enqueued; zero on error (error counters incremented).
-    const size_t mtu         = larger(tx->mtu, UDPARD_MTU_MIN);
-    const size_t frame_count = larger(1, (payload.size + mtu - 1U) / mtu);
-    if ((tx->queue_size + frame_count) > tx->queue_capacity) {
+    uint32_t     out          = 0; // The number of frames enqueued; zero on error (error counters incremented).
+    const size_t payload_size = payload.size;
+    const size_t mtu          = larger(tx->mtu, UDPARD_MTU_MIN);
+    const size_t mtu_last     = ((payload_size % mtu) != 0U) ? (payload_size % mtu) : mtu;
+    const size_t n_frames     = larger(1, (payload_size + mtu - 1U) / mtu);
+    if ((tx->queue_size + n_frames) > tx->queue_capacity) {
         tx->errors_capacity++;
     } else {
-        const tx_chain_t chain = tx_spool(tx->memory, mtu, deadline, meta, endpoint, payload, user_transfer_reference);
-        if (chain.tail != NULL) { // Insert the head into the tx index. Only the head, the rest is linked-listed.
-            tx_frame_t* const head = chain.head;
-            UDPARD_ASSERT(frame_count == chain.count);
-            const udpard_tree_t* res = cavl2_find_or_insert(
-              &tx->index_order, &head->priority, &tx_cavl_compare_prio, &head->index_order, &cavl2_trivial_factory);
-            UDPARD_ASSERT(res == &head->index_order);
-            (void)res;
-            res = cavl2_find_or_insert(&tx->index_deadline,
-                                       &head->deadline,
-                                       &tx_cavl_compare_deadline,
-                                       &head->index_deadline,
-                                       &cavl2_trivial_factory);
-            UDPARD_ASSERT(res == &head->index_deadline);
-            (void)res;
-            tx->queue_size += chain.count;
-            UDPARD_ASSERT(tx->queue_size <= tx->queue_capacity);
-            out = (uint32_t)chain.count;
-        } else { // The queue is large enough but we ran out of heap memory, so we have to unwind the chain.
-            tx->errors_oom++;
-            tx_frame_t* head = chain.head;
-            while (head != NULL) {
-                tx_frame_t* const next = head->next;
-                mem_free(tx->memory.payload, head->datagram_payload.size, head->datagram_payload.data);
-                mem_free(tx->memory.fragment, sizeof(tx_frame_t), head);
-                head = next;
+        tx_transfer_t* const tr = mem_alloc(tx->memory.transfer, sizeof(tx_transfer_t));
+        if (tr != NULL) {
+            mem_zero(sizeof(*tr), tr);
+            tr->retries                 = 0;
+            tr->next_attempt_at         = BIG_BANG; // TODO: we can implement time-triggered comms here.
+            tr->mtu                     = mtu;
+            tr->mtu_last                = mtu_last;
+            tr->topic_hash              = meta.topic_hash;
+            tr->transfer_id             = meta.transfer_id;
+            tr->deadline                = deadline;
+            tr->reliable                = meta.flag_ack;
+            tr->priority                = meta.priority;
+            tr->destination             = endpoint;
+            tr->user_transfer_reference = user_transfer_reference;
+            tr->head = tr->cursor = tx_spool(tx->memory, mtu, meta, payload);
+            if (tr->head != NULL) {
+                // TODO: insert
+                // Finalize
+                tx->queue_size += n_frames;
+                UDPARD_ASSERT(tx->queue_size <= tx->queue_capacity);
+                out = (uint32_t)n_frames;
+            } else { // The queue is large enough but we ran out of heap memory.
+                tx->errors_oom++;
+                mem_free(tx->memory.transfer, sizeof(tx_transfer_t), tr);
             }
+        } else { // The queue is large enough but we couldn't allocate the transfer metadata object.
+            tx->errors_oom++;
         }
     }
     return out;
