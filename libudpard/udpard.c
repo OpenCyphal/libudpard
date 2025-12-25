@@ -470,20 +470,34 @@ static bool header_deserialize(const udpard_bytes_mut_t dgram_payload,
 // ---------------------------------------------------------------------------------------------------------------------
 
 /// This may be allocated in the NIC DMA region so we keep overheads tight.
+/// An alternative solution is to allocate a flex array of void* pointers, one per fragment, directly in tx_transfer_t,
+/// but it might create a bit more memory pressure on average.
 typedef struct tx_frame_t
 {
     struct tx_frame_t* next;
     byte_t             data[];
 } tx_frame_t;
 
-static size_t tx_frame_size(const size_t mtu) { return sizeof(tx_frame_t) + mtu + HEADER_SIZE_BYTES; }
+static size_t tx_frame_object_size(const size_t mtu) { return sizeof(tx_frame_t) + mtu + HEADER_SIZE_BYTES; }
 
+typedef struct
+{
+    uint64_t topic_hash;
+    uint64_t transfer_id;
+} tx_transfer_key_t;
+
+/// The transmission scheduler maintains several indexes for the transfers in the pipeline.
+/// All index operations are logarithmic in the number of scheduled transfers.
+/// The priority index only contains transfers that are ready for transmission (now>=ready_at).
+/// The readiness index contains only transfers that are postponed (now<ready_at).
+/// The deadline index contains all transfers, ordered by their deadlines, used for purging expired transfers.
+/// The transfer index contains all transfers, used for lookup by (topic_hash, transfer_id).
 typedef struct tx_transfer_t
 {
-    /// Various indexes this transfer is a member of.
-    udpard_tree_t index_schedule; ///< Transmission order: next to transmit on the left.
-    udpard_tree_t index_deadline; ///< Soonest to expire on the left.
-    udpard_tree_t index_id;       ///< Ordered by the topic hash and the transfer-ID.
+    udpard_tree_t index_priority;  ///< Next to transmit on the left. Key: (ready, priority); ready is implicit.
+    udpard_tree_t index_readiness; ///< Soonest to be ready on the left. Key: ready_at
+    udpard_tree_t index_deadline;  ///< Soonest to expire on the left. Key: deadline
+    udpard_tree_t index_transfer;  ///< Specific transfer lookup for ack management. Key: tx_transfer_key_t
 
     /// We always keep a pointer to the head, plus a cursor that scans the frames during transmission.
     /// Both are NULL if the payload is destroyed.
@@ -494,7 +508,7 @@ typedef struct tx_transfer_t
 
     /// Retransmission state.
     uint_fast8_t retries;
-    udpard_us_t  next_attempt_at;
+    udpard_us_t  ready_at;
 
     /// All frames except for the last one share the same MTU, so there's no use keeping dedicated size per frame.
     size_t mtu;
@@ -516,16 +530,29 @@ static bool tx_validate_mem_resources(const udpard_tx_mem_resources_t memory)
            (memory.payload.alloc != NULL) && (memory.payload.free != NULL);
 }
 
-/// Frames with identical weight are processed in the FIFO order.
-static int32_t tx_cavl_compare_prio(const void* const user, const udpard_tree_t* const node)
+static int32_t tx_cavl_compare_priority(const void* const user, const udpard_tree_t* const node)
 {
-    return (((int)*(const udpard_prio_t*)user) >= (int)CAVL2_TO_OWNER(node, tx_frame_t, index_order)->priority) ? +1
-                                                                                                                : -1;
+    const udpard_prio_t        key = *(const udpard_prio_t*)user;
+    const tx_transfer_t* const tr  = CAVL2_TO_OWNER(node, tx_transfer_t, index_priority);
+    return (key >= tr->priority) ? +1 : -1; // higher prio is numerically less
 }
-
+static int32_t tx_cavl_compare_readiness(const void* const user, const udpard_tree_t* const node)
+{
+    return ((*(const udpard_us_t*)user) >= CAVL2_TO_OWNER(node, tx_transfer_t, index_readiness)->ready_at) ? +1 : -1;
+}
 static int32_t tx_cavl_compare_deadline(const void* const user, const udpard_tree_t* const node)
 {
-    return ((*(const udpard_us_t*)user) >= CAVL2_TO_OWNER(node, tx_frame_t, index_deadline)->deadline) ? +1 : -1;
+    return ((*(const udpard_us_t*)user) >= CAVL2_TO_OWNER(node, tx_transfer_t, index_deadline)->deadline) ? +1 : -1;
+}
+static int32_t tx_cavl_compare_transfer(const void* const user, const udpard_tree_t* const node)
+{
+    const tx_transfer_key_t* const key = (const tx_transfer_key_t*)user;
+    const tx_transfer_t* const tr = CAVL2_TO_OWNER(node, tx_transfer_t, index_transfer); // clang-format off
+    if (key->topic_hash  < tr->topic_hash)  { return -1; }
+    if (key->topic_hash  > tr->topic_hash)  { return +1; }
+    if (key->transfer_id < tr->transfer_id) { return -1; }
+    if (key->transfer_id > tr->transfer_id) { return +1; }
+    return 0; // clang-format on
 }
 
 /// Returns the head of the transfer chain; NULL on OOM.
@@ -559,7 +586,7 @@ static tx_frame_t* tx_spool(const udpard_tx_mem_resources_t memory,
         if (NULL == tail) {
             while (head != NULL) {
                 tx_frame_t* const next = head->next;
-                mem_free(memory.payload, tx_frame_size((head == tail) ? progress : mtu), head);
+                mem_free(memory.payload, tx_frame_object_size((head == tail) ? progress : mtu), head);
                 head = next;
             }
             break;
@@ -587,7 +614,42 @@ static udpard_us_t tx_ack_timeout(const udpard_us_t baseline, const udpard_prio_
     return baseline * (1L << smaller((size_t)prio + retries, UDPARD_TX_RETRY_MAX)); // NOLINT(*-signed-bitwise)
 }
 
+static void tx_insert(udpard_tx_t* const tx, tx_transfer_t* const tr, const udpard_us_t now)
+{
+    const bool ready = now >= tr->ready_at;
+    if (ready) {
+        if (cavl2_is_inserted(tx->index_readiness, &tr->index_readiness)) {
+            cavl2_remove(&tx->index_readiness, &tr->index_readiness);
+        }
+        if (!cavl2_is_inserted(tx->index_priority, &tr->index_priority)) {
+            (void)cavl2_find_or_insert(
+              &tx->index_priority, &tr->priority, tx_cavl_compare_priority, &tr->index_priority, cavl2_trivial_factory);
+        }
+    } else {
+        if (cavl2_is_inserted(tx->index_priority, &tr->index_priority)) {
+            cavl2_remove(&tx->index_priority, &tr->index_priority);
+        }
+        if (!cavl2_is_inserted(tx->index_readiness, &tr->index_readiness)) {
+            (void)cavl2_find_or_insert(&tx->index_readiness,
+                                       &tr->ready_at,
+                                       tx_cavl_compare_readiness,
+                                       &tr->index_readiness,
+                                       cavl2_trivial_factory);
+        }
+    }
+    if (!cavl2_is_inserted(tx->index_transfer, &tr->index_transfer)) {
+        const tx_transfer_key_t key = { .topic_hash = tr->topic_hash, .transfer_id = tr->transfer_id };
+        (void)cavl2_find_or_insert(
+          &tx->index_transfer, &key, tx_cavl_compare_transfer, &tr->index_transfer, cavl2_trivial_factory);
+    }
+    if (!cavl2_is_inserted(tx->index_deadline, &tr->index_deadline)) {
+        (void)cavl2_find_or_insert(
+          &tx->index_deadline, &tr->deadline, tx_cavl_compare_deadline, &tr->index_deadline, cavl2_trivial_factory);
+    }
+}
+
 static uint32_t tx_push(udpard_tx_t* const      tx,
+                        const udpard_us_t       now,
                         const udpard_us_t       deadline,
                         const meta_t            meta,
                         const udpard_udpip_ep_t endpoint,
@@ -607,7 +669,7 @@ static uint32_t tx_push(udpard_tx_t* const      tx,
         if (tr != NULL) {
             mem_zero(sizeof(*tr), tr);
             tr->retries                 = 0;
-            tr->next_attempt_at         = BIG_BANG; // TODO: we can implement time-triggered comms here.
+            tr->ready_at                = BIG_BANG; // We can implement time-triggered comms here.
             tr->mtu                     = mtu;
             tr->mtu_last                = mtu_last;
             tr->topic_hash              = meta.topic_hash;
@@ -619,8 +681,7 @@ static uint32_t tx_push(udpard_tx_t* const      tx,
             tr->user_transfer_reference = user_transfer_reference;
             tr->head = tr->cursor = tx_spool(tx->memory, mtu, meta, payload);
             if (tr->head != NULL) {
-                // TODO: insert
-                // Finalize
+                tx_insert(tx, tr, now);
                 tx->queue_size += n_frames;
                 UDPARD_ASSERT(tx->queue_size <= tx->queue_capacity);
                 out = (uint32_t)n_frames;

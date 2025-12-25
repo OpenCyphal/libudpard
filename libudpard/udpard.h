@@ -418,9 +418,11 @@ struct udpard_tx_t
     uint64_t errors_capacity;   ///< A transfer could not be enqueued due to queue capacity limit.
     uint64_t errors_expiration; ///< A frame had to be dropped due to premature deadline expiration.
 
-    /// Internal use only, do not modify!
-    udpard_tree_t* index_order;    ///< Most urgent on the left, then according to the insertion order.
-    udpard_tree_t* index_deadline; ///< Soonest on the left, then according to the insertion order.
+    /// Internal use only, do not modify! See tx_transfer_t for details.
+    udpard_tree_t* index_priority;
+    udpard_tree_t* index_readiness;
+    udpard_tree_t* index_deadline;
+    udpard_tree_t* index_transfer;
 
     /// Opaque pointer for the application use only. Not accessed by the library.
     void* user;
