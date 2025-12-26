@@ -715,16 +715,32 @@ static uint32_t tx_push(udpard_tx_t* const      tx,
 
 /// Handle an ACK received from a remote node.
 /// This is where we dequeue pending transmissions and invoke the feedback callback.
+/// Acks for non-reliable transfers are ignored.
 static void tx_receive_ack(udpard_rx_t* const    rx,
                            const uint64_t        topic_hash,
                            const uint64_t        transfer_id,
                            const udpard_remote_t remote)
 {
-    (void)rx;
-    (void)topic_hash;
-    (void)transfer_id;
     (void)remote;
-    // TODO: find the transfer in the TX queue by topic and transfer-ID and remove it; invoke the feedback callback.
+    for (uint_fast8_t i = 0; i < UDPARD_NETWORK_INTERFACE_COUNT_MAX; i++) {
+        udpard_tx_t* const tx = rx->tx[i];
+        if (tx != NULL) {
+            tx_transfer_t* const tr = tx_transfer_find(tx, topic_hash, transfer_id);
+            if ((tr != NULL) && (tr->feedback != NULL)) { // don't match non-reliable transfers
+                const udpard_tx_feedback_t fb = {
+                    .topic_hash              = tr->topic_hash,
+                    .transfer_id             = tr->transfer_id,
+                    .remote_ep               = tr->destination,
+                    .user_transfer_reference = tr->user_transfer_reference,
+                    .attempts                = tr->attempts,
+                    .success                 = true,
+                };
+                tx_transfer_free_payload(tx->memory, tr); // do this early to release memory before callback
+                tr->feedback(tx, fb);
+                tx_transfer_free(tx, tr);
+            }
+        }
+    }
 }
 
 /// Generate an ack transfer for the specified remote transfer.
