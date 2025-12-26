@@ -331,13 +331,10 @@ typedef struct udpard_tx_ejection_t
     uint_fast8_t      dscp;        ///< Set the DSCP field of the outgoing packet to this.
     udpard_udpip_ep_t destination; ///< Unicast or multicast UDP/IP endpoint.
 
-    /// If the ejection handler returns success, the application is responsible for freeing the datagram_origin.data
-    /// using udpard_tx_t::memory.payload.free() at some point in the future (either within the callback or later),
-    /// unless datagram_origin.data is NULL, in which case the library will retain the ownership.
-    /// It may help to know that the view is a small fixed offset greater than the origin,
-    /// so both may not have to be kept, depending on the implementation.
-    udpard_bytes_t     datagram_view;   ///< Transmit this; do not free it.
-    udpard_bytes_mut_t datagram_origin; ///< Free this unless NULL.
+    /// If the datagram pointer is retained by the application, udpard_tx_refcount_inc() must be invoked on it.
+    /// When no longer needed (e.g, upon transmission), udpard_tx_refcount_dec() must be invoked.
+    /// Ref counting is needed because the library may need to retain the buffer for subsequent retransmissions.
+    udpard_bytes_t datagram;
 
     /// This is the same pointer that was passed to udpard_tx_push().
     void* user_transfer_reference;
@@ -482,6 +479,11 @@ uint32_t udpard_tx_push(udpard_tx_t* const      self,
 /// to submit it via the eject() callback provided in the vtable.
 /// The function may deallocate memory. The time complexity is logarithmic in the number of enqueued transfers.
 void udpard_tx_poll(udpard_tx_t* const self, const udpard_us_t now);
+
+/// When a datagram is ejected and the application opts to keep it, these functions must be used to manage the
+/// datagram buffer lifetime. The datagram will be freed once the reference count reaches zero.
+void udpard_tx_refcount_inc(udpard_tx_t* const self, const udpard_bytes_t datagram);
+void udpard_tx_refcount_dec(udpard_tx_t* const self, const udpard_bytes_t datagram);
 
 /// Drops all enqueued items; afterward, the instance is safe to discard. Callbacks will not be invoked.
 void udpard_tx_free(udpard_tx_t* const self);

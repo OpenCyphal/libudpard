@@ -474,11 +474,22 @@ static bool header_deserialize(const udpard_bytes_mut_t dgram_payload,
 /// but it might create a bit more memory pressure on average.
 typedef struct tx_frame_t
 {
+    size_t             refcount; ///< Buffer destroyed when refcount reaches zero.
     struct tx_frame_t* next;
     byte_t             data[];
 } tx_frame_t;
 
 static size_t tx_frame_object_size(const size_t mtu) { return sizeof(tx_frame_t) + mtu + HEADER_SIZE_BYTES; }
+
+static udpard_bytes_t tx_frame_view(const tx_frame_t* const frame, const size_t mtu)
+{
+    return (udpard_bytes_t){ .size = mtu + HEADER_SIZE_BYTES, .data = frame->data };
+}
+
+static tx_frame_t* tx_frame_from_view(const udpard_bytes_t view)
+{
+    return (tx_frame_t*)unbias_ptr(view.data, offsetof(tx_frame_t, data));
+}
 
 typedef struct
 {
@@ -536,14 +547,14 @@ static bool tx_validate_mem_resources(const udpard_tx_mem_resources_t memory)
            (memory.payload.alloc != NULL) && (memory.payload.free != NULL);
 }
 
-static void tx_transfer_free_payload(const udpard_tx_mem_resources_t mem, tx_transfer_t* const tr)
+static void tx_transfer_free_payload(udpard_tx_t* const tx, tx_transfer_t* const tr)
 {
     UDPARD_ASSERT(tr != NULL);
     tx_frame_t* frame = tr->head;
     while (frame != NULL) {
         tx_frame_t* const next = frame->next;
         const size_t      mtu  = (frame->next == NULL) ? tr->mtu_last : tr->mtu;
-        mem_free(mem.payload, tx_frame_object_size(mtu), frame);
+        udpard_tx_refcount_dec(tx, tx_frame_view(frame, mtu));
         frame = next;
     }
     tr->head   = NULL;
@@ -553,7 +564,7 @@ static void tx_transfer_free_payload(const udpard_tx_mem_resources_t mem, tx_tra
 static void tx_transfer_free(udpard_tx_t* const tx, tx_transfer_t* const tr)
 {
     UDPARD_ASSERT(tr != NULL);
-    tx_transfer_free_payload(tx->memory, tr);
+    tx_transfer_free_payload(tx, tr);
     // Remove the transfer from all indexes.
     delist(&tx->queue[tr->priority], &tr->queue);
     if (cavl2_is_inserted(tx->index_staged, &tr->index_staged)) {
@@ -627,6 +638,7 @@ static tx_frame_t* tx_spool(const udpard_tx_mem_resources_t memory,
             break;
         }
         // Populate the frame contents.
+        tail->refcount               = 1;
         tail->next                   = NULL;
         const byte_t* const read_ptr = ((const byte_t*)payload.data) + offset;
         prefix_crc                   = crc_add(prefix_crc, progress, read_ptr);
@@ -735,7 +747,7 @@ static void tx_receive_ack(udpard_rx_t* const    rx,
                     .attempts                = tr->attempts,
                     .success                 = true,
                 };
-                tx_transfer_free_payload(tx->memory, tr); // do this early to release memory before callback
+                tx_transfer_free_payload(tx, tr); // do this early to release memory before callback
                 tr->feedback(tx, fb);
                 tx_transfer_free(tx, tr);
             }
@@ -861,7 +873,7 @@ static void tx_purge_expired(udpard_tx_t* const self, const udpard_us_t now)
                 .attempts                = tr->attempts,
                 .success                 = false,
             };
-            tx_transfer_free_payload(self->memory, tr); // do this early to release memory before callback
+            tx_transfer_free_payload(self, tr); // do this early to release memory before callback
             if (tr->feedback != NULL) {
                 tr->feedback(self, fb);
             }
@@ -914,10 +926,6 @@ static void tx_eject_pending(udpard_tx_t* const self, const udpard_us_t now)
         tx_frame_t* const frame_next   = frame->next;
         const bool        last_attempt = tr->deadline <= tr->retry_at;
         const bool        last_frame   = frame_next == NULL; // if not last attempt we will have to rewind to head
-        const size_t      frame_size   = last_frame ? tr->mtu_last : tr->mtu;
-        // Transfer ownership to the application if no further attempts will be made to reduce queue/memory pressure.
-        const udpard_bytes_mut_t frame_origin = { .size = last_attempt ? tx_frame_object_size(frame_size) : 0U,
-                                                  .data = last_attempt ? frame : NULL };
 
         // Eject the frame.
         const udpard_tx_ejection_t ejection = {
@@ -925,8 +933,7 @@ static void tx_eject_pending(udpard_tx_t* const self, const udpard_us_t now)
             .deadline                = tr->deadline,
             .dscp                    = self->dscp_value_per_priority[tr->priority],
             .destination             = tr->destination,
-            .datagram_view           = { .size = HEADER_SIZE_BYTES + frame_size, .data = frame->data },
-            .datagram_origin         = frame_origin,
+            .datagram                = tx_frame_view(frame, last_frame ? tr->mtu_last : tr->mtu),
             .user_transfer_reference = tr->user_transfer_reference,
         };
         if (!self->vtable->eject(self, ejection)) { // The easy case -- no progress was made at this time;
@@ -937,8 +944,10 @@ static void tx_eject_pending(udpard_tx_t* const self, const udpard_us_t now)
         if (last_attempt) { // no need to keep frames that we will no longer use; free early to reduce pressure
             UDPARD_ASSERT(tr->head == tr->cursor); // They go together on the last attempt.
             tr->head = frame_next;
-            self->enqueued_frames_count--; // Ownership transferred to the application.
+            udpard_tx_refcount_dec(self, ejection.datagram);
+            self->enqueued_frames_count--;
         }
+        tr->cursor = frame_next;
 
         // Finalize the transmission if this was the last frame of the transfer.
         if (last_frame) {
@@ -954,8 +963,6 @@ static void tx_eject_pending(udpard_tx_t* const self, const udpard_us_t now)
                 cavl2_find_or_insert(
                   &self->index_staged, &tr->retry_at, tx_cavl_compare_staged, &tr->index_staged, cavl2_trivial_factory);
             }
-        } else {
-            tr->cursor = frame_next;
         }
     }
 }
@@ -966,6 +973,27 @@ void udpard_tx_poll(udpard_tx_t* const self, const udpard_us_t now)
         tx_purge_expired(self, now);    // This may free up some memory and some queue slots.
         tx_promote_staged(self, now);   // This may add some new transfers to the queue.
         tx_eject_pending(self, now);    // The queue is now up to date and we can try to eject some frames.
+    }
+}
+
+void udpard_tx_refcount_inc(udpard_tx_t* const self, const udpard_bytes_t datagram)
+{
+    if ((self != NULL) && (datagram.data != NULL)) {
+        tx_frame_t* const frame = tx_frame_from_view(datagram);
+        UDPARD_ASSERT(frame->refcount > 0); // NOLINT(*ArrayBound)
+        frame->refcount++;
+    }
+}
+
+void udpard_tx_refcount_dec(udpard_tx_t* const self, const udpard_bytes_t datagram)
+{
+    if ((self != NULL) && (datagram.data != NULL)) {
+        tx_frame_t* const frame = tx_frame_from_view(datagram);
+        UDPARD_ASSERT(frame->refcount > 0); // NOLINT(*ArrayBound)
+        frame->refcount--;
+        if (frame->refcount == 0U) {
+            mem_free(self->memory.payload, tx_frame_object_size(datagram.size), frame);
+        }
     }
 }
 
