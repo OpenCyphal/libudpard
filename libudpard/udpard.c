@@ -87,6 +87,13 @@ static int64_t     max_i64(const int64_t a, const int64_t b) { return (a > b) ? 
 static udpard_us_t earlier(const udpard_us_t a, const udpard_us_t b) { return min_i64(a, b); }
 static udpard_us_t later(const udpard_us_t a, const udpard_us_t b) { return max_i64(a, b); }
 
+/// Two memory resources are considered identical if they share the same user pointer and the same allocation function.
+/// The deallocation function is intentionally excluded from the comparison.
+static bool mem_same(const udpard_mem_resource_t a, const udpard_mem_resource_t b)
+{
+    return (a.user == b.user) && (a.alloc == b.alloc);
+}
+
 static void* mem_alloc(const udpard_mem_resource_t memory, const size_t size)
 {
     UDPARD_ASSERT(memory.alloc != NULL);
@@ -171,6 +178,16 @@ static int32_t cavl_compare_fragment_end(const void* const user, const udpard_tr
 bool udpard_is_valid_endpoint(const udpard_udpip_ep_t ep)
 {
     return (ep.port != 0) && (ep.ip != 0) && (ep.ip != UINT32_MAX);
+}
+
+static bool has_valid_endpoint(const udpard_udpip_ep_t remote_ep[UDPARD_IFACE_COUNT_MAX])
+{
+    for (uint_fast8_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
+        if (udpard_is_valid_endpoint(remote_ep[i])) {
+            return true;
+        }
+    }
+    return false;
 }
 
 udpard_udpip_ep_t udpard_make_subject_endpoint(const uint32_t subject_id)
@@ -330,6 +347,12 @@ static uint32_t crc_full(const size_t n_bytes, const void* const data)
 
 // ---------------------------------------------  LIST CONTAINER  ---------------------------------------------
 
+/// True iff the member is in the list.
+static bool is_listed(const udpard_list_t* const list, const udpard_list_member_t* const member)
+{
+    return (member->next != NULL) || (member->prev != NULL) || (list->head == member);
+}
+
 /// No effect if not in the list.
 static void delist(udpard_list_t* const list, udpard_list_member_t* const member)
 {
@@ -469,26 +492,35 @@ static bool header_deserialize(const udpard_bytes_mut_t dgram_payload,
 // ---------------------------------------------        TX PIPELINE        ---------------------------------------------
 // ---------------------------------------------------------------------------------------------------------------------
 
-/// This may be allocated in the NIC DMA region so we keep overheads tight.
-/// An alternative solution is to allocate a flex array of void* pointers, one per fragment, directly in tx_transfer_t,
-/// but it might create a bit more memory pressure on average.
 typedef struct tx_frame_t
 {
-    size_t             refcount; ///< Buffer destroyed when refcount reaches zero.
-    struct tx_frame_t* next;
-    byte_t             data[];
+    size_t               refcount;
+    udpard_mem_deleter_t deleter;
+    struct tx_frame_t*   next;
+    size_t               size;
+    byte_t               data[];
 } tx_frame_t;
 
-static size_t tx_frame_object_size(const size_t mtu) { return sizeof(tx_frame_t) + mtu + HEADER_SIZE_BYTES; }
-
-static udpard_bytes_t tx_frame_view(const tx_frame_t* const frame, const size_t mtu)
+static udpard_bytes_t tx_frame_view(const tx_frame_t* const frame)
 {
-    return (udpard_bytes_t){ .size = mtu + HEADER_SIZE_BYTES, .data = frame->data };
+    return (udpard_bytes_t){ .size = frame->size, .data = frame->data };
 }
 
 static tx_frame_t* tx_frame_from_view(const udpard_bytes_t view)
 {
     return (tx_frame_t*)unbias_ptr(view.data, offsetof(tx_frame_t, data));
+}
+
+static tx_frame_t* tx_frame_new(const udpard_mem_resource_t mem, const size_t data_size)
+{
+    tx_frame_t* const frame = (tx_frame_t*)mem_alloc(mem, sizeof(tx_frame_t) + data_size);
+    if (frame != NULL) {
+        frame->refcount = 1U;
+        frame->deleter  = (udpard_mem_deleter_t){ .user = mem.user, .free = mem.free };
+        frame->next     = NULL;
+        frame->size     = data_size;
+    }
+    return frame;
 }
 
 typedef struct
@@ -512,22 +544,18 @@ typedef struct tx_transfer_t
     udpard_tree_t        index_staged;   ///< Soonest to be ready on the left. Key: retry_at
     udpard_tree_t        index_deadline; ///< Soonest to expire on the left. Key: deadline
     udpard_tree_t        index_transfer; ///< Specific transfer lookup for ack management. Key: tx_transfer_key_t
-    udpard_list_member_t queue;          ///< Listed when ready for transmission.
+    udpard_list_member_t queue[UDPARD_IFACE_COUNT_MAX]; ///< Listed when ready for transmission.
 
     /// We always keep a pointer to the head, plus a cursor that scans the frames during transmission.
     /// Both are NULL if the payload is destroyed.
     /// The head points to the first frame unless it is known that no (further) retransmissions are needed,
     /// in which case the old head is deleted and the head points to the next frame to transmit.
-    tx_frame_t* head;
+    tx_frame_t* head[UDPARD_IFACE_COUNT_MAX];
 
     /// Mutable transmission state. All other fields, except for the index handles, are immutable.
-    tx_frame_t*  cursor;
-    uint_fast8_t attempts; ///< Does not overflow due to exponential backoff.
+    tx_frame_t*  cursor[UDPARD_IFACE_COUNT_MAX];
+    uint_fast8_t attempts[UDPARD_IFACE_COUNT_MAX]; ///< Does not overflow due to exponential backoff.
     udpard_us_t  retry_at; ///< If retry_at>=deadline, this is the last attempt; frames can be freed as they go out.
-
-    /// All frames except for the last one share the same MTU, so there's no use keeping dedicated size per frame.
-    size_t mtu;
-    size_t mtu_last;
 
     /// Constant transfer properties supplied by the client.
     uint64_t          topic_hash;
@@ -535,7 +563,7 @@ typedef struct tx_transfer_t
     udpard_us_t       deadline;
     bool              reliable;
     udpard_prio_t     priority;
-    udpard_udpip_ep_t destination;
+    udpard_udpip_ep_t destination[UDPARD_IFACE_COUNT_MAX];
     void*             user_transfer_reference;
 
     void (*feedback)(udpard_tx_t*, udpard_tx_feedback_t);
@@ -543,36 +571,69 @@ typedef struct tx_transfer_t
 
 static bool tx_validate_mem_resources(const udpard_tx_mem_resources_t memory)
 {
-    return (memory.transfer.alloc != NULL) && (memory.transfer.free != NULL) && //
-           (memory.payload.alloc != NULL) && (memory.payload.free != NULL);
+    for (uint_fast8_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
+        if ((memory.payload[i].alloc == NULL) || (memory.payload[i].free == NULL)) {
+            return false;
+        }
+    }
+    return (memory.transfer.alloc != NULL) && (memory.transfer.free != NULL);
 }
 
-static void tx_transfer_free_payload(udpard_tx_t* const tx, tx_transfer_t* const tr)
+static void tx_transfer_free_payload(tx_transfer_t* const tr)
 {
     UDPARD_ASSERT(tr != NULL);
-    tx_frame_t* frame = tr->head;
-    while (frame != NULL) {
-        tx_frame_t* const next = frame->next;
-        const size_t      mtu  = (frame->next == NULL) ? tr->mtu_last : tr->mtu;
-        udpard_tx_refcount_dec(tx, tx_frame_view(frame, mtu));
-        frame = next;
+    for (uint_fast8_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
+        const tx_frame_t* frame = tr->head[i];
+        while (frame != NULL) {
+            const tx_frame_t* const next = frame->next;
+            udpard_tx_refcount_dec(tx_frame_view(frame));
+            frame = next;
+        }
+        tr->head[i]   = NULL;
+        tr->cursor[i] = NULL;
     }
-    tr->head   = NULL;
-    tr->cursor = NULL;
 }
 
 static void tx_transfer_free(udpard_tx_t* const tx, tx_transfer_t* const tr)
 {
     UDPARD_ASSERT(tr != NULL);
-    tx_transfer_free_payload(tx, tr);
-    // Remove the transfer from all indexes.
-    delist(&tx->queue[tr->priority], &tr->queue);
+    tx_transfer_free_payload(tr);
+    for (uint_fast8_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
+        delist(&tx->queue[i][tr->priority], &tr->queue[i]);
+    }
     if (cavl2_is_inserted(tx->index_staged, &tr->index_staged)) {
         cavl2_remove(&tx->index_staged, &tr->index_staged);
     }
     cavl2_remove(&tx->index_deadline, &tr->index_deadline);
     cavl2_remove(&tx->index_transfer, &tr->index_transfer);
     mem_free(tx->memory.transfer, sizeof(tx_transfer_t), tr);
+}
+
+/// When the queue is exhausted, finds a transfer to sacrifice using simple heuristics and returns it.
+/// The heuristics are subject to review and improvement.
+/// Will return NULL if there are no transfers worth sacrificing (no queue space can be reclaimed).
+static tx_transfer_t* tx_sacrifice(udpard_tx_t* const tx)
+{
+    uint16_t       max_attempts = 0;
+    tx_transfer_t* out          = NULL;
+    // Scanning from the earliest deadline, meaning we prefer to sacrifice transfers that are the soonest to expire.
+    for (tx_transfer_t* tr = CAVL2_TO_OWNER(cavl2_min(tx->index_deadline), tx_transfer_t, index_deadline); tr != NULL;
+         tr                = CAVL2_TO_OWNER(cavl2_next_greater(&tr->index_deadline), tx_transfer_t, index_deadline)) {
+        uint16_t attempts = 0;
+        for (uint_fast8_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
+            attempts += tr->attempts[i];
+        }
+        if ((attempts > 0) && !tr->reliable) { // Prefer non-reliable transfers that have been transmitted once.
+            out = tr;
+            break;
+        }
+        if (attempts > max_attempts) {
+            tr           = out;
+            max_attempts = attempts;
+        }
+        return out;
+    }
+    return out;
 }
 
 static int32_t tx_cavl_compare_staged(const void* const user, const udpard_tree_t* const node)
@@ -601,11 +662,24 @@ static tx_transfer_t* tx_transfer_find(udpard_tx_t* const tx, const uint64_t top
       cavl2_find(tx->index_transfer, &key, &tx_cavl_compare_transfer), tx_transfer_t, index_transfer);
 }
 
+static udpard_tx_feedback_t tx_make_feedback(const tx_transfer_t* const tr, const bool success)
+{
+    udpard_tx_feedback_t fb = { .topic_hash              = tr->topic_hash,
+                                .transfer_id             = tr->transfer_id,
+                                .user_transfer_reference = tr->user_transfer_reference,
+                                .success                 = success };
+    for (uint_fast8_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
+        fb.remote_ep[i] = tr->destination[i];
+        fb.attempts[i]  = tr->attempts[i];
+    }
+    return fb;
+}
+
 /// Returns the head of the transfer chain; NULL on OOM.
-static tx_frame_t* tx_spool(const udpard_tx_mem_resources_t memory,
-                            const size_t                    mtu,
-                            const meta_t                    meta,
-                            const udpard_bytes_t            payload)
+static tx_frame_t* tx_spool(const udpard_mem_resource_t memory,
+                            const size_t                mtu,
+                            const meta_t                meta,
+                            const udpard_bytes_t        payload)
 {
     UDPARD_ASSERT(mtu > 0);
     UDPARD_ASSERT((payload.data != NULL) || (payload.size == 0U));
@@ -620,7 +694,7 @@ static tx_frame_t* tx_spool(const udpard_tx_mem_resources_t memory,
         // Compute the size of the next frame, allocate it and link it up in the chain.
         const size_t progress = smaller(payload.size - offset, mtu);
         {
-            tx_frame_t* const item = mem_alloc(memory.payload, sizeof(tx_frame_t) + progress + HEADER_SIZE_BYTES);
+            tx_frame_t* const item = tx_frame_new(memory, progress);
             if (NULL == head) {
                 head = item;
             } else {
@@ -632,14 +706,12 @@ static tx_frame_t* tx_spool(const udpard_tx_mem_resources_t memory,
         if (NULL == tail) {
             while (head != NULL) {
                 tx_frame_t* const next = head->next;
-                mem_free(memory.payload, tx_frame_object_size((head == tail) ? progress : mtu), head);
+                mem_free(memory, sizeof(tx_frame_t) + head->size, head);
                 head = next;
             }
             break;
         }
         // Populate the frame contents.
-        tail->refcount               = 1;
-        tail->next                   = NULL;
         const byte_t* const read_ptr = ((const byte_t*)payload.data) + offset;
         prefix_crc                   = crc_add(prefix_crc, progress, read_ptr);
         byte_t* const write_ptr =
@@ -674,8 +746,8 @@ static uint32_t tx_push(udpard_tx_t* const      tx,
     uint32_t     out          = 0; // The number of frames enqueued; zero on error (error counters incremented).
     const size_t payload_size = payload.size;
     const size_t mtu          = larger(tx->mtu, UDPARD_MTU_MIN);
-    const size_t mtu_last     = ((payload_size % mtu) != 0U) ? (payload_size % mtu) : mtu;
     const size_t n_frames     = larger(1, (payload_size + mtu - 1U) / mtu);
+    // TODO: tx_sacrifice()
     if ((tx->enqueued_frames_count + n_frames) > tx->enqueued_frames_limit) {
         tx->errors_capacity++;
     } else {
@@ -686,8 +758,6 @@ static uint32_t tx_push(udpard_tx_t* const      tx,
             tr->retry_at                = meta.flag_ack //
                                             ? (now + tx_ack_timeout(tx->ack_baseline_timeout, meta.priority, 0))
                                             : HEAT_DEATH;
-            tr->mtu                     = mtu;
-            tr->mtu_last                = mtu_last;
             tr->topic_hash              = meta.topic_hash;
             tr->transfer_id             = meta.transfer_id;
             tr->deadline                = deadline;
@@ -734,23 +804,15 @@ static void tx_receive_ack(udpard_rx_t* const    rx,
                            const udpard_remote_t remote)
 {
     (void)remote;
-    for (uint_fast8_t i = 0; i < UDPARD_NETWORK_INTERFACE_COUNT_MAX; i++) {
-        udpard_tx_t* const tx = rx->tx[i];
-        if (tx != NULL) {
-            tx_transfer_t* const tr = tx_transfer_find(tx, topic_hash, transfer_id);
-            if ((tr != NULL) && (tr->feedback != NULL)) { // don't match non-reliable transfers
-                const udpard_tx_feedback_t fb = {
-                    .topic_hash              = tr->topic_hash,
-                    .transfer_id             = tr->transfer_id,
-                    .remote_ep               = tr->destination,
-                    .user_transfer_reference = tr->user_transfer_reference,
-                    .attempts                = tr->attempts,
-                    .success                 = true,
-                };
-                tx_transfer_free_payload(tx, tr); // do this early to release memory before callback
-                tr->feedback(tx, fb);
-                tx_transfer_free(tx, tr);
+    if (rx->tx != NULL) {
+        tx_transfer_t* const tr = tx_transfer_find(rx->tx, topic_hash, transfer_id);
+        if ((tr != NULL) && tr->reliable) {
+            if (tr->feedback != NULL) {
+                const udpard_tx_feedback_t fb = tx_make_feedback(tr, true);
+                tx_transfer_free_payload(tr); // do this early to release memory before callback
+                tr->feedback(rx->tx, fb);
             }
+            tx_transfer_free(rx->tx, tr);
         }
     }
 }
@@ -763,38 +825,34 @@ static void tx_send_ack(udpard_rx_t* const    rx,
                         const uint64_t        transfer_id,
                         const udpard_remote_t remote)
 {
-    // Compose the ack transfer payload. It simply contains the topic hash and the ID of the acked transfer.
-    byte_t  header[UDPARD_P2P_HEADER_BYTES];
-    byte_t* ptr = header;
-    *ptr++      = P2P_KIND_ACK;
-    ptr += 7U; // Reserved bytes.
-    ptr = serialize_u64(ptr, topic_hash);
-    ptr = serialize_u64(ptr, transfer_id);
-    UDPARD_ASSERT((ptr - header) == UDPARD_P2P_HEADER_BYTES);
-    (void)ptr;
-    const udpard_bytes_t payload = { .size = UDPARD_P2P_HEADER_BYTES, .data = header };
-
-    // Enqueue the ack transfer.
-    const uint64_t p2p_transfer_id = rx->p2p_transfer_id++;
-    for (uint_fast8_t i = 0; i < UDPARD_NETWORK_INTERFACE_COUNT_MAX; i++) {
-        udpard_tx_t* const tx = rx->tx[i];
-        if ((tx != NULL) && udpard_is_valid_endpoint(remote.endpoints[i])) {
-            // TODO: scan the transmission queue for already pending acks; abort if one is already there.
-            const uint32_t count = udpard_tx_push(tx,
-                                                  now,
-                                                  now + ACK_TX_DEADLINE,
-                                                  priority,
-                                                  remote.uid, // this is a P2P transfer
-                                                  remote.endpoints[i],
-                                                  p2p_transfer_id,
-                                                  payload,
-                                                  false,
-                                                  NULL);
-            UDPARD_ASSERT(count <= 1);
-            if (count != 1) { // ack is always a single-frame transfer, so we get either 0 or 1
-                rx->errors_ack_tx[i]++;
-            }
+    if (rx->tx != NULL) {
+        byte_t  header[UDPARD_P2P_HEADER_BYTES];
+        byte_t* ptr = header;
+        *ptr++      = P2P_KIND_ACK;
+        ptr += 7U; // Reserved bytes.
+        ptr = serialize_u64(ptr, topic_hash);
+        ptr = serialize_u64(ptr, transfer_id);
+        UDPARD_ASSERT((ptr - header) == UDPARD_P2P_HEADER_BYTES);
+        (void)ptr;
+        const udpard_bytes_t payload = { .size = UDPARD_P2P_HEADER_BYTES, .data = header };
+        // TODO: scan the transmission queue for already pending acks; abort if one is already there.
+        const uint64_t p2p_transfer_id = rx->p2p_transfer_id++;
+        const uint32_t count           = udpard_tx_push(rx->tx,
+                                              now,
+                                              now + ACK_TX_DEADLINE,
+                                              priority,
+                                              remote.uid, // this is a P2P transfer
+                                              remote.endpoints,
+                                              p2p_transfer_id,
+                                              payload,
+                                              NULL,
+                                              NULL);
+        UDPARD_ASSERT(count <= 1);
+        if (count != 1) { // ack is always a single-frame transfer, so we get either 0 or 1
+            rx->errors_ack_tx++;
         }
+    } else {
+        rx->errors_ack_tx++;
     }
 }
 
@@ -810,19 +868,21 @@ bool udpard_tx_new(udpard_tx_t* const              self,
         mem_zero(sizeof(*self), self);
         self->vtable                = vtable;
         self->local_uid             = local_uid;
-        self->mtu                   = UDPARD_MTU_DEFAULT;
         self->ack_baseline_timeout  = UDPARD_TX_ACK_BASELINE_TIMEOUT_DEFAULT_us;
         self->enqueued_frames_limit = enqueued_frames_limit;
         self->enqueued_frames_count = 0;
         self->memory                = memory;
-        for (size_t i = 0; i < UDPARD_PRIORITY_COUNT; i++) {
-            self->queue[i].head = NULL;
-            self->queue[i].tail = NULL;
+        self->index_staged          = NULL;
+        self->index_deadline        = NULL;
+        self->index_transfer        = NULL;
+        self->user                  = NULL;
+        for (uint_fast8_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
+            self->mtu[i] = UDPARD_MTU_DEFAULT;
+            for (uint_fast8_t p = 0; p < UDPARD_PRIORITY_COUNT; p++) {
+                self->queue[i][p].head = NULL;
+                self->queue[i][p].tail = NULL;
+            }
         }
-        self->index_staged   = NULL;
-        self->index_deadline = NULL;
-        self->index_transfer = NULL;
-        self->user           = NULL;
     }
     return ok;
 }
@@ -832,7 +892,7 @@ uint32_t udpard_tx_push(udpard_tx_t* const      self,
                         const udpard_us_t       deadline,
                         const udpard_prio_t     priority,
                         const uint64_t          topic_hash,
-                        const udpard_udpip_ep_t remote_ep,
+                        const udpard_udpip_ep_t remote_ep[UDPARD_IFACE_COUNT_MAX],
                         const uint64_t          transfer_id,
                         const udpard_bytes_t    payload,
                         void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t),
@@ -840,13 +900,13 @@ uint32_t udpard_tx_push(udpard_tx_t* const      self,
 {
     uint32_t   out = 0;
     const bool ok  = (self != NULL) && (deadline >= now) && (now >= 0) && (self->local_uid != 0) &&
-                    udpard_is_valid_endpoint(remote_ep) && (priority <= UDPARD_PRIORITY_MAX) &&
+                    has_valid_endpoint(remote_ep) && (priority <= UDPARD_PRIORITY_MAX) &&
                     ((payload.data != NULL) || (payload.size == 0U)) &&
                     (tx_transfer_find(self, topic_hash, transfer_id) == NULL);
     if (ok) {
         // Before attempting to enqueue a new transfer, we need to update the transmission scheduler.
         // It may release some items from the tx queue, and it may also promote some staged transfers to the queue.
-        udpard_tx_poll(self, now);
+        udpard_tx_poll(self, now, UDPARD_IFACE_MASK_ALL);
         const meta_t meta = {
             .priority              = priority,
             .flag_ack              = feedback != NULL,
@@ -865,16 +925,9 @@ static void tx_purge_expired(udpard_tx_t* const self, const udpard_us_t now)
     while (true) { // we can use next_greater instead of doing min search every time
         tx_transfer_t* const tr = CAVL2_TO_OWNER(cavl2_min(self->index_deadline), tx_transfer_t, index_deadline);
         if ((tr != NULL) && (now > tr->deadline)) {
-            const udpard_tx_feedback_t fb = {
-                .topic_hash              = tr->topic_hash,
-                .transfer_id             = tr->transfer_id,
-                .remote_ep               = tr->destination,
-                .user_transfer_reference = tr->user_transfer_reference,
-                .attempts                = tr->attempts,
-                .success                 = false,
-            };
-            tx_transfer_free_payload(self, tr); // do this early to release memory before callback
             if (tr->feedback != NULL) {
+                const udpard_tx_feedback_t fb = tx_make_feedback(tr, false);
+                tx_transfer_free_payload(tr); // do this early to release memory before callback
                 tr->feedback(self, fb);
             }
             tx_transfer_free(self, tr);
@@ -903,13 +956,13 @@ static void tx_promote_staged(udpard_tx_t* const self, const udpard_us_t now)
     }
 }
 
-static void tx_eject_pending(udpard_tx_t* const self, const udpard_us_t now)
+static void tx_eject_pending(udpard_tx_t* const self, const udpard_us_t now, const uint_fast8_t ifindex)
 {
     while (true) {
         // Find the highest-priority pending transfer.
         tx_transfer_t* tr = NULL;
         for (size_t prio = 0; prio < UDPARD_PRIORITY_COUNT; prio++) { // dear compiler, please unroll
-            tx_transfer_t* const candidate = LIST_TAIL(self->queue[prio], tx_transfer_t, queue);
+            tx_transfer_t* const candidate = LIST_TAIL(self->queue[ifindex][prio], tx_transfer_t, queue);
             if (candidate != NULL) {
                 tr = candidate;
                 break;
@@ -922,7 +975,7 @@ static void tx_eject_pending(udpard_tx_t* const self, const udpard_us_t now)
         UDPARD_ASSERT(tr->cursor != NULL); // cannot be pending without payload, doesn't make sense
 
         // Compute the auxiliary states that will guide the ejection.
-        tx_frame_t* const frame        = tr->cursor;
+        tx_frame_t* const frame        = tr->cursor[ifindex];
         tx_frame_t* const frame_next   = frame->next;
         const bool        last_attempt = tr->deadline <= tr->retry_at;
         const bool        last_frame   = frame_next == NULL; // if not last attempt we will have to rewind to head
@@ -932,8 +985,8 @@ static void tx_eject_pending(udpard_tx_t* const self, const udpard_us_t now)
             .now                     = now,
             .deadline                = tr->deadline,
             .dscp                    = self->dscp_value_per_priority[tr->priority],
-            .destination             = tr->destination,
-            .datagram                = tx_frame_view(frame, last_frame ? tr->mtu_last : tr->mtu),
+            .destination             = tr->destination[ifindex],
+            .datagram                = tx_frame_view(frame),
             .user_transfer_reference = tr->user_transfer_reference,
         };
         if (!self->vtable->eject(self, ejection)) { // The easy case -- no progress was made at this time;
@@ -943,20 +996,20 @@ static void tx_eject_pending(udpard_tx_t* const self, const udpard_us_t now)
         // Frame ejected successfully. Update the transfer state to get ready for the next frame.
         if (last_attempt) { // no need to keep frames that we will no longer use; free early to reduce pressure
             UDPARD_ASSERT(tr->head == tr->cursor); // They go together on the last attempt.
-            tr->head = frame_next;
-            udpard_tx_refcount_dec(self, ejection.datagram);
+            tr->head[ifindex] = frame_next;
+            udpard_tx_refcount_dec(ejection.datagram);
             self->enqueued_frames_count--;
         }
-        tr->cursor = frame_next;
+        tr->cursor[ifindex] = frame_next;
 
         // Finalize the transmission if this was the last frame of the transfer.
         if (last_frame) {
-            tr->cursor = tr->head;
-            tr->attempts++;
-            delist(&self->queue[tr->priority], &tr->queue); // no longer pending for transmission
+            tr->cursor[ifindex] = tr->head[ifindex];
+            tr->attempts[ifindex]++;
+            delist(&self->queue[ifindex][tr->priority], &tr->queue[ifindex]); // no longer pending for transmission
             if (last_attempt) {
-                if (tr->feedback == NULL) { // Best-effort transfers are removed immediately.
-                    tx_transfer_free(self, tr);
+                if (!tr->reliable) {            // Best-effort transfers are removed immediately.
+                    tx_transfer_free(self, tr); // We can invoke the feedback callback here if needed.
                 }
                 // If this is the last attempt of a reliable transfer, it will wait for ack or expiration.
             } else { // Reinsert into the staged index for later retransmission if not acknowledged.
@@ -967,32 +1020,36 @@ static void tx_eject_pending(udpard_tx_t* const self, const udpard_us_t now)
     }
 }
 
-void udpard_tx_poll(udpard_tx_t* const self, const udpard_us_t now)
+void udpard_tx_poll(udpard_tx_t* const self, const udpard_us_t now, const uint_fast8_t iface_mask)
 {
     if ((self != NULL) && (now >= 0)) { // This is the main scheduler state machine update tick.
         tx_purge_expired(self, now);    // This may free up some memory and some queue slots.
         tx_promote_staged(self, now);   // This may add some new transfers to the queue.
-        tx_eject_pending(self, now);    // The queue is now up to date and we can try to eject some frames.
+        for (uint_fast8_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
+            if ((iface_mask & (1U << i)) != 0U) {
+                tx_eject_pending(self, now, i);
+            }
+        }
     }
 }
 
-void udpard_tx_refcount_inc(udpard_tx_t* const self, const udpard_bytes_t datagram)
+void udpard_tx_refcount_inc(const udpard_bytes_t tx_payload_view)
 {
-    if ((self != NULL) && (datagram.data != NULL)) {
-        tx_frame_t* const frame = tx_frame_from_view(datagram);
+    if (tx_payload_view.data != NULL) {
+        tx_frame_t* const frame = tx_frame_from_view(tx_payload_view);
         UDPARD_ASSERT(frame->refcount > 0); // NOLINT(*ArrayBound)
         frame->refcount++;
     }
 }
 
-void udpard_tx_refcount_dec(udpard_tx_t* const self, const udpard_bytes_t datagram)
+void udpard_tx_refcount_dec(const udpard_bytes_t tx_payload_view)
 {
-    if ((self != NULL) && (datagram.data != NULL)) {
-        tx_frame_t* const frame = tx_frame_from_view(datagram);
+    if (tx_payload_view.data != NULL) {
+        tx_frame_t* const frame = tx_frame_from_view(tx_payload_view);
         UDPARD_ASSERT(frame->refcount > 0); // NOLINT(*ArrayBound)
         frame->refcount--;
         if (frame->refcount == 0U) {
-            mem_free(self->memory.payload, tx_frame_object_size(datagram.size), frame);
+            frame->deleter.free(frame->deleter.user, sizeof(tx_frame_t) + tx_payload_view.size, frame);
         }
     }
 }
@@ -1683,7 +1740,7 @@ static void rx_session_update(rx_session_t* const        self,
 
     // Update the return path discovery state.
     // We identify nodes by their UID, allowing them to migrate across interfaces and IP addresses.
-    UDPARD_ASSERT(ifindex < UDPARD_NETWORK_INTERFACE_COUNT_MAX);
+    UDPARD_ASSERT(ifindex < UDPARD_IFACE_COUNT_MAX);
     self->remote.endpoints[ifindex] = src_ep;
 
     // Do-once initialization to ensure we don't lose any transfers by choosing the initial transfer-ID poorly.
@@ -1863,9 +1920,7 @@ static bool rx_validate_mem_resources(const udpard_rx_mem_resources_t memory)
            (memory.fragment.alloc != NULL) && (memory.fragment.free != NULL);
 }
 
-void udpard_rx_new(udpard_rx_t* const self,
-                   udpard_tx_t* const tx[UDPARD_NETWORK_INTERFACE_COUNT_MAX],
-                   const uint64_t     p2p_transfer_id_initial)
+void udpard_rx_new(udpard_rx_t* const self, udpard_tx_t* const tx, const uint64_t p2p_transfer_id_initial)
 {
     UDPARD_ASSERT(self != NULL);
     mem_zero(sizeof(*self), self);
@@ -1874,11 +1929,9 @@ void udpard_rx_new(udpard_rx_t* const self,
     self->errors_oom                  = 0;
     self->errors_frame_malformed      = 0;
     self->errors_transfer_malformed   = 0;
-    for (size_t i = 0; i < UDPARD_NETWORK_INTERFACE_COUNT_MAX; i++) {
-        self->tx[i] = tx[i];
-    }
-    self->p2p_transfer_id = p2p_transfer_id_initial;
-    self->user            = NULL;
+    self->tx                          = tx;
+    self->p2p_transfer_id             = p2p_transfer_id_initial;
+    self->user                        = NULL;
 }
 
 void udpard_rx_poll(udpard_rx_t* const self, const udpard_us_t now)
@@ -2025,7 +2078,7 @@ bool udpard_rx_port_push(udpard_rx_t* const         rx,
 {
     const bool ok = (rx != NULL) && (port != NULL) && (timestamp >= 0) && udpard_is_valid_endpoint(source_ep) &&
                     (datagram_payload.data != NULL) && (payload_deleter.free != NULL) &&
-                    (redundant_iface_index < UDPARD_NETWORK_INTERFACE_COUNT_MAX);
+                    (redundant_iface_index < UDPARD_IFACE_COUNT_MAX);
     if (ok) {
         rx_frame_t frame       = { 0 };
         uint32_t   frame_index = 0;
