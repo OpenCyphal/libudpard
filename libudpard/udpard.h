@@ -95,15 +95,13 @@ typedef int64_t udpard_us_t;
 /// See udpard_tx_t::ack_baseline_timeout.
 #define UDPARD_TX_ACK_BASELINE_TIMEOUT_DEFAULT_us 16000LL
 
-/// The maximum number of transmission attempts for a transfer is capped at this value irrespective of other settings.
-#define UDPARD_TX_RETRY_MAX 31U
-
 /// The subject-ID only affects the formation of the multicast UDP/IP endpoint address.
 /// In IPv4 networks, it is limited to 23 bits only due to the limited MAC multicast address space.
 /// In IPv6 networks, 32 bits are supported.
 #define UDPARD_IPv4_SUBJECT_ID_MAX 0x7FFFFFUL
 
-#define UDPARD_PRIORITY_MAX 7U
+#define UDPARD_PRIORITY_MAX   7U
+#define UDPARD_PRIORITY_COUNT (UDPARD_PRIORITY_MAX + 1U)
 
 typedef enum udpard_prio_t
 {
@@ -314,23 +312,13 @@ typedef struct udpard_tx_mem_resources_t
 typedef struct udpard_tx_feedback_t
 {
     uint64_t          topic_hash;
-    uint32_t          transfer_id;
+    uint64_t          transfer_id;
     udpard_udpip_ep_t remote_ep;
+    void*             user_transfer_reference; ///< This is the same pointer that was passed to udpard_tx_push().
 
-    uint_fast8_t retries; ///< The number of attempts equals retries plus one.
-    bool         success; ///< False if no ack was received from the remote end before deadline expiration.
-
-    /// This is the same pointer that was passed to udpard_tx_push().
-    void* user_transfer_reference;
+    uint_fast8_t attempts; ///< Cannot overflow due to exponential backoff. 0 if timed out before first attempt.
+    bool         success;  ///< False if no ack was received from the remote end before deadline expiration.
 } udpard_tx_feedback_t;
-
-/// The TX frame ejection handler returns one of these results to guide the udpard_tx_poll() logic.
-typedef enum udpard_tx_eject_result_t
-{
-    udpard_tx_eject_success, ///< Frame submitted to NIC/socket successfully and can be removed from the TX queue.
-    udpard_tx_eject_blocked, ///< The NIC/socket is currently not ready to accept new frames; try again later.
-    udpard_tx_eject_failed,  ///< An unrecoverable error occurred while submitting the frame; drop it from the TX queue.
-} udpard_tx_eject_result_t;
 
 typedef struct udpard_tx_ejection_t
 {
@@ -343,8 +331,8 @@ typedef struct udpard_tx_ejection_t
     uint_fast8_t      dscp;        ///< Set the DSCP field of the outgoing packet to this.
     udpard_udpip_ep_t destination; ///< Unicast or multicast UDP/IP endpoint.
 
-    /// If the result is udpard_tx_eject_success, the application is responsible for freeing the datagram_origin.data
-    /// using self->memory.payload.free() at some point in the future (either within the callback or later),
+    /// If the ejection handler returns success, the application is responsible for freeing the datagram_origin.data
+    /// using udpard_tx_t::memory.payload.free() at some point in the future (either within the callback or later),
     /// unless datagram_origin.data is NULL, in which case the library will retain the ownership.
     /// It may help to know that the view is a small fixed offset greater than the origin,
     /// so both may not have to be kept, depending on the implementation.
@@ -358,12 +346,7 @@ typedef struct udpard_tx_ejection_t
 typedef struct udpard_tx_vtable_t
 {
     /// Invoked from udpard_tx_poll() to push outgoing UDP datagrams into the socket/NIC driver.
-    udpard_tx_eject_result_t (*eject)(udpard_tx_t*, udpard_tx_ejection_t);
-
-    /// Invoked from udpard_tx_poll() to report the result of reliable transfer transmission attempts.
-    /// This is ALWAYS invoked EXACTLY ONCE per reliable transfer pushed via udpard_tx_push() successfully;
-    /// this is NOT invoked for best-effort (non-reliable) transfers.
-    void (*feedback)(udpard_tx_t*, udpard_tx_feedback_t);
+    bool (*eject)(udpard_tx_t*, udpard_tx_ejection_t);
 } udpard_tx_vtable_t;
 
 /// The transmission pipeline is a prioritized transmission queue that keeps UDP datagrams (aka transport frames)
@@ -390,10 +373,6 @@ struct udpard_tx_t
     /// The globally unique identifier of the local node. Must not change after initialization.
     uint64_t local_uid;
 
-    /// The maximum number of UDP datagrams this instance is allowed to enqueue.
-    /// The purpose of this limitation is to ensure that a blocked queue does not exhaust the memory.
-    size_t queue_capacity;
-
     /// The maximum number of Cyphal transfer payload bytes per UDP datagram.
     /// The Cyphal/UDP header is added to this value to obtain the total UDP datagram payload size. See UDPARD_MTU_*.
     /// The value can be changed arbitrarily between enqueue operations as long as it is at least UDPARD_MTU_MIN.
@@ -405,12 +384,17 @@ struct udpard_tx_t
 
     /// Optional user-managed mapping from the Cyphal priority level in [0,7] (highest priority at index 0)
     /// to the IP DSCP field value for use by the application when transmitting. By default, all entries are zero.
-    uint_least8_t dscp_value_per_priority[UDPARD_PRIORITY_MAX + 1U];
+    uint_least8_t dscp_value_per_priority[UDPARD_PRIORITY_COUNT];
 
-    udpard_tx_mem_resources_t memory;
+    /// The maximum number of UDP datagrams this instance is allowed to enqueue, irrespective of the transfer count.
+    /// At worst, there may be one datagram per transfer, more for multi-frame transfers.
+    /// The purpose of this limitation is to ensure that a blocked queue does not exhaust the memory.
+    size_t enqueued_frames_limit;
 
     /// The number of frames that are currently contained in the queue, initially zero. READ-ONLY!
-    size_t queue_size;
+    size_t enqueued_frames_count;
+
+    udpard_tx_mem_resources_t memory;
 
     /// Error counters incremented automatically when the corresponding error condition occurs.
     /// These counters are never decremented by the library but they can be reset by the application if needed.
@@ -419,8 +403,8 @@ struct udpard_tx_t
     uint64_t errors_expiration; ///< A frame had to be dropped due to premature deadline expiration.
 
     /// Internal use only, do not modify! See tx_transfer_t for details.
-    udpard_tree_t* index_priority;
-    udpard_tree_t* index_readiness;
+    udpard_list_t  queue[UDPARD_PRIORITY_COUNT];
+    udpard_tree_t* index_staged;
     udpard_tree_t* index_deadline;
     udpard_tree_t* index_transfer;
 
@@ -434,7 +418,7 @@ struct udpard_tx_t
 /// True on success, false if any of the arguments are invalid.
 bool udpard_tx_new(udpard_tx_t* const              self,
                    const uint64_t                  local_uid,
-                   const size_t                    queue_capacity,
+                   const size_t                    enqueued_frames_limit,
                    const udpard_tx_mem_resources_t memory,
                    const udpard_tx_vtable_t* const vtable);
 
@@ -461,6 +445,16 @@ bool udpard_tx_new(udpard_tx_t* const              self,
 /// while invocations with invalid arguments just return zero without modifying the queue state. In all cases,
 /// either all frames of the transfer are enqueued successfully or none are.
 ///
+/// An attempt to push a transfer with a (topic hash, transfer-ID) pair that is already enqueued will fail.
+///
+/// The callback is invoked from udpard_tx_poll() to report the result of reliable transfer transmission attempts.
+/// This is ALWAYS invoked EXACTLY ONCE per reliable transfer pushed via udpard_tx_push() successfully.
+/// Set the callback to NULL for best-effort (non-acknowledged) transfers.
+///
+/// Reliable transfers will keep retransmitting until either an acknowledgment is received from the remote,
+/// or the deadline expires. The number of retransmissions cannot be limited directly. Each subsequent
+/// retransmission timeout is doubled compared to the previous one (exponential backoff).
+///
 /// The memory allocation requirement is two allocations per datagram:
 /// a single-frame transfer takes two allocations; a multi-frame transfer of N frames takes N*2 allocations.
 /// In each pair of allocations:
@@ -479,8 +473,8 @@ uint32_t udpard_tx_push(udpard_tx_t* const      self,
                         const udpard_udpip_ep_t remote_ep,
                         const uint64_t          transfer_id,
                         const udpard_bytes_t    payload,
-                        const bool              reliable, // Will keep retransmitting until acked or deadline reached.
-                        void* const             user_transfer_reference);
+                        void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t), // NULL if best-effort.
+                        void* const user_transfer_reference);
 
 /// This should be invoked whenever the socket/NIC of this queue becomes ready to accept new datagrams for transmission.
 /// It is fine to also invoke it periodically unconditionally to drive the transmission process.
@@ -489,7 +483,7 @@ uint32_t udpard_tx_push(udpard_tx_t* const      self,
 /// The function may deallocate memory. The time complexity is logarithmic in the number of enqueued transfers.
 void udpard_tx_poll(udpard_tx_t* const self, const udpard_us_t now);
 
-/// Drops all enqueued items; afterward, the instance is safe to discard.
+/// Drops all enqueued items; afterward, the instance is safe to discard. Callbacks will not be invoked.
 void udpard_tx_free(udpard_tx_t* const self);
 
 // =====================================================================================================================
