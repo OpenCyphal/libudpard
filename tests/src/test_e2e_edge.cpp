@@ -16,6 +16,8 @@ namespace {
 void                              on_message(udpard_rx_t* rx, udpard_rx_port_t* port, udpard_rx_transfer_t transfer);
 void                              on_collision(udpard_rx_t* rx, udpard_rx_port_t* port, udpard_remote_t remote);
 constexpr udpard_rx_port_vtable_t callbacks{ .on_message = &on_message, .on_collision = &on_collision };
+void on_message_p2p(udpard_rx_t* rx, udpard_rx_port_p2p_t* port, udpard_rx_transfer_p2p_t transfer);
+constexpr udpard_rx_port_p2p_vtable_t p2p_callbacks{ &on_message_p2p };
 
 struct CapturedFrame
 {
@@ -47,8 +49,9 @@ constexpr udpard_tx_vtable_t tx_vtable{ .eject = &capture_tx_frame };
 struct Context
 {
     std::vector<uint64_t> ids;
-    size_t                collisions   = 0;
-    uint64_t              expected_uid = 0;
+    size_t                collisions     = 0;
+    uint64_t              expected_uid   = 0;
+    uint64_t              expected_topic = 0;
     udpard_udpip_ep_t     source{};
 };
 
@@ -164,6 +167,19 @@ void on_collision(udpard_rx_t* const rx, udpard_rx_port_t* const /*port*/, const
     ctx->collisions++;
 }
 
+void on_message_p2p(udpard_rx_t* const rx, udpard_rx_port_p2p_t* const port, const udpard_rx_transfer_p2p_t transfer)
+{
+    auto* const ctx = static_cast<Context*>(rx->user);
+    ctx->ids.push_back(transfer.base.transfer_id);
+    if (ctx->expected_topic != 0) {
+        TEST_ASSERT_EQUAL_UINT64(ctx->expected_topic, transfer.topic_hash);
+    }
+    TEST_ASSERT_EQUAL_UINT64(ctx->expected_uid, transfer.base.remote.uid);
+    TEST_ASSERT_EQUAL_UINT32(ctx->source.ip, transfer.base.remote.endpoints[0].ip);
+    TEST_ASSERT_EQUAL_UINT16(ctx->source.port, transfer.base.remote.endpoints[0].port);
+    udpard_fragment_free_all(transfer.base.payload, port->base.memory.fragment);
+}
+
 /// UNORDERED mode should drop duplicates while keeping arrival order.
 void test_udpard_rx_unordered_duplicates()
 {
@@ -262,6 +278,86 @@ void test_udpard_rx_ordered_head_advanced_late()
     TEST_ASSERT_EQUAL_size_t(0, fix.ctx.collisions);
 }
 
+/// P2P helper should emit frames with auto transfer-ID and proper addressing.
+void test_udpard_tx_push_p2p()
+{
+    instrumented_allocator_t tx_alloc_transfer{};
+    instrumented_allocator_t tx_alloc_payload{};
+    instrumented_allocator_t rx_alloc_frag{};
+    instrumented_allocator_t rx_alloc_session{};
+    instrumented_allocator_new(&tx_alloc_transfer);
+    instrumented_allocator_new(&tx_alloc_payload);
+    instrumented_allocator_new(&rx_alloc_frag);
+    instrumented_allocator_new(&rx_alloc_session);
+    udpard_tx_mem_resources_t tx_mem{};
+    tx_mem.transfer = instrumented_allocator_make_resource(&tx_alloc_transfer);
+    for (auto& res : tx_mem.payload) {
+        res = instrumented_allocator_make_resource(&tx_alloc_payload);
+    }
+    udpard_tx_t tx{};
+    TEST_ASSERT_TRUE(udpard_tx_new(&tx, 0x1122334455667788ULL, 5U, 8, tx_mem, &tx_vtable));
+    std::vector<CapturedFrame> frames;
+    tx.user = &frames;
+
+    const udpard_rx_mem_resources_t rx_mem{ .session  = instrumented_allocator_make_resource(&rx_alloc_session),
+                                            .fragment = instrumented_allocator_make_resource(&rx_alloc_frag) };
+    udpard_rx_t                     rx{};
+    udpard_rx_port_p2p_t            port{};
+    Context                         ctx{};
+    const udpard_udpip_ep_t         source{ .ip = 0x0A0000AAU, .port = 7600U };
+    const udpard_udpip_ep_t         dest{ .ip = 0x0A000010U, .port = 7400U };
+    const uint64_t                  local_uid  = 0xCAFEBABECAFED00DULL;
+    const uint64_t                  topic_hash = 0xAABBCCDDEEFF1122ULL;
+    ctx.expected_uid                           = tx.local_uid;
+    ctx.expected_topic                         = topic_hash;
+    ctx.source                                 = source;
+    rx.user                                    = &ctx;
+    TEST_ASSERT_TRUE(udpard_rx_port_new_p2p(&port, local_uid, 1024, rx_mem, &p2p_callbacks));
+
+    udpard_remote_t remote{};
+    remote.uid           = local_uid;
+    remote.endpoints[0U] = dest;
+
+    std::array<uint8_t, UDPARD_P2P_HEADER_BYTES> payload_buf{};
+    constexpr uint8_t                            p2p_kind_response = 0U;
+    payload_buf[0]                                                 = p2p_kind_response;
+    for (size_t i = 0; i < sizeof(topic_hash); i++) {
+        payload_buf[8U + i] = static_cast<uint8_t>((topic_hash >> (i * 8U)) & 0xFFU);
+    }
+    const uint64_t response_transfer_id = 55;
+    for (size_t i = 0; i < sizeof(response_transfer_id); i++) {
+        payload_buf[16U + i] = static_cast<uint8_t>((response_transfer_id >> (i * 8U)) & 0xFFU);
+    }
+    const udpard_bytes_t payload{ .size = payload_buf.size(), .data = payload_buf.data() };
+    const udpard_us_t    now      = 0;
+    const uint64_t       first_id = tx.p2p_transfer_id;
+    TEST_ASSERT_GREATER_THAN_UINT32(
+      0U, udpard_tx_push_p2p(&tx, now, now + 1000000, udpard_prio_nominal, remote, payload, nullptr, nullptr));
+    udpard_tx_poll(&tx, now, UDPARD_IFACE_MASK_ALL);
+    TEST_ASSERT_FALSE(frames.empty());
+
+    const udpard_mem_deleter_t tx_payload_deleter{ .user = nullptr, .free = &tx_refcount_free };
+    for (const auto& f : frames) {
+        TEST_ASSERT_TRUE(udpard_rx_port_push(
+          &rx, reinterpret_cast<udpard_rx_port_t*>(&port), now, source, f.datagram, tx_payload_deleter, f.iface_index));
+    }
+    udpard_rx_poll(&rx, now);
+    TEST_ASSERT_EQUAL_size_t(1, ctx.ids.size());
+    TEST_ASSERT_EQUAL_UINT64(first_id, ctx.ids[0]);
+    TEST_ASSERT_EQUAL_size_t(0, ctx.collisions);
+
+    udpard_rx_port_free(&rx, reinterpret_cast<udpard_rx_port_t*>(&port));
+    udpard_tx_free(&tx);
+    TEST_ASSERT_EQUAL(0, tx_alloc_transfer.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, tx_alloc_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, rx_alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, rx_alloc_session.allocated_fragments);
+    instrumented_allocator_reset(&tx_alloc_transfer);
+    instrumented_allocator_reset(&tx_alloc_payload);
+    instrumented_allocator_reset(&rx_alloc_frag);
+    instrumented_allocator_reset(&rx_alloc_session);
+}
+
 } // namespace
 
 extern "C" void setUp() {}
@@ -274,5 +370,6 @@ int main()
     RUN_TEST(test_udpard_rx_unordered_duplicates);
     RUN_TEST(test_udpard_rx_ordered_out_of_order);
     RUN_TEST(test_udpard_rx_ordered_head_advanced_late);
+    RUN_TEST(test_udpard_tx_push_p2p);
     return UNITY_END();
 }

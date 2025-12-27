@@ -5,3 +5,4 @@ Please read `README.md` for general information about LibUDPard.
 Keep the code and comments very brief. Be sure every significant code block is preceded with a brief comment.
 
 When building the code, don't hesitate to use multiple jobs to use all CPU cores.
+To speed things up, it is best to configure CMake with `NO_STATIC_ANALYSIS=1`.

@@ -34,7 +34,7 @@ next-generation intelligent vehicles: manned and unmanned aircraft, spacecraft, 
 - Detailed time complexity and memory requirement models for the benefit of real-time high-integrity applications.
 - Runs anywhere out of the box, including extremely resource-constrained baremetal environments with ~100K ROM/RAM.
   No porting required.
-- MISRA C compliance (reach out to <https://forum.opencyphal.org>).
+- Partial MISRA C compliance (reach out to <https://forum.opencyphal.org>).
 - Full implementation in a single C file with only ~2k lines of straightforward C99!
 - Extensive test coverage.
 
