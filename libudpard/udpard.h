@@ -304,8 +304,7 @@ typedef struct udpard_tx_ejection_t
     /// it is optional to use depending on the implementation of the NIC driver (most traditional drivers ignore it).
     udpard_us_t deadline;
 
-    uint_fast8_t iface_index; ///< The interface index on which the datagram is to be transmitted.
-
+    uint_fast8_t      iface_index; ///< The interface index on which the datagram is to be transmitted.
     uint_fast8_t      dscp;        ///< Set the DSCP field of the outgoing packet to this.
     udpard_udpip_ep_t destination; ///< Unicast or multicast UDP/IP endpoint.
 

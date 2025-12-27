@@ -684,6 +684,17 @@ static tx_transfer_t* tx_transfer_find(udpard_tx_t* const tx, const uint64_t top
       cavl2_find(tx->index_transfer, &key, &tx_cavl_compare_transfer), tx_transfer_t, index_transfer);
 }
 
+/// True iff listed in at least one interface queue.
+static bool tx_is_pending(const udpard_tx_t* const tx, const tx_transfer_t* const tr)
+{
+    for (uint_fast8_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
+        if (is_listed(&tx->queue[i][tr->priority], &tr->queue[i])) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static udpard_tx_feedback_t tx_make_feedback(const tx_transfer_t* const tr, const bool success)
 {
     const udpard_tx_feedback_t fb = { .topic_hash              = tr->topic_hash,
@@ -710,7 +721,7 @@ static tx_frame_t* tx_spool(udpard_tx_t* const          tx,
     do {
         // Compute the size of the next frame, allocate it and link it up in the chain.
         const size_t      progress = smaller(payload.size - offset, mtu);
-        tx_frame_t* const item     = tx_frame_new(tx, memory, progress);
+        tx_frame_t* const item     = tx_frame_new(tx, memory, progress + HEADER_SIZE_BYTES);
         if (NULL == head) {
             head = item;
         } else {
@@ -861,6 +872,7 @@ static uint32_t tx_push(udpard_tx_t* const      tx,
     }
     UDPARD_ASSERT((tx->enqueued_frames_count - enqueued_frames_before) == n_frames);
     UDPARD_ASSERT(tx->enqueued_frames_count <= tx->enqueued_frames_limit);
+    (void)enqueued_frames_before;
 
     // Enqueue for transmission immediately.
     for (uint_fast8_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
@@ -887,7 +899,8 @@ static uint32_t tx_push(udpard_tx_t* const      tx,
     if (out_transfer != NULL) {
         *out_transfer = tr;
     }
-    return n_frames;
+    UDPARD_ASSERT(n_frames <= UINT32_MAX);
+    return (uint32_t)n_frames;
 }
 
 /// Handle an ACK received from a remote node.
@@ -926,7 +939,7 @@ static void tx_send_ack(udpard_rx_t* const    rx,
         const uint32_t new_ep_mask   = valid_ep_mask(remote.endpoints);
         const bool     new_better    = (new_ep_mask & (~prior_ep_mask)) != 0U;
         if (!new_better) {
-            return; // Can we get a new ack? We have ack at home!
+            return; // Can we get an ack? We have ack at home!
         }
         if (prior != NULL) {
             tx_transfer_free(tx, prior); // avoid redundant acks for the same transfer
@@ -1108,8 +1121,10 @@ static void tx_eject_pending(udpard_tx_t* const self, const udpard_us_t now, con
     while (true) {
         // Find the highest-priority pending transfer.
         tx_transfer_t* tr = NULL;
-        for (size_t prio = 0; prio < UDPARD_PRIORITY_COUNT; prio++) { // dear compiler, please unroll
-            tx_transfer_t* const candidate = LIST_TAIL(self->queue[ifindex][prio], tx_transfer_t, queue);
+        for (size_t prio = 0; prio < UDPARD_PRIORITY_COUNT; prio++) {
+            tx_transfer_t* const candidate = // This pointer arithmetic is ugly and perhaps should be improved
+              unbias_ptr(self->queue[ifindex][prio].tail,
+                         offsetof(tx_transfer_t, queue) + (sizeof(udpard_list_member_t) * ifindex));
             if (candidate != NULL) {
                 tr = candidate;
                 break;
@@ -1118,7 +1133,8 @@ static void tx_eject_pending(udpard_tx_t* const self, const udpard_us_t now, con
         if (tr == NULL) {
             break; // No pending transfers at the moment. Find something else to do.
         }
-        UDPARD_ASSERT(tr->cursor != NULL); // cannot be pending without payload, doesn't make sense
+        UDPARD_ASSERT(tr->cursor[ifindex] != NULL); // cannot be pending without payload, doesn't make sense
+        UDPARD_ASSERT(tr->priority < UDPARD_PRIORITY_COUNT);
 
         // Eject the frame.
         const tx_frame_t* const frame        = tr->cursor[ifindex];
@@ -1128,6 +1144,7 @@ static void tx_eject_pending(udpard_tx_t* const self, const udpard_us_t now, con
         const udpard_tx_ejection_t ejection = {
             .now                     = now,
             .deadline                = tr->deadline,
+            .iface_index             = ifindex,
             .dscp                    = self->dscp_value_per_priority[tr->priority],
             .destination             = tr->destination[ifindex],
             .datagram                = tx_frame_view(frame),
@@ -1139,7 +1156,7 @@ static void tx_eject_pending(udpard_tx_t* const self, const udpard_us_t now, con
 
         // Frame ejected successfully. Update the transfer state to get ready for the next frame.
         if (last_attempt) { // no need to keep frames that we will no longer use; free early to reduce pressure
-            UDPARD_ASSERT(tr->head == tr->cursor); // They go together on the last attempt.
+            UDPARD_ASSERT(tr->head[ifindex] == tr->cursor[ifindex]);
             tr->head[ifindex] = frame_next;
             udpard_tx_refcount_dec(ejection.datagram);
         }
@@ -1149,10 +1166,10 @@ static void tx_eject_pending(udpard_tx_t* const self, const udpard_us_t now, con
         if (last_frame) {
             tr->cursor[ifindex] = tr->head[ifindex];
             delist(&self->queue[ifindex][tr->priority], &tr->queue[ifindex]); // no longer pending for transmission
-            if (last_attempt && !tr->reliable) { // Best-effort transfers are removed immediately, no ack to wait for.
-                tx_transfer_free(self, tr);      // We can invoke the feedback callback here if needed.
+            UDPARD_ASSERT(!last_attempt || (tr->head[ifindex] == NULL));      // this iface is done with the payload
+            if (last_attempt && !tr->reliable && !tx_is_pending(self, tr)) {  // remove early once all ifaces are done
+                tx_transfer_free(self, tr);
             }
-            UDPARD_ASSERT(!last_attempt || (tr->head == NULL)); // the payload is no longer needed
         }
     }
 }
