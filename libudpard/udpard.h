@@ -282,7 +282,7 @@ typedef struct udpard_tx_mem_resources_t
     udpard_mem_resource_t transfer;
 
     /// The UDP datagram payload buffers are allocated per frame; each buffer is of size at most
-    /// (HEADER_SIZE+MTU+sizeof(void*)) bytes, so a trivial block pool is enough if MTU is known in advance.
+    /// HEADER_SIZE + MTU + small overhead, so a trivial block pool is enough if MTU is known in advance.
     udpard_mem_resource_t payload[UDPARD_IFACE_COUNT_MAX];
 } udpard_tx_mem_resources_t;
 
@@ -345,10 +345,13 @@ struct udpard_tx_t
 
     /// The maximum number of UDP datagrams irrespective of the transfer count, for all ifaces pooled.
     /// The purpose of this limitation is to ensure that a blocked interface queue does not exhaust the memory.
-    /// When the limit is reached, the library will apply simple heuristics to choose which transfers to drop.
+    /// When the limit is reached, the library will apply simple heuristics to choose which transfers to sacrifice.
     size_t enqueued_frames_limit;
 
-    /// The number of frames that are currently registered in the queue, initially zero. READ-ONLY!
+    /// The number of frames that are currently registered in the queue, initially zero.
+    /// This includes frames that are handed over to the NIC driver for transmission that are not yet released
+    /// via udpard_tx_refcount_dec().
+    /// READ-ONLY!
     size_t enqueued_frames_count;
 
     udpard_tx_mem_resources_t memory;

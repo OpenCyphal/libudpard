@@ -496,6 +496,7 @@ typedef struct tx_frame_t
 {
     size_t               refcount;
     udpard_mem_deleter_t deleter;
+    size_t*              objcount;
     struct tx_frame_t*   next;
     size_t               size;
     byte_t               data[];
@@ -511,14 +512,17 @@ static tx_frame_t* tx_frame_from_view(const udpard_bytes_t view)
     return (tx_frame_t*)unbias_ptr(view.data, offsetof(tx_frame_t, data));
 }
 
-static tx_frame_t* tx_frame_new(const udpard_mem_resource_t mem, const size_t data_size)
+static tx_frame_t* tx_frame_new(udpard_tx_t* const tx, const udpard_mem_resource_t mem, const size_t data_size)
 {
     tx_frame_t* const frame = (tx_frame_t*)mem_alloc(mem, sizeof(tx_frame_t) + data_size);
     if (frame != NULL) {
         frame->refcount = 1U;
         frame->deleter  = (udpard_mem_deleter_t){ .user = mem.user, .free = mem.free };
+        frame->objcount = &tx->enqueued_frames_count;
         frame->next     = NULL;
         frame->size     = data_size;
+        // Update the count; this is decremented when the frame is freed upon refcount reaching zero.
+        tx->enqueued_frames_count++;
     }
     return frame;
 }
@@ -623,7 +627,7 @@ static bool tx_ensure_queue_space(udpard_tx_t* const tx, const size_t total_fram
     while (total_frames_needed > (tx->enqueued_frames_limit - tx->enqueued_frames_count)) {
         tx_transfer_t* const victim = tx_sacrifice(tx);
         if (victim == NULL) {
-            break;
+            break; // We may have no transfers anymore but the NIC TX driver could still be holding some frames.
         }
         tx_transfer_free(tx, victim);
     }
@@ -666,10 +670,7 @@ static udpard_tx_feedback_t tx_make_feedback(const tx_transfer_t* const tr, cons
 }
 
 /// Returns the head of the transfer chain; NULL on OOM.
-static tx_frame_t* tx_spool(const udpard_mem_resource_t memory,
-                            const size_t                mtu,
-                            const meta_t                meta,
-                            const udpard_bytes_t        payload)
+static tx_frame_t* tx_spool(udpard_tx_t* const tx, const size_t mtu, const meta_t meta, const udpard_bytes_t payload)
 {
     UDPARD_ASSERT(mtu > 0);
     UDPARD_ASSERT((payload.data != NULL) || (payload.size == 0U));
@@ -684,7 +685,7 @@ static tx_frame_t* tx_spool(const udpard_mem_resource_t memory,
         // Compute the size of the next frame, allocate it and link it up in the chain.
         const size_t progress = smaller(payload.size - offset, mtu);
         {
-            tx_frame_t* const item = tx_frame_new(memory, progress);
+            tx_frame_t* const item = tx_frame_new(tx, tx->memory, progress);
             if (NULL == head) {
                 head = item;
             } else {
@@ -696,7 +697,7 @@ static tx_frame_t* tx_spool(const udpard_mem_resource_t memory,
         if (NULL == tail) {
             while (head != NULL) {
                 tx_frame_t* const next = head->next;
-                mem_free(memory, sizeof(tx_frame_t) + head->size, head);
+                mem_free(tx->memory, sizeof(tx_frame_t) + head->size, head);
                 head = next;
             }
             break;
@@ -755,7 +756,7 @@ static uint32_t tx_push(udpard_tx_t* const      tx,
             tr->feedback                = feedback;
             tr->staged_until =
               meta.flag_ack ? (now + tx_ack_timeout(tx->ack_baseline_timeout, tr->priority, tr->epoch)) : HEAT_DEATH;
-            tr->head = tr->cursor = tx_spool(tx->memory, mtu, meta, payload);
+            tr->head = tr->cursor = tx_spool(tx, mtu, meta, payload);
             if (tr->head != NULL) {
                 for (uint_fast8_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
                     if (udpard_is_valid_endpoint(tr->destination[i])) {
@@ -781,7 +782,6 @@ static uint32_t tx_push(udpard_tx_t* const      tx,
                                            &tr->index_deadline,
                                            cavl2_trivial_factory);
                 enlist_head(&tx->agewise, &tr->agewise);
-                tx->enqueued_frames_count += n_frames;
                 UDPARD_ASSERT(tx->enqueued_frames_count <= tx->enqueued_frames_limit);
                 out = (uint32_t)n_frames;
             } else { // The queue is large enough but we ran out of heap memory.
@@ -1012,7 +1012,6 @@ static void tx_eject_pending(udpard_tx_t* const self, const udpard_us_t now, con
             UDPARD_ASSERT(tr->head == tr->cursor); // They go together on the last attempt.
             tr->head[ifindex] = frame_next;
             udpard_tx_refcount_dec(ejection.datagram);
-            self->enqueued_frames_count--;
         }
         tr->cursor[ifindex] = frame_next;
 
@@ -1057,6 +1056,7 @@ void udpard_tx_refcount_dec(const udpard_bytes_t tx_payload_view)
         UDPARD_ASSERT(frame->refcount > 0); // NOLINT(*ArrayBound)
         frame->refcount--;
         if (frame->refcount == 0U) {
+            --*frame->objcount;
             frame->deleter.free(frame->deleter.user, sizeof(tx_frame_t) + tx_payload_view.size, frame);
         }
     }
