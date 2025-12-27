@@ -523,6 +523,7 @@ static tx_frame_t* tx_frame_new(udpard_tx_t* const tx, const udpard_mem_resource
         frame->size     = data_size;
         // Update the count; this is decremented when the frame is freed upon refcount reaching zero.
         tx->enqueued_frames_count++;
+        UDPARD_ASSERT(tx->enqueued_frames_count <= tx->enqueued_frames_limit);
     }
     return frame;
 }
@@ -1004,12 +1005,10 @@ static void tx_promote_staged(udpard_tx_t* const self, const udpard_us_t now)
         tx_transfer_t* const tr = CAVL2_TO_OWNER(cavl2_min(self->index_staged), tx_transfer_t, index_staged);
         if ((tr != NULL) && (now >= tr->staged_until)) {
             UDPARD_ASSERT(tr->cursor != NULL); // cannot stage without payload, doesn't make sense
-
             // Reinsert into the staged index at the new position, when the next attempt is due.
             // Do not insert if this is the last attempt -- no point doing that since it will not be transmitted again.
             cavl2_remove(&self->index_staged, &tr->index_staged);
-            tr->epoch++;
-            tr->staged_until += tx_ack_timeout(self->ack_baseline_timeout, tr->priority, tr->epoch);
+            tr->staged_until += tx_ack_timeout(self->ack_baseline_timeout, tr->priority, ++(tr->epoch));
             if (tr->deadline > tr->staged_until) {
                 (void)cavl2_find_or_insert(&self->index_staged,
                                            &tr->staged_until,
@@ -1017,7 +1016,6 @@ static void tx_promote_staged(udpard_tx_t* const self, const udpard_us_t now)
                                            &tr->index_staged,
                                            cavl2_trivial_factory);
             }
-
             // Enqueue for transmission unless it's been there since the last attempt (stalled interface?)
             for (uint_fast8_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
                 UDPARD_ASSERT(tr->cursor[i] == tr->head[i]);
@@ -1047,7 +1045,6 @@ static void tx_eject_pending(udpard_tx_t* const self, const udpard_us_t now, con
         if (tr == NULL) {
             break; // No pending transfers at the moment. Find something else to do.
         }
-        UDPARD_ASSERT(!cavl2_is_inserted(self->index_staged, &tr->index_staged));
         UDPARD_ASSERT(tr->cursor != NULL); // cannot be pending without payload, doesn't make sense
 
         // Eject the frame.
