@@ -921,6 +921,7 @@ static void tx_receive_ack(udpard_rx_t* const rx, const uint64_t topic_hash, con
 }
 
 /// Generate an ack transfer for the specified remote transfer.
+/// Do nothing if an ack for the same transfer is already enqueued with equal or better endpoint coverage.
 static void tx_send_ack(udpard_rx_t* const    rx,
                         const udpard_us_t     now,
                         const udpard_prio_t   priority,
@@ -943,7 +944,7 @@ static void tx_send_ack(udpard_rx_t* const    rx,
             return; // Can we get an ack? We have ack at home!
         }
         if (prior != NULL) {
-            tx_transfer_free(tx, prior); // avoid redundant acks for the same transfer
+            tx_transfer_free(tx, prior); // avoid redundant acks for the same transfer -- replace with better one
         }
 
         // Serialize the ACK payload.
@@ -958,24 +959,15 @@ static void tx_send_ack(udpard_rx_t* const    rx,
 
         // Enqueue the transfer.
         const udpard_bytes_t payload = { .size = UDPARD_P2P_HEADER_BYTES, .data = header };
-        const meta_t         meta    = {
-                       .priority              = priority,
-                       .flag_ack              = false,
-                       .transfer_payload_size = (uint32_t)payload.size,
-                       .transfer_id           = tx->p2p_transfer_id++,
-                       .sender_uid            = tx->local_uid,
-                       .topic_hash            = remote.uid, // this is a P2P transfer
-        };
-        tx_transfer_t* tr    = NULL;
-        const uint32_t count = tx_push(tx, //
-                                       now,
-                                       now + ACK_TX_DEADLINE,
-                                       meta,
-                                       remote.endpoints,
-                                       payload,
-                                       NULL,
-                                       NULL,
-                                       &tr);
+        const meta_t         meta    = { .priority              = priority,
+                                         .flag_ack              = false,
+                                         .transfer_payload_size = (uint32_t)payload.size,
+                                         .transfer_id           = tx->p2p_transfer_id++,
+                                         .sender_uid            = tx->local_uid,
+                                         .topic_hash            = remote.uid };
+        tx_transfer_t*       tr      = NULL;
+        const uint32_t       count =
+          tx_push(tx, now, now + ACK_TX_DEADLINE, meta, remote.endpoints, payload, NULL, NULL, &tr);
         UDPARD_ASSERT(count <= 1);
         if (count == 1) { // ack is always a single-frame transfer, so we get either 0 or 1
             UDPARD_ASSERT(tr != NULL);

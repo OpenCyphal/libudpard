@@ -1,7 +1,6 @@
-# LibUDPard instructions for agents
+# LibUDPard instructions for AI agents
 
-Please read README.md for general information about LibUDPard.
-The library source files are just two: `libudpard/udpard.c` and `libudpard/udpard.h`.
+Please read `README.md` for general information about LibUDPard.
 
 Keep the code and comments very brief. Be sure every significant code block is preceded with a brief comment.
 

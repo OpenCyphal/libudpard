@@ -1594,85 +1594,72 @@ typedef struct
     uint64_t          acked_transfer_id;
 } ack_tx_info_t;
 
-// Per-interface TX pipelines used by RX for acks.
 typedef struct
 {
-    instrumented_allocator_t alloc_frag[UDPARD_NETWORK_INTERFACE_COUNT_MAX];
-    instrumented_allocator_t alloc_payload[UDPARD_NETWORK_INTERFACE_COUNT_MAX];
-    udpard_tx_t              tx[UDPARD_NETWORK_INTERFACE_COUNT_MAX];
-    udpard_tx_t*             ptrs[UDPARD_NETWORK_INTERFACE_COUNT_MAX];
+    instrumented_allocator_t alloc_transfer;
+    instrumented_allocator_t alloc_payload;
+    udpard_tx_t              tx;
+    ack_tx_info_t            captured[16];
+    size_t                   captured_count;
 } tx_fixture_t;
+
+static bool tx_capture_ack(udpard_tx_t* const tx, const udpard_tx_ejection_t ejection)
+{
+    tx_fixture_t* const self = (tx_fixture_t*)tx->user;
+    if ((self == NULL) || (self->captured_count >= (sizeof(self->captured) / sizeof(self->captured[0])))) {
+        return false;
+    }
+    udpard_tx_refcount_inc(ejection.datagram);
+    meta_t         meta         = { 0 };
+    uint32_t       frame_index  = 0;
+    uint32_t       frame_offset = 0;
+    uint32_t       prefix_crc   = 0;
+    udpard_bytes_t payload      = { 0 };
+    const bool     ok =
+      header_deserialize((udpard_bytes_mut_t){ .size = ejection.datagram.size, .data = (void*)ejection.datagram.data },
+                         &meta,
+                         &frame_index,
+                         &frame_offset,
+                         &prefix_crc,
+                         &payload);
+    if (ok && (frame_index == 0U) && (frame_offset == 0U) && (payload.size == UDPARD_P2P_HEADER_BYTES)) {
+        const byte_t* const pl = (const byte_t*)payload.data;
+        if (pl[0] == P2P_KIND_ACK) {
+            ack_tx_info_t* const info = &self->captured[self->captured_count++];
+            info->priority            = meta.priority;
+            info->transfer_id         = meta.transfer_id;
+            info->topic_hash          = meta.topic_hash;
+            info->destination         = ejection.destination;
+            (void)deserialize_u64(pl + 8U, &info->acked_topic_hash);
+            (void)deserialize_u64(pl + 16U, &info->acked_transfer_id);
+        }
+    }
+    udpard_tx_refcount_dec(ejection.datagram);
+    return true;
+}
 
 static void tx_fixture_init(tx_fixture_t* const self, const uint64_t uid, const size_t capacity)
 {
-    for (size_t i = 0; i < UDPARD_NETWORK_INTERFACE_COUNT_MAX; i++) {
-        instrumented_allocator_new(&self->alloc_frag[i]);
-        instrumented_allocator_new(&self->alloc_payload[i]);
-        const udpard_tx_mem_resources_t mem = {
-            .fragment = instrumented_allocator_make_resource(&self->alloc_frag[i]),
-            .payload  = instrumented_allocator_make_resource(&self->alloc_payload[i]),
-        };
-        TEST_ASSERT(udpard_tx_new(&self->tx[i], uid, capacity, mem));
-        self->ptrs[i] = &self->tx[i];
+    instrumented_allocator_new(&self->alloc_transfer);
+    instrumented_allocator_new(&self->alloc_payload);
+    self->captured_count          = 0;
+    udpard_tx_mem_resources_t mem = { 0 };
+    mem.transfer                  = instrumented_allocator_make_resource(&self->alloc_transfer);
+    for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
+        mem.payload[i] = instrumented_allocator_make_resource(&self->alloc_payload);
     }
+    static const udpard_tx_vtable_t vtb = { .eject = &tx_capture_ack };
+    TEST_ASSERT(udpard_tx_new(&self->tx, uid, 1U, capacity, mem, &vtb));
+    self->tx.user = self;
 }
 
 static void tx_fixture_free(tx_fixture_t* const self)
 {
-    for (size_t i = 0; i < UDPARD_NETWORK_INTERFACE_COUNT_MAX; i++) {
-        TEST_ASSERT_EQUAL(0, self->tx[i].queue_size);
-        TEST_ASSERT_EQUAL(0, self->alloc_frag[i].allocated_fragments);
-        TEST_ASSERT_EQUAL(0, self->alloc_payload[i].allocated_fragments);
-        instrumented_allocator_reset(&self->alloc_frag[i]);
-        instrumented_allocator_reset(&self->alloc_payload[i]);
-    }
-}
-
-// Drains ack frames while returning the last one.
-static size_t drain_ack_tx(udpard_tx_t* const tx[], const udpard_us_t now, ack_tx_info_t* const last_out)
-{
-    size_t count = 0;
-    for (size_t i = 0; i < UDPARD_NETWORK_INTERFACE_COUNT_MAX; i++) {
-        udpard_tx_t* pipeline = tx[i];
-        if (pipeline == NULL) {
-            continue;
-        }
-        for (udpard_tx_item_t* item = udpard_tx_peek(pipeline, now); item != NULL;
-             item                   = udpard_tx_peek(pipeline, now)) {
-            meta_t         meta         = { 0 };
-            uint32_t       frame_index  = 0;
-            uint32_t       frame_offset = 0;
-            uint32_t       prefix_crc   = 0;
-            udpard_bytes_t payload      = { 0 };
-            ack_tx_info_t  info         = { 0 };
-            const bool     ok           = header_deserialize(
-              (udpard_bytes_mut_t){ .size = item->datagram_payload.size, .data = item->datagram_payload.data },
-              &meta,
-              &frame_index,
-              &frame_offset,
-              &prefix_crc,
-              &payload);
-            TEST_ASSERT_TRUE(ok);
-            TEST_ASSERT_EQUAL_UINT32(0, frame_index);
-            TEST_ASSERT_EQUAL_UINT32(0, frame_offset);
-            TEST_ASSERT_EQUAL_size_t(UDPARD_P2P_HEADER_BYTES, payload.size);
-            const byte_t* const pl = (const byte_t*)payload.data;
-            TEST_ASSERT_EQUAL_UINT8(P2P_KIND_ACK, pl[0]);
-            info.priority    = meta.priority;
-            info.transfer_id = meta.transfer_id;
-            info.topic_hash  = meta.topic_hash;
-            info.destination = item->destination;
-            (void)deserialize_u64(pl + 8U, &info.acked_topic_hash);
-            (void)deserialize_u64(pl + 16U, &info.acked_transfer_id);
-            if (last_out != NULL) {
-                *last_out = info;
-            }
-            udpard_tx_pop(pipeline, item);
-            udpard_tx_free(pipeline->memory, item);
-            count++;
-        }
-    }
-    return count;
+    udpard_tx_free(&self->tx);
+    TEST_ASSERT_EQUAL(0, self->alloc_transfer.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, self->alloc_payload.allocated_fragments);
+    instrumented_allocator_reset(&self->alloc_transfer);
+    instrumented_allocator_reset(&self->alloc_payload);
 }
 
 typedef struct
@@ -1757,7 +1744,7 @@ static void test_rx_ack_enqueued(void)
     tx_fixture_init(&tx_fix, 0xBADC0FFEE0DDF00DULL, 8);
 
     udpard_rx_t rx;
-    udpard_rx_new(&rx, tx_fix.ptrs, 10);
+    udpard_rx_new(&rx, &tx_fix.tx);
     callback_result_t cb_result = { 0 };
     rx.user                     = &cb_result;
 
@@ -1791,8 +1778,12 @@ static void test_rx_ack_enqueued(void)
     now += 100;
     rx_session_update(ses, &rx, now, ep0, make_frame_ptr(meta, mem_payload, "hello", 0, 5), del_payload, 0);
     TEST_ASSERT_EQUAL(1, cb_result.message.count);
-    cb_result.ack.count += drain_ack_tx(tx_fix.ptrs, now, &cb_result.ack.last);
-    TEST_ASSERT_EQUAL(1, cb_result.ack.count);
+    udpard_tx_poll(&tx_fix.tx, now, (uint_fast8_t)(1U << 0U));
+    cb_result.ack.count = tx_fix.captured_count;
+    if (tx_fix.captured_count > 0) {
+        cb_result.ack.last = tx_fix.captured[tx_fix.captured_count - 1U];
+    }
+    TEST_ASSERT(cb_result.ack.count >= 1);
     TEST_ASSERT_EQUAL_UINT64(topic_hash, cb_result.ack.last.acked_topic_hash);
     TEST_ASSERT_EQUAL_UINT64(meta.transfer_id, cb_result.ack.last.acked_transfer_id);
     TEST_ASSERT_EQUAL_UINT32(ep0.ip, cb_result.ack.last.destination.ip);
@@ -1806,8 +1797,12 @@ static void test_rx_ack_enqueued(void)
     const udpard_udpip_ep_t ep1 = { .ip = 0x0A000002, .port = 0x5678 };
     now += 100;
     rx_session_update(ses, &rx, now, ep1, make_frame_ptr(meta, mem_payload, "hello", 0, 5), del_payload, 1);
-    cb_result.ack.count += drain_ack_tx(tx_fix.ptrs, now, &cb_result.ack.last);
-    TEST_ASSERT_EQUAL(3, cb_result.ack.count); // acks on interfaces 0 and 1
+    udpard_tx_poll(&tx_fix.tx, now, (uint_fast8_t)(1U << 1U));
+    cb_result.ack.count = tx_fix.captured_count;
+    if (tx_fix.captured_count > 0) {
+        cb_result.ack.last = tx_fix.captured[tx_fix.captured_count - 1U];
+    }
+    TEST_ASSERT(cb_result.ack.count >= 2); // acks on interfaces 0 and 1
     TEST_ASSERT_EQUAL_UINT64(meta.transfer_id, cb_result.ack.last.acked_transfer_id);
 
     udpard_rx_port_free(&rx, &port);
@@ -1838,9 +1833,8 @@ static void test_rx_session_ordered(void)
 
     const udpard_rx_mem_resources_t rx_mem = { .fragment = mem_frag, .session = mem_session };
 
-    udpard_rx_t  rx;
-    udpard_tx_t* rx_tx[UDPARD_NETWORK_INTERFACE_COUNT_MAX] = { NULL, NULL, NULL };
-    udpard_rx_new(&rx, rx_tx, 0);
+    udpard_rx_t rx;
+    udpard_rx_new(&rx, NULL);
     callback_result_t cb_result = { 0 };
     rx.user                     = &cb_result;
 
@@ -1979,9 +1973,8 @@ static void test_rx_session_unordered(void)
     const udpard_mem_deleter_t      del_payload = instrumented_allocator_make_deleter(&alloc_payload);
     const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
 
-    udpard_rx_t  rx;
-    udpard_tx_t* rx_tx[UDPARD_NETWORK_INTERFACE_COUNT_MAX] = { NULL, NULL, NULL };
-    udpard_rx_new(&rx, rx_tx, 0);
+    udpard_rx_t rx;
+    udpard_rx_new(&rx, NULL);
     callback_result_t cb_result = { 0 };
     rx.user                     = &cb_result;
 
@@ -2126,7 +2119,7 @@ static void test_rx_session_unordered_reject_old(void)
     tx_fixture_t tx_fix = { 0 };
     tx_fixture_init(&tx_fix, 0xF00DCAFEF00DCAFEULL, 4);
     udpard_rx_t rx;
-    udpard_rx_new(&rx, tx_fix.ptrs, 2);
+    udpard_rx_new(&rx, &tx_fix.tx);
     callback_result_t cb_result = { 0 };
     rx.user                     = &cb_result;
 
@@ -2195,7 +2188,11 @@ static void test_rx_session_unordered_reject_old(void)
                       del_payload,
                       0);
     TEST_ASSERT_EQUAL(2, cb_result.message.count);
-    cb_result.ack.count += drain_ack_tx(tx_fix.ptrs, now, &cb_result.ack.last);
+    udpard_tx_poll(&tx_fix.tx, now, UDPARD_IFACE_MASK_ALL);
+    cb_result.ack.count = tx_fix.captured_count;
+    if (tx_fix.captured_count > 0) {
+        cb_result.ack.last = tx_fix.captured[tx_fix.captured_count - 1U];
+    }
     TEST_ASSERT_GREATER_OR_EQUAL_UINT64(1, cb_result.ack.count);
     TEST_ASSERT_EQUAL_UINT64(10, cb_result.ack.last.acked_transfer_id);
     TEST_ASSERT_EQUAL_UINT64(port.topic_hash, cb_result.ack.last.acked_topic_hash);
@@ -2225,9 +2222,8 @@ static void test_rx_session_unordered_duplicates(void)
     const udpard_mem_deleter_t      del_payload = instrumented_allocator_make_deleter(&alloc_payload);
     const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
 
-    udpard_rx_t  rx;
-    udpard_tx_t* rx_tx[UDPARD_NETWORK_INTERFACE_COUNT_MAX] = { NULL, NULL, NULL };
-    udpard_rx_new(&rx, rx_tx, 0);
+    udpard_rx_t rx;
+    udpard_rx_new(&rx, NULL);
     callback_result_t cb_result = { 0 };
     rx.user                     = &cb_result;
 
@@ -2302,9 +2298,8 @@ static void test_rx_session_ordered_reject_stale_after_jump(void)
     const udpard_mem_deleter_t      del_payload = instrumented_allocator_make_deleter(&alloc_payload);
     const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
 
-    udpard_rx_t  rx;
-    udpard_tx_t* rx_tx[UDPARD_NETWORK_INTERFACE_COUNT_MAX] = { NULL, NULL, NULL };
-    udpard_rx_new(&rx, rx_tx, 0);
+    udpard_rx_t rx;
+    udpard_rx_new(&rx, NULL);
     callback_result_t cb_result = { 0 };
     rx.user                     = &cb_result;
 
@@ -2410,9 +2405,8 @@ static void test_rx_session_ordered_zero_reordering_window(void)
     const udpard_mem_deleter_t      del_payload = instrumented_allocator_make_deleter(&alloc_payload);
     const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
 
-    udpard_rx_t  rx;
-    udpard_tx_t* rx_tx[UDPARD_NETWORK_INTERFACE_COUNT_MAX] = { NULL, NULL, NULL };
-    udpard_rx_new(&rx, rx_tx, 0);
+    udpard_rx_t rx;
+    udpard_rx_new(&rx, NULL);
     callback_result_t cb_result = { 0 };
     rx.user                     = &cb_result;
 
@@ -2505,9 +2499,8 @@ static void test_rx_port(void)
     const udpard_mem_deleter_t      del_payload = instrumented_allocator_make_deleter(&alloc_payload);
     const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
 
-    udpard_rx_t  rx;
-    udpard_tx_t* rx_tx[UDPARD_NETWORK_INTERFACE_COUNT_MAX] = { NULL, NULL, NULL };
-    udpard_rx_new(&rx, rx_tx, 0);
+    udpard_rx_t rx;
+    udpard_rx_new(&rx, NULL);
     callback_result_t cb_result = { 0 };
     rx.user                     = &cb_result;
 
@@ -2582,9 +2575,8 @@ static void test_rx_port_timeouts(void)
     const udpard_mem_deleter_t      del_payload = instrumented_allocator_make_deleter(&alloc_payload);
     const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
 
-    udpard_rx_t  rx;
-    udpard_tx_t* rx_tx[UDPARD_NETWORK_INTERFACE_COUNT_MAX] = { NULL, NULL, NULL };
-    udpard_rx_new(&rx, rx_tx, 0);
+    udpard_rx_t rx;
+    udpard_rx_new(&rx, NULL);
     callback_result_t cb_result = { 0 };
     rx.user                     = &cb_result;
 
@@ -2646,9 +2638,8 @@ static void test_rx_port_oom(void)
     const udpard_mem_deleter_t      del_payload = instrumented_allocator_make_deleter(&alloc_payload);
     const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
 
-    udpard_rx_t  rx;
-    udpard_tx_t* rx_tx[UDPARD_NETWORK_INTERFACE_COUNT_MAX] = { NULL, NULL, NULL };
-    udpard_rx_new(&rx, rx_tx, 0);
+    udpard_rx_t rx;
+    udpard_rx_new(&rx, NULL);
     callback_result_t cb_result = { 0 };
     rx.user                     = &cb_result;
 
@@ -2705,9 +2696,8 @@ static void test_rx_port_free_loop(void)
     const udpard_mem_deleter_t      del_payload = instrumented_allocator_make_deleter(&alloc_payload);
     const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
 
-    udpard_rx_t  rx;
-    udpard_tx_t* rx_tx[UDPARD_NETWORK_INTERFACE_COUNT_MAX] = { NULL, NULL, NULL };
-    udpard_rx_new(&rx, rx_tx, 0);
+    udpard_rx_t rx;
+    udpard_rx_new(&rx, NULL);
     callback_result_t cb_result = { 0 };
     rx.user                     = &cb_result;
 

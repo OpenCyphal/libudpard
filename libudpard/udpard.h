@@ -716,6 +716,8 @@ struct udpard_rx_port_p2p_t
 
 /// The RX instance holds no resources and can be destroyed at any time by simply freeing all its ports first
 /// using udpard_rx_port_free(), then discarding the instance itself. The self pointer must not be NULL.
+/// The TX instance must be initialized beforehand, unless the application wants to only listen,
+/// in which case it may be NULL.
 void udpard_rx_new(udpard_rx_t* const self, udpard_tx_t* const tx);
 
 /// Must be invoked at least every few milliseconds (more often is fine) to purge timed-out sessions and eject

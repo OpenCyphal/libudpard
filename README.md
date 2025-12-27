@@ -22,17 +22,21 @@ next-generation intelligent vehicles: manned and unmanned aircraft, spacecraft, 
 
 - Zero-copy RX pipeline -- payload is moved from the NIC driver all the way to the application without copying.
 - Support for redundant network interfaces with seamless interface aggregation and zero fail-over delay.
-- Robust message reassembler tolerant to highly distorted datagram streams (out-of-order, duplication, distinct MTU).
-- Message ordering recovery for ordering-sensitive applications (e.g., state estimators, control loops).
+- Robust message reassembler supporting highly distorted datagram streams:
+  out-of-order fragments, message ordering recovery, fragment/message deduplication, interleaving, variable MTU, ...
+- Robust message ordering recovery for ordering-sensitive applications (e.g., state estimators, control loops)
+  with well-defined deterministic recovery in the event of lost messages.
 - Packet loss mitigation via:
-  - repetition-coding FEC (transparent to the application);
   - redundant interfaces (packet lost on one interface may be received on another, transparent to the application);
-  - positive acknowledgment with retransmission (retransmission not handled by the library).
+  - reliable topics (retransmit until acknowledged; callback notifications for successful/failed deliveries).
+- Single-copy TX pipeline with fragment deduplication across multiple interfaces and reference counting.
 - Heap not required; the library can be used with fixed-size block pool allocators.
 - Detailed time complexity and memory requirement models for the benefit of real-time high-integrity applications.
-- Runs on any 8/16/32/64-bit platform and extremely resource-constrained baremetal environments with ~100K ROM/RAM.
+- Runs anywhere out of the box, including extremely resource-constrained baremetal environments with ~100K ROM/RAM.
+  No porting required.
 - MISRA C compliance (reach out to <https://forum.opencyphal.org>).
-- Full implementation in a single C file with less than 2k lines of straightforward code!
+- Full implementation in a single C file with only ~2k lines of straightforward C99!
+- Extensive test coverage.
 
 ## Usage
 
@@ -72,7 +76,9 @@ standards-compliant C99 compiler is available.
 
 ### v3.0
 
-WIP --- adding support for Cyphal v1.1.
+The library has been redesigned from scratch to support Cyphal v1.1, named topics, and reliable transfers.
+No porting guide is provided since the changes are too significant;
+please refer to the new API docs in `libudpard/udpard.h`.
 
 ### v2.0
 
