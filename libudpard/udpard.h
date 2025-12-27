@@ -456,7 +456,7 @@ uint32_t udpard_tx_push_p2p(udpard_tx_t* const    self,
 /// The iface mask indicates which interfaces are currently available for transmission;
 /// eject() will only be invoked on these interfaces.
 /// The function may deallocate memory. The time complexity is logarithmic in the number of enqueued transfers.
-void udpard_tx_poll(udpard_tx_t* const self, const udpard_us_t now, const uint_fast8_t iface_mask);
+void udpard_tx_poll(udpard_tx_t* const self, const udpard_us_t now, const uint32_t iface_mask);
 
 /// When a datagram is ejected and the application opts to keep it, these functions must be used to manage the
 /// datagram buffer lifetime. The datagram will be freed once the reference count reaches zero.
@@ -776,7 +776,9 @@ bool udpard_rx_port_new_p2p(udpard_rx_port_p2p_t* const              self,
                             const udpard_rx_port_p2p_vtable_t* const vtable);
 
 /// Returns all memory allocated for the sessions, slots, fragments, etc of the given port.
-/// Does not free the port itself and does not alter the RX instance aside from unlinking the port from it.
+/// This is usable with udpard_rx_port_p2p_t as well via the base member.
+/// Does not free the port itself since it is allocated by the application rather than the library,
+/// and does not alter the RX instance aside from unlinking the port from it.
 /// It is safe to invoke this at any time, but the port instance shall not be used again unless re-initialized.
 /// The function has no effect if any of the arguments are NULL.
 void udpard_rx_port_free(udpard_rx_t* const rx, udpard_rx_port_t* const port);
