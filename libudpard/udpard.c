@@ -197,25 +197,25 @@ udpard_udpip_ep_t udpard_make_subject_endpoint(const uint32_t subject_id)
 }
 
 // NOLINTNEXTLINE(misc-no-recursion)
-void udpard_fragment_free_all(udpard_fragment_t* const frag, const udpard_mem_resource_t fragment_mem_resource)
+void udpard_fragment_free_all(udpard_fragment_t* const frag, const udpard_mem_resource_t mem_fragment)
 {
     if (frag != NULL) {
         // Descend the tree
         for (size_t i = 0; i < 2; i++) {
             if (frag->index_offset.lr[i] != NULL) {
                 frag->index_offset.lr[i]->up = NULL; // Prevent backtrack ascension from this branch
-                udpard_fragment_free_all((udpard_fragment_t*)frag->index_offset.lr[i], fragment_mem_resource);
+                udpard_fragment_free_all((udpard_fragment_t*)frag->index_offset.lr[i], mem_fragment);
                 frag->index_offset.lr[i] = NULL; // Avoid dangly pointers even if we're headed for imminent destruction
             }
         }
         // Delete this fragment
         udpard_fragment_t* const parent = (udpard_fragment_t*)frag->index_offset.up;
         mem_free_payload(frag->payload_deleter, frag->origin);
-        mem_free(fragment_mem_resource, sizeof(udpard_fragment_t), frag);
+        mem_free(mem_fragment, sizeof(udpard_fragment_t), frag);
         // Ascend the tree.
         if (parent != NULL) {
             parent->index_offset.lr[parent->index_offset.lr[1] == (udpard_tree_t*)frag] = NULL;
-            udpard_fragment_free_all(parent, fragment_mem_resource); // tail call hopefully
+            udpard_fragment_free_all(parent, mem_fragment); // tail call
         }
     }
 }
@@ -757,15 +757,18 @@ static udpard_us_t tx_ack_timeout(const udpard_us_t baseline, const udpard_prio_
     return baseline * (1L << smaller((size_t)prio + attempts, 62)); // NOLINT(*-signed-bitwise)
 }
 
-/// A transfer can use the same fragments between two interfaces if both have the same MTU and use the same allocator.
+/// A transfer can use the same fragments between two interfaces if
+/// (both have the same MTU OR the transfer fits in both MTU) AND both use the same allocator.
+/// Either they will share the same spool, or there is only a single frame so the MTU difference does not matter.
 /// The allocator requirement is important because it is possible that distinct NICs may not be able to reach the
 /// same memory region via DMA.
 static bool tx_spool_shareable(const size_t                mtu_a,
                                const udpard_mem_resource_t mem_a,
                                const size_t                mtu_b,
-                               const udpard_mem_resource_t mem_b)
+                               const udpard_mem_resource_t mem_b,
+                               const size_t                payload_size)
 {
-    return (mtu_a == mtu_b) && mem_same(mem_a, mem_b);
+    return ((mtu_a == mtu_b) || (payload_size <= smaller(mtu_a, mtu_b))) && mem_same(mem_a, mem_b);
 }
 
 /// The prediction takes into account that some interfaces may share the same frame spool.
@@ -774,13 +777,14 @@ static size_t tx_predict_frame_count(const size_t                mtu[UDPARD_IFAC
                                      const udpard_udpip_ep_t     endpoint[UDPARD_IFACE_COUNT_MAX],
                                      const size_t                payload_size)
 {
+    UDPARD_ASSERT(valid_ep_mask(endpoint) != 0); // The caller ensures that at least one endpoint is valid.
     size_t n_frames_total = 0;
     for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
         if (udpard_is_valid_endpoint(endpoint[i])) {
             bool shared = false;
             for (size_t j = 0; j < i; j++) {
                 shared = shared || (udpard_is_valid_endpoint(endpoint[j]) &&
-                                    tx_spool_shareable(mtu[i], memory[i], mtu[j], memory[j]));
+                                    tx_spool_shareable(mtu[i], memory[i], mtu[j], memory[j], payload_size));
             }
             if (!shared) {
                 n_frames_total += larger(1, (payload_size + mtu[i] - 1U) / mtu[i]);
@@ -853,7 +857,11 @@ static uint32_t tx_push(udpard_tx_t* const      tx,
                 // Detect which interfaces can use the same spool to conserve memory.
                 for (size_t j = i + 1; j < UDPARD_IFACE_COUNT_MAX; j++) {
                     if (udpard_is_valid_endpoint(tr->destination[j]) &&
-                        tx_spool_shareable(tx->mtu[i], tx->memory.payload[i], tx->mtu[j], tx->memory.payload[j])) {
+                        tx_spool_shareable(tx->mtu[i],
+                                           tx->memory.payload[i],
+                                           tx->mtu[j],
+                                           tx->memory.payload[j],
+                                           meta.transfer_payload_size)) {
                         tr->head[j]       = tr->head[i];
                         tr->cursor[j]     = tr->cursor[i];
                         tx_frame_t* frame = tr->head[j];
@@ -2014,7 +2022,7 @@ static void rx_port_accept_stateful(udpard_rx_t* const         rx,
                                     const udpard_udpip_ep_t    source_ep,
                                     rx_frame_t* const          frame,
                                     const udpard_mem_deleter_t payload_deleter,
-                                    const uint_fast8_t         redundant_iface_index)
+                                    const uint_fast8_t         iface_index)
 {
     rx_session_factory_args_t fac_args = { .owner                 = port,
                                            .sessions_by_animation = &rx->list_session_by_animation,
@@ -2027,7 +2035,7 @@ static void rx_port_accept_stateful(udpard_rx_t* const         rx,
                                                  &fac_args,
                                                  &cavl_factory_rx_session_by_remote_uid);
     if (ses != NULL) {
-        rx_session_update(ses, rx, timestamp, source_ep, frame, payload_deleter, redundant_iface_index);
+        rx_session_update(ses, rx, timestamp, source_ep, frame, payload_deleter, iface_index);
     } else {
         mem_free_payload(payload_deleter, frame->base.origin);
         ++rx->errors_oom;
@@ -2041,7 +2049,7 @@ static void rx_port_accept_stateless(udpard_rx_t* const         rx,
                                      const udpard_udpip_ep_t    source_ep,
                                      rx_frame_t* const          frame,
                                      const udpard_mem_deleter_t payload_deleter,
-                                     const uint_fast8_t         redundant_iface_index)
+                                     const uint_fast8_t         iface_index)
 {
     const size_t required_size = smaller(port->extent, frame->meta.transfer_payload_size);
     const bool   full_transfer = (frame->base.offset == 0) && (frame->base.payload.size >= required_size);
@@ -2050,8 +2058,8 @@ static void rx_port_accept_stateless(udpard_rx_t* const         rx,
         // Maybe we could do something about it in the future to avoid this allocation.
         udpard_fragment_t* const frag = rx_fragment_new(port->memory.fragment, payload_deleter, frame->base);
         if (frag != NULL) {
-            udpard_remote_t remote                  = { .uid = frame->meta.sender_uid };
-            remote.endpoints[redundant_iface_index] = source_ep;
+            udpard_remote_t remote        = { .uid = frame->meta.sender_uid };
+            remote.endpoints[iface_index] = source_ep;
             // The CRC is validated by the frame parser for the first frame of any transfer. It is certainly correct.
             UDPARD_ASSERT(frame->base.crc == crc_full(frame->base.payload.size, frame->base.payload.data));
             const udpard_rx_transfer_t transfer = {
@@ -2242,11 +2250,11 @@ bool udpard_rx_port_push(udpard_rx_t* const         rx,
                          const udpard_udpip_ep_t    source_ep,
                          const udpard_bytes_mut_t   datagram_payload,
                          const udpard_mem_deleter_t payload_deleter,
-                         const uint_fast8_t         redundant_iface_index)
+                         const uint_fast8_t         iface_index)
 {
     const bool ok = (rx != NULL) && (port != NULL) && (timestamp >= 0) && udpard_is_valid_endpoint(source_ep) &&
                     (datagram_payload.data != NULL) && (payload_deleter.free != NULL) &&
-                    (redundant_iface_index < UDPARD_IFACE_COUNT_MAX);
+                    (iface_index < UDPARD_IFACE_COUNT_MAX);
     if (ok) {
         rx_frame_t frame       = { 0 };
         uint32_t   frame_index = 0;
@@ -2258,12 +2266,11 @@ bool udpard_rx_port_push(udpard_rx_t* const         rx,
         frame.base.origin = datagram_payload; // Take ownership of the payload.
         if (frame_valid) {
             if (frame.meta.topic_hash == port->topic_hash) {
-                port->vtable_private->accept(
-                  rx, port, timestamp, source_ep, &frame, payload_deleter, redundant_iface_index);
+                port->vtable_private->accept(rx, port, timestamp, source_ep, &frame, payload_deleter, iface_index);
             } else { // Collisions are discovered early so that we don't attempt to allocate sessions for them.
                 mem_free_payload(payload_deleter, frame.base.origin);
-                udpard_remote_t remote                  = { .uid = frame.meta.sender_uid };
-                remote.endpoints[redundant_iface_index] = source_ep;
+                udpard_remote_t remote        = { .uid = frame.meta.sender_uid };
+                remote.endpoints[iface_index] = source_ep;
                 port->vtable->on_collision(rx, port, remote);
             }
         } else {
