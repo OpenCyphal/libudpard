@@ -329,7 +329,7 @@ struct udpard_tx_t
     /// The globally unique identifier of the local node. Must not change after initialization.
     uint64_t local_uid;
 
-    /// A random-initialized transfer-ID counter for all outgoing P2P transfers.
+    /// A random-initialized transfer-ID counter for all outgoing P2P transfers. Must not be changed by the application.
     uint64_t p2p_transfer_id;
 
     /// The maximum number of Cyphal transfer payload bytes per UDP datagram.
@@ -392,10 +392,6 @@ bool udpard_tx_new(udpard_tx_t* const              self,
 /// transmission queue at the appropriate position. The transfer payload will be copied into the transmission queue
 /// so that the lifetime of the datagrams is not related to the lifetime of the input payload buffer.
 ///
-/// The topic hash is not defined for P2P transfers since there are no topics involved; in P2P, this parameter
-/// is used to pass the destination node's UID instead. Setting it incorrectly will cause the destination node
-/// to reject the transfer as misaddressed.
-///
 /// The transfer_id parameter is used to populate the transfer_id field of the generated Cyphal/UDP frames.
 /// The caller shall increment the transfer-ID counter after each successful invocation of this function
 /// per redundant interface; the same transfer published over redundant interfaces shall have the same transfer-ID.
@@ -435,12 +431,23 @@ uint32_t udpard_tx_push(udpard_tx_t* const      self,
                         const udpard_us_t       now,
                         const udpard_us_t       deadline,
                         const udpard_prio_t     priority,
-                        const uint64_t          topic_hash, // For P2P transfers, this is the destination's UID.
+                        const uint64_t          topic_hash,
                         const udpard_udpip_ep_t remote_ep[UDPARD_IFACE_COUNT_MAX], // May be invalid for some ifaces.
                         const uint64_t          transfer_id,
                         const udpard_bytes_t    payload,
                         void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t), // NULL if best-effort.
                         void* const user_transfer_reference);
+
+/// Specialization for P2P transfers. The semantics are identical to udpard_tx_push().
+/// The transfer-ID will be provided by the library based on the udpard_tx_t::p2p_transfer_id counter.
+uint32_t udpard_tx_push_p2p(udpard_tx_t* const    self,
+                            const udpard_us_t     now,
+                            const udpard_us_t     deadline,
+                            const udpard_prio_t   priority,
+                            const udpard_remote_t remote, // Endpoints may be invalid for some ifaces.
+                            const udpard_bytes_t  payload,
+                            void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t), // NULL if best-effort.
+                            void* const user_transfer_reference);
 
 /// This should be invoked whenever the socket/NIC of this queue becomes ready to accept new datagrams for transmission.
 /// It is fine to also invoke it periodically unconditionally to drive the transmission process.

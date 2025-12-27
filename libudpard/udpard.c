@@ -890,9 +890,11 @@ static uint32_t tx_push(udpard_tx_t* const      tx,
     (void)cavl2_find_or_insert(
       &tx->index_deadline, &tr->deadline, tx_cavl_compare_deadline, &tr->index_deadline, cavl2_trivial_factory);
     // Add to the transfer index for incoming ack management.
-    const tx_transfer_key_t key = { .topic_hash = tr->topic_hash, .transfer_id = tr->transfer_id };
-    (void)cavl2_find_or_insert(
+    const tx_transfer_key_t    key           = { .topic_hash = tr->topic_hash, .transfer_id = tr->transfer_id };
+    const udpard_tree_t* const tree_transfer = cavl2_find_or_insert(
       &tx->index_transfer, &key, tx_cavl_compare_transfer, &tr->index_transfer, cavl2_trivial_factory);
+    UDPARD_ASSERT(tree_transfer == &tr->index_transfer); // ensure no duplicates; checked at the API level
+    (void)tree_transfer;
     // Add to the agewise list to allow instant sacrifice when needed; oldest at the tail.
     enlist_head(&tx->agewise, &tr->agewise);
 
@@ -1039,23 +1041,38 @@ uint32_t udpard_tx_push(udpard_tx_t* const      self,
         // Before attempting to enqueue a new transfer, we need to update the transmission scheduler.
         // It may release some items from the tx queue, and it may also promote some staged transfers to the queue.
         udpard_tx_poll(self, now, UDPARD_IFACE_MASK_ALL);
-        const meta_t meta = {
-            .priority              = priority,
-            .flag_ack              = feedback != NULL,
-            .transfer_payload_size = (uint32_t)payload.size,
-            .transfer_id           = transfer_id,
-            .sender_uid            = self->local_uid,
-            .topic_hash            = topic_hash,
-        };
-        out = tx_push(self, //
-                      now,
-                      deadline,
-                      meta,
-                      remote_ep,
-                      payload,
-                      feedback,
-                      user_transfer_reference,
-                      NULL);
+        const meta_t meta = { .priority              = priority,
+                              .flag_ack              = feedback != NULL,
+                              .transfer_payload_size = (uint32_t)payload.size,
+                              .transfer_id           = transfer_id,
+                              .sender_uid            = self->local_uid,
+                              .topic_hash            = topic_hash };
+        out = tx_push(self, now, deadline, meta, remote_ep, payload, feedback, user_transfer_reference, NULL);
+    }
+    return out;
+}
+
+uint32_t udpard_tx_push_p2p(udpard_tx_t* const    self,
+                            const udpard_us_t     now,
+                            const udpard_us_t     deadline,
+                            const udpard_prio_t   priority,
+                            const udpard_remote_t remote,
+                            const udpard_bytes_t  payload,
+                            void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t),
+                            void* const user_transfer_reference)
+{
+    uint32_t out = 0;
+    if (self != NULL) {
+        out = udpard_tx_push(self,
+                             now,
+                             deadline,
+                             priority,
+                             remote.uid,
+                             remote.endpoints,
+                             self->p2p_transfer_id++,
+                             payload,
+                             feedback,
+                             user_transfer_reference);
     }
     return out;
 }
