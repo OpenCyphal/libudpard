@@ -330,6 +330,9 @@ struct udpard_tx_t
     /// The globally unique identifier of the local node. Must not change after initialization.
     uint64_t local_uid;
 
+    /// A random-initialized transfer-ID counter for all outgoing P2P transfers.
+    uint64_t p2p_transfer_id;
+
     /// The maximum number of Cyphal transfer payload bytes per UDP datagram.
     /// The Cyphal/UDP header is added to this value to obtain the total UDP datagram payload size. See UDPARD_MTU_*.
     /// The value can be changed arbitrarily between enqueue operations as long as it is at least UDPARD_MTU_MIN.
@@ -368,6 +371,7 @@ struct udpard_tx_t
     udpard_tree_t* index_staged;
     udpard_tree_t* index_deadline;
     udpard_tree_t* index_transfer;
+    udpard_tree_t* index_transfer_remote;
 
     /// Opaque pointer for the application use only. Not accessed by the library.
     void* user;
@@ -379,6 +383,7 @@ struct udpard_tx_t
 /// True on success, false if any of the arguments are invalid.
 bool udpard_tx_new(udpard_tx_t* const              self,
                    const uint64_t                  local_uid,
+                   const uint64_t                  p2p_transfer_id_initial,
                    const size_t                    enqueued_frames_limit,
                    const udpard_tx_mem_resources_t memory,
                    const udpard_tx_vtable_t* const vtable);
@@ -563,9 +568,6 @@ typedef struct udpard_rx_t
     /// If the application wants to only listen, the pointer may be NULL (no acks will be sent).
     udpard_tx_t* tx;
 
-    /// A random-initialized transfer-ID counter for all outgoing P2P transfers.
-    uint64_t p2p_transfer_id;
-
     void* user; ///< Opaque pointer for the application use only. Not accessed by the library.
 } udpard_rx_t;
 
@@ -714,7 +716,7 @@ struct udpard_rx_port_p2p_t
 
 /// The RX instance holds no resources and can be destroyed at any time by simply freeing all its ports first
 /// using udpard_rx_port_free(), then discarding the instance itself. The self pointer must not be NULL.
-void udpard_rx_new(udpard_rx_t* const self, udpard_tx_t* const tx, const uint64_t p2p_transfer_id_initial);
+void udpard_rx_new(udpard_rx_t* const self, udpard_tx_t* const tx);
 
 /// Must be invoked at least every few milliseconds (more often is fine) to purge timed-out sessions and eject
 /// received transfers when the reordering window expires. If this is invoked simultaneously with rx subscription
