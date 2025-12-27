@@ -644,6 +644,7 @@ static bool tx_ensure_queue_space(udpard_tx_t* const tx, const size_t total_fram
             break; // We may have no transfers anymore but the NIC TX driver could still be holding some frames.
         }
         tx_transfer_free(tx, victim);
+        tx->errors_sacrifice++;
     }
     return total_frames_needed <= (tx->enqueued_frames_limit - tx->enqueued_frames_count);
 }

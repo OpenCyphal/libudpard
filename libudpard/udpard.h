@@ -360,9 +360,10 @@ struct udpard_tx_t
 
     /// Error counters incremented automatically when the corresponding error condition occurs.
     /// These counters are never decremented by the library but they can be reset by the application if needed.
-    uint64_t errors_oom;        ///< A transfer could not be enqueued due to OOM.
+    uint64_t errors_oom;        ///< A transfer could not be enqueued due to OOM, while there was queue space available.
     uint64_t errors_capacity;   ///< A transfer could not be enqueued due to queue capacity limit.
-    uint64_t errors_expiration; ///< A frame had to be dropped due to premature deadline expiration.
+    uint64_t errors_sacrifice;  ///< A transfer had to be sacrificed to make room for a new transfer.
+    uint64_t errors_expiration; ///< A transfer had to be dequeued due to deadline expiration.
 
     /// Internal use only, do not modify! See tx_transfer_t for details.
     udpard_list_t  queue[UDPARD_IFACE_COUNT_MAX][UDPARD_PRIORITY_COUNT]; ///< Next to transmit at the tail.
