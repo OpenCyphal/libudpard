@@ -289,13 +289,11 @@ typedef struct udpard_tx_mem_resources_t
 /// Outcome notification for a reliable transfer previously scheduled for transmission.
 typedef struct udpard_tx_feedback_t
 {
-    uint64_t          topic_hash;
-    uint64_t          transfer_id;
-    udpard_udpip_ep_t remote_ep[UDPARD_IFACE_COUNT_MAX];
-    void*             user_transfer_reference; ///< This is the same pointer that was passed to udpard_tx_push().
+    uint64_t topic_hash;
+    uint64_t transfer_id;
+    void*    user_transfer_reference; ///< This is the same pointer that was passed to udpard_tx_push().
 
-    uint_fast8_t attempts[UDPARD_IFACE_COUNT_MAX]; ///< 0 if timed out before first attempt.
-    bool         success; ///< False if no ack was received from the remote end before deadline expiration.
+    bool success; ///< False if no ack was received from the remote end before deadline expiration or forced eviction.
 } udpard_tx_feedback_t;
 
 typedef struct udpard_tx_ejection_t
@@ -347,8 +345,7 @@ struct udpard_tx_t
 
     /// The maximum number of UDP datagrams irrespective of the transfer count, for all ifaces pooled.
     /// The purpose of this limitation is to ensure that a blocked interface queue does not exhaust the memory.
-    /// When the limit is reached, the library will apply heuristics to choose which transfers to drop,
-    /// which may incur linear worst-case complexity in the number of enqueued transfers.
+    /// When the limit is reached, the library will apply simple heuristics to choose which transfers to drop.
     size_t enqueued_frames_limit;
 
     /// The number of frames that are currently registered in the queue, initially zero. READ-ONLY!
@@ -363,7 +360,8 @@ struct udpard_tx_t
     uint64_t errors_expiration; ///< A frame had to be dropped due to premature deadline expiration.
 
     /// Internal use only, do not modify! See tx_transfer_t for details.
-    udpard_list_t  queue[UDPARD_IFACE_COUNT_MAX][UDPARD_PRIORITY_COUNT];
+    udpard_list_t  queue[UDPARD_IFACE_COUNT_MAX][UDPARD_PRIORITY_COUNT]; ///< Next to transmit at the tail.
+    udpard_list_t  agewise;                                              ///< Oldest at the tail.
     udpard_tree_t* index_staged;
     udpard_tree_t* index_deadline;
     udpard_tree_t* index_transfer;

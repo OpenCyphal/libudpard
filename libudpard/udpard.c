@@ -530,21 +530,19 @@ typedef struct
 } tx_transfer_key_t;
 
 /// The transmission scheduler maintains several indexes for the transfers in the pipeline.
-/// All index operations are logarithmic in the number of scheduled transfers except for the pending queue,
-/// where the complexity is constant.
 ///
 /// The segregated priority queue only contains transfers that are ready for transmission.
-/// The staged index contains only transfers that will be ready for transmission later, ordered by readiness time.
-/// Transfers that will no longer be transmitted but are retained waiting for the ack are in neither of these.
-///
+/// The staged index contains transfers ordered by readiness time;
+/// transfers that will no longer be transmitted but are retained waiting for the ack are in neither of these.
 /// The deadline index contains ALL transfers, ordered by their deadlines, used for purging expired transfers.
 /// The transfer index contains ALL transfers, used for lookup by (topic_hash, transfer_id).
 typedef struct tx_transfer_t
 {
-    udpard_tree_t        index_staged;   ///< Soonest to be ready on the left. Key: retry_at
+    udpard_tree_t        index_staged;   ///< Soonest to be ready on the left. Key: staged_until
     udpard_tree_t        index_deadline; ///< Soonest to expire on the left. Key: deadline
     udpard_tree_t        index_transfer; ///< Specific transfer lookup for ack management. Key: tx_transfer_key_t
     udpard_list_member_t queue[UDPARD_IFACE_COUNT_MAX]; ///< Listed when ready for transmission.
+    udpard_list_member_t agewise;                       ///< Listed when created; oldest at the tail.
 
     /// We always keep a pointer to the head, plus a cursor that scans the frames during transmission.
     /// Both are NULL if the payload is destroyed.
@@ -554,8 +552,8 @@ typedef struct tx_transfer_t
 
     /// Mutable transmission state. All other fields, except for the index handles, are immutable.
     tx_frame_t*  cursor[UDPARD_IFACE_COUNT_MAX];
-    uint_fast8_t attempts[UDPARD_IFACE_COUNT_MAX]; ///< Does not overflow due to exponential backoff.
-    udpard_us_t  retry_at; ///< If retry_at>=deadline, this is the last attempt; frames can be freed as they go out.
+    uint_fast8_t epoch;        ///< Does not overflow due to exponential backoff.
+    udpard_us_t  staged_until; ///< If staged_until>=deadline, this is the last attempt; frames can be freed as leave.
 
     /// Constant transfer properties supplied by the client.
     uint64_t          topic_hash;
@@ -586,7 +584,7 @@ static void tx_transfer_free_payload(tx_transfer_t* const tr)
         const tx_frame_t* frame = tr->head[i];
         while (frame != NULL) {
             const tx_frame_t* const next = frame->next;
-            udpard_tx_refcount_dec(tx_frame_view(frame));
+            udpard_tx_refcount_dec(tx_frame_view(frame)); // TODO FIXME frame counting!
             frame = next;
         }
         tr->head[i]   = NULL;
@@ -601,6 +599,7 @@ static void tx_transfer_free(udpard_tx_t* const tx, tx_transfer_t* const tr)
     for (uint_fast8_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
         delist(&tx->queue[i][tr->priority], &tr->queue[i]);
     }
+    delist(&tx->agewise, &tr->agewise);
     if (cavl2_is_inserted(tx->index_staged, &tr->index_staged)) {
         cavl2_remove(&tx->index_staged, &tr->index_staged);
     }
@@ -610,35 +609,30 @@ static void tx_transfer_free(udpard_tx_t* const tx, tx_transfer_t* const tr)
 }
 
 /// When the queue is exhausted, finds a transfer to sacrifice using simple heuristics and returns it.
-/// The heuristics are subject to review and improvement.
 /// Will return NULL if there are no transfers worth sacrificing (no queue space can be reclaimed).
-static tx_transfer_t* tx_sacrifice(udpard_tx_t* const tx)
+/// We cannot simply stop accepting new transfers when the queue is full, because it may be caused by a single
+/// stalled interface holding back progress for all transfers.
+/// The heuristics are subject to review and improvement.
+static tx_transfer_t* tx_sacrifice(udpard_tx_t* const tx) { return LIST_TAIL(tx->agewise, tx_transfer_t, agewise); }
+
+static bool tx_ensure_queue_space(udpard_tx_t* const tx, const size_t total_frames_needed)
 {
-    uint16_t       max_attempts = 0;
-    tx_transfer_t* out          = NULL;
-    // Scanning from the earliest deadline, meaning we prefer to sacrifice transfers that are the soonest to expire.
-    for (tx_transfer_t* tr = CAVL2_TO_OWNER(cavl2_min(tx->index_deadline), tx_transfer_t, index_deadline); tr != NULL;
-         tr                = CAVL2_TO_OWNER(cavl2_next_greater(&tr->index_deadline), tx_transfer_t, index_deadline)) {
-        uint16_t attempts = 0;
-        for (uint_fast8_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
-            attempts += tr->attempts[i];
-        }
-        if ((attempts > 0) && !tr->reliable) { // Prefer non-reliable transfers that have been transmitted once.
-            out = tr;
+    if (total_frames_needed > tx->enqueued_frames_limit) {
+        return false; // not gonna happen
+    }
+    while (total_frames_needed > (tx->enqueued_frames_limit - tx->enqueued_frames_count)) {
+        tx_transfer_t* const victim = tx_sacrifice(tx);
+        if (victim == NULL) {
             break;
         }
-        if (attempts > max_attempts) {
-            tr           = out;
-            max_attempts = attempts;
-        }
-        return out;
+        tx_transfer_free(tx, victim);
     }
-    return out;
+    return total_frames_needed <= (tx->enqueued_frames_limit - tx->enqueued_frames_count);
 }
 
 static int32_t tx_cavl_compare_staged(const void* const user, const udpard_tree_t* const node)
 {
-    return ((*(const udpard_us_t*)user) >= CAVL2_TO_OWNER(node, tx_transfer_t, index_staged)->retry_at) ? +1 : -1;
+    return ((*(const udpard_us_t*)user) >= CAVL2_TO_OWNER(node, tx_transfer_t, index_staged)->staged_until) ? +1 : -1;
 }
 static int32_t tx_cavl_compare_deadline(const void* const user, const udpard_tree_t* const node)
 {
@@ -664,14 +658,10 @@ static tx_transfer_t* tx_transfer_find(udpard_tx_t* const tx, const uint64_t top
 
 static udpard_tx_feedback_t tx_make_feedback(const tx_transfer_t* const tr, const bool success)
 {
-    udpard_tx_feedback_t fb = { .topic_hash              = tr->topic_hash,
-                                .transfer_id             = tr->transfer_id,
-                                .user_transfer_reference = tr->user_transfer_reference,
-                                .success                 = success };
-    for (uint_fast8_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
-        fb.remote_ep[i] = tr->destination[i];
-        fb.attempts[i]  = tr->attempts[i];
-    }
+    const udpard_tx_feedback_t fb = { .topic_hash              = tr->topic_hash,
+                                      .transfer_id             = tr->transfer_id,
+                                      .user_transfer_reference = tr->user_transfer_reference,
+                                      .success                 = success };
     return fb;
 }
 
@@ -747,17 +737,14 @@ static uint32_t tx_push(udpard_tx_t* const      tx,
     const size_t payload_size = payload.size;
     const size_t mtu          = larger(tx->mtu, UDPARD_MTU_MIN);
     const size_t n_frames     = larger(1, (payload_size + mtu - 1U) / mtu);
-    // TODO: tx_sacrifice()
+    // TODO: tx_sacrifice() and choose duplication --- find matching allocations in the existing queues to reuse.
     if ((tx->enqueued_frames_count + n_frames) > tx->enqueued_frames_limit) {
         tx->errors_capacity++;
     } else {
         tx_transfer_t* const tr = mem_alloc(tx->memory.transfer, sizeof(tx_transfer_t));
         if (tr != NULL) {
             mem_zero(sizeof(*tr), tr);
-            tr->attempts                = 0;
-            tr->retry_at                = meta.flag_ack //
-                                            ? (now + tx_ack_timeout(tx->ack_baseline_timeout, meta.priority, 0))
-                                            : HEAT_DEATH;
+            tr->epoch                   = 0;
             tr->topic_hash              = meta.topic_hash;
             tr->transfer_id             = meta.transfer_id;
             tr->deadline                = deadline;
@@ -766,10 +753,22 @@ static uint32_t tx_push(udpard_tx_t* const      tx,
             tr->destination             = endpoint;
             tr->user_transfer_reference = user_transfer_reference;
             tr->feedback                = feedback;
+            tr->staged_until =
+              meta.flag_ack ? (now + tx_ack_timeout(tx->ack_baseline_timeout, tr->priority, tr->epoch)) : HEAT_DEATH;
             tr->head = tr->cursor = tx_spool(tx->memory, mtu, meta, payload);
             if (tr->head != NULL) {
-                // Schedule the transfer for transmission.
-                enlist_head(&tx->queue[tr->priority], &tr->queue);
+                for (uint_fast8_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
+                    if (udpard_is_valid_endpoint(tr->destination[i])) {
+                        enlist_head(&tx->queue[i][tr->priority], &tr->queue[i]);
+                    }
+                }
+                if (tr->deadline > tr->staged_until) { // only if retransmissions are possible
+                    (void)cavl2_find_or_insert(&tx->index_staged,
+                                               &tr->staged_until,
+                                               tx_cavl_compare_staged,
+                                               &tr->index_staged,
+                                               cavl2_trivial_factory);
+                }
                 const tx_transfer_key_t key = { .topic_hash = tr->topic_hash, .transfer_id = tr->transfer_id };
                 (void)cavl2_find_or_insert(&tx->index_transfer, //
                                            &key,
@@ -781,6 +780,7 @@ static uint32_t tx_push(udpard_tx_t* const      tx,
                                            tx_cavl_compare_deadline,
                                            &tr->index_deadline,
                                            cavl2_trivial_factory);
+                enlist_head(&tx->agewise, &tr->agewise);
                 tx->enqueued_frames_count += n_frames;
                 UDPARD_ASSERT(tx->enqueued_frames_count <= tx->enqueued_frames_limit);
                 out = (uint32_t)n_frames;
@@ -942,14 +942,30 @@ static void tx_promote_staged(udpard_tx_t* const self, const udpard_us_t now)
 {
     while (true) { // we can use next_greater instead of doing min search every time
         tx_transfer_t* const tr = CAVL2_TO_OWNER(cavl2_min(self->index_staged), tx_transfer_t, index_staged);
-        if ((tr != NULL) && (now >= tr->retry_at)) {
+        if ((tr != NULL) && (now >= tr->staged_until)) {
             UDPARD_ASSERT(tr->cursor != NULL); // cannot stage without payload, doesn't make sense
-            // Update the state for the next retransmission.
-            tr->retry_at += tx_ack_timeout(self->ack_baseline_timeout, tr->priority, tr->attempts);
-            UDPARD_ASSERT(tr->cursor == tr->head);
-            // Remove from the staged index and add to the transmission queue.
-            enlist_head(&self->queue[tr->priority], &tr->queue);
+
+            // Reinsert into the staged index at the new position, when the next attempt is due.
+            // Do not insert if this is the last attempt -- no point doing that since it will not be transmitted again.
             cavl2_remove(&self->index_staged, &tr->index_staged);
+            tr->epoch++;
+            tr->staged_until += tx_ack_timeout(self->ack_baseline_timeout, tr->priority, tr->epoch);
+            if (tr->deadline > tr->staged_until) {
+                (void)cavl2_find_or_insert(&self->index_staged,
+                                           &tr->staged_until,
+                                           tx_cavl_compare_staged,
+                                           &tr->index_staged,
+                                           cavl2_trivial_factory);
+            }
+
+            // Enqueue for transmission unless it's been there since the last attempt (stalled interface?)
+            for (uint_fast8_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
+                UDPARD_ASSERT(tr->cursor[i] == tr->head[i]);
+                if (udpard_is_valid_endpoint(tr->destination[i]) &&
+                    !is_listed(&self->queue[i][tr->priority], &tr->queue[i])) {
+                    enlist_head(&self->queue[i][tr->priority], &tr->queue[i]);
+                }
+            }
         } else {
             break;
         }
@@ -974,13 +990,11 @@ static void tx_eject_pending(udpard_tx_t* const self, const udpard_us_t now, con
         UDPARD_ASSERT(!cavl2_is_inserted(self->index_staged, &tr->index_staged));
         UDPARD_ASSERT(tr->cursor != NULL); // cannot be pending without payload, doesn't make sense
 
-        // Compute the auxiliary states that will guide the ejection.
-        tx_frame_t* const frame        = tr->cursor[ifindex];
-        tx_frame_t* const frame_next   = frame->next;
-        const bool        last_attempt = tr->deadline <= tr->retry_at;
-        const bool        last_frame   = frame_next == NULL; // if not last attempt we will have to rewind to head
-
         // Eject the frame.
+        const tx_frame_t* const frame        = tr->cursor[ifindex];
+        tx_frame_t* const       frame_next   = frame->next;
+        const bool              last_attempt = tr->deadline <= tr->staged_until;
+        const bool              last_frame  = frame_next == NULL; // if not last attempt we will have to rewind to head.
         const udpard_tx_ejection_t ejection = {
             .now                     = now,
             .deadline                = tr->deadline,
@@ -1005,17 +1019,11 @@ static void tx_eject_pending(udpard_tx_t* const self, const udpard_us_t now, con
         // Finalize the transmission if this was the last frame of the transfer.
         if (last_frame) {
             tr->cursor[ifindex] = tr->head[ifindex];
-            tr->attempts[ifindex]++;
             delist(&self->queue[ifindex][tr->priority], &tr->queue[ifindex]); // no longer pending for transmission
-            if (last_attempt) {
-                if (!tr->reliable) {            // Best-effort transfers are removed immediately.
-                    tx_transfer_free(self, tr); // We can invoke the feedback callback here if needed.
-                }
-                // If this is the last attempt of a reliable transfer, it will wait for ack or expiration.
-            } else { // Reinsert into the staged index for later retransmission if not acknowledged.
-                cavl2_find_or_insert(
-                  &self->index_staged, &tr->retry_at, tx_cavl_compare_staged, &tr->index_staged, cavl2_trivial_factory);
+            if (last_attempt && !tr->reliable) { // Best-effort transfers are removed immediately, no ack to wait for.
+                tx_transfer_free(self, tr);      // We can invoke the feedback callback here if needed.
             }
+            UDPARD_ASSERT(!last_attempt || (tr->head == NULL)); // the payload is no longer needed
         }
     }
 }
