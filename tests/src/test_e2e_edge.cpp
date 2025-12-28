@@ -456,6 +456,100 @@ void test_udpard_tx_push_p2p()
     instrumented_allocator_reset(&rx_alloc_session);
 }
 
+/// P2P messages with invalid kind byte should be silently dropped.
+/// This tests the malformed branch in rx_p2p_on_message.
+void test_udpard_rx_p2p_malformed_kind()
+{
+    instrumented_allocator_t tx_alloc_transfer{};
+    instrumented_allocator_t tx_alloc_payload{};
+    instrumented_allocator_t rx_alloc_frag{};
+    instrumented_allocator_t rx_alloc_session{};
+    instrumented_allocator_new(&tx_alloc_transfer);
+    instrumented_allocator_new(&tx_alloc_payload);
+    instrumented_allocator_new(&rx_alloc_frag);
+    instrumented_allocator_new(&rx_alloc_session);
+
+    udpard_tx_mem_resources_t tx_mem{};
+    tx_mem.transfer = instrumented_allocator_make_resource(&tx_alloc_transfer);
+    for (auto& res : tx_mem.payload) {
+        res = instrumented_allocator_make_resource(&tx_alloc_payload);
+    }
+    udpard_tx_t tx{};
+    TEST_ASSERT_TRUE(udpard_tx_new(&tx, 0x1122334455667788ULL, 5U, 8, tx_mem, &tx_vtable));
+    std::vector<CapturedFrame> frames;
+    tx.user = &frames;
+
+    const udpard_rx_mem_resources_t rx_mem{ .session  = instrumented_allocator_make_resource(&rx_alloc_session),
+                                            .fragment = instrumented_allocator_make_resource(&rx_alloc_frag) };
+    udpard_rx_t                     rx{};
+    udpard_rx_port_p2p_t            port{};
+    Context                         ctx{};
+    const udpard_udpip_ep_t         source{ .ip = 0x0A0000BBU, .port = 7700U };
+    const uint64_t                  local_uid = 0xDEADBEEFCAFEBABEULL;
+    ctx.expected_uid                          = tx.local_uid;
+    ctx.source                                = source;
+    udpard_rx_new(&rx, nullptr);
+    rx.user = &ctx;
+    TEST_ASSERT_TRUE(udpard_rx_port_new_p2p(&port, local_uid, 1024, rx_mem, &p2p_callbacks));
+
+    // Construct a P2P payload with an invalid kind byte.
+    // P2P header format: kind (1 byte) + reserved (7 bytes) + topic_hash (8 bytes) + transfer_id (8 bytes) = 24 bytes
+    // Valid kinds are 0 (P2P_KIND_RESPONSE) and 1 (P2P_KIND_ACK). Use 0xFF as invalid.
+    std::array<uint8_t, UDPARD_P2P_HEADER_BYTES + 4> p2p_payload{};
+    p2p_payload[0] = 0xFFU; // Invalid kind
+    // Rest of P2P header (reserved, topic_hash, transfer_id) can be zeros - doesn't matter for this test.
+    // Add some user payload bytes.
+    p2p_payload[UDPARD_P2P_HEADER_BYTES + 0] = 0x11U;
+    p2p_payload[UDPARD_P2P_HEADER_BYTES + 1] = 0x22U;
+    p2p_payload[UDPARD_P2P_HEADER_BYTES + 2] = 0x33U;
+    p2p_payload[UDPARD_P2P_HEADER_BYTES + 3] = 0x44U;
+
+    // Send using regular udpard_tx_push - the library handles all CRC calculations.
+    const udpard_us_t              now     = 0;
+    const udpard_bytes_scattered_t payload = make_scattered(p2p_payload.data(), p2p_payload.size());
+    std::array<udpard_udpip_ep_t, UDPARD_IFACE_COUNT_MAX> dest{};
+    dest[0] = { .ip = 0x0A000010U, .port = 7400U };
+    TEST_ASSERT_GREATER_THAN_UINT32(0U,
+                                    udpard_tx_push(&tx,
+                                                   now,
+                                                   now + 1000000,
+                                                   udpard_prio_nominal,
+                                                   local_uid, // topic_hash = local_uid for P2P port matching
+                                                   dest.data(),
+                                                   42U,
+                                                   payload,
+                                                   nullptr,
+                                                   nullptr));
+    udpard_tx_poll(&tx, now, UDPARD_IFACE_MASK_ALL);
+    TEST_ASSERT_FALSE(frames.empty());
+
+    // Push the frame to RX P2P port.
+    TEST_ASSERT_EQUAL_UINT64(0, rx.errors_transfer_malformed);
+    const udpard_mem_deleter_t tx_payload_deleter{ .user = nullptr, .free = &tx_refcount_free };
+    for (const auto& f : frames) {
+        TEST_ASSERT_TRUE(udpard_rx_port_push(
+          &rx, reinterpret_cast<udpard_rx_port_t*>(&port), now, source, f.datagram, tx_payload_deleter, f.iface_index));
+    }
+    udpard_rx_poll(&rx, now);
+
+    // The malformed message should be dropped - no callback invoked, error counter incremented.
+    TEST_ASSERT_EQUAL_size_t(0, ctx.ids.size());
+    TEST_ASSERT_EQUAL_size_t(0, ctx.collisions);
+    TEST_ASSERT_EQUAL_UINT64(1, rx.errors_transfer_malformed);
+
+    // Cleanup - verify no memory leaks.
+    udpard_rx_port_free(&rx, reinterpret_cast<udpard_rx_port_t*>(&port));
+    udpard_tx_free(&tx);
+    TEST_ASSERT_EQUAL(0, tx_alloc_transfer.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, tx_alloc_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, rx_alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, rx_alloc_session.allocated_fragments);
+    instrumented_allocator_reset(&tx_alloc_transfer);
+    instrumented_allocator_reset(&tx_alloc_payload);
+    instrumented_allocator_reset(&rx_alloc_frag);
+    instrumented_allocator_reset(&rx_alloc_session);
+}
+
 } // namespace
 
 extern "C" void setUp() {}
@@ -470,5 +564,6 @@ int main()
     RUN_TEST(test_udpard_rx_ordered_head_advanced_late);
     RUN_TEST(test_udpard_tx_feedback_always_called);
     RUN_TEST(test_udpard_tx_push_p2p);
+    RUN_TEST(test_udpard_rx_p2p_malformed_kind);
     return UNITY_END();
 }

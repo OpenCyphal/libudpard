@@ -2268,6 +2268,7 @@ static void rx_p2p_on_message(udpard_rx_t* const rx, udpard_rx_port_t* const por
     } else if (kind == P2P_KIND_RESPONSE) {
         self->vtable->on_message(rx, self, (udpard_rx_transfer_p2p_t){ .base = transfer, .topic_hash = topic_hash });
     } else { // malformed
+        ++rx->errors_transfer_malformed;
         udpard_fragment_free_all(transfer.payload, port->memory.fragment);
     }
 }
