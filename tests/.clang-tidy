@@ -52,6 +52,9 @@ Checks: >-
   -*DeprecatedOrUnsafeBufferHandling,
   -*-prefer-static-over-anonymous-namespace,
   -*-pro-bounds-avoid-unchecked-container-access,
+  -*-array*decay,
+  -*-avoid-c-arrays,
+  -*-named-parameter,
 WarningsAsErrors: '*'
 HeaderFilterRegex: '.*\.hpp'
 FormatStyle: file

@@ -19,6 +19,13 @@ constexpr udpard_rx_port_vtable_t callbacks{ .on_message = &on_message, .on_coll
 void on_message_p2p(udpard_rx_t* rx, udpard_rx_port_p2p_t* port, udpard_rx_transfer_p2p_t transfer);
 constexpr udpard_rx_port_p2p_vtable_t p2p_callbacks{ &on_message_p2p };
 
+struct FbState
+{
+    size_t   count   = 0;
+    bool     success = false;
+    uint64_t tid     = 0;
+};
+
 struct CapturedFrame
 {
     udpard_bytes_mut_t datagram;
@@ -45,6 +52,24 @@ bool capture_tx_frame(udpard_tx_t* const tx, const udpard_tx_ejection_t ejection
 }
 
 constexpr udpard_tx_vtable_t tx_vtable{ .eject = &capture_tx_frame };
+
+void fb_record(udpard_tx_t*, const udpard_tx_feedback_t fb)
+{
+    auto* st = static_cast<FbState*>(fb.user_transfer_reference);
+    if (st != nullptr) {
+        st->count++;
+        st->success = fb.success;
+        st->tid     = fb.transfer_id;
+    }
+}
+
+void release_frames(std::vector<CapturedFrame>& frames)
+{
+    for (const auto& [datagram, iface_index] : frames) {
+        udpard_tx_refcount_dec(udpard_bytes_t{ .size = datagram.size, .data = datagram.data });
+    }
+    frames.clear();
+}
 
 struct Context
 {
@@ -278,6 +303,106 @@ void test_udpard_rx_ordered_head_advanced_late()
     TEST_ASSERT_EQUAL_size_t(0, fix.ctx.collisions);
 }
 
+// Feedback must fire regardless of disposal path.
+void test_udpard_tx_feedback_always_called()
+{
+    instrumented_allocator_t tx_alloc_transfer{};
+    instrumented_allocator_t tx_alloc_payload{};
+    instrumented_allocator_new(&tx_alloc_transfer);
+    instrumented_allocator_new(&tx_alloc_payload);
+    udpard_tx_mem_resources_t tx_mem{};
+    tx_mem.transfer = instrumented_allocator_make_resource(&tx_alloc_transfer);
+    for (auto& res : tx_mem.payload) {
+        res = instrumented_allocator_make_resource(&tx_alloc_payload);
+    }
+    const udpard_udpip_ep_t endpoint = udpard_make_subject_endpoint(1);
+
+    // Expiration path triggers feedback=false.
+    {
+        std::vector<CapturedFrame> frames;
+        udpard_tx_t                tx{};
+        TEST_ASSERT_TRUE(udpard_tx_new(&tx, 1U, 1U, 4, tx_mem, &tx_vtable));
+        tx.user = &frames;
+        FbState           fb{};
+        udpard_udpip_ep_t dests[UDPARD_IFACE_COUNT_MAX] = { endpoint, {} };
+        TEST_ASSERT_GREATER_THAN_UINT32(
+          0,
+          udpard_tx_push(
+            &tx, 10, 10, udpard_prio_fast, 1, dests, 11, udpard_bytes_t{ .size = 0, .data = nullptr }, fb_record, &fb));
+        udpard_tx_poll(&tx, 11, UDPARD_IFACE_MASK_ALL);
+        TEST_ASSERT_EQUAL_size_t(1, fb.count);
+        TEST_ASSERT_FALSE(fb.success);
+        release_frames(frames);
+        udpard_tx_free(&tx);
+    }
+
+    // Sacrifice path should also emit feedback.
+    {
+        std::vector<CapturedFrame> frames;
+        udpard_tx_t                tx{};
+        TEST_ASSERT_TRUE(udpard_tx_new(&tx, 2U, 1U, 1, tx_mem, &tx_vtable));
+        tx.user = &frames;
+        FbState           fb_old{};
+        FbState           fb_new{};
+        udpard_udpip_ep_t dests[UDPARD_IFACE_COUNT_MAX] = { endpoint, {} };
+        TEST_ASSERT_GREATER_THAN_UINT32(0,
+                                        udpard_tx_push(&tx,
+                                                       0,
+                                                       1000,
+                                                       udpard_prio_fast,
+                                                       2,
+                                                       dests,
+                                                       21,
+                                                       udpard_bytes_t{ .size = 0, .data = nullptr },
+                                                       fb_record,
+                                                       &fb_old));
+        (void)udpard_tx_push(&tx,
+                             0,
+                             1000,
+                             udpard_prio_fast,
+                             3,
+                             dests,
+                             22,
+                             udpard_bytes_t{ .size = 0, .data = nullptr },
+                             fb_record,
+                             &fb_new);
+        TEST_ASSERT_EQUAL_size_t(1, fb_old.count);
+        TEST_ASSERT_FALSE(fb_old.success);
+        TEST_ASSERT_GREATER_OR_EQUAL_UINT64(1, tx.errors_sacrifice);
+        TEST_ASSERT_EQUAL_size_t(0, fb_new.count);
+        release_frames(frames);
+        udpard_tx_free(&tx);
+    }
+
+    // Destroying a TX with pending transfers still calls feedback.
+    {
+        std::vector<CapturedFrame> frames;
+        udpard_tx_t                tx{};
+        TEST_ASSERT_TRUE(udpard_tx_new(&tx, 3U, 1U, 4, tx_mem, &tx_vtable));
+        tx.user = &frames;
+        FbState           fb{};
+        udpard_udpip_ep_t dests[UDPARD_IFACE_COUNT_MAX] = { endpoint, {} };
+        TEST_ASSERT_GREATER_THAN_UINT32(0,
+                                        udpard_tx_push(&tx,
+                                                       0,
+                                                       1000,
+                                                       udpard_prio_fast,
+                                                       4,
+                                                       dests,
+                                                       33,
+                                                       udpard_bytes_t{ .size = 0, .data = nullptr },
+                                                       fb_record,
+                                                       &fb));
+        udpard_tx_free(&tx);
+        TEST_ASSERT_EQUAL_size_t(1, fb.count);
+        TEST_ASSERT_FALSE(fb.success);
+        release_frames(frames);
+    }
+
+    instrumented_allocator_reset(&tx_alloc_transfer);
+    instrumented_allocator_reset(&tx_alloc_payload);
+}
+
 /// P2P helper should emit frames with auto transfer-ID and proper addressing.
 void test_udpard_tx_push_p2p()
 {
@@ -370,6 +495,7 @@ int main()
     RUN_TEST(test_udpard_rx_unordered_duplicates);
     RUN_TEST(test_udpard_rx_ordered_out_of_order);
     RUN_TEST(test_udpard_rx_ordered_head_advanced_late);
+    RUN_TEST(test_udpard_tx_feedback_always_called);
     RUN_TEST(test_udpard_tx_push_p2p);
     return UNITY_END();
 }
