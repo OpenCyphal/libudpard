@@ -6,3 +6,5 @@ Keep the code and comments very brief. Be sure every significant code block is p
 
 When building the code, don't hesitate to use multiple jobs to use all CPU cores.
 To speed things up, it is best to configure CMake with `NO_STATIC_ANALYSIS=1`.
+
+Run all tests in debug build to ensure that all assertion checks are enabled.

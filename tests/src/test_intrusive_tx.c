@@ -220,18 +220,35 @@ static void test_tx_spool_and_queue_errors(void)
     TEST_ASSERT_EQUAL_size_t(1, tx.errors_capacity);
 
     // Immediate rejection when the request exceeds limits.
-    udpard_tx_t tx_limit           = { .enqueued_frames_limit = 1, .enqueued_frames_count = 0 };
+    udpard_tx_t tx_limit;
+    mem_zero(sizeof(tx_limit), &tx_limit);
+    tx_limit.enqueued_frames_limit = 1;
+    tx_limit.enqueued_frames_count = 0;
     tx_limit.memory.transfer.free  = noop_free;
     tx_limit.memory.transfer.alloc = dummy_alloc;
     TEST_ASSERT_FALSE(tx_ensure_queue_space(&tx_limit, 3));
 
     // Sacrifice clears space when the queue is full.
-    udpard_tx_t tx_sac           = { .enqueued_frames_limit = 1, .enqueued_frames_count = 1, .errors_sacrifice = 0 };
+    udpard_tx_t tx_sac;
+    mem_zero(sizeof(tx_sac), &tx_sac);
+    tx_sac.enqueued_frames_limit = 1;
+    tx_sac.enqueued_frames_count = 1;
+    tx_sac.errors_sacrifice      = 0;
     tx_sac.memory.transfer.free  = noop_free;
     tx_sac.memory.transfer.alloc = dummy_alloc;
     tx_transfer_t victim;
     mem_zero(sizeof(victim), &victim);
-    victim.priority = udpard_prio_fast;
+    victim.priority    = udpard_prio_fast;
+    victim.deadline    = 1;
+    victim.topic_hash  = 7;
+    victim.transfer_id = 9;
+    (void)cavl2_find_or_insert(
+      &tx_sac.index_deadline, &victim.deadline, tx_cavl_compare_deadline, &victim.index_deadline, cavl2_trivial_factory);
+    (void)cavl2_find_or_insert(&tx_sac.index_transfer,
+                               &(tx_transfer_key_t){ .topic_hash = victim.topic_hash, .transfer_id = victim.transfer_id },
+                               tx_cavl_compare_transfer,
+                               &victim.index_transfer,
+                               cavl2_trivial_factory);
     enlist_head(&tx_sac.agewise, &victim.agewise);
     TEST_ASSERT_FALSE(tx_ensure_queue_space(&tx_sac, 1));
     TEST_ASSERT_EQUAL_size_t(1, tx_sac.errors_sacrifice);
@@ -341,6 +358,7 @@ static void test_tx_ack_and_scheduler(void)
     exp->topic_hash              = 55;
     exp->transfer_id             = 66;
     exp->user_transfer_reference = &fstate;
+    exp->reliable                = true;
     exp->feedback                = record_feedback;
     (void)cavl2_find_or_insert(
       &tx4.index_deadline, &exp->deadline, tx_cavl_compare_deadline, &exp->index_deadline, cavl2_trivial_factory);
