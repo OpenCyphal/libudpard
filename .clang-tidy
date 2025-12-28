@@ -26,7 +26,7 @@ Checks: >-
   -*-macro-usage,
   -*-enum-size,
   -*-use-using,
-  -bugprone-casting-through-void,
+  -*-casting-through-void,
   -misc-include-cleaner,
   -cppcoreguidelines-avoid-do-while,
   -*-magic-numbers,

@@ -54,6 +54,7 @@ Checks: >-
   -*-pro-bounds-avoid-unchecked-container-access,
   -*-array*decay,
   -*-avoid-c-arrays,
+  -*-casting-through-void,
   -*-named-parameter,
 WarningsAsErrors: '*'
 HeaderFilterRegex: '.*\.hpp'
