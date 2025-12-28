@@ -139,17 +139,23 @@ typedef struct udpard_list_t
     udpard_list_member_t* tail; ///< NULL if list empty
 } udpard_list_t;
 
-typedef struct udpard_bytes_mut_t
-{
-    size_t size;
-    void*  data;
-} udpard_bytes_mut_t;
-
 typedef struct udpard_bytes_t
 {
     size_t      size;
     const void* data;
 } udpard_bytes_t;
+
+typedef struct udpard_bytes_scattered_t
+{
+    udpard_bytes_t                         bytes;
+    const struct udpard_bytes_scattered_t* next; ///< NULL in the last fragment.
+} udpard_bytes_scattered_t;
+
+typedef struct udpard_bytes_mut_t
+{
+    size_t size;
+    void*  data;
+} udpard_bytes_mut_t;
 
 /// Zeros if invalid/unset/unavailable.
 typedef struct udpard_udpip_ep_t
@@ -432,9 +438,11 @@ bool udpard_tx_new(udpard_tx_t* const              self,
 /// The user_transfer_reference is an opaque pointer that will be stored for each enqueued item of this transfer.
 /// The library itself does not use or check this value in any way, so it can be NULL if not needed.
 ///
-/// The function returns the number of payload fragments created, which is always a positive number, in case of success.
+/// The function returns the number of payload fragments enqueued, which is always a positive number, on success.
 /// In case of failure, the function returns zero. Runtime failures increment the corresponding error counters,
 /// while invocations with invalid arguments just return zero without modifying the queue state.
+///
+/// The enqueued transfer will be emitted over all interfaces for which a valid (non-zero) remote endpoint is provided.
 ///
 /// An attempt to push a transfer with a (topic hash, transfer-ID) pair that is already enqueued will fail,
 /// as that violates the transfer-ID uniqueness requirement stated above.
@@ -450,25 +458,25 @@ bool udpard_tx_new(udpard_tx_t* const              self,
 /// On success, the function allocates a single transfer state instance and a number of payload fragments.
 /// The time complexity is O(p + log e), where p is the transfer payload size, and e is the number of
 /// transfers already enqueued in the transmission queue.
-uint32_t udpard_tx_push(udpard_tx_t* const      self,
-                        const udpard_us_t       now,
-                        const udpard_us_t       deadline,
-                        const udpard_prio_t     priority,
-                        const uint64_t          topic_hash,
-                        const udpard_udpip_ep_t remote_ep[UDPARD_IFACE_COUNT_MAX], // May be invalid for some ifaces.
-                        const uint64_t          transfer_id,
-                        const udpard_bytes_t    payload,
+uint32_t udpard_tx_push(udpard_tx_t* const             self,
+                        const udpard_us_t              now,
+                        const udpard_us_t              deadline,
+                        const udpard_prio_t            priority,
+                        const uint64_t                 topic_hash,
+                        const udpard_udpip_ep_t        remote_ep[UDPARD_IFACE_COUNT_MAX],
+                        const uint64_t                 transfer_id,
+                        const udpard_bytes_scattered_t payload,
                         void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t), // NULL if best-effort.
                         void* const user_transfer_reference);
 
 /// Specialization for P2P transfers. The semantics are identical to udpard_tx_push().
 /// The transfer-ID will be provided by the library based on the udpard_tx_t::p2p_transfer_id counter.
-uint32_t udpard_tx_push_p2p(udpard_tx_t* const    self,
-                            const udpard_us_t     now,
-                            const udpard_us_t     deadline,
-                            const udpard_prio_t   priority,
-                            const udpard_remote_t remote, // Endpoints may be invalid for some ifaces.
-                            const udpard_bytes_t  payload,
+uint32_t udpard_tx_push_p2p(udpard_tx_t* const             self,
+                            const udpard_us_t              now,
+                            const udpard_us_t              deadline,
+                            const udpard_prio_t            priority,
+                            const udpard_remote_t          remote, // Endpoints may be invalid for some ifaces.
+                            const udpard_bytes_scattered_t payload,
                             void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t), // NULL if best-effort.
                             void* const user_transfer_reference);
 

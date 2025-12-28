@@ -155,26 +155,6 @@ static const byte_t* deserialize_u64(const byte_t* ptr, uint64_t* const out_valu
 // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
 static void mem_zero(const size_t size, void* const data) { (void)memset(data, 0, size); }
 
-/// We require that the fragment tree does not contain fully-contained or equal-range fragments. This implies that no
-/// two fragments have the same offset, and that fragments ordered by offset also order by their ends.
-static int32_t cavl_compare_fragment_offset(const void* const user, const udpard_tree_t* const node)
-{
-    const size_t u = *(const size_t*)user;
-    const size_t v = ((const udpard_fragment_t*)node)->offset; // clang-format off
-    if (u < v) { return -1; }
-    if (u > v) { return +1; }
-    return 0; // clang-format on
-}
-static int32_t cavl_compare_fragment_end(const void* const user, const udpard_tree_t* const node)
-{
-    const size_t                   u = *(const size_t*)user;
-    const udpard_fragment_t* const f = (const udpard_fragment_t*)node;
-    const size_t                   v = f->offset + f->view.size; // clang-format off
-    if (u < v) { return -1; }
-    if (u > v) { return +1; }
-    return 0; // clang-format on
-}
-
 bool udpard_is_valid_endpoint(const udpard_udpip_ep_t ep)
 {
     return (ep.port != 0) && (ep.ip != 0) && (ep.ip != UINT32_MAX);
@@ -194,6 +174,58 @@ static uint32_t valid_ep_mask(const udpard_udpip_ep_t remote_ep[UDPARD_IFACE_COU
 udpard_udpip_ep_t udpard_make_subject_endpoint(const uint32_t subject_id)
 {
     return (udpard_udpip_ep_t){ .ip = IPv4_MCAST_PREFIX | (subject_id & UDPARD_IPv4_SUBJECT_ID_MAX), .port = UDP_PORT };
+}
+
+typedef struct
+{
+    const udpard_bytes_scattered_t* cursor;   ///< Initially points at the head.
+    size_t                          position; ///< Position within the current fragment, initially zero.
+} bytes_scattered_reader_t;
+
+/// Sequentially reads data from a scattered byte array into a contiguous destination buffer.
+/// Requires that the total amount of read data does not exceed the total size of the scattered array.
+static void bytes_scattered_read(bytes_scattered_reader_t* const reader, const size_t size, void* const destination)
+{
+    UDPARD_ASSERT((reader != NULL) && (reader->cursor != NULL) && (destination != NULL));
+    byte_t* ptr       = (byte_t*)destination;
+    size_t  remaining = size;
+    while (remaining > 0U) {
+        UDPARD_ASSERT(reader->position <= reader->cursor->bytes.size);
+        while (reader->position == reader->cursor->bytes.size) { // Advance while skipping empty fragments.
+            reader->position = 0U;
+            reader->cursor   = reader->cursor->next;
+            UDPARD_ASSERT(reader->cursor != NULL);
+        }
+        UDPARD_ASSERT(reader->position < reader->cursor->bytes.size);
+        const size_t progress = smaller(remaining, reader->cursor->bytes.size - reader->position);
+        UDPARD_ASSERT((progress > 0U) && (progress <= remaining));
+        UDPARD_ASSERT((reader->position + progress) <= reader->cursor->bytes.size);
+        // NOLINTNEXTLINE(*DeprecatedOrUnsafeBufferHandling)
+        (void)memcpy(ptr, ((const byte_t*)reader->cursor->bytes.data) + reader->position, progress);
+        ptr += progress;
+        remaining -= progress;
+        reader->position += progress;
+    }
+}
+
+/// We require that the fragment tree does not contain fully-contained or equal-range fragments. This implies that no
+/// two fragments have the same offset, and that fragments ordered by offset also order by their ends.
+static int32_t cavl_compare_fragment_offset(const void* const user, const udpard_tree_t* const node)
+{
+    const size_t u = *(const size_t*)user;
+    const size_t v = ((const udpard_fragment_t*)node)->offset; // clang-format off
+    if (u < v) { return -1; }
+    if (u > v) { return +1; }
+    return 0; // clang-format on
+}
+static int32_t cavl_compare_fragment_end(const void* const user, const udpard_tree_t* const node)
+{
+    const size_t                   u = *(const size_t*)user;
+    const udpard_fragment_t* const f = (const udpard_fragment_t*)node;
+    const size_t                   v = f->offset + f->view.size; // clang-format off
+    if (u < v) { return -1; }
+    if (u > v) { return +1; }
+    return 0; // clang-format on
 }
 
 // NOLINTNEXTLINE(misc-no-recursion)
@@ -711,22 +743,22 @@ static bool tx_is_pending(const udpard_tx_t* const tx, const tx_transfer_t* cons
 }
 
 /// Returns the head of the transfer chain; NULL on OOM.
-static tx_frame_t* tx_spool(udpard_tx_t* const          tx,
-                            const udpard_mem_resource_t memory,
-                            const size_t                mtu,
-                            const meta_t                meta,
-                            const udpard_bytes_t        payload)
+static tx_frame_t* tx_spool(udpard_tx_t* const             tx,
+                            const udpard_mem_resource_t    memory,
+                            const size_t                   mtu,
+                            const meta_t                   meta,
+                            const udpard_bytes_scattered_t payload)
 {
     UDPARD_ASSERT(mtu > 0);
-    UDPARD_ASSERT((payload.data != NULL) || (payload.size == 0U));
-    uint32_t    prefix_crc  = CRC_INITIAL;
-    tx_frame_t* head        = NULL;
-    tx_frame_t* tail        = NULL;
-    size_t      frame_index = 0U;
-    size_t      offset      = 0U;
+    uint32_t                 prefix_crc  = CRC_INITIAL;
+    tx_frame_t*              head        = NULL;
+    tx_frame_t*              tail        = NULL;
+    size_t                   frame_index = 0U;
+    size_t                   offset      = 0U;
+    bytes_scattered_reader_t reader      = { .cursor = &payload, .position = 0U };
     do {
         // Compute the size of the next frame, allocate it and link it up in the chain.
-        const size_t      progress = smaller(payload.size - offset, mtu);
+        const size_t      progress = smaller(meta.transfer_payload_size - offset, mtu);
         tx_frame_t* const item     = tx_frame_new(tx, memory, progress + HEADER_SIZE_BYTES);
         if (NULL == head) {
             head = item;
@@ -744,17 +776,19 @@ static tx_frame_t* tx_spool(udpard_tx_t* const          tx,
             break;
         }
         // Populate the frame contents.
-        const byte_t* const read_ptr = ((const byte_t*)payload.data) + offset;
-        prefix_crc                   = crc_add(prefix_crc, progress, read_ptr);
-        byte_t* const write_ptr =
+        byte_t* const payload_ptr = &tail->data[HEADER_SIZE_BYTES];
+        bytes_scattered_read(&reader, progress, payload_ptr);
+        prefix_crc = crc_add(prefix_crc, progress, payload_ptr);
+        const byte_t* const end_of_header =
           header_serialize(tail->data, meta, (uint32_t)frame_index, (uint32_t)offset, prefix_crc ^ CRC_OUTPUT_XOR);
-        (void)memcpy(write_ptr, read_ptr, progress); // NOLINT(*DeprecatedOrUnsafeBufferHandling)
+        UDPARD_ASSERT(end_of_header == payload_ptr);
+        (void)end_of_header;
         // Advance the state.
         ++frame_index;
         offset += progress;
-        UDPARD_ASSERT(offset <= payload.size);
-    } while (offset < payload.size);
-    UDPARD_ASSERT((offset == payload.size) || ((head == NULL) && (tail == NULL)));
+        UDPARD_ASSERT(offset <= meta.transfer_payload_size);
+    } while (offset < meta.transfer_payload_size);
+    UDPARD_ASSERT((offset == meta.transfer_payload_size) || ((head == NULL) && (tail == NULL)));
     return head;
 }
 
@@ -802,12 +836,12 @@ static size_t tx_predict_frame_count(const size_t                mtu[UDPARD_IFAC
     return n_frames_total;
 }
 
-static uint32_t tx_push(udpard_tx_t* const      tx,
-                        const udpard_us_t       now,
-                        const udpard_us_t       deadline,
-                        const meta_t            meta,
-                        const udpard_udpip_ep_t endpoint[UDPARD_IFACE_COUNT_MAX],
-                        const udpard_bytes_t    payload,
+static uint32_t tx_push(udpard_tx_t* const             tx,
+                        const udpard_us_t              now,
+                        const udpard_us_t              deadline,
+                        const meta_t                   meta,
+                        const udpard_udpip_ep_t        endpoint[UDPARD_IFACE_COUNT_MAX],
+                        const udpard_bytes_scattered_t payload,
                         void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t),
                         void* const           user_transfer_reference,
                         tx_transfer_t** const out_transfer)
@@ -815,7 +849,6 @@ static uint32_t tx_push(udpard_tx_t* const      tx,
     UDPARD_ASSERT(now <= deadline);
     UDPARD_ASSERT(tx != NULL);
     UDPARD_ASSERT(valid_ep_mask(endpoint) != 0);
-    UDPARD_ASSERT((payload.data != NULL) || (payload.size == 0U));
 
     // Ensure the queue has enough space.
     for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
@@ -975,15 +1008,24 @@ static void tx_send_ack(udpard_rx_t* const    rx,
 
         // Enqueue the transfer.
         const udpard_bytes_t payload = { .size = UDPARD_P2P_HEADER_BYTES, .data = header };
-        const meta_t         meta    = { .priority              = priority,
-                                         .flag_ack              = false,
-                                         .transfer_payload_size = (uint32_t)payload.size,
-                                         .transfer_id           = tx->p2p_transfer_id++,
-                                         .sender_uid            = tx->local_uid,
-                                         .topic_hash            = remote.uid };
-        tx_transfer_t*       tr      = NULL;
-        const uint32_t       count =
-          tx_push(tx, now, now + ACK_TX_DEADLINE, meta, remote.endpoints, payload, NULL, NULL, &tr);
+        const meta_t         meta    = {
+                       .priority              = priority,
+                       .flag_ack              = false,
+                       .transfer_payload_size = (uint32_t)payload.size,
+                       .transfer_id           = tx->p2p_transfer_id++,
+                       .sender_uid            = tx->local_uid,
+                       .topic_hash            = remote.uid,
+        };
+        tx_transfer_t* tr    = NULL;
+        const uint32_t count = tx_push(tx,
+                                       now,
+                                       now + ACK_TX_DEADLINE,
+                                       meta,
+                                       remote.endpoints,
+                                       (udpard_bytes_scattered_t){ .bytes = payload, .next = NULL },
+                                       NULL,
+                                       NULL,
+                                       &tr);
         UDPARD_ASSERT(count <= 1);
         if (count == 1) { // ack is always a single-frame transfer, so we get either 0 or 1
             UDPARD_ASSERT(tr != NULL);
@@ -1035,29 +1077,37 @@ bool udpard_tx_new(udpard_tx_t* const              self,
     return ok;
 }
 
-uint32_t udpard_tx_push(udpard_tx_t* const      self,
-                        const udpard_us_t       now,
-                        const udpard_us_t       deadline,
-                        const udpard_prio_t     priority,
-                        const uint64_t          topic_hash,
-                        const udpard_udpip_ep_t remote_ep[UDPARD_IFACE_COUNT_MAX],
-                        const uint64_t          transfer_id,
-                        const udpard_bytes_t    payload,
+uint32_t udpard_tx_push(udpard_tx_t* const             self,
+                        const udpard_us_t              now,
+                        const udpard_us_t              deadline,
+                        const udpard_prio_t            priority,
+                        const uint64_t                 topic_hash,
+                        const udpard_udpip_ep_t        remote_ep[UDPARD_IFACE_COUNT_MAX],
+                        const uint64_t                 transfer_id,
+                        const udpard_bytes_scattered_t payload,
                         void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t),
                         void* const user_transfer_reference)
 {
     uint32_t   out = 0;
     const bool ok  = (self != NULL) && (deadline >= now) && (now >= 0) && (self->local_uid != 0) &&
                     (valid_ep_mask(remote_ep) != 0) && (priority <= UDPARD_PRIORITY_MAX) &&
-                    ((payload.data != NULL) || (payload.size == 0U)) &&
+                    ((payload.bytes.data != NULL) || (payload.bytes.size == 0U)) &&
                     (tx_transfer_find(self, topic_hash, transfer_id) == NULL);
     if (ok) {
         // Before attempting to enqueue a new transfer, we need to update the transmission scheduler.
         // It may release some items from the tx queue, and it may also promote some staged transfers to the queue.
         udpard_tx_poll(self, now, UDPARD_IFACE_MASK_ALL);
+        // Compute the total payload size.
+        size_t                          size    = payload.bytes.size;
+        const udpard_bytes_scattered_t* current = payload.next;
+        while (current != NULL) {
+            size += current->bytes.size;
+            current = current->next;
+        };
+        // Enqueue the transfer.
         const meta_t meta = { .priority              = priority,
                               .flag_ack              = feedback != NULL,
-                              .transfer_payload_size = (uint32_t)payload.size,
+                              .transfer_payload_size = (uint32_t)size,
                               .transfer_id           = transfer_id,
                               .sender_uid            = self->local_uid,
                               .topic_hash            = topic_hash };
@@ -1066,12 +1116,12 @@ uint32_t udpard_tx_push(udpard_tx_t* const      self,
     return out;
 }
 
-uint32_t udpard_tx_push_p2p(udpard_tx_t* const    self,
-                            const udpard_us_t     now,
-                            const udpard_us_t     deadline,
-                            const udpard_prio_t   priority,
-                            const udpard_remote_t remote,
-                            const udpard_bytes_t  payload,
+uint32_t udpard_tx_push_p2p(udpard_tx_t* const             self,
+                            const udpard_us_t              now,
+                            const udpard_us_t              deadline,
+                            const udpard_prio_t            priority,
+                            const udpard_remote_t          remote,
+                            const udpard_bytes_scattered_t payload,
                             void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t),
                             void* const user_transfer_reference)
 {

@@ -21,6 +21,7 @@ next-generation intelligent vehicles: manned and unmanned aircraft, spacecraft, 
 ## Features
 
 - Zero-copy RX pipeline -- payload is moved from the NIC driver all the way to the application without copying.
+- ≤1-copy TX pipeline with deduplication across multiple interfaces and scattered input buffer support.
 - Support for redundant network interfaces with seamless interface aggregation and zero fail-over delay.
 - Robust message reassembler supporting highly distorted datagram streams:
   out-of-order fragments, message ordering recovery, fragment/message deduplication, interleaving, variable MTU, ...
@@ -29,13 +30,12 @@ next-generation intelligent vehicles: manned and unmanned aircraft, spacecraft, 
 - Packet loss mitigation via:
   - redundant interfaces (packet lost on one interface may be received on another, transparent to the application);
   - reliable topics (retransmit until acknowledged; callback notifications for successful/failed deliveries).
-- Single-copy TX pipeline with fragment deduplication across multiple interfaces and reference counting.
 - Heap not required; the library can be used with fixed-size block pool allocators.
 - Detailed time complexity and memory requirement models for the benefit of real-time high-integrity applications.
 - Runs anywhere out of the box, including extremely resource-constrained baremetal environments with ~100K ROM/RAM.
   No porting required.
 - Partial MISRA C compliance (reach out to <https://forum.opencyphal.org>).
-- Full implementation in a single C file with only ~2k lines of straightforward C99!
+- Full implementation in a single C file with only 2k lines of straightforward C99!
 - Extensive test coverage.
 
 ## Usage

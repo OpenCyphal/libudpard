@@ -52,6 +52,40 @@ static void record_feedback(udpard_tx_t* const tx, const udpard_tx_feedback_t fb
 // Minimal endpoint helper.
 static udpard_udpip_ep_t make_ep(const uint32_t ip) { return (udpard_udpip_ep_t){ .ip = ip, .port = 1U }; }
 
+static void test_bytes_scattered_read(void)
+{
+    // Skips empty fragments and spans boundaries.
+    {
+        const byte_t                   frag_a[] = { 1U, 2U, 3U };
+        const byte_t                   frag_c[] = { 4U, 5U, 6U, 7U, 8U };
+        const udpard_bytes_scattered_t frag3    = { .bytes = { .size = sizeof(frag_c), .data = frag_c }, .next = NULL };
+        const udpard_bytes_scattered_t frag2    = { .bytes = { .size = 0U, .data = NULL }, .next = &frag3 };
+        const udpard_bytes_scattered_t frag1  = { .bytes = { .size = sizeof(frag_a), .data = frag_a }, .next = &frag2 };
+        const udpard_bytes_scattered_t frag0  = { .bytes = { .size = 0U, .data = NULL }, .next = &frag1 };
+        bytes_scattered_reader_t       reader = { .cursor = &frag0, .position = 0U };
+        byte_t                         out[7] = { 0 };
+        bytes_scattered_read(&reader, sizeof(out), out);
+        const byte_t expected[] = { 1U, 2U, 3U, 4U, 5U, 6U, 7U };
+        TEST_ASSERT_EQUAL_UINT8_ARRAY(expected, out, sizeof(expected));
+        TEST_ASSERT_EQUAL_PTR(&frag3, reader.cursor);
+        TEST_ASSERT_EQUAL_size_t(4U, reader.position);
+    }
+
+    // Resumes mid-fragment when data remains.
+    {
+        const byte_t                   frag_tail[] = { 9U, 10U, 11U };
+        const udpard_bytes_scattered_t frag        = { .bytes = { .size = sizeof(frag_tail), .data = frag_tail },
+                                                       .next  = NULL };
+        bytes_scattered_reader_t       reader      = { .cursor = &frag, .position = 1U };
+        byte_t                         out[2]      = { 0 };
+        bytes_scattered_read(&reader, sizeof(out), out);
+        const byte_t expected[] = { 10U, 11U };
+        TEST_ASSERT_EQUAL_UINT8_ARRAY(expected, out, sizeof(out));
+        TEST_ASSERT_EQUAL_PTR(&frag, reader.cursor);
+        TEST_ASSERT_EQUAL_size_t(frag.bytes.size, reader.position);
+    }
+}
+
 static void test_tx_serialize_header(void)
 {
     typedef struct
@@ -190,17 +224,17 @@ static void test_tx_spool_and_queue_errors(void)
     // OOM in spool after first frame.
     instrumented_allocator_t alloc_payload = { 0 };
     instrumented_allocator_new(&alloc_payload);
-    alloc_payload.limit_fragments = 1;
-    udpard_tx_t tx                = { .enqueued_frames_limit = 1, .enqueued_frames_count = 0 };
-    tx.memory.payload[0]          = instrumented_allocator_make_resource(&alloc_payload);
-    byte_t         buffer[64]     = { 0 };
-    udpard_bytes_t payload        = { .size = sizeof(buffer), .data = buffer };
-    const meta_t   meta           = { .priority              = udpard_prio_fast,
-                                      .flag_ack              = false,
-                                      .transfer_payload_size = (uint32_t)payload.size,
-                                      .transfer_id           = 1,
-                                      .sender_uid            = 1,
-                                      .topic_hash            = 1 };
+    alloc_payload.limit_fragments             = 1;
+    udpard_tx_t tx                            = { .enqueued_frames_limit = 1, .enqueued_frames_count = 0 };
+    tx.memory.payload[0]                      = instrumented_allocator_make_resource(&alloc_payload);
+    byte_t                         buffer[64] = { 0 };
+    const udpard_bytes_scattered_t payload    = make_scattered(buffer, sizeof(buffer));
+    const meta_t                   meta       = { .priority              = udpard_prio_fast,
+                                                  .flag_ack              = false,
+                                                  .transfer_payload_size = (uint32_t)payload.bytes.size,
+                                                  .transfer_id           = 1,
+                                                  .sender_uid            = 1,
+                                                  .topic_hash            = 1 };
     TEST_ASSERT_NULL(tx_spool(&tx, tx.memory.payload[0], 32, meta, payload));
     TEST_ASSERT_EQUAL_size_t(0, tx.enqueued_frames_count);
     TEST_ASSERT_EQUAL_UINT64(80, tx_ack_timeout(5, udpard_prio_high, 1));
@@ -213,9 +247,9 @@ static void test_tx_spool_and_queue_errors(void)
         mem.payload[i] = instrumented_allocator_make_resource(&alloc_payload);
     }
     TEST_ASSERT_TRUE(udpard_tx_new(&tx, 2U, 2U, 1U, mem, &(udpard_tx_vtable_t){ .eject = eject_with_flag }));
-    udpard_udpip_ep_t    ep[UDPARD_IFACE_COUNT_MAX] = { make_ep(1), { 0 } };
-    byte_t               big_buf[2000]              = { 0 };
-    const udpard_bytes_t big_payload                = { .size = sizeof(big_buf), .data = big_buf };
+    udpard_udpip_ep_t              ep[UDPARD_IFACE_COUNT_MAX] = { make_ep(1), { 0 } };
+    byte_t                         big_buf[2000]              = { 0 };
+    const udpard_bytes_scattered_t big_payload                = make_scattered(big_buf, sizeof(big_buf));
     TEST_ASSERT_EQUAL_UINT32(0, udpard_tx_push(&tx, 0, 1000, udpard_prio_fast, 11, ep, 1, big_payload, NULL, NULL));
     TEST_ASSERT_EQUAL_size_t(1, tx.errors_capacity);
 
@@ -242,13 +276,17 @@ static void test_tx_spool_and_queue_errors(void)
     victim.deadline    = 1;
     victim.topic_hash  = 7;
     victim.transfer_id = 9;
-    (void)cavl2_find_or_insert(
-      &tx_sac.index_deadline, &victim.deadline, tx_cavl_compare_deadline, &victim.index_deadline, cavl2_trivial_factory);
-    (void)cavl2_find_or_insert(&tx_sac.index_transfer,
-                               &(tx_transfer_key_t){ .topic_hash = victim.topic_hash, .transfer_id = victim.transfer_id },
-                               tx_cavl_compare_transfer,
-                               &victim.index_transfer,
+    (void)cavl2_find_or_insert(&tx_sac.index_deadline,
+                               &victim.deadline,
+                               tx_cavl_compare_deadline,
+                               &victim.index_deadline,
                                cavl2_trivial_factory);
+    (void)cavl2_find_or_insert(
+      &tx_sac.index_transfer,
+      &(tx_transfer_key_t){ .topic_hash = victim.topic_hash, .transfer_id = victim.transfer_id },
+      tx_cavl_compare_transfer,
+      &victim.index_transfer,
+      cavl2_trivial_factory);
     enlist_head(&tx_sac.agewise, &victim.agewise);
     TEST_ASSERT_FALSE(tx_ensure_queue_space(&tx_sac, 1));
     TEST_ASSERT_EQUAL_size_t(1, tx_sac.errors_sacrifice);
@@ -258,7 +296,7 @@ static void test_tx_spool_and_queue_errors(void)
     tx.errors_capacity            = 0;
     TEST_ASSERT_TRUE(udpard_tx_new(&tx, 3U, 3U, 2U, mem, &(udpard_tx_vtable_t){ .eject = eject_with_flag }));
     TEST_ASSERT_EQUAL_UINT32(
-      0, udpard_tx_push(&tx, 0, 1000, udpard_prio_fast, 12, ep, 2, (udpard_bytes_t){ 0 }, NULL, NULL));
+      0, udpard_tx_push(&tx, 0, 1000, udpard_prio_fast, 12, ep, 2, make_scattered(NULL, 0), NULL, NULL));
     TEST_ASSERT_EQUAL_size_t(1, tx.errors_oom);
 
     // Spool OOM inside tx_push.
@@ -274,7 +312,8 @@ static void test_tx_spool_and_queue_errors(void)
     tx.ack_baseline_timeout = 1;
     TEST_ASSERT_GREATER_THAN_UINT32(
       0,
-      udpard_tx_push(&tx, 0, 100000, udpard_prio_nominal, 14, ep, 4, (udpard_bytes_t){ 0 }, record_feedback, &fstate));
+      udpard_tx_push(
+        &tx, 0, 100000, udpard_prio_nominal, 14, ep, 4, make_scattered(NULL, 0), record_feedback, &fstate));
     TEST_ASSERT_NOT_NULL(tx.index_staged);
     udpard_tx_free(&tx);
     instrumented_allocator_reset(&alloc_payload);
@@ -295,7 +334,8 @@ static void test_tx_ack_and_scheduler(void)
     TEST_ASSERT_TRUE(udpard_tx_new(&tx1, 10U, 1U, 8U, mem, &(udpard_tx_vtable_t){ .eject = eject_with_flag }));
     udpard_udpip_ep_t ep[UDPARD_IFACE_COUNT_MAX] = { make_ep(2), { 0 } };
     TEST_ASSERT_EQUAL_UINT32(
-      1, udpard_tx_push(&tx1, 0, 1000, udpard_prio_fast, 21, ep, 42, (udpard_bytes_t){ 0 }, record_feedback, &fstate));
+      1,
+      udpard_tx_push(&tx1, 0, 1000, udpard_prio_fast, 21, ep, 42, make_scattered(NULL, 0), record_feedback, &fstate));
     udpard_rx_t rx = { .tx = &tx1 };
     tx_receive_ack(&rx, 21, 42);
     TEST_ASSERT_EQUAL_size_t(1, fstate.count);
@@ -411,6 +451,7 @@ void tearDown(void) {}
 int main(void)
 {
     UNITY_BEGIN();
+    RUN_TEST(test_bytes_scattered_read);
     RUN_TEST(test_tx_serialize_header);
     RUN_TEST(test_tx_validation_and_free);
     RUN_TEST(test_tx_comparators_and_feedback);

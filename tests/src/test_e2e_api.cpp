@@ -206,8 +206,8 @@ void test_reliable_delivery_under_losses()
     sub_rx.user    = &ctx;
 
     // Reliable transfer with staged losses.
-    FeedbackState        fb{};
-    const udpard_bytes_t payload_view{ .size = payload.size(), .data = payload.data() };
+    FeedbackState                                         fb{};
+    const udpard_bytes_scattered_t                        payload_view = make_scattered(payload.data(), payload.size());
     std::array<udpard_udpip_ep_t, UDPARD_IFACE_COUNT_MAX> dest_per_iface = subscriber_endpoints;
     pub_tx.mtu[0]                                                        = 600;
     pub_tx.mtu[1]                                                        = 900;
@@ -324,9 +324,9 @@ void test_reliable_stats_and_failures()
     std::vector<CapturedFrame> exp_frames;
     TEST_ASSERT_TRUE(udpard_tx_new(&exp_tx, 0x9999000011112222ULL, 2U, 4, exp_mem, &tx_vtable));
     exp_tx.user = &exp_frames;
-    FeedbackState           fb_fail{};
-    const udpard_udpip_ep_t exp_dest[UDPARD_IFACE_COUNT_MAX] = { udpard_make_subject_endpoint(99U), {}, {} };
-    const udpard_bytes_t    exp_payload{ .size = 4, .data = "ping" };
+    FeedbackState                  fb_fail{};
+    const udpard_udpip_ep_t        exp_dest[UDPARD_IFACE_COUNT_MAX] = { udpard_make_subject_endpoint(99U), {}, {} };
+    const udpard_bytes_scattered_t exp_payload                      = make_scattered("ping", 4);
     TEST_ASSERT_GREATER_THAN_UINT32(
       0U,
       udpard_tx_push(
@@ -378,9 +378,9 @@ void test_reliable_stats_and_failures()
     TEST_ASSERT_TRUE(
       udpard_rx_port_new(&port, 0x12340000ULL, 64, UDPARD_RX_REORDERING_WINDOW_UNORDERED, rx_mem, &callbacks));
 
-    const udpard_udpip_ep_t src_dest[UDPARD_IFACE_COUNT_MAX] = { udpard_make_subject_endpoint(12U), {}, {} };
-    const udpard_bytes_t    src_payload{ .size = ctx.expected.size(), .data = ctx.expected.data() };
-    FeedbackState           fb_ignore{};
+    const udpard_udpip_ep_t        src_dest[UDPARD_IFACE_COUNT_MAX] = { udpard_make_subject_endpoint(12U), {}, {} };
+    const udpard_bytes_scattered_t src_payload = make_scattered(ctx.expected.data(), ctx.expected.size());
+    FeedbackState                  fb_ignore{};
     TEST_ASSERT_GREATER_THAN_UINT32(
       0U,
       udpard_tx_push(

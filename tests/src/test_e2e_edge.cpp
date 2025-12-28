@@ -148,8 +148,8 @@ struct Fixture
         for (size_t i = 0; i < payload_buf.size(); i++) {
             payload_buf[i] = static_cast<uint8_t>(transfer_id >> (i * 8U));
         }
-        const udpard_bytes_t payload{ .size = payload_buf.size(), .data = payload_buf.data() };
-        const udpard_us_t    deadline = ts + 1000000;
+        const udpard_bytes_scattered_t payload  = make_scattered(payload_buf.data(), payload_buf.size());
+        const udpard_us_t              deadline = ts + 1000000;
         for (auto& mtu_value : tx.mtu) {
             mtu_value = UDPARD_MTU_DEFAULT;
         }
@@ -326,9 +326,7 @@ void test_udpard_tx_feedback_always_called()
         FbState           fb{};
         udpard_udpip_ep_t dests[UDPARD_IFACE_COUNT_MAX] = { endpoint, {} };
         TEST_ASSERT_GREATER_THAN_UINT32(
-          0,
-          udpard_tx_push(
-            &tx, 10, 10, udpard_prio_fast, 1, dests, 11, udpard_bytes_t{ .size = 0, .data = nullptr }, fb_record, &fb));
+          0, udpard_tx_push(&tx, 10, 10, udpard_prio_fast, 1, dests, 11, make_scattered(nullptr, 0), fb_record, &fb));
         udpard_tx_poll(&tx, 11, UDPARD_IFACE_MASK_ALL);
         TEST_ASSERT_EQUAL_size_t(1, fb.count);
         TEST_ASSERT_FALSE(fb.success);
@@ -345,27 +343,11 @@ void test_udpard_tx_feedback_always_called()
         FbState           fb_old{};
         FbState           fb_new{};
         udpard_udpip_ep_t dests[UDPARD_IFACE_COUNT_MAX] = { endpoint, {} };
-        TEST_ASSERT_GREATER_THAN_UINT32(0,
-                                        udpard_tx_push(&tx,
-                                                       0,
-                                                       1000,
-                                                       udpard_prio_fast,
-                                                       2,
-                                                       dests,
-                                                       21,
-                                                       udpard_bytes_t{ .size = 0, .data = nullptr },
-                                                       fb_record,
-                                                       &fb_old));
-        (void)udpard_tx_push(&tx,
-                             0,
-                             1000,
-                             udpard_prio_fast,
-                             3,
-                             dests,
-                             22,
-                             udpard_bytes_t{ .size = 0, .data = nullptr },
-                             fb_record,
-                             &fb_new);
+        TEST_ASSERT_GREATER_THAN_UINT32(
+          0,
+          udpard_tx_push(&tx, 0, 1000, udpard_prio_fast, 2, dests, 21, make_scattered(nullptr, 0), fb_record, &fb_old));
+        (void)udpard_tx_push(
+          &tx, 0, 1000, udpard_prio_fast, 3, dests, 22, make_scattered(nullptr, 0), fb_record, &fb_new);
         TEST_ASSERT_EQUAL_size_t(1, fb_old.count);
         TEST_ASSERT_FALSE(fb_old.success);
         TEST_ASSERT_GREATER_OR_EQUAL_UINT64(1, tx.errors_sacrifice);
@@ -382,17 +364,8 @@ void test_udpard_tx_feedback_always_called()
         tx.user = &frames;
         FbState           fb{};
         udpard_udpip_ep_t dests[UDPARD_IFACE_COUNT_MAX] = { endpoint, {} };
-        TEST_ASSERT_GREATER_THAN_UINT32(0,
-                                        udpard_tx_push(&tx,
-                                                       0,
-                                                       1000,
-                                                       udpard_prio_fast,
-                                                       4,
-                                                       dests,
-                                                       33,
-                                                       udpard_bytes_t{ .size = 0, .data = nullptr },
-                                                       fb_record,
-                                                       &fb));
+        TEST_ASSERT_GREATER_THAN_UINT32(
+          0, udpard_tx_push(&tx, 0, 1000, udpard_prio_fast, 4, dests, 33, make_scattered(nullptr, 0), fb_record, &fb));
         udpard_tx_free(&tx);
         TEST_ASSERT_EQUAL_size_t(1, fb.count);
         TEST_ASSERT_FALSE(fb.success);
@@ -453,8 +426,8 @@ void test_udpard_tx_push_p2p()
     for (size_t i = 0; i < sizeof(response_transfer_id); i++) {
         payload_buf[16U + i] = static_cast<uint8_t>((response_transfer_id >> (i * 8U)) & 0xFFU);
     }
-    const udpard_bytes_t payload{ .size = payload_buf.size(), .data = payload_buf.data() };
-    const udpard_us_t    now = 0;
+    const udpard_bytes_scattered_t payload = make_scattered(payload_buf.data(), payload_buf.size());
+    const udpard_us_t              now     = 0;
     TEST_ASSERT_GREATER_THAN_UINT32(
       0U, udpard_tx_push_p2p(&tx, now, now + 1000000, udpard_prio_nominal, remote, payload, nullptr, nullptr));
     udpard_tx_poll(&tx, now, UDPARD_IFACE_MASK_ALL);

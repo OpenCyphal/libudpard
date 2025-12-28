@@ -279,11 +279,11 @@ void test_udpard_tx_rx_end_to_end()
         }
 
         // Each transfer is sent on all redundant interfaces with different MTUs to exercise fragmentation variety.
-        const udpard_bytes_t    payload_view{ .size = payload.size(), .data = payload.data() };
-        const auto              priority = static_cast<udpard_prio_t>(random_range(0, UDPARD_PRIORITY_MAX));
-        const udpard_udpip_ep_t dest     = udpard_make_subject_endpoint(subject_ids[port_index]);
-        const TransferKey       key{ .transfer_id = transfer_id, .topic_hash = topic_hashes[port_index] };
-        const bool              inserted =
+        const udpard_bytes_scattered_t payload_view = make_scattered(payload.data(), payload.size());
+        const auto                     priority     = static_cast<udpard_prio_t>(random_range(0, UDPARD_PRIORITY_MAX));
+        const udpard_udpip_ep_t        dest         = udpard_make_subject_endpoint(subject_ids[port_index]);
+        const TransferKey              key{ .transfer_id = transfer_id, .topic_hash = topic_hashes[port_index] };
+        const bool                     inserted =
           ctx.expected.emplace(key, ExpectedPayload{ .payload = payload, .payload_size_wire = payload.size() }).second;
         TEST_ASSERT_TRUE(inserted);
 
