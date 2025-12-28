@@ -469,12 +469,18 @@ uint32_t udpard_tx_push(udpard_tx_t* const             self,
                         void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t), // NULL if best-effort.
                         void* const user_transfer_reference);
 
-/// Specialization for P2P transfers. The semantics are identical to udpard_tx_push().
-/// The transfer-ID will be provided by the library based on the udpard_tx_t::p2p_transfer_id counter.
+/// This is a specialization of the general push function for P2P transfers.
+/// It is used to send P2P responses to messages received from topics; the request_* values shall be taken from
+/// the message transfer that is being responded to.
+/// P2P transfers are a bit more complex because they carry some additional metadata that is automatically
+/// composed/parsed by the library transparently for the application.
+/// The size of the serialized payload will include UDPARD_P2P_HEADER_BYTES additional bytes for the P2P header.
 uint32_t udpard_tx_push_p2p(udpard_tx_t* const             self,
                             const udpard_us_t              now,
                             const udpard_us_t              deadline,
                             const udpard_prio_t            priority,
+                            const uint64_t                 request_topic_hash,
+                            const uint64_t                 request_transfer_id,
                             const udpard_remote_t          remote, // Endpoints may be invalid for some ifaces.
                             const udpard_bytes_scattered_t payload,
                             void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t), // NULL if best-effort.
@@ -647,7 +653,7 @@ struct udpard_rx_port_t
 
     /// Transfer payloads exceeding this extent may be truncated.
     /// The total size of the received payload may still exceed this extent setting by some small margin.
-    /// For P2P ports, UDPARD_P2P_HEADER_BYTES must be included in this value.
+    /// For P2P ports, UDPARD_P2P_HEADER_BYTES must be included in this value (the library takes care of this).
     size_t extent;
 
     /// See UDPARD_RX_REORDERING_WINDOW_... above.

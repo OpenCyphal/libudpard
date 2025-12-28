@@ -41,6 +41,7 @@ jobs:
           # Shall it break one day, feel free to remove the matrix from here.
           name: ${{github.job}}-#${{strategy.job-index}}-${{job.status}}-${{join(matrix.*, ',')}}
           path: ${{github.workspace}}/**/*
+          include-hidden-files: true
           retention-days: 2
 
   optimizations:
@@ -85,6 +86,7 @@ jobs:
           # Shall it break one day, feel free to remove the matrix from here.
           name: ${{github.job}}-#${{strategy.job-index}}-${{job.status}}-${{join(matrix.*, ',')}}
           path: ${{github.workspace}}/**/*
+          include-hidden-files: true
           retention-days: 2
 
   coverage:
@@ -107,6 +109,7 @@ jobs:
         with:
           name: ${{github.job}}-#${{strategy.job-index}}-${{job.status}}
           path: ${{github.workspace}}/**/*
+          include-hidden-files: true
           retention-days: 30
 
 # TODO: re-enable this

@@ -1120,6 +1120,8 @@ uint32_t udpard_tx_push_p2p(udpard_tx_t* const             self,
                             const udpard_us_t              now,
                             const udpard_us_t              deadline,
                             const udpard_prio_t            priority,
+                            const uint64_t                 request_topic_hash,
+                            const uint64_t                 request_transfer_id,
                             const udpard_remote_t          remote,
                             const udpard_bytes_scattered_t payload,
                             void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t),
@@ -1127,6 +1129,19 @@ uint32_t udpard_tx_push_p2p(udpard_tx_t* const             self,
 {
     uint32_t out = 0;
     if (self != NULL) {
+        // Serialize the P2P header.
+        byte_t  header[UDPARD_P2P_HEADER_BYTES];
+        byte_t* ptr = header;
+        *ptr++      = P2P_KIND_RESPONSE;
+        ptr += 7U; // Reserved bytes.
+        ptr = serialize_u64(ptr, request_topic_hash);
+        ptr = serialize_u64(ptr, request_transfer_id);
+        UDPARD_ASSERT((ptr - header) == UDPARD_P2P_HEADER_BYTES);
+        (void)ptr;
+        // Construct the full P2P payload with the header prepended. No copying needed!
+        const udpard_bytes_scattered_t headed_payload = { .bytes = { .size = UDPARD_P2P_HEADER_BYTES, .data = header },
+                                                          .next  = &payload };
+        // Enqueue the transfer.
         out = udpard_tx_push(self,
                              now,
                              deadline,
@@ -1134,7 +1149,7 @@ uint32_t udpard_tx_push_p2p(udpard_tx_t* const             self,
                              remote.uid,
                              remote.endpoints,
                              self->p2p_transfer_id++,
-                             payload,
+                             headed_payload,
                              feedback,
                              user_transfer_reference);
     }

@@ -416,20 +416,21 @@ void test_udpard_tx_push_p2p()
     remote.uid           = local_uid;
     remote.endpoints[0U] = dest;
 
-    std::array<uint8_t, UDPARD_P2P_HEADER_BYTES> payload_buf{};
-    constexpr uint8_t                            p2p_kind_response = 0U;
-    payload_buf[0]                                                 = p2p_kind_response;
-    for (size_t i = 0; i < sizeof(topic_hash); i++) {
-        payload_buf[8U + i] = static_cast<uint8_t>((topic_hash >> (i * 8U)) & 0xFFU);
-    }
-    const uint64_t response_transfer_id = 55;
-    for (size_t i = 0; i < sizeof(response_transfer_id); i++) {
-        payload_buf[16U + i] = static_cast<uint8_t>((response_transfer_id >> (i * 8U)) & 0xFFU);
-    }
-    const udpard_bytes_scattered_t payload = make_scattered(payload_buf.data(), payload_buf.size());
+    const uint64_t                 request_transfer_id = 55;
+    const std::array<uint8_t, 3>   user_payload{ 0xAAU, 0xBBU, 0xCCU };
+    const udpard_bytes_scattered_t payload = make_scattered(user_payload.data(), user_payload.size());
     const udpard_us_t              now     = 0;
-    TEST_ASSERT_GREATER_THAN_UINT32(
-      0U, udpard_tx_push_p2p(&tx, now, now + 1000000, udpard_prio_nominal, remote, payload, nullptr, nullptr));
+    TEST_ASSERT_GREATER_THAN_UINT32(0U,
+                                    udpard_tx_push_p2p(&tx,
+                                                       now,
+                                                       now + 1000000,
+                                                       udpard_prio_nominal,
+                                                       topic_hash,
+                                                       request_transfer_id,
+                                                       remote,
+                                                       payload,
+                                                       nullptr,
+                                                       nullptr));
     udpard_tx_poll(&tx, now, UDPARD_IFACE_MASK_ALL);
     TEST_ASSERT_FALSE(frames.empty());
 
@@ -440,7 +441,7 @@ void test_udpard_tx_push_p2p()
     }
     udpard_rx_poll(&rx, now);
     TEST_ASSERT_EQUAL_size_t(1, ctx.ids.size());
-    TEST_ASSERT_EQUAL_UINT64(response_transfer_id, ctx.ids[0]);
+    TEST_ASSERT_EQUAL_UINT64(request_transfer_id, ctx.ids[0]);
     TEST_ASSERT_EQUAL_size_t(0, ctx.collisions);
 
     udpard_rx_port_free(&rx, reinterpret_cast<udpard_rx_port_t*>(&port));
