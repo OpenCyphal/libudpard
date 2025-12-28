@@ -55,7 +55,7 @@ jobs:
           - toolchain: gcc
             c-compiler: gcc
             cxx-compiler: g++
-            cxx-flags: -fno-strict-aliasing # GCC in MinSizeRel C++20 mode misoptimizes the Cavl test.
+            cxx-flags: ""
           - toolchain: clang
             c-compiler: clang
             cxx-compiler: clang++
@@ -86,6 +86,36 @@ jobs:
           name: ${{github.job}}-#${{strategy.job-index}}-${{job.status}}-${{join(matrix.*, ',')}}
           path: ${{github.workspace}}/**/*
           retention-days: 2
+
+  coverage:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    container: ghcr.io/opencyphal/toolshed:ts24.4.3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      # language=bash
+      - run: >
+          cmake
+          -B ${{ github.workspace }}/build
+          -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+          -DCMAKE_C_COMPILER=${{ matrix.c-compiler }}
+          -DCMAKE_CXX_COMPILER=${{ matrix.cxx-compiler }}
+          -DCMAKE_CXX_FLAGS="${{ matrix.cxx-flags }}"
+          -DNO_STATIC_ANALYSIS=ON
+          -DENABLE_COVERAGE=ON
+          .
+      # language=bash
+      - run: |
+          cd ${{ github.workspace }}/build
+          make -j$(nproc) && make test && make coverage
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{github.job}}-#${{strategy.job-index}}-${{job.status}}
+          path: ${{github.workspace}}/**/*
+          retention-days: 30
 
 # TODO: re-enable this
 #  avr:

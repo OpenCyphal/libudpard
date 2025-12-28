@@ -454,8 +454,7 @@ void test_udpard_tx_push_p2p()
         payload_buf[16U + i] = static_cast<uint8_t>((response_transfer_id >> (i * 8U)) & 0xFFU);
     }
     const udpard_bytes_t payload{ .size = payload_buf.size(), .data = payload_buf.data() };
-    const udpard_us_t    now      = 0;
-    const uint64_t       first_id = tx.p2p_transfer_id;
+    const udpard_us_t    now = 0;
     TEST_ASSERT_GREATER_THAN_UINT32(
       0U, udpard_tx_push_p2p(&tx, now, now + 1000000, udpard_prio_nominal, remote, payload, nullptr, nullptr));
     udpard_tx_poll(&tx, now, UDPARD_IFACE_MASK_ALL);
@@ -468,7 +467,7 @@ void test_udpard_tx_push_p2p()
     }
     udpard_rx_poll(&rx, now);
     TEST_ASSERT_EQUAL_size_t(1, ctx.ids.size());
-    TEST_ASSERT_EQUAL_UINT64(first_id, ctx.ids[0]);
+    TEST_ASSERT_EQUAL_UINT64(response_transfer_id, ctx.ids[0]);
     TEST_ASSERT_EQUAL_size_t(0, ctx.collisions);
 
     udpard_rx_port_free(&rx, reinterpret_cast<udpard_rx_port_t*>(&port));

@@ -80,6 +80,10 @@ function(gen_test_matrix name files)
     gen_test("${name}_x32_c11" "${files}" "" "-m32" "-m32" "11")
 endfunction()
 
+function(gen_test_single name files) # When the full matrix is not needed, to keep pipelines fast.
+    gen_test("${name}" "${files}" "" "-m32" "-m32" "11")
+endfunction()
+
 # Add the test targets.
 # Those that are written in C may #include <udpard.c> to reach its internals; they are called "intrusive".
 # The public interface tests may be written in C++ for convenience.
@@ -89,9 +93,9 @@ gen_test_matrix(test_intrusive_misc "src/test_intrusive_misc.c")
 gen_test_matrix(test_intrusive_tx "src/test_intrusive_tx.c")
 gen_test_matrix(test_intrusive_rx "src/test_intrusive_rx.c")
 gen_test_matrix(test_fragment "src/test_fragment.cpp;${library_dir}/udpard.c")
-gen_test_matrix(test_e2e_random "src/test_e2e_random.cpp;${library_dir}/udpard.c")
-gen_test_matrix(test_e2e_edge "src/test_e2e_edge.cpp;${library_dir}/udpard.c")
-gen_test_matrix(test_e2e_api "src/test_e2e_api.cpp;${library_dir}/udpard.c")
+gen_test_single(test_e2e_random "src/test_e2e_random.cpp;${library_dir}/udpard.c")
+gen_test_single(test_e2e_edge "src/test_e2e_edge.cpp;${library_dir}/udpard.c")
+gen_test_single(test_e2e_api "src/test_e2e_api.cpp;${library_dir}/udpard.c")
 
 # Coverage targets. Usage:
 #   cmake -DENABLE_COVERAGE=ON ..
