@@ -2167,7 +2167,7 @@ bool udpard_rx_port_new(udpard_rx_port_t* const              self,
 }
 
 /// A thin proxy that reads the P2P header and dispatches the message to the appropriate handler.
-static void rx_p2p_on_message(udpard_rx_t* const rx, udpard_rx_port_t* const port, const udpard_rx_transfer_t transfer)
+static void rx_p2p_on_message(udpard_rx_t* const rx, udpard_rx_port_t* const port, udpard_rx_transfer_t transfer)
 {
     udpard_rx_port_p2p_t* const self = (udpard_rx_port_p2p_t*)port;
 
@@ -2190,18 +2190,20 @@ static void rx_p2p_on_message(udpard_rx_t* const rx, udpard_rx_port_t* const por
     UDPARD_ASSERT((ptr == (UDPARD_P2P_HEADER_BYTES + (byte_t*)frag0->view.data)));
     (void)ptr;
 
-    // Remove the header from the view.
+    // Remove the header from the view and update the transfer metadata.
+    transfer.transfer_id = transfer_id;
+    transfer.payload_size_stored -= UDPARD_P2P_HEADER_BYTES;
     frag0->view.size -= UDPARD_P2P_HEADER_BYTES;
     frag0->view.data = UDPARD_P2P_HEADER_BYTES + (byte_t*)(frag0->view.data);
 
     // Process the data depending on the kind.
     if (kind == P2P_KIND_ACK) {
         tx_receive_ack(rx, topic_hash, transfer_id);
+        udpard_fragment_free_all(transfer.payload, port->memory.fragment);
     } else if (kind == P2P_KIND_RESPONSE) {
-        const udpard_rx_transfer_p2p_t tr = { .base = transfer, .topic_hash = topic_hash };
-        self->vtable->on_message(rx, self, tr);
-    } else {
-        (void)0; // Malformed, ignored.
+        self->vtable->on_message(rx, self, (udpard_rx_transfer_p2p_t){ .base = transfer, .topic_hash = topic_hash });
+    } else { // malformed
+        udpard_fragment_free_all(transfer.payload, port->memory.fragment);
     }
 }
 

@@ -738,6 +738,7 @@ typedef struct udpard_rx_port_p2p_vtable_t
 } udpard_rx_port_p2p_vtable_t;
 
 /// A specialization of udpard_rx_port_t for the local node's P2P port.
+/// Each node must have exactly one P2P port, which is used for P2P transfers and acknowledgments.
 struct udpard_rx_port_p2p_t
 {
     udpard_rx_port_t                   base;

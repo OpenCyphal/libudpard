@@ -2919,9 +2919,16 @@ static void test_rx_additional_coverage(void)
     udpard_rx_port_p2p_t port_p2p = { .vtable = &(udpard_rx_port_p2p_vtable_t){ .on_message = stub_on_message_p2p },
                                       .base   = { .memory = mem } };
     byte_t               p2p_header[UDPARD_P2P_HEADER_BYTES] = { P2P_KIND_ACK };
-    udpard_fragment_t    frag     = { .view   = { .data = p2p_header, .size = UDPARD_P2P_HEADER_BYTES },
-                                      .origin = { .data = NULL, .size = 0 } };
-    udpard_rx_transfer_t transfer = { .payload             = &frag,
+    void*                ack_buf = mem.fragment.alloc(mem.fragment.user, UDPARD_P2P_HEADER_BYTES);
+    TEST_ASSERT_NOT_NULL(ack_buf);
+    memcpy(ack_buf, p2p_header, UDPARD_P2P_HEADER_BYTES);
+    udpard_fragment_t* frag = (udpard_fragment_t*)mem.fragment.alloc(mem.fragment.user, sizeof(udpard_fragment_t));
+    TEST_ASSERT_NOT_NULL(frag);
+    mem_zero(sizeof(*frag), frag);
+    frag->view                    = (udpard_bytes_t){ .data = ack_buf, .size = UDPARD_P2P_HEADER_BYTES };
+    frag->origin                  = (udpard_bytes_mut_t){ .data = ack_buf, .size = UDPARD_P2P_HEADER_BYTES };
+    frag->payload_deleter         = instrumented_allocator_make_deleter(&alloc_frag);
+    udpard_rx_transfer_t transfer = { .payload             = frag,
                                       .payload_size_stored = UDPARD_P2P_HEADER_BYTES,
                                       .payload_size_wire   = UDPARD_P2P_HEADER_BYTES };
     rx_p2p_on_message(&rx, (udpard_rx_port_t*)&port_p2p, transfer);
