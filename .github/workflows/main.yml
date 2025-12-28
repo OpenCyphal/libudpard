@@ -97,15 +97,7 @@ jobs:
           submodules: true
       # language=bash
       - run: >
-          cmake
-          -B ${{ github.workspace }}/build
-          -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
-          -DCMAKE_C_COMPILER=${{ matrix.c-compiler }}
-          -DCMAKE_CXX_COMPILER=${{ matrix.cxx-compiler }}
-          -DCMAKE_CXX_FLAGS="${{ matrix.cxx-flags }}"
-          -DNO_STATIC_ANALYSIS=ON
-          -DENABLE_COVERAGE=ON
-          .
+          cmake -B ${{ github.workspace }}/build -DCMAKE_BUILD_TYPE=Debug -DNO_STATIC_ANALYSIS=ON -DENABLE_COVERAGE=ON .
       # language=bash
       - run: |
           cd ${{ github.workspace }}/build
