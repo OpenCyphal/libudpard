@@ -24,21 +24,21 @@ jobs:
       # language=bash
       - run: >
           cmake
-          -B ${{ github.workspace }}/build
+          -B $GITHUB_WORKSPACE/build
           -DCMAKE_BUILD_TYPE=Debug
           -DCMAKE_C_COMPILER=${{ matrix.c-compiler }}
           -DCMAKE_CXX_COMPILER=${{ matrix.cxx-compiler }}
           .
       # language=bash
       - run: |
-          cd ${{ github.workspace }}/build
+          cd $GITHUB_WORKSPACE/build
           make VERBOSE=1 -j$(nproc)
           make test ARGS="--verbose"
       - name: Archive workspace
         if: always()
         run: |
-          cd ${{ github.workspace }}
-          tar --use-compress-program="gzip -9" -cf ${RUNNER_TEMP}/workspace.tar.gz .
+          cd $GITHUB_WORKSPACE
+          tar --use-compress-program="gzip -9" -cf ${{runner.temp}}/workspace.tar.gz .
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -71,7 +71,7 @@ jobs:
       # language=bash
       - run: >
           cmake
-          -B ${{ github.workspace }}/build
+          -B $GITHUB_WORKSPACE/build
           -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
           -DCMAKE_C_COMPILER=${{ matrix.c-compiler }}
           -DCMAKE_CXX_COMPILER=${{ matrix.cxx-compiler }}
@@ -80,14 +80,14 @@ jobs:
           .
       # language=bash
       - run: |
-          cd ${{ github.workspace }}/build
+          cd $GITHUB_WORKSPACE/build
           make VERBOSE=1 -j$(nproc)
           make test ARGS="--verbose"
       - name: Archive workspace
         if: always()
         run: |
-          cd ${{ github.workspace }}
-          tar --use-compress-program="gzip -9" -cf ${RUNNER_TEMP}/workspace.tar.gz .
+          cd $GITHUB_WORKSPACE
+          tar --use-compress-program="gzip -9" -cf ${{runner.temp}}/workspace.tar.gz .
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -107,21 +107,16 @@ jobs:
           submodules: true
       # language=bash
       - run: >
-          cmake -B ${{ github.workspace }}/build -DCMAKE_BUILD_TYPE=Debug -DNO_STATIC_ANALYSIS=ON -DENABLE_COVERAGE=ON .
+          cmake -B $GITHUB_WORKSPACE/build -DCMAKE_BUILD_TYPE=Debug -DNO_STATIC_ANALYSIS=ON -DENABLE_COVERAGE=ON .
       # language=bash
       - run: |
-          cd ${{ github.workspace }}/build
+          cd $GITHUB_WORKSPACE/build
           make -j$(nproc) && make test && make coverage
       - name: Archive workspace
         if: always()
         run: |
-          ws="${GITHUB_WORKSPACE}"
-          parent="$(dirname "$ws")"
-          base="$(basename "$ws")"
-          echo "Archiving: $ws"
-          ls -la "$ws"
-          tar -C "$parent" --use-compress-program="gzip -9" -cf "${RUNNER_TEMP}/workspace.tar.gz" "$base"
-          tar -tzf "${RUNNER_TEMP}/workspace.tar.gz" | sed -n '1,120p'
+          cd $GITHUB_WORKSPACE
+          tar --use-compress-program="gzip -9" -cf ${{runner.temp}}/workspace.tar.gz .
       - uses: actions/upload-artifact@v4
         if: always()
         with:
