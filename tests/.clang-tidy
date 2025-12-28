@@ -40,7 +40,7 @@ Checks: >-
   -*-no-malloc,
   -cert-msc30-c,
   -cert-msc50-cpp,
-  -modernize-macro-to-enum,
+  -*-macro-to-enum,
   -modernize-use-trailing-return-type,
   -*-macro-usage,
   -*-enum-size,
@@ -52,6 +52,10 @@ Checks: >-
   -*DeprecatedOrUnsafeBufferHandling,
   -*-prefer-static-over-anonymous-namespace,
   -*-pro-bounds-avoid-unchecked-container-access,
+  -*-array*decay,
+  -*-avoid-c-arrays,
+  -*-casting-through-void,
+  -*-named-parameter,
 WarningsAsErrors: '*'
 HeaderFilterRegex: '.*\.hpp'
 FormatStyle: file

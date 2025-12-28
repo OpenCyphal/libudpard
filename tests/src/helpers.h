@@ -54,6 +54,16 @@ static inline void dummy_free(void* const user, const size_t size, void* const p
     TEST_PANIC_UNLESS(pointer == NULL);
 }
 
+// Single-fragment scatter helper.
+static inline udpard_bytes_scattered_t make_scattered(const void* const data, const size_t size)
+{
+    udpard_bytes_scattered_t out;
+    out.bytes.size = size;
+    out.bytes.data = data;
+    out.next       = NULL;
+    return out;
+}
+
 /// The instrumented allocator tracks memory consumption, checks for heap corruption, and can be configured to fail
 /// allocations above a certain threshold.
 #define INSTRUMENTED_ALLOCATOR_CANARY_SIZE 1024U

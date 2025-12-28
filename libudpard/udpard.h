@@ -5,30 +5,36 @@
 ///                         `____/ .___/`___/_/ /_/`____/`__, / .___/_/ /_/`__,_/_/
 ///                             /_/                     /____/_/
 ///
-/// LibUDPard is a compact implementation of the Cyphal/UDP protocol for high-integrity real-time embedded systems.
-/// It is designed for use in robust deterministic embedded systems equipped with at least 64K ROM and RAM.
+/// LibUDPard is a compact implementation of the Cyphal/UDP transport for high-integrity real-time embedded systems.
+/// It is designed for use in robust deterministic embedded systems equipped with at least ~100K ROM and RAM,
+/// as well as in general-purpose software.
+///
 /// The codebase is compliant with a large subset of MISRA C and is fully covered by unit and end-to-end tests.
 /// The library is designed to be compatible with any conventional target platform, from 8 to 64 bit, little- and
-/// big-endian, RTOS-based or baremetal, as long as there is a standards-compliant ISO C99+ compiler available.
+/// big-endian, RTOS-based or baremetal, as long as there is a standards-compliant ISO C99 or C11 compiler available.
 ///
-/// The library is intended to be integrated into the end application by simply copying its source files into the
+/// The library is intended to be integrated into the end application by simply copying udpard.c/.h into the
 /// source tree of the project; it does not require any special compilation options and should work out of the box.
 /// There are build-time configuration parameters defined near the top of udpard.c, but they are optional to use.
 ///
-/// To use the library, the application needs to provide a UDP/IPv4 stack supporting IGMP and ARP.
+/// To use the library, the application needs to provide a minimal UDP/IPv4 stack supporting IGMP v2 and passive ARP.
 /// POSIX-based systems may use the standard Berkeley sockets API, while more constrained embedded systems may choose
-/// to rely either on a third-party solution like LwIP or a custom UDP/IP stack.
+/// to rely either on a third-party solution like LwIP or a custom minimal UDP/IP stack.
 ///
 /// The library can be used either with a regular heap (preferably constant-time) or with a collection of fixed-size
 /// block pool allocators (may be preferable in safety-certified systems).
 /// If block pool allocators are used, the following block sizes should be served:
 /// - MTU-sized blocks for the TX and RX pipelines (typically at most 1.5 KB unless jumbo frames are used).
-/// - sizeof(udpard_tx_item_t) blocks for the TX pipeline.
-/// - sizeof(rx_session_t) blocks for the RX pipeline.
-/// - sizeof(udpard_fragment_t) blocks for the RX pipeline.
+///   The TX pipeline adds a small overhead of sizeof(tx_frame_t).
+/// - sizeof(tx_transfer_t) blocks for the TX pipeline to store outgoing transfer metadata.
+/// - sizeof(rx_session_t) blocks for the RX pipeline to store incoming transfer session metadata.
+/// - sizeof(udpard_fragment_t) blocks for the RX pipeline to store received data fragments.
+///
+/// Suitable memory allocators may be found here:
+/// - Constant-time ultrafast deterministic heap: https://github.com/pavel-kirienko/o1heap
+/// - Single-header fixed-size block pool: https://gist.github.com/pavel-kirienko/daf89e0481e6eac0f1fa8a7614667f59
 ///
 /// --------------------------------------------------------------------------------------------------------------------
-///
 /// This software is distributed under the terms of the MIT License.
 /// Copyright (C) OpenCyphal Development Team  <opencyphal.org>
 /// Copyright Amazon.com Inc. or its affiliates.
@@ -60,26 +66,48 @@ extern "C"
 
 /// RFC 791 states that hosts must be prepared to accept datagrams of up to 576 octets and it is expected that this
 /// library will receive non IP-fragmented datagrams thus the minimum MTU should be larger than 576.
-/// This is also the maximum size of a single-frame transfer.
 /// That being said, the MTU here is set to a larger value that is derived as:
 ///     1500B Ethernet MTU (RFC 894) - 60B IPv4 max header - 8B UDP Header - 48B Cyphal header
+/// This is also the default maximum size of a single-frame transfer.
+/// The application can change this value at runtime as needed.
 #define UDPARD_MTU_DEFAULT 1384U
 
 /// MTU less than this should not be used. This value may be increased in a future version of the library.
 #define UDPARD_MTU_MIN 460U
 
 /// The library supports at most this many local redundant network interfaces.
-#define UDPARD_NETWORK_INTERFACE_COUNT_MAX 3U
+#define UDPARD_IFACE_COUNT_MAX 3U
+
+#define UDPARD_IFACE_MASK_ALL ((1U << UDPARD_IFACE_COUNT_MAX) - 1U)
+
+/// All P2P transfers have a fixed prefix in the payload, handled by the library transparently for the application,
+/// defined as follows in DSDL notation:
+///
+///     uint8 KIND_RESPONSE = 0  # The topic hash and transfer-ID specify which message this is a response to.
+///     uint8 KIND_ACK = 1       # The topic hash and transfer-ID specify which transfer is being acknowledged.
+///     uint8 kind
+///     void56
+///     uint64 topic_hash
+///     uint64 transfer_id
+///     # Payload follows only for KIND_RESPONSE.
+///
+/// The extent of P2P ports must be at least this large to accommodate the header.
+#define UDPARD_P2P_HEADER_BYTES 24U
 
 /// Timestamps supplied by the application must be non-negative monotonically increasing counts of microseconds.
 typedef int64_t udpard_us_t;
+
+/// See udpard_tx_t::ack_baseline_timeout.
+/// This default value might be a good starting point for many applications running over a local network.
+#define UDPARD_TX_ACK_BASELINE_TIMEOUT_DEFAULT_us 16000LL
 
 /// The subject-ID only affects the formation of the multicast UDP/IP endpoint address.
 /// In IPv4 networks, it is limited to 23 bits only due to the limited MAC multicast address space.
 /// In IPv6 networks, 32 bits are supported.
 #define UDPARD_IPv4_SUBJECT_ID_MAX 0x7FFFFFUL
 
-#define UDPARD_PRIORITY_MAX 7U
+#define UDPARD_PRIORITY_MAX   7U
+#define UDPARD_PRIORITY_COUNT (UDPARD_PRIORITY_MAX + 1U)
 
 typedef enum udpard_prio_t
 {
@@ -105,23 +133,30 @@ typedef struct udpard_list_member_t
     struct udpard_list_member_t* next;
     struct udpard_list_member_t* prev;
 } udpard_list_member_t;
+
 typedef struct udpard_list_t
 {
     udpard_list_member_t* head; ///< NULL if list empty
     udpard_list_member_t* tail; ///< NULL if list empty
 } udpard_list_t;
 
-typedef struct udpard_bytes_mut_t
-{
-    size_t size;
-    void*  data;
-} udpard_bytes_mut_t;
-
 typedef struct udpard_bytes_t
 {
     size_t      size;
     const void* data;
 } udpard_bytes_t;
+
+typedef struct udpard_bytes_scattered_t
+{
+    udpard_bytes_t                         bytes;
+    const struct udpard_bytes_scattered_t* next; ///< NULL in the last fragment.
+} udpard_bytes_scattered_t;
+
+typedef struct udpard_bytes_mut_t
+{
+    size_t size;
+    void*  data;
+} udpard_bytes_mut_t;
 
 /// Zeros if invalid/unset/unavailable.
 typedef struct udpard_udpip_ep_t
@@ -134,31 +169,30 @@ typedef struct udpard_udpip_ep_t
 /// The RX pipeline will attempt to discover the sender's UDP/IP endpoint per redundant interface
 /// based on the source address of the received UDP datagrams. If the sender's endpoint could not be discovered
 /// for a certain interface (e.g., if the sender is not connected to that interface), the corresponding entry in
-/// the endpoints array will be zeroed.
+/// the endpoints array will be zeroed and udpard_is_valid_endpoint() will return false for that entry.
+///
 /// Cyphal/UDP thus allows nodes to change their network interface addresses dynamically.
 /// The library does not make any assumptions about the specific values and their uniqueness;
 /// as such, multiple remote nodes can even share the same endpoint.
 typedef struct udpard_remote_t
 {
     uint64_t          uid;
-    udpard_udpip_ep_t endpoints[UDPARD_NETWORK_INTERFACE_COUNT_MAX]; ///< Zeros in unavailable ifaces.
+    udpard_udpip_ep_t endpoints[UDPARD_IFACE_COUNT_MAX]; ///< Zeros in unavailable ifaces.
 } udpard_remote_t;
 
 /// Returns true if the given UDP/IP endpoint appears to be valid. Zero port or IP are considered invalid.
 bool udpard_is_valid_endpoint(const udpard_udpip_ep_t ep);
 
-/// Returns the destination multicast UDP/IP endpoint for the given subject ID.
+/// Returns the destination multicast UDP/IP endpoint for the given subject-ID.
 /// The application should use this function when setting up subscription sockets or sending transfers.
-/// If the subject-ID exceeds the allowed range, the excessive bits are masked out.
-/// For P2P ports use the unicast node address instead.
+/// If the subject-ID exceeds UDPARD_IPv4_SUBJECT_ID_MAX, the excessive bits are masked out.
+/// For P2P use the unicast node address directly instead, as provided by the RX pipeline per received transfer.
 udpard_udpip_ep_t udpard_make_subject_endpoint(const uint32_t subject_id);
 
 /// The semantics are similar to malloc/free.
-/// Consider using O1Heap: https://github.com/pavel-kirienko/o1heap. Alternatively, some applications may prefer to
-/// use a set of fixed-size block pool allocators (see the high-level overview for details); for example:
-/// https://github.com/OpenCyphal-Garage/demos/blob/87741d8242bcb27b39e22115559a4b91e92ffe06/libudpard_demo/src/memory_block.h
+/// Consider using O1Heap: https://github.com/pavel-kirienko/o1heap.
 /// The API documentation is written on the assumption that the memory management functions are O(1).
-/// The value of the user reference is taken from the corresponding field of the memory resource structure.
+/// The user pointer is taken from the corresponding field of the memory resource structure.
 typedef void* (*udpard_mem_alloc_t)(void* const user, const size_t size);
 typedef void (*udpard_mem_free_t)(void* const user, const size_t size, void* const pointer);
 
@@ -169,9 +203,6 @@ typedef struct udpard_mem_deleter_t
     udpard_mem_free_t free;
 } udpard_mem_deleter_t;
 
-/// A memory resource encapsulates the dynamic memory allocation and deallocation facilities.
-/// Note that the library allocates a large amount of small fixed-size objects for bookkeeping purposes;
-/// allocators for them can be implemented using fixed-size block pools to eliminate extrinsic memory fragmentation.
 typedef struct udpard_mem_resource_t
 {
     void*              user;
@@ -212,7 +243,7 @@ typedef struct udpard_fragment_t
 /// All fragments in the tree will be freed and invalidated.
 /// The passed fragment can be any fragment inside the tree (not necessarily the root).
 /// If the fragment argument is NULL, the function has no effect. The complexity is linear in the number of fragments.
-void udpard_fragment_free_all(udpard_fragment_t* const frag, const udpard_mem_resource_t fragment_mem_resource);
+void udpard_fragment_free_all(udpard_fragment_t* const frag, const udpard_mem_resource_t mem_fragment);
 
 /// Given any fragment in a transfer, returns the fragment that contains the given payload offset.
 /// Returns NULL if the offset points beyond the stored payload, or if frag is NULL.
@@ -227,6 +258,7 @@ udpard_fragment_t* udpard_fragment_seek(const udpard_fragment_t* frag, const siz
 /// The complexity is amortized-constant.
 udpard_fragment_t* udpard_fragment_next(const udpard_fragment_t* frag);
 
+/// A convenience function built on top of udpard_fragment_seek() and udpard_fragment_next().
 /// Copies `size` bytes of payload stored in a fragment tree starting from `offset` into `destination`.
 /// The cursor pointer is an iterator updated to the last fragment touched, enabling very efficient sequential
 /// access without repeated searches; it is never set to NULL.
@@ -242,220 +274,234 @@ size_t udpard_fragment_gather(const udpard_fragment_t** cursor,
 // =================================================    TX PIPELINE    =================================================
 // =====================================================================================================================
 
-/// The transmission (TX) pipeline is used to publish messages and send P2P transfers to the network through a
-/// particular redundant interface. A Cyphal node with R redundant network interfaces needs to instantiate
-/// R transmission pipelines, one per interface, unless the application is not interested in sending data at all.
-/// The transmission pipeline contains a prioritized queue of UDP datagrams scheduled for transmission via its
-/// network interface.
+/// Graphically, the transmission pipeline is arranged as shown below.
+/// There is a single pipeline instance that serves all topics, P2P, and all network interfaces.
 ///
-/// Each transmission pipeline instance requires one socket (or a similar abstraction provided by the underlying
-/// UDP/IP stack) that is not connected to any specific remote endpoint (i.e., usable with sendto(),
-/// speaking in terms of Berkeley sockets). In the case of redundant interfaces, each socket may need to be configured
-/// to emit data through its specific interface (using bind() in Berkeley sockets terminology).
+///                                   +---> REDUNDANT INTERFACE A
+///                                   |
+///     TRANSFERS ---> udpard_tx_t ---+---> REDUNDANT INTERFACE B
+///                                   |
+///                                   +---> ...
 ///
-/// Graphically, the transmission pipeline is arranged as follows:
-///
-///                +---> udpard_tx_t ---> UDP SOCKET ---> REDUNDANT INTERFACE A
-///                |
-///     PAYLOAD ---+---> udpard_tx_t ---> UDP SOCKET ---> REDUNDANT INTERFACE B
-///                |
-///                +---> ...
-///
-/// Applications can mark outgoing datagrams with DSCP values derived from the Cyphal transfer priority when sending
-/// items pulled from a TX queue. The library itself does not touch the DSCP field but exposes the transfer priority
-/// on every enqueued item so the application can apply its own mapping as needed.
-/// The maximum transmission unit (MTU) can also be configured separately per TX pipeline instance.
-/// Applications that are interested in maximizing their wire compatibility should not change the default MTU setting.
+typedef struct udpard_tx_t udpard_tx_t;
 
-/// A TX queue uses these memory resources for allocating the enqueued items (UDP datagrams).
-/// There are exactly two allocations per enqueued item:
-/// - the first for bookkeeping purposes (udpard_tx_item_t)
-/// - second for payload storage (the frame data)
-/// In a simple application, there would be just one memory resource shared by all parts of the library.
-/// If the application knows its MTU, it can use block allocation to avoid extrinsic fragmentation.
 typedef struct udpard_tx_mem_resources_t
 {
-    /// The queue bookkeeping structures (udpard_tx_item_t) are allocated per datagram.
-    /// Each instance is a very small fixed-size object, so a trivial zero-fragmentation block allocator is enough.
-    udpard_mem_resource_t fragment;
+    /// The queue bookkeeping structures are allocated per outgoing transfer, i.e., one per udpard_tx_push().
+    /// Each allocation is sizeof(tx_transfer_t).
+    udpard_mem_resource_t transfer;
 
-    /// The UDP datagram payload buffers are allocated per frame; each buffer is at most MTU-sized,
-    /// so a trivial zero-fragmentation MTU-sized block allocator is enough if MTU is known in advance.
-    udpard_mem_resource_t payload;
+    /// The UDP datagram payload buffers are allocated per frame, each at most HEADER_SIZE+MTU+sizeof(tx_frame_t).
+    /// These may be distinct per interface to allow each interface to draw buffers from a specific memory region
+    /// or a specific DMA-compatible memory pool.
+    ///
+    /// IMPORTANT: DISTINCT MEMORY RESOURCES INCREASE TX MEMORY USAGE AND DATA COPYING.
+    /// If possible, it is recommended to use the same memory resource for all interfaces, because the library will be
+    /// able to avoid frame duplication and instead reuse each frame across all interfaces when the MTUs are identical.
+    udpard_mem_resource_t payload[UDPARD_IFACE_COUNT_MAX];
 } udpard_tx_mem_resources_t;
 
-/// The transmission pipeline is a prioritized transmission queue that keeps UDP datagrams (aka transport frames)
-/// destined for transmission via one network interface.
-/// Applications with redundant network interfaces are expected to have one instance of this type per interface.
-/// Applications that are not interested in transmission may have zero such instances.
-///
-/// All operations are logarithmic in complexity on the number of enqueued items.
-/// Once initialized, instances cannot be copied.
-///
-/// FUTURE: Eventually we might consider adding another way of arranging the transmission pipeline where the UDP
-/// datagrams ready for transmission are not enqueued into the local prioritized queue but instead are sent directly
-/// to the network interface driver using a dedicated callback. The callback would accept not just a single
-/// chunk of data but a list of chunks to avoid copying the source transfer payload: the header and the payload.
-/// The driver would then use some form of vectorized IO or MSG_MORE/UDP_CORK to transmit the data;
-/// the advantage of this approach is that up to two data copy operations are eliminated from the stack and the
-/// memory allocator is not used at all. The disadvantage is that if the driver callback is blocking,
-/// the application thread will be blocked as well; plus the driver will be responsible for the correct
-/// prioritization of the outgoing datagrams according to the DSCP value.
-typedef struct udpard_tx_t
+/// Outcome notification for a reliable transfer previously scheduled for transmission.
+typedef struct udpard_tx_feedback_t
 {
+    uint64_t topic_hash;
+    uint64_t transfer_id;
+    void*    user_transfer_reference; ///< This is the same pointer that was passed to udpard_tx_push().
+
+    bool success; ///< False if no ack was received from the remote end before deadline expiration or forced eviction.
+} udpard_tx_feedback_t;
+
+/// Request to transmit a UDP datagram over the specified interface to the given destination endpoint.
+/// Which interface indexes are available is determined by the user when pushing a transfer: the endpoints for
+/// unavailable interfaces should be zeroed, then no ejection will be requested for those interfaces.
+/// If Berkeley sockets or similar API is used, the application should use a dedicated socket per redundant interface.
+typedef struct udpard_tx_ejection_t
+{
+    /// The current time carried over from the API function that initiated the ejection.
+    udpard_us_t now;
+
+    /// Specifies when the frame should be considered expired and dropped if not yet transmitted by then;
+    /// it is optional to use depending on the implementation of the NIC driver (most traditional drivers ignore it).
+    udpard_us_t deadline;
+
+    uint_fast8_t      iface_index; ///< The interface index on which the datagram is to be transmitted.
+    uint_fast8_t      dscp;        ///< Set the DSCP field of the outgoing UDP packet to this.
+    udpard_udpip_ep_t destination; ///< Unicast (for P2P transfers) or multicast UDP/IP endpoint.
+
+    /// If the datagram pointer is retained by the application, udpard_tx_refcount_inc() must be invoked on it
+    /// to prevent it from being garbage collected. When no longer needed (e.g, upon transmission),
+    /// udpard_tx_refcount_dec() must be invoked to release the reference.
+    udpard_bytes_t datagram;
+
+    /// This is the same pointer that was passed to udpard_tx_push().
+    void* user_transfer_reference;
+} udpard_tx_ejection_t;
+
+/// Virtual function table for the TX pipeline, to be provided by the application.
+typedef struct udpard_tx_vtable_t
+{
+    /// Invoked from udpard_tx_poll() et al to push outgoing UDP datagrams into the socket/NIC driver.
+    bool (*eject)(udpard_tx_t*, udpard_tx_ejection_t);
+} udpard_tx_vtable_t;
+
+/// The application must create a single instance of this struct to manage the TX pipeline.
+/// A single instance manages all redundant interfaces.
+struct udpard_tx_t
+{
+    const udpard_tx_vtable_t* vtable;
+
     /// The globally unique identifier of the local node. Must not change after initialization.
     uint64_t local_uid;
 
-    /// The maximum number of UDP datagrams this instance is allowed to enqueue.
-    /// The purpose of this limitation is to ensure that a blocked queue does not exhaust the memory.
-    size_t queue_capacity;
+    /// A random-initialized transfer-ID counter for all outgoing P2P transfers. Must not be changed by the application.
+    uint64_t p2p_transfer_id;
 
-    /// The maximum number of Cyphal transfer payload bytes per UDP datagram.
-    /// The Cyphal/UDP header is added to this value to obtain the total UDP datagram payload size. See UDPARD_MTU_*.
+    /// The maximum number of Cyphal transfer payload bytes per UDP datagram. See UDPARD_MTU_*.
+    /// The Cyphal/UDP header is added to this value to obtain the total UDP datagram payload size.
     /// The value can be changed arbitrarily between enqueue operations as long as it is at least UDPARD_MTU_MIN.
-    size_t mtu;
+    ///
+    /// IMPORTANT: DISTINCT MTU VALUES INCREASE TX MEMORY USAGE AND DATA COPYING.
+    /// If possible, it is recommended to use the same MTU for all interfaces, because the library will be
+    /// able to avoid frame duplication and instead reuse each frame across all interfaces.
+    size_t mtu[UDPARD_IFACE_COUNT_MAX];
+
+    /// This duration is used to derive the acknowledgment timeout for reliable transfers in tx_ack_timeout().
+    /// It must be a positive number of microseconds. A sensible default is provided at initialization.
+    udpard_us_t ack_baseline_timeout;
 
     /// Optional user-managed mapping from the Cyphal priority level in [0,7] (highest priority at index 0)
-    /// to the IP DSCP field value for use by the application when transmitting. The library does not populate
-    /// or otherwise use this array; udpard_tx_new() leaves it zero-initialized.
-    uint_least8_t dscp_value_per_priority[UDPARD_PRIORITY_MAX + 1U];
+    /// to the IP DSCP field value for use by the application when transmitting. By default, all entries are zero.
+    uint_least8_t dscp_value_per_priority[UDPARD_PRIORITY_COUNT];
+
+    /// The maximum number of UDP datagrams irrespective of the transfer count, for all ifaces pooled.
+    /// The purpose of this limitation is to ensure that a blocked interface queue does not exhaust the memory.
+    /// When the limit is reached, the library will apply simple heuristics to choose which transfers to sacrifice.
+    size_t enqueued_frames_limit;
+
+    /// The number of frames that are currently registered in the queue, initially zero.
+    /// This includes frames that are handed over to the NIC driver for transmission that are not yet released
+    /// via udpard_tx_refcount_dec().
+    /// READ-ONLY!
+    size_t enqueued_frames_count;
 
     udpard_tx_mem_resources_t memory;
 
-    /// The number of frames that are currently contained in the queue, initially zero. READ-ONLY!
-    size_t queue_size;
-
     /// Error counters incremented automatically when the corresponding error condition occurs.
     /// These counters are never decremented by the library but they can be reset by the application if needed.
-    uint64_t errors_oom;        ///< A transfer could not be enqueued due to OOM.
+    uint64_t errors_oom;        ///< A transfer could not be enqueued due to OOM, while there was queue space available.
     uint64_t errors_capacity;   ///< A transfer could not be enqueued due to queue capacity limit.
-    uint64_t errors_expiration; ///< A frame had to be dropped due to premature deadline expiration.
+    uint64_t errors_sacrifice;  ///< A transfer had to be sacrificed to make room for a new transfer.
+    uint64_t errors_expiration; ///< A transfer had to be dequeued due to deadline expiration.
 
-    /// Internal use only, do not modify!
-    udpard_tree_t* index_prio;     ///< Most urgent on the left, then according to the insertion order.
-    udpard_tree_t* index_deadline; ///< Soonest on the left, then according to the insertion order.
-} udpard_tx_t;
+    /// Internal use only, do not modify! See tx_transfer_t for details.
+    udpard_list_t  queue[UDPARD_IFACE_COUNT_MAX][UDPARD_PRIORITY_COUNT]; ///< Next to transmit at the tail.
+    udpard_list_t  agewise;                                              ///< Oldest at the tail.
+    udpard_tree_t* index_staged;
+    udpard_tree_t* index_deadline;
+    udpard_tree_t* index_transfer;
+    udpard_tree_t* index_transfer_remote;
 
-/// One UDP datagram stored in the udpard_tx_t transmission queue along with its metadata.
-/// The datagram should be sent to the indicated UDP/IP endpoint with the DSCP value chosen by the application,
-/// e.g., via its own mapping from udpard_prio_t.
-/// The datagram should be discarded (transmission aborted) if the deadline has expired.
-/// All fields are READ-ONLY except the mutable `datagram_payload` field, which could be nullified to indicate
-/// a transfer of the payload memory ownership to somewhere else.
-typedef struct udpard_tx_item_t
-{
-    udpard_tree_t index_prio;
-    udpard_tree_t index_deadline;
+    /// Opaque pointer for the application use only. Not accessed by the library.
+    void* user;
+};
 
-    /// Points to the next frame in this transfer or NULL.
-    /// Normally, the application would not use it because transfer frame ordering is orthogonal to global TX ordering.
-    /// It can be useful though for pulling pending frames from the TX queue if at least one frame of their transfer
-    /// failed to transmit; the idea is that if at least one frame is missing, the transfer will not be received by
-    /// remote nodes anyway, so all its remaining frames can be dropped from the queue at once using udpard_tx_pop().
-    struct udpard_tx_item_t* next_in_transfer;
-
-    /// This is the same value that is passed to udpard_tx_push().
-    /// Frames whose transmission deadline is in the past are dropped (transmission aborted).
-    udpard_us_t deadline;
-
-    /// The original transfer priority level. The application should obtain the corresponding DSCP value
-    /// by mapping it via the dscp_value_per_priority array.
-    udpard_prio_t priority;
-
-    /// This UDP/IP datagram compiled by libudpard should be sent to this remote endpoint.
-    /// It is a multicast address unless this is a P2P transfer.
-    udpard_udpip_ep_t destination;
-
-    /// The completed UDP/IP datagram payload.
-    udpard_bytes_mut_t datagram_payload;
-
-    /// This opaque pointer is assigned the value that is passed to udpard_tx_push().
-    /// The library itself does not make use of it but the application can use it to provide continuity between
-    /// its high-level transfer objects and datagrams that originate from it. Assign NULL if not needed.
-    void* user_transfer_reference;
-} udpard_tx_item_t;
-
-/// The parameters are initialized deterministically (MTU defaults to UDPARD_MTU_DEFAULT and counters are reset)
+/// The parameters are default-initialized (MTU defaults to UDPARD_MTU_DEFAULT and counters are reset)
 /// and can be changed later by modifying the struct fields directly. No memory allocation is going to take place
-/// until the pipeline is actually written to.
+/// until the first transfer is successfully pushed via udpard_tx_push().
 ///
-/// The instance does not hold any resources itself except for the allocated memory.
-/// To safely discard it, simply pop all enqueued frames from it using udpard_tx_pop() and free their memory
-/// using udpard_tx_free(), then discard the instance itself.
+/// The local UID should be a globally unique EUI-64 identifier assigned to the local node. It may be a random
+/// EUI-64, which is especially useful for short-lived software nodes.
+///
+/// The p2p_transfer_id_initial value must be chosen randomly such that it is likely to be distinct per application
+/// startup. See the transfer-ID counter requirements in udpard_tx_push() for details.
+///
+/// The enqueued_frames_limit should be large enough to accommodate the expected burstiness of the application traffic.
+/// If the limit is reached, the library will apply heuristics to sacrifice some older transfers to make room
+/// for the new one. This behavior allows the library to make progress even when some interfaces are stalled.
 ///
 /// True on success, false if any of the arguments are invalid.
 bool udpard_tx_new(udpard_tx_t* const              self,
                    const uint64_t                  local_uid,
-                   const size_t                    queue_capacity,
-                   const udpard_tx_mem_resources_t memory);
+                   const uint64_t                  p2p_transfer_id_initial,
+                   const size_t                    enqueued_frames_limit,
+                   const udpard_tx_mem_resources_t memory,
+                   const udpard_tx_vtable_t* const vtable);
 
-/// This function serializes a transfer into a sequence of UDP datagrams and inserts them into the prioritized
-/// transmission queue at the appropriate position. Afterwards, the application is supposed to take the enqueued frames
-/// from the transmission queue using the udpard_tx_peek/pop() and transmit them one by one. The enqueued items
-/// are prioritized according to their Cyphal transfer priority to avoid the inner priority inversion. The transfer
-/// payload will be copied into the transmission queue so that the lifetime of the datagrams is not related to the
-/// lifetime of the input payload buffer.
+/// Submit a transfer for transmission. The payload data will be copied into the transmission queue, so it can be
+/// invalidated immediately after this function returns. When redundant interfaces are used, the library will attempt to
+/// minimize the number of copies by reusing frames across interfaces with identical MTU values and memory resources.
 ///
-/// The topic hash is not defined for P2P transfers since there are no topics involved; in P2P, this parameter
-/// is used to pass the destination node's UID instead. Setting it incorrectly will cause the destination node
-/// to reject the transfer as misaddressed.
-///
-/// The transfer_id parameter is used to populate the transfer_id field of the generated Cyphal/UDP frames.
-/// The caller shall increment the transfer-ID counter after each successful invocation of this function
-/// per redundant interface; the same transfer published over redundant interfaces shall have the same transfer-ID.
+/// The caller shall increment the transfer-ID counter after each successful invocation of this function per topic.
 /// There shall be a separate transfer-ID counter per topic. The initial value shall be chosen randomly
 /// such that it is likely to be distinct per application startup (embedded systems can use noinit memory sections,
 /// hash uninitialized SRAM, use timers or ADC noise, etc).
 ///
-/// The user_transfer_reference is an opaque pointer that will be assigned to the eponymous field of each enqueued item.
+/// The user_transfer_reference is an opaque pointer that will be stored for each enqueued item of this transfer.
 /// The library itself does not use or check this value in any way, so it can be NULL if not needed.
 ///
-/// The deadline value will be used to populate the eponymous field of the generated datagrams (all will share the
-/// same deadline value). This is used for aborting frames that could not be transmitted before the specified deadline.
-///
-/// The function returns the number of UDP datagrams enqueued, which is always a positive number, in case of success.
+/// The function returns the number of payload fragments enqueued, which is always a positive number, on success.
 /// In case of failure, the function returns zero. Runtime failures increment the corresponding error counters,
-/// while invocations with invalid arguments just return zero without modifying the queue state. In all cases,
-/// either all frames of the transfer are enqueued successfully or none are.
+/// while invocations with invalid arguments just return zero without modifying the queue state.
 ///
-/// The memory allocation requirement is two allocations per datagram:
-/// a single-frame transfer takes two allocations; a multi-frame transfer of N frames takes N*2 allocations.
-/// In each pair of allocations:
-/// - the first allocation is for `udpard_tx_item_t`; the size is `sizeof(udpard_tx_item_t)`;
-///   the TX queue `memory.fragment` memory resource is used for this allocation (and later for deallocation);
-/// - the second allocation is for the payload (the datagram data) - the size is normally MTU but could be less for
-///   the last frame of the transfer; the TX queue `memory.payload` resource is used for this allocation.
+/// The enqueued transfer will be emitted over all interfaces for which a valid (non-zero) remote endpoint is provided.
 ///
+/// An attempt to push a transfer with a (topic hash, transfer-ID) pair that is already enqueued will fail,
+/// as that violates the transfer-ID uniqueness requirement stated above.
+///
+/// The feedback callback is set to NULL for best-effort (non-acknowledged) transfers. Otherwise, the transfer is
+/// treated as reliable, requesting a delivery acknowledgement from at least one remote node (subscriber),
+/// with repeated retransmissions until an acknowledgement is received or the deadline has expired.
+/// The feedback callback is ALWAYS invoked EXACTLY ONCE per reliable transfer pushed via udpard_tx_push() successfully,
+/// indicating either success (acknowledgment received before deadline) or failure (deadline expired without ack).
+/// The retransmission delay is increased exponentially with each retransmission attempt; please refer to
+/// udpard_tx_t::ack_baseline_timeout for details.
+///
+/// On success, the function allocates a single transfer state instance and a number of payload fragments.
 /// The time complexity is O(p + log e), where p is the transfer payload size, and e is the number of
-/// transfers (not frames) already enqueued in the transmission queue.
-uint32_t udpard_tx_push(udpard_tx_t* const      self,
-                        const udpard_us_t       now,
-                        const udpard_us_t       deadline,
-                        const udpard_prio_t     priority,
-                        const uint64_t          topic_hash, // For P2P transfers, this is the destination's UID.
-                        const udpard_udpip_ep_t remote_ep,
-                        const uint64_t          transfer_id,
-                        const udpard_bytes_t    payload,
-                        const bool              ack_required,
-                        void* const             user_transfer_reference);
+/// transfers already enqueued in the transmission queue.
+uint32_t udpard_tx_push(udpard_tx_t* const             self,
+                        const udpard_us_t              now,
+                        const udpard_us_t              deadline,
+                        const udpard_prio_t            priority,
+                        const uint64_t                 topic_hash,
+                        const udpard_udpip_ep_t        remote_ep[UDPARD_IFACE_COUNT_MAX],
+                        const uint64_t                 transfer_id,
+                        const udpard_bytes_scattered_t payload,
+                        void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t), // NULL if best-effort.
+                        void* const user_transfer_reference);
 
-/// Purges all timed out items from the transmission queue automatically; returns the next item to be transmitted,
-/// if there is any, otherwise NULL. The returned item is not removed from the queue; use udpard_tx_pop() to do that.
-/// The returned item (if any) is guaranteed to be non-expired (deadline>=now).
-udpard_tx_item_t* udpard_tx_peek(udpard_tx_t* const self, const udpard_us_t now);
+/// This is a specialization of the general push function for P2P transfers.
+/// It is used to send P2P responses to messages received from topics; the request_* values shall be taken from
+/// the message transfer that is being responded to.
+/// P2P transfers are a bit more complex because they carry some additional metadata that is automatically
+/// composed/parsed by the library transparently for the application.
+/// The size of the serialized payload will include UDPARD_P2P_HEADER_BYTES additional bytes for the P2P header.
+uint32_t udpard_tx_push_p2p(udpard_tx_t* const             self,
+                            const udpard_us_t              now,
+                            const udpard_us_t              deadline,
+                            const udpard_prio_t            priority,
+                            const uint64_t                 request_topic_hash,
+                            const uint64_t                 request_transfer_id,
+                            const udpard_remote_t          remote, // Endpoints may be invalid for some ifaces.
+                            const udpard_bytes_scattered_t payload,
+                            void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t), // NULL if best-effort.
+                            void* const user_transfer_reference);
 
-/// Transfers the ownership of the specified item, previously returned from udpard_tx_peek(), to the application.
-/// The item does not have to be the top one.
-/// The item is dequeued but not invalidated; the application must deallocate its memory later; see udpard_tx_free().
-/// The memory SHALL NOT be deallocated UNTIL this function is invoked.
-/// If any of the arguments are NULL, the function has no effect.
-void udpard_tx_pop(udpard_tx_t* const self, udpard_tx_item_t* const item);
+/// This should be invoked whenever the socket/NIC of this queue becomes ready to accept new datagrams for transmission.
+/// It is fine to also invoke it periodically unconditionally to drive the transmission process.
+/// Internally, the function will query the scheduler for the next frame to be transmitted and will attempt
+/// to submit it via the eject() callback provided in the vtable.
+/// The iface mask indicates which interfaces are currently ready to accept new datagrams.
+/// The function may deallocate memory. The time complexity is logarithmic in the number of enqueued transfers.
+void udpard_tx_poll(udpard_tx_t* const self, const udpard_us_t now, const uint32_t iface_mask);
 
-/// This is a simple helper that frees the memory allocated for the item and its payload.
-/// If the item argument is NULL, the function has no effect. The time complexity is constant.
-/// If the item frame payload is NULL then it is assumed that the payload buffer was already freed,
-/// or moved to a different owner (f.e. to the media layer).
-void udpard_tx_free(const udpard_tx_mem_resources_t memory, udpard_tx_item_t* const item);
+/// When a datagram is ejected and the application opts to keep it, these functions must be used to manage the
+/// datagram buffer lifetime. The datagram will be freed once the reference count reaches zero.
+void udpard_tx_refcount_inc(const udpard_bytes_t tx_payload_view);
+void udpard_tx_refcount_dec(const udpard_bytes_t tx_payload_view);
+
+/// Drops all enqueued items; afterward, the instance is safe to discard. Callbacks will not be invoked.
+void udpard_tx_free(udpard_tx_t* const self);
 
 // =====================================================================================================================
 // =================================================    RX PIPELINE    =================================================
@@ -464,7 +510,6 @@ void udpard_tx_free(const udpard_tx_mem_resources_t memory, udpard_tx_item_t* co
 /// The reception (RX) pipeline is used to subscribe to subjects and to receive P2P transfers.
 /// The reception pipeline is highly robust and is able to accept datagrams with arbitrary MTU distinct per interface,
 /// delivered out-of-order (OOO) with duplication and arbitrary interleaving between transfers.
-/// Robust OOO reassembly is particularly interesting when simple repetition coding FEC is used.
 /// All redundant interfaces are pooled together into a single fragment stream per RX port,
 /// thus providing seamless failover and great resilience against packet loss on any of the interfaces.
 /// The RX pipeline operates at the speed/latency of the best-performing interface at any given time.
@@ -549,6 +594,7 @@ void udpard_tx_free(const udpard_tx_mem_resources_t memory, udpard_tx_item_t* co
 #define UDPARD_RX_REORDERING_WINDOW_UNORDERED ((udpard_us_t)(-1))
 #define UDPARD_RX_REORDERING_WINDOW_STATELESS ((udpard_us_t)(-2))
 
+/// The application will have a single RX instance to manage all subscriptions and P2P ports.
 typedef struct udpard_rx_t
 {
     udpard_list_t  list_session_by_animation;   ///< Oldest at the tail.
@@ -557,6 +603,15 @@ typedef struct udpard_rx_t
     uint64_t errors_oom;                ///< A frame could not be processed (transfer possibly dropped) due to OOM.
     uint64_t errors_frame_malformed;    ///< A received frame was malformed and thus dropped.
     uint64_t errors_transfer_malformed; ///< A transfer could not be reassembled correctly.
+
+    /// Whenever an ack fails to transmit, the counter is incremented.
+    /// The specific error can be determined by checking the specific counters in the corresponding tx instance.
+    uint64_t errors_ack_tx;
+
+    /// The transmission pipeline is needed to manage ack transmission and removal of acknowledged transfers.
+    /// If the application wants to only listen, the pointer may be NULL (no acks will be sent).
+    /// When initializing the library, the TX instance needs to be created first.
+    udpard_tx_t* tx;
 
     void* user; ///< Opaque pointer for the application use only. Not accessed by the library.
 } udpard_rx_t;
@@ -575,9 +630,10 @@ typedef struct udpard_rx_mem_resources_t
     udpard_mem_resource_t fragment;
 } udpard_rx_mem_resources_t;
 
-typedef struct udpard_rx_port_t        udpard_rx_port_t;
-typedef struct udpard_rx_transfer_t    udpard_rx_transfer_t;
-typedef struct udpard_rx_ack_mandate_t udpard_rx_ack_mandate_t;
+typedef struct udpard_rx_port_t         udpard_rx_port_t;
+typedef struct udpard_rx_port_p2p_t     udpard_rx_port_p2p_t;
+typedef struct udpard_rx_transfer_t     udpard_rx_transfer_t;
+typedef struct udpard_rx_transfer_p2p_t udpard_rx_transfer_p2p_t;
 
 /// Provided by the application per port instance to specify the callbacks to be invoked on certain events.
 /// This design allows distinct callbacks per port, which is especially useful for the P2P port.
@@ -587,8 +643,6 @@ typedef struct udpard_rx_port_vtable_t
     void (*on_message)(udpard_rx_t*, udpard_rx_port_t*, udpard_rx_transfer_t);
     /// A topic hash collision is detected on a port.
     void (*on_collision)(udpard_rx_t*, udpard_rx_port_t*, udpard_remote_t);
-    /// The application is required to send an acknowledgment back to the sender.
-    void (*on_ack_mandate)(udpard_rx_t*, udpard_rx_port_t*, udpard_rx_ack_mandate_t);
 } udpard_rx_port_vtable_t;
 
 /// This type represents an open input port, such as a subscription to a topic.
@@ -600,6 +654,7 @@ struct udpard_rx_port_t
 
     /// Transfer payloads exceeding this extent may be truncated.
     /// The total size of the received payload may still exceed this extent setting by some small margin.
+    /// For P2P ports, UDPARD_P2P_HEADER_BYTES must be included in this value (the library takes care of this).
     size_t extent;
 
     /// See UDPARD_RX_REORDERING_WINDOW_... above.
@@ -681,20 +736,35 @@ struct udpard_rx_transfer_t
     udpard_fragment_t* payload;
 };
 
-/// Emitted when the stack detects the need to send a reception acknowledgment back to the remote node.
-struct udpard_rx_ack_mandate_t
+/// A P2P transfer carries a response to a message published earlier.
+/// The transfer-ID in the base structure identifies the original message being responded to.
+/// The topic_hash field identifies the topic of the original message.
+struct udpard_rx_transfer_p2p_t
 {
-    udpard_prio_t   priority;
-    uint64_t        transfer_id;
-    udpard_remote_t remote;
-    /// View of the payload carried by the first frame of the transfer that is being confirmed.
-    /// Valid until return from the callback.
-    udpard_bytes_t payload_head;
+    udpard_rx_transfer_t base;
+    uint64_t             topic_hash;
+};
+
+/// A specialization of udpard_rx_port_vtable_t for P2P ports.
+typedef struct udpard_rx_port_p2p_vtable_t
+{
+    /// A new message is received on a port. The handler takes ownership of the payload; it must free it after use.
+    void (*on_message)(udpard_rx_t*, udpard_rx_port_p2p_t*, udpard_rx_transfer_p2p_t);
+} udpard_rx_port_p2p_vtable_t;
+
+/// A specialization of udpard_rx_port_t for the local node's P2P port.
+/// Each node must have exactly one P2P port, which is used for P2P transfers and acknowledgments.
+struct udpard_rx_port_p2p_t
+{
+    udpard_rx_port_t                   base;
+    const udpard_rx_port_p2p_vtable_t* vtable;
 };
 
 /// The RX instance holds no resources and can be destroyed at any time by simply freeing all its ports first
 /// using udpard_rx_port_free(), then discarding the instance itself. The self pointer must not be NULL.
-void udpard_rx_new(udpard_rx_t* const self);
+/// The TX instance must be initialized beforehand, unless the application wants to only listen,
+/// in which case it may be NULL.
+void udpard_rx_new(udpard_rx_t* const self, udpard_tx_t* const tx);
 
 /// Must be invoked at least every few milliseconds (more often is fine) to purge timed-out sessions and eject
 /// received transfers when the reordering window expires. If this is invoked simultaneously with rx subscription
@@ -702,14 +772,17 @@ void udpard_rx_new(udpard_rx_t* const self);
 /// The time complexity is logarithmic in the number of living sessions.
 void udpard_rx_poll(udpard_rx_t* const self, const udpard_us_t now);
 
-/// To subscribe to a subject or to listen for P2P transfers, the application should do this:
+/// To subscribe to a subject, the application should do this:
 ///     1. Create a new udpard_rx_port_t instance using udpard_rx_port_new().
 ///     2. Per redundant network interface:
 ///        - Create a new RX socket bound to the IP multicast group address and UDP port number returned by
 ///          udpard_make_subject_endpoint() for the desired subject-ID.
-///          For P2P transfer ports use ordinary sockets.
+///          For P2P transfer ports use ordinary unicast sockets.
 ///     3. Read data from the sockets continuously and forward each datagram to udpard_rx_port_push(),
 ///        along with the index of the redundant interface the datagram was received on.
+///
+/// For P2P ports, the procedure is similar except that the appropriate function is udpard_rx_port_new_p2p().
+/// There must be exactly one P2P port per node.
 ///
 /// The extent defines the maximum possible size of received objects, considering also possible future data type
 /// versions with new fields. It is safe to pick larger values. Note well that the extent is not the same thing as
@@ -718,7 +791,6 @@ void udpard_rx_poll(udpard_rx_t* const self, const udpard_us_t now);
 ///
 /// The topic hash is needed to detect and ignore transfers that use different topics on the same subject-ID.
 /// The collision callback is invoked if a topic hash collision is detected.
-/// For P2P ports, the topic hash is populated with the local node's UID instead.
 ///
 /// If not sure which reassembly mode to choose, consider UDPARD_RX_REORDERING_WINDOW_UNORDERED as the default choice.
 /// For ordering-sensitive use cases, such as state estimators and control loops, use ORDERED with a short window.
@@ -734,8 +806,18 @@ bool udpard_rx_port_new(udpard_rx_port_t* const              self,
                         const udpard_rx_mem_resources_t      memory,
                         const udpard_rx_port_vtable_t* const vtable);
 
+/// Same as udpard_rx_port_new() but explicitly indicates that this is the local node's P2P port.
+/// UDPARD_P2P_HEADER_BYTES will be added to the specified extent value.
+bool udpard_rx_port_new_p2p(udpard_rx_port_p2p_t* const              self,
+                            const uint64_t                           local_uid,
+                            const size_t                             extent,
+                            const udpard_rx_mem_resources_t          memory,
+                            const udpard_rx_port_p2p_vtable_t* const vtable);
+
 /// Returns all memory allocated for the sessions, slots, fragments, etc of the given port.
-/// Does not free the port itself and does not alter the RX instance aside from unlinking the port from it.
+/// This is usable with udpard_rx_port_p2p_t as well via the base member.
+/// Does not free the port itself since it is allocated by the application rather than the library,
+/// and does not alter the RX instance aside from unlinking the port from it.
 /// It is safe to invoke this at any time, but the port instance shall not be used again unless re-initialized.
 /// The function has no effect if any of the arguments are NULL.
 void udpard_rx_port_free(udpard_rx_t* const rx, udpard_rx_port_t* const port);
@@ -766,7 +848,7 @@ bool udpard_rx_port_push(udpard_rx_t* const         rx,
                          const udpard_udpip_ep_t    source_ep,
                          const udpard_bytes_mut_t   datagram_payload,
                          const udpard_mem_deleter_t payload_deleter,
-                         const uint_fast8_t         redundant_iface_index);
+                         const uint_fast8_t         iface_index);
 
 #ifdef __cplusplus
 }
