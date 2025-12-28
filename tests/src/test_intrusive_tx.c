@@ -130,9 +130,7 @@ static void test_tx_validation_and_free(void)
                                &tr->index_transfer_remote,
                                cavl2_trivial_factory);
     enlist_head(&tx.agewise, &tr->agewise);
-    const udpard_tx_feedback_t fb = tx_make_feedback(tr, true);
-    TEST_ASSERT_TRUE(fb.success);
-    tx_transfer_free(&tx, tr);
+    tx_transfer_retire(&tx, tr, true);
     TEST_ASSERT_NULL(tx.index_staged);
     TEST_ASSERT_NULL(tx.index_transfer_remote);
     instrumented_allocator_reset(&alloc_transfer);

@@ -604,10 +604,18 @@ static void tx_transfer_free_payload(tx_transfer_t* const tr)
     }
 }
 
-static void tx_transfer_free(udpard_tx_t* const tx, tx_transfer_t* const tr)
+static void tx_transfer_retire(udpard_tx_t* const tx, tx_transfer_t* const tr, const bool success)
 {
-    UDPARD_ASSERT(tr != NULL);
-    tx_transfer_free_payload(tr);
+    // Construct the feedback object first before the transfer is destroyed.
+    const udpard_tx_feedback_t fb = { .topic_hash              = tr->topic_hash,
+                                      .transfer_id             = tr->transfer_id,
+                                      .user_transfer_reference = tr->user_transfer_reference,
+                                      .success                 = success };
+    UDPARD_ASSERT(tr->reliable == (tr->feedback != NULL));
+    // save the feedback pointer
+    void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t) = tr->feedback;
+
+    // Remove from all indexes and lists.
     for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
         delist(&tx->queue[i][tr->priority], &tr->queue[i]);
     }
@@ -620,7 +628,15 @@ static void tx_transfer_free(udpard_tx_t* const tx, tx_transfer_t* const tr)
     if (cavl2_is_inserted(tx->index_transfer_remote, &tr->index_transfer_remote)) {
         cavl2_remove(&tx->index_transfer_remote, &tr->index_transfer_remote);
     }
+
+    // Free the memory. The payload memory may already be empty depending on where we were invoked from.
+    tx_transfer_free_payload(tr);
     mem_free(tx->memory.transfer, sizeof(tx_transfer_t), tr);
+
+    // Finally, when the internal state is updated and consistent, invoke the feedback callback if any.
+    if (feedback != NULL) {
+        feedback(tx, fb);
+    }
 }
 
 /// When the queue is exhausted, finds a transfer to sacrifice using simple heuristics and returns it.
@@ -637,11 +653,11 @@ static bool tx_ensure_queue_space(udpard_tx_t* const tx, const size_t total_fram
         return false; // not gonna happen
     }
     while (total_frames_needed > (tx->enqueued_frames_limit - tx->enqueued_frames_count)) {
-        tx_transfer_t* const victim = tx_sacrifice(tx);
-        if (victim == NULL) {
+        tx_transfer_t* const tr = tx_sacrifice(tx);
+        if (tr == NULL) {
             break; // We may have no transfers anymore but the NIC TX driver could still be holding some frames.
         }
-        tx_transfer_free(tx, victim);
+        tx_transfer_retire(tx, tr, false);
         tx->errors_sacrifice++;
     }
     return total_frames_needed <= (tx->enqueued_frames_limit - tx->enqueued_frames_count);
@@ -692,15 +708,6 @@ static bool tx_is_pending(const udpard_tx_t* const tx, const tx_transfer_t* cons
         }
     }
     return false;
-}
-
-static udpard_tx_feedback_t tx_make_feedback(const tx_transfer_t* const tr, const bool success)
-{
-    const udpard_tx_feedback_t fb = { .topic_hash              = tr->topic_hash,
-                                      .transfer_id             = tr->transfer_id,
-                                      .user_transfer_reference = tr->user_transfer_reference,
-                                      .success                 = success };
-    return fb;
 }
 
 /// Returns the head of the transfer chain; NULL on OOM.
@@ -921,12 +928,7 @@ static void tx_receive_ack(udpard_rx_t* const rx, const uint64_t topic_hash, con
     if (rx->tx != NULL) {
         tx_transfer_t* const tr = tx_transfer_find(rx->tx, topic_hash, transfer_id);
         if ((tr != NULL) && tr->reliable) {
-            if (tr->feedback != NULL) {
-                const udpard_tx_feedback_t fb = tx_make_feedback(tr, true);
-                tx_transfer_free_payload(tr); // do this early to release memory before callback
-                tr->feedback(rx->tx, fb);
-            }
-            tx_transfer_free(rx->tx, tr);
+            tx_transfer_retire(rx->tx, tr, true);
         }
     }
 }
@@ -954,8 +956,9 @@ static void tx_send_ack(udpard_rx_t* const    rx,
         if (!new_better) {
             return; // Can we get an ack? We have ack at home!
         }
-        if (prior != NULL) {             // avoid redundant acks for the same transfer -- replace with better one
-            tx_transfer_free(tx, prior); // this will free up a queue slot and some memory
+        if (prior != NULL) { // avoid redundant acks for the same transfer -- replace with better one
+            UDPARD_ASSERT(prior->feedback == NULL);
+            tx_transfer_retire(tx, prior, false); // this will free up a queue slot and some memory
         }
         // Even if the new, better ack fails to enqueue for some reason, it's no big deal -- we will send the next one.
         // The only reason it might fail is an OOM but we just freed a slot so it should be fine.
@@ -1093,12 +1096,7 @@ static void tx_purge_expired_transfers(udpard_tx_t* const self, const udpard_us_
     while (true) { // we can use next_greater instead of doing min search every time
         tx_transfer_t* const tr = CAVL2_TO_OWNER(cavl2_min(self->index_deadline), tx_transfer_t, index_deadline);
         if ((tr != NULL) && (now > tr->deadline)) {
-            if (tr->feedback != NULL) {
-                const udpard_tx_feedback_t fb = tx_make_feedback(tr, false);
-                tx_transfer_free_payload(tr); // do this early to release memory before callback
-                tr->feedback(self, fb);
-            }
-            tx_transfer_free(self, tr);
+            tx_transfer_retire(self, tr, false);
             self->errors_expiration++;
         } else {
             break;
@@ -1189,7 +1187,8 @@ static void tx_eject_pending_frames(udpard_tx_t* const self, const udpard_us_t n
             delist(&self->queue[ifindex][tr->priority], &tr->queue[ifindex]); // no longer pending for transmission
             UDPARD_ASSERT(!last_attempt || (tr->head[ifindex] == NULL));      // this iface is done with the payload
             if (last_attempt && !tr->reliable && !tx_is_pending(self, tr)) {  // remove early once all ifaces are done
-                tx_transfer_free(self, tr);
+                UDPARD_ASSERT(tr->feedback == NULL); // non-reliable transfers have no feedback callback
+                tx_transfer_retire(self, tr, true);
             }
         }
     }
@@ -1234,7 +1233,8 @@ void udpard_tx_free(udpard_tx_t* const self)
 {
     if (self != NULL) {
         while (self->index_transfer != NULL) {
-            tx_transfer_free(self, CAVL2_TO_OWNER(self->index_transfer, tx_transfer_t, index_transfer));
+            tx_transfer_t* tr = CAVL2_TO_OWNER(self->index_transfer, tx_transfer_t, index_transfer);
+            tx_transfer_retire(self, tr, false);
         }
     }
 }
