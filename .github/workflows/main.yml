@@ -38,14 +38,14 @@ jobs:
         if: always()
         run: |
           cd ${{ github.workspace }}
-          tar --use-compress-program="gzip -9" -cf ../workspace.tar.gz .
+          tar --use-compress-program="gzip -9" -cf ${RUNNER_TEMP}/workspace.tar.gz .
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           # The matrix is shown for convenience but this is fragile because the values may not be string-convertible.
           # Shall it break one day, feel free to remove the matrix from here.
           name: ${{github.job}}-#${{strategy.job-index}}-${{job.status}}-${{join(matrix.*, ',')}}
-          path: ${{github.workspace}}/../workspace.tar.gz
+          path: ${{runner.temp}}/workspace.tar.gz
           retention-days: 2
 
   optimizations:
@@ -87,14 +87,14 @@ jobs:
         if: always()
         run: |
           cd ${{ github.workspace }}
-          tar --use-compress-program="gzip -9" -cf ../workspace.tar.gz .
+          tar --use-compress-program="gzip -9" -cf ${RUNNER_TEMP}/workspace.tar.gz .
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           # The matrix is shown for convenience but this is fragile because the values may not be string-convertible.
           # Shall it break one day, feel free to remove the matrix from here.
           name: ${{github.job}}-#${{strategy.job-index}}-${{job.status}}-${{join(matrix.*, ',')}}
-          path: ${{github.workspace}}/../workspace.tar.gz
+          path: ${{runner.temp}}/workspace.tar.gz
           retention-days: 2
 
   coverage:
@@ -116,12 +116,12 @@ jobs:
         if: always()
         run: |
           cd ${{ github.workspace }}
-          tar --use-compress-program="gzip -9" -cf ../workspace.tar.gz .
+          tar --use-compress-program="gzip -9" -cf ${RUNNER_TEMP}/workspace.tar.gz .
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: ${{github.job}}-#${{strategy.job-index}}-${{job.status}}
-          path: ${{github.workspace}}/../workspace.tar.gz
+          path: ${{runner.temp}}/workspace.tar.gz
           retention-days: 30
 
   # TODO: re-enable this
