@@ -115,7 +115,6 @@ jobs:
       - name: Archive workspace
         if: always()
         run: |
-          set -euo pipefail
           ws="${GITHUB_WORKSPACE}"
           parent="$(dirname "$ws")"
           base="$(basename "$ws")"
