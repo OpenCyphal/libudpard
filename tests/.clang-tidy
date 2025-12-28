@@ -40,7 +40,7 @@ Checks: >-
   -*-no-malloc,
   -cert-msc30-c,
   -cert-msc50-cpp,
-  -modernize-macro-to-enum,
+  -*-macro-to-enum,
   -modernize-use-trailing-return-type,
   -*-macro-usage,
   -*-enum-size,

@@ -118,66 +118,76 @@ void on_ack_response(udpard_rx_t*, udpard_rx_port_p2p_t* port, const udpard_rx_t
 constexpr udpard_rx_port_p2p_vtable_t ack_callbacks{ &on_ack_response };
 
 // Reliable delivery must survive data and ack loss.
+// Each node uses exactly one TX and one RX instance as per the library design.
 void test_reliable_delivery_under_losses()
 {
     seed_prng();
 
-    // Allocators.
-    instrumented_allocator_t pub_alloc_transfer{};
-    instrumented_allocator_t pub_alloc_payload{};
-    instrumented_allocator_t sub_alloc_frag{};
-    instrumented_allocator_t sub_alloc_session{};
-    instrumented_allocator_t acktx_alloc_transfer{};
-    instrumented_allocator_t acktx_alloc_payload{};
-    instrumented_allocator_t ackrx_alloc_frag{};
-    instrumented_allocator_t ackrx_alloc_session{};
-    instrumented_allocator_new(&pub_alloc_transfer);
-    instrumented_allocator_new(&pub_alloc_payload);
-    instrumented_allocator_new(&sub_alloc_frag);
-    instrumented_allocator_new(&sub_alloc_session);
-    instrumented_allocator_new(&acktx_alloc_transfer);
-    instrumented_allocator_new(&acktx_alloc_payload);
-    instrumented_allocator_new(&ackrx_alloc_frag);
-    instrumented_allocator_new(&ackrx_alloc_session);
+    // Allocators - one TX and one RX per node.
+    // Publisher node allocators.
+    instrumented_allocator_t pub_tx_alloc_transfer{};
+    instrumented_allocator_t pub_tx_alloc_payload{};
+    instrumented_allocator_t pub_rx_alloc_frag{};
+    instrumented_allocator_t pub_rx_alloc_session{};
+    instrumented_allocator_new(&pub_tx_alloc_transfer);
+    instrumented_allocator_new(&pub_tx_alloc_payload);
+    instrumented_allocator_new(&pub_rx_alloc_frag);
+    instrumented_allocator_new(&pub_rx_alloc_session);
 
-    // Memory views.
-    udpard_tx_mem_resources_t pub_mem{};
-    pub_mem.transfer = instrumented_allocator_make_resource(&pub_alloc_transfer);
-    for (auto& res : pub_mem.payload) {
-        res = instrumented_allocator_make_resource(&pub_alloc_payload);
-    }
-    udpard_tx_mem_resources_t ack_mem{};
-    ack_mem.transfer = instrumented_allocator_make_resource(&acktx_alloc_transfer);
-    for (auto& res : ack_mem.payload) {
-        res = instrumented_allocator_make_resource(&acktx_alloc_payload);
-    }
-    const udpard_rx_mem_resources_t sub_mem{ .session  = instrumented_allocator_make_resource(&sub_alloc_session),
-                                             .fragment = instrumented_allocator_make_resource(&sub_alloc_frag) };
-    const udpard_rx_mem_resources_t ack_rx_mem{ .session  = instrumented_allocator_make_resource(&ackrx_alloc_session),
-                                                .fragment = instrumented_allocator_make_resource(&ackrx_alloc_frag) };
+    // Subscriber node allocators.
+    instrumented_allocator_t sub_tx_alloc_transfer{};
+    instrumented_allocator_t sub_tx_alloc_payload{};
+    instrumented_allocator_t sub_rx_alloc_frag{};
+    instrumented_allocator_t sub_rx_alloc_session{};
+    instrumented_allocator_new(&sub_tx_alloc_transfer);
+    instrumented_allocator_new(&sub_tx_alloc_payload);
+    instrumented_allocator_new(&sub_rx_alloc_frag);
+    instrumented_allocator_new(&sub_rx_alloc_session);
 
-    // Pipelines.
+    // Memory resources.
+    udpard_tx_mem_resources_t pub_tx_mem{};
+    pub_tx_mem.transfer = instrumented_allocator_make_resource(&pub_tx_alloc_transfer);
+    for (auto& res : pub_tx_mem.payload) {
+        res = instrumented_allocator_make_resource(&pub_tx_alloc_payload);
+    }
+    const udpard_rx_mem_resources_t pub_rx_mem{ .session  = instrumented_allocator_make_resource(&pub_rx_alloc_session),
+                                                .fragment = instrumented_allocator_make_resource(&pub_rx_alloc_frag) };
+
+    udpard_tx_mem_resources_t sub_tx_mem{};
+    sub_tx_mem.transfer = instrumented_allocator_make_resource(&sub_tx_alloc_transfer);
+    for (auto& res : sub_tx_mem.payload) {
+        res = instrumented_allocator_make_resource(&sub_tx_alloc_payload);
+    }
+    const udpard_rx_mem_resources_t sub_rx_mem{ .session  = instrumented_allocator_make_resource(&sub_rx_alloc_session),
+                                                .fragment = instrumented_allocator_make_resource(&sub_rx_alloc_frag) };
+
+    // Publisher node: single TX, single RX (linked to TX for ACK processing).
+    constexpr uint64_t         pub_uid = 0x1111222233334444ULL;
     udpard_tx_t                pub_tx{};
     std::vector<CapturedFrame> pub_frames;
-    TEST_ASSERT_TRUE(udpard_tx_new(&pub_tx, 0x1111222233334444ULL, 10U, 64, pub_mem, &tx_vtable));
+    TEST_ASSERT_TRUE(udpard_tx_new(&pub_tx, pub_uid, 10U, 64, pub_tx_mem, &tx_vtable));
     pub_tx.user                 = &pub_frames;
     pub_tx.ack_baseline_timeout = 8000;
-    udpard_tx_t                ack_tx{};
-    std::vector<CapturedFrame> ack_frames;
-    TEST_ASSERT_TRUE(udpard_tx_new(&ack_tx, 0xABCDEF0012345678ULL, 77U, 8, ack_mem, &tx_vtable));
-    ack_tx.user = &ack_frames;
+
+    udpard_rx_t pub_rx{};
+    udpard_rx_new(&pub_rx, &pub_tx);
+    udpard_rx_port_p2p_t pub_p2p_port{};
+    TEST_ASSERT_TRUE(
+      udpard_rx_port_new_p2p(&pub_p2p_port, pub_uid, UDPARD_P2P_HEADER_BYTES, pub_rx_mem, &ack_callbacks));
+
+    // Subscriber node: single TX, single RX (linked to TX for sending ACKs).
+    constexpr uint64_t         sub_uid = 0xABCDEF0012345678ULL;
+    udpard_tx_t                sub_tx{};
+    std::vector<CapturedFrame> sub_frames;
+    TEST_ASSERT_TRUE(udpard_tx_new(&sub_tx, sub_uid, 77U, 8, sub_tx_mem, &tx_vtable));
+    sub_tx.user = &sub_frames;
 
     udpard_rx_t sub_rx{};
-    udpard_rx_new(&sub_rx, &ack_tx);
+    udpard_rx_new(&sub_rx, &sub_tx);
     udpard_rx_port_t sub_port{};
     const uint64_t   topic_hash = 0x0123456789ABCDEFULL;
     TEST_ASSERT_TRUE(
-      udpard_rx_port_new(&sub_port, topic_hash, 6000, UDPARD_RX_REORDERING_WINDOW_UNORDERED, sub_mem, &callbacks));
-    udpard_rx_t          ack_rx{};
-    udpard_rx_port_p2p_t ack_port{};
-    udpard_rx_new(&ack_rx, &pub_tx);
-    TEST_ASSERT_TRUE(
-      udpard_rx_port_new_p2p(&ack_port, pub_tx.local_uid, UDPARD_P2P_HEADER_BYTES, ack_rx_mem, &ack_callbacks));
+      udpard_rx_port_new(&sub_port, topic_hash, 6000, UDPARD_RX_REORDERING_WINDOW_UNORDERED, sub_rx_mem, &callbacks));
 
     // Endpoints.
     const std::array<udpard_udpip_ep_t, UDPARD_IFACE_COUNT_MAX> publisher_sources{
@@ -185,15 +195,15 @@ void test_reliable_delivery_under_losses()
         udpard_udpip_ep_t{ .ip = 0x0A000002U, .port = 7401U },
         udpard_udpip_ep_t{ .ip = 0x0A000003U, .port = 7402U },
     };
-    const std::array<udpard_udpip_ep_t, UDPARD_IFACE_COUNT_MAX> subscriber_endpoints{
-        udpard_make_subject_endpoint(111U),
-        udpard_udpip_ep_t{ .ip = 0x0A00000BU, .port = 7501U },
-        udpard_udpip_ep_t{ .ip = 0x0A00000CU, .port = 7502U },
-    };
-    const std::array<udpard_udpip_ep_t, UDPARD_IFACE_COUNT_MAX> ack_sources{
+    const std::array<udpard_udpip_ep_t, UDPARD_IFACE_COUNT_MAX> subscriber_sources{
         udpard_udpip_ep_t{ .ip = 0x0A000010U, .port = 7600U },
         udpard_udpip_ep_t{ .ip = 0x0A000011U, .port = 7601U },
         udpard_udpip_ep_t{ .ip = 0x0A000012U, .port = 7602U },
+    };
+    const std::array<udpard_udpip_ep_t, UDPARD_IFACE_COUNT_MAX> topic_multicast{
+        udpard_make_subject_endpoint(111U),
+        udpard_udpip_ep_t{ .ip = 0x0A00000BU, .port = 7501U },
+        udpard_udpip_ep_t{ .ip = 0x0A00000CU, .port = 7502U },
     };
 
     // Payload and context.
@@ -202,13 +212,13 @@ void test_reliable_delivery_under_losses()
     RxContext ctx{};
     ctx.expected   = payload;
     ctx.sources    = publisher_sources;
-    ctx.remote_uid = pub_tx.local_uid;
+    ctx.remote_uid = pub_uid;
     sub_rx.user    = &ctx;
 
     // Reliable transfer with staged losses.
     FeedbackState                                         fb{};
     const udpard_bytes_scattered_t                        payload_view = make_scattered(payload.data(), payload.size());
-    std::array<udpard_udpip_ep_t, UDPARD_IFACE_COUNT_MAX> dest_per_iface = subscriber_endpoints;
+    std::array<udpard_udpip_ep_t, UDPARD_IFACE_COUNT_MAX> dest_per_iface = topic_multicast;
     pub_tx.mtu[0]                                                        = 600;
     pub_tx.mtu[1]                                                        = 900;
     pub_tx.mtu[2]                                                        = 500;
@@ -233,6 +243,7 @@ void test_reliable_delivery_under_losses()
     size_t       attempts    = 0;
     const size_t attempt_cap = 6;
     while ((fb.count == 0) && (attempts < attempt_cap)) {
+        // Publisher transmits topic message.
         pub_frames.clear();
         udpard_tx_poll(&pub_tx, now, UDPARD_IFACE_MASK_ALL);
         bool data_loss_done = false;
@@ -253,25 +264,26 @@ void test_reliable_delivery_under_losses()
         }
         udpard_rx_poll(&sub_rx, now);
 
-        ack_frames.clear();
-        udpard_tx_poll(&ack_tx, now, UDPARD_IFACE_MASK_ALL);
+        // Subscriber transmits ACKs (via sub_tx since sub_rx is linked to it).
+        sub_frames.clear();
+        udpard_tx_poll(&sub_tx, now, UDPARD_IFACE_MASK_ALL);
         bool ack_sent = false;
-        for (const auto& ack : ack_frames) {
+        for (const auto& ack : sub_frames) {
             const bool drop_ack = first_round && !ack_sent;
             if (drop_ack) {
                 drop_frame(ack);
                 continue;
             }
             ack_sent = true;
-            TEST_ASSERT_TRUE(udpard_rx_port_push(&ack_rx,
-                                                 reinterpret_cast<udpard_rx_port_t*>(&ack_port),
+            TEST_ASSERT_TRUE(udpard_rx_port_push(&pub_rx,
+                                                 reinterpret_cast<udpard_rx_port_t*>(&pub_p2p_port),
                                                  now,
-                                                 ack_sources[ack.iface_index],
+                                                 subscriber_sources[ack.iface_index],
                                                  ack.datagram,
                                                  tx_payload_deleter,
                                                  ack.iface_index));
         }
-        udpard_rx_poll(&ack_rx, now);
+        udpard_rx_poll(&pub_rx, now);
         first_round = false;
         attempts++;
         now += pub_tx.ack_baseline_timeout + 5000;
@@ -284,25 +296,27 @@ void test_reliable_delivery_under_losses()
 
     // Cleanup.
     udpard_rx_port_free(&sub_rx, &sub_port);
-    udpard_rx_port_free(&ack_rx, reinterpret_cast<udpard_rx_port_t*>(&ack_port));
+    udpard_rx_port_free(&pub_rx, reinterpret_cast<udpard_rx_port_t*>(&pub_p2p_port));
     udpard_tx_free(&pub_tx);
-    udpard_tx_free(&ack_tx);
-    TEST_ASSERT_EQUAL_size_t(0, sub_alloc_frag.allocated_fragments);
-    TEST_ASSERT_EQUAL_size_t(0, sub_alloc_session.allocated_fragments);
-    TEST_ASSERT_EQUAL_size_t(0, pub_alloc_transfer.allocated_fragments);
-    TEST_ASSERT_EQUAL_size_t(0, pub_alloc_payload.allocated_fragments);
-    TEST_ASSERT_EQUAL_size_t(0, acktx_alloc_transfer.allocated_fragments);
-    TEST_ASSERT_EQUAL_size_t(0, acktx_alloc_payload.allocated_fragments);
-    TEST_ASSERT_EQUAL_size_t(0, ackrx_alloc_frag.allocated_fragments);
-    TEST_ASSERT_EQUAL_size_t(0, ackrx_alloc_session.allocated_fragments);
-    instrumented_allocator_reset(&sub_alloc_frag);
-    instrumented_allocator_reset(&sub_alloc_session);
-    instrumented_allocator_reset(&pub_alloc_transfer);
-    instrumented_allocator_reset(&pub_alloc_payload);
-    instrumented_allocator_reset(&acktx_alloc_transfer);
-    instrumented_allocator_reset(&acktx_alloc_payload);
-    instrumented_allocator_reset(&ackrx_alloc_frag);
-    instrumented_allocator_reset(&ackrx_alloc_session);
+    udpard_tx_free(&sub_tx);
+
+    TEST_ASSERT_EQUAL_size_t(0, pub_tx_alloc_transfer.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0, pub_tx_alloc_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0, pub_rx_alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0, pub_rx_alloc_session.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0, sub_tx_alloc_transfer.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0, sub_tx_alloc_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0, sub_rx_alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0, sub_rx_alloc_session.allocated_fragments);
+
+    instrumented_allocator_reset(&pub_tx_alloc_transfer);
+    instrumented_allocator_reset(&pub_tx_alloc_payload);
+    instrumented_allocator_reset(&pub_rx_alloc_frag);
+    instrumented_allocator_reset(&pub_rx_alloc_session);
+    instrumented_allocator_reset(&sub_tx_alloc_transfer);
+    instrumented_allocator_reset(&sub_tx_alloc_payload);
+    instrumented_allocator_reset(&sub_rx_alloc_frag);
+    instrumented_allocator_reset(&sub_rx_alloc_session);
 }
 
 // Counters must reflect expired deliveries and ack failures.

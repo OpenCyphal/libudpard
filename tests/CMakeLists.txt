@@ -96,6 +96,7 @@ gen_test_matrix(test_fragment "src/test_fragment.cpp;${library_dir}/udpard.c")
 gen_test_single(test_e2e_random "src/test_e2e_random.cpp;${library_dir}/udpard.c")
 gen_test_single(test_e2e_edge "src/test_e2e_edge.cpp;${library_dir}/udpard.c")
 gen_test_single(test_e2e_api "src/test_e2e_api.cpp;${library_dir}/udpard.c")
+gen_test_single(test_e2e_responses "src/test_e2e_responses.cpp;${library_dir}/udpard.c")
 
 # Coverage targets. Usage:
 #   cmake -DENABLE_COVERAGE=ON ..
