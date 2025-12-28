@@ -38,7 +38,7 @@ jobs:
         if: always()
         run: |
           cd $GITHUB_WORKSPACE
-          tar --use-compress-program="gzip -9" -cf ${{runner.temp}}/workspace.tar.gz .
+          tar --use-compress-program="gzip -9" -cf $RUNNER_TEMP/workspace.tar.gz .
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -87,7 +87,7 @@ jobs:
         if: always()
         run: |
           cd $GITHUB_WORKSPACE
-          tar --use-compress-program="gzip -9" -cf ${{runner.temp}}/workspace.tar.gz .
+          tar --use-compress-program="gzip -9" -cf $RUNNER_TEMP/workspace.tar.gz .
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -116,7 +116,7 @@ jobs:
         if: always()
         run: |
           cd $GITHUB_WORKSPACE
-          tar --use-compress-program="gzip -9" -cf ${{runner.temp}}/workspace.tar.gz .
+          tar --use-compress-program="gzip -9" -cf $RUNNER_TEMP/workspace.tar.gz .
       - uses: actions/upload-artifact@v4
         if: always()
         with:
