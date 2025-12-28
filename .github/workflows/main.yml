@@ -9,7 +9,7 @@ jobs:
     container: ghcr.io/opencyphal/toolshed:ts24.4.3
     strategy:
       matrix:
-        toolchain: [ 'clang', 'gcc' ]
+        toolchain: [ "clang", "gcc" ]
         include:
           - toolchain: gcc
             c-compiler: gcc
@@ -34,14 +34,18 @@ jobs:
           cd ${{ github.workspace }}/build
           make VERBOSE=1 -j$(nproc)
           make test ARGS="--verbose"
+      - name: Archive workspace
+        if: always()
+        run: |
+          cd ${{ github.workspace }}
+          tar --use-compress-program="gzip -9" -cf workspace.tar.gz --exclude=workspace.tar.gz .
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           # The matrix is shown for convenience but this is fragile because the values may not be string-convertible.
           # Shall it break one day, feel free to remove the matrix from here.
           name: ${{github.job}}-#${{strategy.job-index}}-${{job.status}}-${{join(matrix.*, ',')}}
-          path: ${{github.workspace}}/**/*
-          include-hidden-files: true
+          path: ${{github.workspace}}/workspace.tar.gz
           retention-days: 2
 
   optimizations:
@@ -50,7 +54,7 @@ jobs:
     container: ghcr.io/opencyphal/toolshed:ts24.4.3
     strategy:
       matrix:
-        toolchain: [ 'clang', 'gcc' ]
+        toolchain: [ "clang", "gcc" ]
         build_type: [ Release, MinSizeRel ]
         include:
           - toolchain: gcc
@@ -79,14 +83,18 @@ jobs:
           cd ${{ github.workspace }}/build
           make VERBOSE=1 -j$(nproc)
           make test ARGS="--verbose"
+      - name: Archive workspace
+        if: always()
+        run: |
+          cd ${{ github.workspace }}
+          tar --use-compress-program="gzip -9" -cf workspace.tar.gz --exclude=workspace.tar.gz .
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           # The matrix is shown for convenience but this is fragile because the values may not be string-convertible.
           # Shall it break one day, feel free to remove the matrix from here.
           name: ${{github.job}}-#${{strategy.job-index}}-${{job.status}}-${{join(matrix.*, ',')}}
-          path: ${{github.workspace}}/**/*
-          include-hidden-files: true
+          path: ${{github.workspace}}/workspace.tar.gz
           retention-days: 2
 
   coverage:
@@ -104,32 +112,36 @@ jobs:
       - run: |
           cd ${{ github.workspace }}/build
           make -j$(nproc) && make test && make coverage
+      - name: Archive workspace
+        if: always()
+        run: |
+          cd ${{ github.workspace }}
+          tar --use-compress-program="gzip -9" -cf workspace.tar.gz --exclude=workspace.tar.gz .
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: ${{github.job}}-#${{strategy.job-index}}-${{job.status}}
-          path: ${{github.workspace}}/**/*
-          include-hidden-files: true
+          path: ${{github.workspace}}/workspace.tar.gz
           retention-days: 30
 
-# TODO: re-enable this
-#  avr:
-#    if: github.event_name == 'push'
-#    runs-on: ubuntu-latest
-#    env:
-#      mcu: at90can64
-#      flags: -Wall -Wextra -Werror -pedantic -Wconversion -Wtype-limits
-#    strategy:
-#      matrix:
-#        std: [ 'c99', 'c11', 'gnu99', 'gnu11' ]
-#    steps:
-#      - uses: actions/checkout@v4
-#      # language=bash
-#      - run: |
-#          sudo apt update -y && sudo apt upgrade -y
-#          sudo apt install gcc-avr avr-libc
-#          avr-gcc --version
-#      - run: avr-gcc -Ilib/cavl/ libudpard/*.c -c -std=${{matrix.std}} -mmcu=${{env.mcu}} ${{env.flags}}
+  # TODO: re-enable this
+  #  avr:
+  #    if: github.event_name == 'push'
+  #    runs-on: ubuntu-latest
+  #    env:
+  #      mcu: at90can64
+  #      flags: -Wall -Wextra -Werror -pedantic -Wconversion -Wtype-limits
+  #    strategy:
+  #      matrix:
+  #        std: [ 'c99', 'c11', 'gnu99', 'gnu11' ]
+  #    steps:
+  #      - uses: actions/checkout@v4
+  #      # language=bash
+  #      - run: |
+  #          sudo apt update -y && sudo apt upgrade -y
+  #          sudo apt install gcc-avr avr-libc
+  #          avr-gcc --version
+  #      - run: avr-gcc -Ilib/cavl/ libudpard/*.c -c -std=${{matrix.std}} -mmcu=${{env.mcu}} ${{env.flags}}
 
   arm:
     if: github.event_name == 'push'
@@ -138,7 +150,7 @@ jobs:
       flags: -Wall -Wextra -Werror -pedantic -Wconversion -Wtype-limits -Wcast-align -Wfatal-errors
     strategy:
       matrix:
-        std: [ 'c99', 'c11', 'gnu99', 'gnu11' ]
+        std: [ "c99", "c11", "gnu99", "gnu11" ]
     steps:
       - uses: actions/checkout@v4
       # language=bash
@@ -164,12 +176,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
+          fetch-depth: 0 # Shallow clones should be disabled for a better relevancy of analysis
           submodules: true
       - uses: actions/setup-java@v4
         with:
           java-version: 17
-          distribution: 'zulu'
+          distribution: "zulu"
       # language=bash
       - run: |
           clang --version
@@ -204,6 +216,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: DoozyX/clang-format-lint-action@v0.20
         with:
-          source: './libudpard ./tests'
-          extensions: 'c,h,cpp,hpp'
+          source: "./libudpard ./tests"
+          extensions: "c,h,cpp,hpp"
           clangFormatVersion: ${{ env.LLVM_VERSION }}
