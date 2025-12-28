@@ -1,6 +1,6 @@
 # LibUDPard instructions for AI agents
 
-Please read `README.md` for general information about LibUDPard.
+Please read `README.md` for general information about LibUDPard, and `CONTRIBUTING.md` for development-related notes.
 
 Keep the code and comments very brief. Be sure every significant code block is preceded with a brief comment.
 

@@ -7,6 +7,51 @@
 #include "helpers.h"
 #include <unity.h>
 
+typedef struct
+{
+    size_t count;
+    bool   allow;
+} eject_state_t;
+
+typedef struct
+{
+    size_t               count;
+    udpard_tx_feedback_t last;
+} feedback_state_t;
+
+static void noop_free(void* const user, const size_t size, void* const pointer)
+{
+    (void)user;
+    (void)size;
+    (void)pointer;
+}
+
+// Ejects with a configurable outcome.
+static bool eject_with_flag(udpard_tx_t* const tx, const udpard_tx_ejection_t ejection)
+{
+    (void)ejection;
+    eject_state_t* const st = (eject_state_t*)tx->user;
+    if (st != NULL) {
+        st->count++;
+        return st->allow;
+    }
+    return true;
+}
+
+// Records feedback into the provided state via user_transfer_reference.
+static void record_feedback(udpard_tx_t* const tx, const udpard_tx_feedback_t fb)
+{
+    (void)tx;
+    feedback_state_t* const st = (feedback_state_t*)fb.user_transfer_reference;
+    if (st != NULL) {
+        st->count++;
+        st->last = fb;
+    }
+}
+
+// Minimal endpoint helper.
+static udpard_udpip_ep_t make_ep(const uint32_t ip) { return (udpard_udpip_ep_t){ .ip = ip, .port = 1U }; }
+
 static void test_tx_serialize_header(void)
 {
     typedef struct
@@ -47,6 +92,302 @@ static void test_tx_serialize_header(void)
     }
 }
 
+static void test_tx_validation_and_free(void)
+{
+    // Invalid memory config fails fast.
+    udpard_tx_mem_resources_t bad = { 0 };
+    TEST_ASSERT_FALSE(tx_validate_mem_resources(bad));
+
+    instrumented_allocator_t alloc_transfer = { 0 };
+    instrumented_allocator_t alloc_payload  = { 0 };
+    instrumented_allocator_new(&alloc_transfer);
+    instrumented_allocator_new(&alloc_payload);
+    udpard_tx_mem_resources_t mem = { .transfer = instrumented_allocator_make_resource(&alloc_transfer) };
+    for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
+        mem.payload[i] = instrumented_allocator_make_resource(&alloc_payload);
+    }
+
+    // Populate indexes then free to hit all removal paths.
+    udpard_tx_t tx = { 0 };
+    TEST_ASSERT_TRUE(udpard_tx_new(&tx, 1U, 1U, 4U, mem, &(udpard_tx_vtable_t){ .eject = eject_with_flag }));
+    tx_transfer_t* const tr = mem_alloc(mem.transfer, sizeof(tx_transfer_t));
+    mem_zero(sizeof(*tr), tr);
+    tr->priority           = udpard_prio_fast;
+    tr->deadline           = 10;
+    tr->staged_until       = 1;
+    tr->remote_topic_hash  = 99;
+    tr->remote_transfer_id = 100;
+    tx_transfer_key_t key  = { .topic_hash = 5, .transfer_id = 7 };
+    (void)cavl2_find_or_insert(
+      &tx.index_staged, &tr->staged_until, tx_cavl_compare_staged, &tr->index_staged, cavl2_trivial_factory);
+    (void)cavl2_find_or_insert(
+      &tx.index_deadline, &tr->deadline, tx_cavl_compare_deadline, &tr->index_deadline, cavl2_trivial_factory);
+    (void)cavl2_find_or_insert(
+      &tx.index_transfer, &key, tx_cavl_compare_transfer, &tr->index_transfer, cavl2_trivial_factory);
+    (void)cavl2_find_or_insert(&tx.index_transfer_remote,
+                               &key,
+                               tx_cavl_compare_transfer_remote,
+                               &tr->index_transfer_remote,
+                               cavl2_trivial_factory);
+    enlist_head(&tx.agewise, &tr->agewise);
+    const udpard_tx_feedback_t fb = tx_make_feedback(tr, true);
+    TEST_ASSERT_TRUE(fb.success);
+    tx_transfer_free(&tx, tr);
+    TEST_ASSERT_NULL(tx.index_staged);
+    TEST_ASSERT_NULL(tx.index_transfer_remote);
+    instrumented_allocator_reset(&alloc_transfer);
+    instrumented_allocator_reset(&alloc_payload);
+}
+
+static void test_tx_comparators_and_feedback(void)
+{
+    tx_transfer_t tr;
+    mem_zero(sizeof(tr), &tr);
+    tr.staged_until       = 5;
+    tr.deadline           = 7;
+    tr.topic_hash         = 10;
+    tr.transfer_id        = 20;
+    tr.remote_topic_hash  = 3;
+    tr.remote_transfer_id = 4;
+
+    // Staged/deadline comparisons both ways.
+    udpard_us_t us = 6;
+    TEST_ASSERT_EQUAL(1, tx_cavl_compare_staged(&us, &tr.index_staged));
+    us = 4;
+    TEST_ASSERT_EQUAL(-1, tx_cavl_compare_staged(&us, &tr.index_staged));
+    us = 8;
+    TEST_ASSERT_EQUAL(1, tx_cavl_compare_deadline(&us, &tr.index_deadline));
+    us = 6;
+    TEST_ASSERT_EQUAL(-1, tx_cavl_compare_deadline(&us, &tr.index_deadline));
+
+    // Transfer comparator covers all branches.
+    tx_transfer_key_t key = { .topic_hash = 5, .transfer_id = 1 };
+    TEST_ASSERT_EQUAL(-1, tx_cavl_compare_transfer(&key, &tr.index_transfer));
+    key.topic_hash = 15;
+    TEST_ASSERT_EQUAL(1, tx_cavl_compare_transfer(&key, &tr.index_transfer));
+    key.topic_hash  = tr.topic_hash;
+    key.transfer_id = 15;
+    TEST_ASSERT_EQUAL(-1, tx_cavl_compare_transfer(&key, &tr.index_transfer));
+    key.transfer_id = 25;
+    TEST_ASSERT_EQUAL(1, tx_cavl_compare_transfer(&key, &tr.index_transfer));
+    key.transfer_id = tr.transfer_id;
+    TEST_ASSERT_EQUAL(0, tx_cavl_compare_transfer(&key, &tr.index_transfer));
+
+    // Remote comparator mirrors the above.
+    tx_transfer_key_t rkey = { .topic_hash = 2, .transfer_id = 1 };
+    TEST_ASSERT_EQUAL(-1, tx_cavl_compare_transfer_remote(&rkey, &tr.index_transfer_remote));
+    rkey.topic_hash = 5;
+    TEST_ASSERT_EQUAL(1, tx_cavl_compare_transfer_remote(&rkey, &tr.index_transfer_remote));
+    rkey.topic_hash  = tr.remote_topic_hash;
+    rkey.transfer_id = 2;
+    TEST_ASSERT_EQUAL(-1, tx_cavl_compare_transfer_remote(&rkey, &tr.index_transfer_remote));
+    rkey.transfer_id = 6;
+    TEST_ASSERT_EQUAL(1, tx_cavl_compare_transfer_remote(&rkey, &tr.index_transfer_remote));
+    rkey.transfer_id = tr.remote_transfer_id;
+    TEST_ASSERT_EQUAL(0, tx_cavl_compare_transfer_remote(&rkey, &tr.index_transfer_remote));
+}
+
+static void test_tx_spool_and_queue_errors(void)
+{
+    // OOM in spool after first frame.
+    instrumented_allocator_t alloc_payload = { 0 };
+    instrumented_allocator_new(&alloc_payload);
+    alloc_payload.limit_fragments = 1;
+    udpard_tx_t tx                = { .enqueued_frames_limit = 1, .enqueued_frames_count = 0 };
+    tx.memory.payload[0]          = instrumented_allocator_make_resource(&alloc_payload);
+    byte_t         buffer[64]     = { 0 };
+    udpard_bytes_t payload        = { .size = sizeof(buffer), .data = buffer };
+    const meta_t   meta           = { .priority              = udpard_prio_fast,
+                                      .flag_ack              = false,
+                                      .transfer_payload_size = (uint32_t)payload.size,
+                                      .transfer_id           = 1,
+                                      .sender_uid            = 1,
+                                      .topic_hash            = 1 };
+    TEST_ASSERT_NULL(tx_spool(&tx, tx.memory.payload[0], 32, meta, payload));
+    TEST_ASSERT_EQUAL_size_t(0, tx.enqueued_frames_count);
+    TEST_ASSERT_EQUAL_UINT64(80, tx_ack_timeout(5, udpard_prio_high, 1));
+    instrumented_allocator_reset(&alloc_payload);
+
+    // Capacity exhaustion.
+    instrumented_allocator_new(&alloc_payload);
+    udpard_tx_mem_resources_t mem = { .transfer = instrumented_allocator_make_resource(&alloc_payload) };
+    for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
+        mem.payload[i] = instrumented_allocator_make_resource(&alloc_payload);
+    }
+    TEST_ASSERT_TRUE(udpard_tx_new(&tx, 2U, 2U, 1U, mem, &(udpard_tx_vtable_t){ .eject = eject_with_flag }));
+    udpard_udpip_ep_t    ep[UDPARD_IFACE_COUNT_MAX] = { make_ep(1), { 0 } };
+    byte_t               big_buf[2000]              = { 0 };
+    const udpard_bytes_t big_payload                = { .size = sizeof(big_buf), .data = big_buf };
+    TEST_ASSERT_EQUAL_UINT32(0, udpard_tx_push(&tx, 0, 1000, udpard_prio_fast, 11, ep, 1, big_payload, NULL, NULL));
+    TEST_ASSERT_EQUAL_size_t(1, tx.errors_capacity);
+
+    // Immediate rejection when the request exceeds limits.
+    udpard_tx_t tx_limit           = { .enqueued_frames_limit = 1, .enqueued_frames_count = 0 };
+    tx_limit.memory.transfer.free  = noop_free;
+    tx_limit.memory.transfer.alloc = dummy_alloc;
+    TEST_ASSERT_FALSE(tx_ensure_queue_space(&tx_limit, 3));
+
+    // Sacrifice clears space when the queue is full.
+    udpard_tx_t tx_sac           = { .enqueued_frames_limit = 1, .enqueued_frames_count = 1, .errors_sacrifice = 0 };
+    tx_sac.memory.transfer.free  = noop_free;
+    tx_sac.memory.transfer.alloc = dummy_alloc;
+    tx_transfer_t victim;
+    mem_zero(sizeof(victim), &victim);
+    victim.priority = udpard_prio_fast;
+    enlist_head(&tx_sac.agewise, &victim.agewise);
+    TEST_ASSERT_FALSE(tx_ensure_queue_space(&tx_sac, 1));
+    TEST_ASSERT_EQUAL_size_t(1, tx_sac.errors_sacrifice);
+
+    // Transfer allocation OOM.
+    alloc_payload.limit_fragments = 0;
+    tx.errors_capacity            = 0;
+    TEST_ASSERT_TRUE(udpard_tx_new(&tx, 3U, 3U, 2U, mem, &(udpard_tx_vtable_t){ .eject = eject_with_flag }));
+    TEST_ASSERT_EQUAL_UINT32(
+      0, udpard_tx_push(&tx, 0, 1000, udpard_prio_fast, 12, ep, 2, (udpard_bytes_t){ 0 }, NULL, NULL));
+    TEST_ASSERT_EQUAL_size_t(1, tx.errors_oom);
+
+    // Spool OOM inside tx_push.
+    alloc_payload.limit_fragments = 1;
+    TEST_ASSERT_TRUE(udpard_tx_new(&tx, 4U, 4U, 4U, mem, &(udpard_tx_vtable_t){ .eject = eject_with_flag }));
+    TEST_ASSERT_EQUAL_UINT32(0, udpard_tx_push(&tx, 0, 1000, udpard_prio_fast, 13, ep, 3, big_payload, NULL, NULL));
+    TEST_ASSERT_EQUAL_size_t(1, tx.errors_oom);
+
+    // Reliable transfer gets staged.
+    alloc_payload.limit_fragments = SIZE_MAX;
+    feedback_state_t fstate       = { 0 };
+    TEST_ASSERT_TRUE(udpard_tx_new(&tx, 5U, 5U, 4U, mem, &(udpard_tx_vtable_t){ .eject = eject_with_flag }));
+    tx.ack_baseline_timeout = 1;
+    TEST_ASSERT_GREATER_THAN_UINT32(
+      0,
+      udpard_tx_push(&tx, 0, 100000, udpard_prio_nominal, 14, ep, 4, (udpard_bytes_t){ 0 }, record_feedback, &fstate));
+    TEST_ASSERT_NOT_NULL(tx.index_staged);
+    udpard_tx_free(&tx);
+    instrumented_allocator_reset(&alloc_payload);
+}
+
+static void test_tx_ack_and_scheduler(void)
+{
+    instrumented_allocator_t alloc = { 0 };
+    instrumented_allocator_new(&alloc);
+    udpard_tx_mem_resources_t mem = { .transfer = instrumented_allocator_make_resource(&alloc) };
+    for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
+        mem.payload[i] = instrumented_allocator_make_resource(&alloc);
+    }
+
+    // Ack reception triggers feedback.
+    feedback_state_t fstate = { 0 };
+    udpard_tx_t      tx1    = { 0 };
+    TEST_ASSERT_TRUE(udpard_tx_new(&tx1, 10U, 1U, 8U, mem, &(udpard_tx_vtable_t){ .eject = eject_with_flag }));
+    udpard_udpip_ep_t ep[UDPARD_IFACE_COUNT_MAX] = { make_ep(2), { 0 } };
+    TEST_ASSERT_EQUAL_UINT32(
+      1, udpard_tx_push(&tx1, 0, 1000, udpard_prio_fast, 21, ep, 42, (udpard_bytes_t){ 0 }, record_feedback, &fstate));
+    udpard_rx_t rx = { .tx = &tx1 };
+    tx_receive_ack(&rx, 21, 42);
+    TEST_ASSERT_EQUAL_size_t(1, fstate.count);
+    udpard_tx_free(&tx1);
+
+    // Ack suppressed when coverage not improved.
+    udpard_tx_t tx2 = { 0 };
+    TEST_ASSERT_TRUE(udpard_tx_new(&tx2, 11U, 2U, 4U, mem, &(udpard_tx_vtable_t){ .eject = eject_with_flag }));
+    tx_transfer_t prior;
+    mem_zero(sizeof(prior), &prior);
+    prior.destination[0]     = make_ep(3);
+    prior.remote_topic_hash  = 7;
+    prior.remote_transfer_id = 8;
+    cavl2_find_or_insert(&tx2.index_transfer_remote,
+                         &(tx_transfer_key_t){ .topic_hash = 7, .transfer_id = 8 },
+                         tx_cavl_compare_transfer_remote,
+                         &prior.index_transfer_remote,
+                         cavl2_trivial_factory);
+    rx.errors_ack_tx = 0;
+    rx.tx            = &tx2;
+    tx_send_ack(&rx, 0, udpard_prio_fast, 7, 8, (udpard_remote_t){ .uid = 9, .endpoints = { make_ep(3) } });
+    TEST_ASSERT_EQUAL_UINT64(0, rx.errors_ack_tx);
+    udpard_tx_free(&tx2);
+
+    // Ack replaced with broader coverage.
+    udpard_tx_t tx3 = { 0 };
+    TEST_ASSERT_TRUE(udpard_tx_new(&tx3, 12U, 3U, 4U, mem, &(udpard_tx_vtable_t){ .eject = eject_with_flag }));
+    rx.tx = &tx3;
+    tx_send_ack(&rx, 0, udpard_prio_fast, 9, 9, (udpard_remote_t){ .uid = 11, .endpoints = { make_ep(4) } });
+    tx_send_ack(
+      &rx, 0, udpard_prio_fast, 9, 9, (udpard_remote_t){ .uid = 11, .endpoints = { make_ep(4), make_ep(5) } });
+    udpard_tx_free(&tx3);
+
+    // Ack push failure with TX present.
+    udpard_tx_mem_resources_t fail_mem = { .transfer = { .user = NULL, .alloc = dummy_alloc, .free = noop_free } };
+    for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
+        fail_mem.payload[i] = fail_mem.transfer;
+    }
+    udpard_tx_t tx6 = { 0 };
+    TEST_ASSERT_TRUE(udpard_tx_new(&tx6, 15U, 6U, 1U, fail_mem, &(udpard_tx_vtable_t){ .eject = eject_with_flag }));
+    rx.errors_ack_tx = 0;
+    rx.tx            = &tx6;
+    tx_send_ack(&rx, 0, udpard_prio_fast, 2, 2, (udpard_remote_t){ .uid = 1, .endpoints = { make_ep(6) } });
+    TEST_ASSERT_GREATER_THAN_UINT64(0, rx.errors_ack_tx);
+    udpard_tx_free(&tx6);
+
+    // Ack push failure increments error.
+    udpard_rx_t rx_fail = { .tx = NULL };
+    tx_send_ack(&rx_fail, 0, udpard_prio_fast, 1, 1, (udpard_remote_t){ 0 });
+    TEST_ASSERT_GREATER_THAN_UINT64(0, rx_fail.errors_ack_tx);
+
+    // Expired transfer purge with feedback.
+    udpard_tx_t tx4 = { 0 };
+    TEST_ASSERT_TRUE(udpard_tx_new(&tx4, 13U, 4U, 4U, mem, &(udpard_tx_vtable_t){ .eject = eject_with_flag }));
+    tx4.errors_expiration = 0;
+    tx_transfer_t* exp    = mem_alloc(mem.transfer, sizeof(tx_transfer_t));
+    mem_zero(sizeof(*exp), exp);
+    exp->deadline                = 1;
+    exp->priority                = udpard_prio_slow;
+    exp->topic_hash              = 55;
+    exp->transfer_id             = 66;
+    exp->user_transfer_reference = &fstate;
+    exp->feedback                = record_feedback;
+    (void)cavl2_find_or_insert(
+      &tx4.index_deadline, &exp->deadline, tx_cavl_compare_deadline, &exp->index_deadline, cavl2_trivial_factory);
+    (void)cavl2_find_or_insert(&tx4.index_transfer,
+                               &(tx_transfer_key_t){ .topic_hash = 55, .transfer_id = 66 },
+                               tx_cavl_compare_transfer,
+                               &exp->index_transfer,
+                               cavl2_trivial_factory);
+    tx_purge_expired_transfers(&tx4, 2);
+    TEST_ASSERT_GREATER_THAN_UINT64(0, tx4.errors_expiration);
+    udpard_tx_free(&tx4);
+
+    // Staged promotion re-enqueues transfer.
+    udpard_tx_t tx5 = { 0 };
+    TEST_ASSERT_TRUE(udpard_tx_new(&tx5, 14U, 5U, 4U, mem, &(udpard_tx_vtable_t){ .eject = eject_with_flag }));
+    tx_transfer_t staged;
+    mem_zero(sizeof(staged), &staged);
+    staged.staged_until    = 0;
+    staged.deadline        = 100;
+    staged.priority        = udpard_prio_fast;
+    staged.destination[0]  = make_ep(7);
+    tx_frame_t dummy_frame = { 0 };
+    staged.head[0] = staged.cursor[0] = &dummy_frame;
+    cavl2_find_or_insert(
+      &tx5.index_staged, &staged.staged_until, tx_cavl_compare_staged, &staged.index_staged, cavl2_trivial_factory);
+    tx5.ack_baseline_timeout = 1;
+    tx_promote_staged_transfers(&tx5, 1);
+    TEST_ASSERT_NOT_NULL(tx5.queue[0][staged.priority].head);
+
+    // Ejection stops when NIC refuses.
+    staged.cursor[0]                   = staged.head[0];
+    staged.queue[0].next               = NULL;
+    staged.queue[0].prev               = NULL;
+    tx5.queue[0][staged.priority].head = &staged.queue[0];
+    tx5.queue[0][staged.priority].tail = &staged.queue[0];
+    eject_state_t eject_flag           = { .count = 0, .allow = false };
+    tx5.vtable                         = &(udpard_tx_vtable_t){ .eject = eject_with_flag };
+    tx5.user                           = &eject_flag;
+    tx_eject_pending_frames(&tx5, 5, 0);
+    TEST_ASSERT_EQUAL_size_t(1, eject_flag.count);
+    udpard_tx_free(&tx5);
+
+    instrumented_allocator_reset(&alloc);
+}
+
 void setUp(void) {}
 
 void tearDown(void) {}
@@ -55,5 +396,9 @@ int main(void)
 {
     UNITY_BEGIN();
     RUN_TEST(test_tx_serialize_header);
+    RUN_TEST(test_tx_validation_and_free);
+    RUN_TEST(test_tx_comparators_and_feedback);
+    RUN_TEST(test_tx_spool_and_queue_errors);
+    RUN_TEST(test_tx_ack_and_scheduler);
     return UNITY_END();
 }

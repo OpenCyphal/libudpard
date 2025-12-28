@@ -954,9 +954,11 @@ static void tx_send_ack(udpard_rx_t* const    rx,
         if (!new_better) {
             return; // Can we get an ack? We have ack at home!
         }
-        if (prior != NULL) {
-            tx_transfer_free(tx, prior); // avoid redundant acks for the same transfer -- replace with better one
+        if (prior != NULL) {             // avoid redundant acks for the same transfer -- replace with better one
+            tx_transfer_free(tx, prior); // this will free up a queue slot and some memory
         }
+        // Even if the new, better ack fails to enqueue for some reason, it's no big deal -- we will send the next one.
+        // The only reason it might fail is an OOM but we just freed a slot so it should be fine.
 
         // Serialize the ACK payload.
         byte_t  header[UDPARD_P2P_HEADER_BYTES];
