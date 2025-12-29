@@ -821,6 +821,7 @@ static size_t tx_predict_frame_count(const size_t                mtu[UDPARD_IFAC
     UDPARD_ASSERT(valid_ep_mask(endpoint) != 0); // The caller ensures that at least one endpoint is valid.
     size_t n_frames_total = 0;
     for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
+        UDPARD_ASSERT(mtu[i] > 0);
         if (udpard_is_valid_endpoint(endpoint[i])) {
             bool shared = false;
             for (size_t j = 0; j < i; j++) {
@@ -1277,6 +1278,7 @@ void udpard_tx_refcount_inc(const udpard_bytes_t tx_payload_view)
     if (tx_payload_view.data != NULL) {
         tx_frame_t* const frame = tx_frame_from_view(tx_payload_view);
         UDPARD_ASSERT(frame->refcount > 0); // NOLINT(*ArrayBound)
+        // TODO: if C11 is enabled, use stdatomic here
         frame->refcount++;
     }
 }
@@ -1286,6 +1288,7 @@ void udpard_tx_refcount_dec(const udpard_bytes_t tx_payload_view)
     if (tx_payload_view.data != NULL) {
         tx_frame_t* const frame = tx_frame_from_view(tx_payload_view);
         UDPARD_ASSERT(frame->refcount > 0); // NOLINT(*ArrayBound)
+        // TODO: if C11 is enabled, use stdatomic here
         frame->refcount--;
         if (frame->refcount == 0U) {
             --*frame->objcount;
