@@ -588,8 +588,8 @@ typedef struct tx_transfer_t
 
     /// Mutable transmission state. All other fields, except for the index handles, are immutable.
     tx_frame_t*  cursor[UDPARD_IFACE_COUNT_MAX];
-    uint_fast8_t epoch;        ///< Does not overflow due to exponential backoff; e.g. 1us with epoch=48 => 9 years.
-    udpard_us_t  staged_until; ///< If staged_until>=deadline, this is the last attempt; frames can be freed on the go.
+    uint_fast8_t epoch; ///< Does not overflow due to exponential backoff; e.g. 1us with epoch=48 => 9 years.
+    udpard_us_t  staged_until;
 
     /// Constant transfer properties supplied by the client.
     uint64_t          topic_hash;
@@ -789,9 +789,35 @@ static tx_frame_t* tx_spool(udpard_tx_t* const             tx,
 }
 
 /// Derives the ack timeout for an outgoing transfer.
-static udpard_us_t tx_ack_timeout(const udpard_us_t baseline, const udpard_prio_t prio, const uint_fast8_t attempts)
+static udpard_us_t tx_ack_timeout(const udpard_us_t baseline, const udpard_prio_t prio, const size_t attempts)
 {
-    return baseline * (1L << smaller((size_t)prio + attempts, 62)); // NOLINT(*-signed-bitwise)
+    UDPARD_ASSERT(baseline > 0);
+    UDPARD_ASSERT(prio <= UDPARD_PRIORITY_MAX);
+    return baseline * (1LL << smaller((size_t)prio + attempts, 62)); // NOLINT(*-signed-bitwise)
+}
+
+/// Updates the next attempt time and inserts the transfer into the staged index, unless the next scheduled
+/// transmission time is too close to the deadline, in which case no further attempts will be made.
+/// When invoking for the first time, staged_until must be set to the time of the first attempt (usually now).
+/// Once can deduce whether further attempts are planned by checking if the transfer is in the staged index.
+///
+/// The idea is that retransmitting the transfer too close to the deadline is pointless, because
+/// the ack may arrive just after the deadline and the transfer would be considered failed anyway.
+/// The solution is to add a small margin before the deadline. The margin is derived using a simple heuristic,
+/// which is subject to review and improvement later on (this is not an API-visible trait).
+static void tx_stage_if(udpard_tx_t* const tx, tx_transfer_t* const tr)
+{
+    UDPARD_ASSERT(!cavl2_is_inserted(tx->index_staged, &tr->index_staged));
+    const uint_fast8_t epoch   = tr->epoch++;
+    const udpard_us_t  timeout = tx_ack_timeout(tx->ack_baseline_timeout, tr->priority, epoch);
+    tr->staged_until += timeout;
+    if ((tr->deadline - timeout) >= tr->staged_until) {
+        (void)cavl2_find_or_insert(&tx->index_staged, //
+                                   &tr->staged_until,
+                                   tx_cavl_compare_staged,
+                                   &tr->index_staged,
+                                   cavl2_trivial_factory);
+    }
 }
 
 /// A transfer can use the same fragments between two interfaces if
@@ -865,6 +891,7 @@ static uint32_t tx_push(udpard_tx_t* const             tx,
     }
     mem_zero(sizeof(*tr), tr);
     tr->epoch                   = 0;
+    tr->staged_until            = now;
     tr->topic_hash              = meta.topic_hash;
     tr->transfer_id             = meta.transfer_id;
     tr->deadline                = deadline;
@@ -872,8 +899,6 @@ static uint32_t tx_push(udpard_tx_t* const             tx,
     tr->priority                = meta.priority;
     tr->user_transfer_reference = user_transfer_reference;
     tr->feedback                = feedback;
-    tr->staged_until =
-      meta.flag_ack ? (now + tx_ack_timeout(tx->ack_baseline_timeout, tr->priority, tr->epoch)) : HEAT_DEATH;
     for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
         tr->destination[i] = endpoint[i];
         tr->head[i] = tr->cursor[i] = NULL;
@@ -927,10 +952,9 @@ static uint32_t tx_push(udpard_tx_t* const             tx,
             enlist_head(&tx->queue[i][tr->priority], &tr->queue[i]);
         }
     }
-    // If retransmissions are possible, add to the staged index so that it is re-enqueued later unless acknowledged.
-    if (tr->deadline > tr->staged_until) {
-        (void)cavl2_find_or_insert(
-          &tx->index_staged, &tr->staged_until, tx_cavl_compare_staged, &tr->index_staged, cavl2_trivial_factory);
+    // Add to the staged index so that it is repeatedly re-enqueued later until acknowledged or expired.
+    if (meta.flag_ack) {
+        tx_stage_if(tx, tr);
     }
     // Add to the deadline index for expiration management.
     (void)cavl2_find_or_insert(
@@ -1172,17 +1196,9 @@ static void tx_promote_staged_transfers(udpard_tx_t* const self, const udpard_us
         tx_transfer_t* const tr = CAVL2_TO_OWNER(cavl2_min(self->index_staged), tx_transfer_t, index_staged);
         if ((tr != NULL) && (now >= tr->staged_until)) {
             UDPARD_ASSERT(tr->cursor != NULL); // cannot stage without payload, doesn't make sense
-            // Reinsert into the staged index at the new position, when the next attempt is due.
-            // Do not insert if this is the last attempt -- no point doing that since it will not be transmitted again.
+            // Reinsert into the staged index at the new position, when the next attempt is due (if any).
             cavl2_remove(&self->index_staged, &tr->index_staged);
-            tr->staged_until += tx_ack_timeout(self->ack_baseline_timeout, tr->priority, ++(tr->epoch));
-            if (tr->deadline > tr->staged_until) {
-                (void)cavl2_find_or_insert(&self->index_staged,
-                                           &tr->staged_until,
-                                           tx_cavl_compare_staged,
-                                           &tr->index_staged,
-                                           cavl2_trivial_factory);
-            }
+            tx_stage_if(self, tr);
             // Enqueue for transmission unless it's been there since the last attempt (stalled interface?)
             for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
                 UDPARD_ASSERT(tr->cursor[i] == tr->head[i]);
