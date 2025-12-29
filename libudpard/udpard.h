@@ -368,6 +368,7 @@ typedef struct udpard_tx_ejection_t
 typedef struct udpard_tx_vtable_t
 {
     /// Invoked from udpard_tx_poll() et al to push outgoing UDP datagrams into the socket/NIC driver.
+    /// The callback must not mutate the TX pipeline (no udpard_tx_push/cancel/free).
     bool (*eject)(udpard_tx_t*, udpard_tx_ejection_t);
 } udpard_tx_vtable_t;
 
@@ -526,6 +527,15 @@ void udpard_tx_poll(udpard_tx_t* const self, const udpard_us_t now, const uint32
 /// datagram buffer lifetime. The datagram will be freed once the reference count reaches zero.
 void udpard_tx_refcount_inc(const udpard_bytes_t tx_payload_view);
 void udpard_tx_refcount_dec(const udpard_bytes_t tx_payload_view);
+
+/// Cancel a previously enqueued transfer.
+/// If provided, the feedback callback will be invoked with success==false.
+/// Not safe to call from the eject() callback.
+/// Returns true if a transfer was found and cancelled, false if no such transfer was found.
+/// The complexity is O(log t + f), where t is the number of enqueued transfers,
+/// and f is the number of frames in the transfer.
+/// The function will free the memory associated with the transfer.
+bool udpard_tx_cancel(udpard_tx_t* const self, const uint64_t topic_hash, const uint64_t transfer_id);
 
 /// Drops all enqueued items; afterward, the instance is safe to discard. Reliable transfer callbacks are still invoked.
 void udpard_tx_free(udpard_tx_t* const self);

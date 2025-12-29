@@ -451,6 +451,45 @@ static void test_tx_ack_and_scheduler(void)
     instrumented_allocator_reset(&alloc);
 }
 
+// Cancels transfers and reports outcome.
+static void test_tx_cancel(void)
+{
+    TEST_ASSERT_FALSE(udpard_tx_cancel(NULL, 0, 0));
+
+    instrumented_allocator_t alloc = { 0 };
+    instrumented_allocator_new(&alloc);
+    udpard_tx_mem_resources_t mem = { .transfer = instrumented_allocator_make_resource(&alloc) };
+    for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
+        mem.payload[i] = instrumented_allocator_make_resource(&alloc);
+    }
+
+    udpard_tx_t        tx                         = { 0 };
+    feedback_state_t   fstate                     = { 0 };
+    udpard_udpip_ep_t  ep[UDPARD_IFACE_COUNT_MAX] = { make_ep(1), { 0 } };
+    udpard_tx_vtable_t vt                         = { .eject = eject_with_flag };
+    TEST_ASSERT_TRUE(udpard_tx_new(&tx, 20U, 1U, 8U, mem, &vt));
+
+    // Reliable transfer cancels with failure feedback.
+    TEST_ASSERT_GREATER_THAN_UINT32(
+      0, udpard_tx_push(&tx, 0, 100, udpard_prio_fast, 200, ep, 1, make_scattered(NULL, 0), record_feedback, &fstate));
+    TEST_ASSERT_NOT_NULL(tx_transfer_find(&tx, 200, 1));
+    TEST_ASSERT_TRUE(udpard_tx_cancel(&tx, 200, 1));
+    TEST_ASSERT_NULL(tx_transfer_find(&tx, 200, 1));
+    TEST_ASSERT_EQUAL_size_t(1, fstate.count);
+    TEST_ASSERT_FALSE(fstate.last.success);
+    TEST_ASSERT_EQUAL_size_t(0, tx.enqueued_frames_count);
+    TEST_ASSERT_FALSE(udpard_tx_cancel(&tx, 200, 1));
+
+    // Best-effort transfer cancels quietly.
+    TEST_ASSERT_GREATER_THAN_UINT32(
+      0, udpard_tx_push(&tx, 0, 100, udpard_prio_fast, 201, ep, 2, make_scattered(NULL, 0), NULL, NULL));
+    TEST_ASSERT_TRUE(udpard_tx_cancel(&tx, 201, 2));
+    TEST_ASSERT_EQUAL_size_t(0, tx.enqueued_frames_count);
+
+    udpard_tx_free(&tx);
+    instrumented_allocator_reset(&alloc);
+}
+
 static void test_tx_spool_deduplication(void)
 {
     instrumented_allocator_t alloc_a = { 0 };
@@ -579,6 +618,7 @@ int main(void)
     RUN_TEST(test_tx_validation_and_free);
     RUN_TEST(test_tx_comparators_and_feedback);
     RUN_TEST(test_tx_spool_and_queue_errors);
+    RUN_TEST(test_tx_cancel);
     RUN_TEST(test_tx_spool_deduplication);
     RUN_TEST(test_tx_ack_and_scheduler);
     return UNITY_END();

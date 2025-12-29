@@ -1220,7 +1220,7 @@ static void tx_eject_pending_frames(udpard_tx_t* const self, const udpard_us_t n
         // Eject the frame.
         const tx_frame_t* const frame        = tr->cursor[ifindex];
         tx_frame_t* const       frame_next   = frame->next;
-        const bool              last_attempt = tr->deadline <= tr->staged_until;
+        const bool              last_attempt = !cavl2_is_inserted(self->index_staged, &tr->index_staged);
         const bool              last_frame  = frame_next == NULL; // if not last attempt we will have to rewind to head.
         const udpard_tx_ejection_t ejection = {
             .now                     = now,
@@ -1291,6 +1291,19 @@ void udpard_tx_refcount_dec(const udpard_bytes_t tx_payload_view)
             frame->deleter.free(frame->deleter.user, sizeof(tx_frame_t) + tx_payload_view.size, frame);
         }
     }
+}
+
+bool udpard_tx_cancel(udpard_tx_t* const self, const uint64_t topic_hash, const uint64_t transfer_id)
+{
+    bool cancelled = false;
+    if (self != NULL) {
+        tx_transfer_t* const tr = tx_transfer_find(self, topic_hash, transfer_id);
+        if (tr != NULL) {
+            tx_transfer_retire(self, tr, false);
+            cancelled = true;
+        }
+    }
+    return cancelled;
 }
 
 void udpard_tx_free(udpard_tx_t* const self)
