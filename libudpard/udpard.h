@@ -283,6 +283,33 @@ size_t udpard_fragment_gather(const udpard_fragment_t** cursor,
 ///                                   |
 ///                                   +---> ...
 ///
+/// The RX pipeline is linked with the TX pipeline for reliable message management: the RX pipeline notifies
+/// the TX when acknowledgments are received, and also enqueues outgoing acknowledgments to confirm received messages.
+/// Thus the transmission pipeline is inherently remote-controlled by other nodes and one needs to keep in mind
+/// that new frames may appear in the TX pipeline even while the application is idle.
+///
+/// The reliable delivery mechanism guarantees either that a message is delivered successfully to at least one
+/// remote subscriber, or could not be delivered to any remote subscriber before the specified deadline.
+/// Rudimentary congestion control is implemented by exponential backoff of retransmission intervals.
+/// The reliability is chosen by the publisher on a per-message basis; as such, the same topic may carry both
+/// reliable and unreliable messages depending on who is publishing at any given time.
+///
+/// It is assumed that reliable messages are used in either of the following scenarios:
+///
+/// - Published on topics with a single subscriber, or sent via P2P transport (responses to published messages).
+///   With a single subscriber a single acknowledgement is sufficient to guarantee delivery.
+///
+/// - The application only cares about one acknowledgement (anycast), e.g., with modular redundant nodes.
+///
+/// - The application assumes that if one copy was delivered successfully, then other copies have likely
+///   succeeded as well (depends on the required reliability guarantees), similar to the CAN bus.
+///
+/// Reliable messages published over high-fanout topics will generate a large amount of feedback acknowledgments,
+/// which must be kept in mind when designing the network.
+///
+/// Subscribers operating in the ORDERED mode do not acknowledge messages that have been designated as lost
+/// (arriving too late, after the reordering window has passed). No negative acknowledgments are sent either
+/// because there may be other subscribers on the same topic who might still be able to receive the message.
 typedef struct udpard_tx_t udpard_tx_t;
 
 typedef struct udpard_tx_mem_resources_t
