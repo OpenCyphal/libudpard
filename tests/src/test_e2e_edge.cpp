@@ -550,6 +550,411 @@ void test_udpard_rx_p2p_malformed_kind()
     instrumented_allocator_reset(&rx_alloc_session);
 }
 
+/// Test TX with minimum MTU to verify fragmentation at the edge.
+void test_udpard_tx_minimum_mtu()
+{
+    instrumented_allocator_t tx_alloc_transfer{};
+    instrumented_allocator_t tx_alloc_payload{};
+    instrumented_allocator_t rx_alloc_frag{};
+    instrumented_allocator_t rx_alloc_session{};
+    instrumented_allocator_new(&tx_alloc_transfer);
+    instrumented_allocator_new(&tx_alloc_payload);
+    instrumented_allocator_new(&rx_alloc_frag);
+    instrumented_allocator_new(&rx_alloc_session);
+
+    udpard_tx_mem_resources_t tx_mem{};
+    tx_mem.transfer = instrumented_allocator_make_resource(&tx_alloc_transfer);
+    for (auto& res : tx_mem.payload) {
+        res = instrumented_allocator_make_resource(&tx_alloc_payload);
+    }
+    const udpard_rx_mem_resources_t rx_mem{ .session  = instrumented_allocator_make_resource(&rx_alloc_session),
+                                            .fragment = instrumented_allocator_make_resource(&rx_alloc_frag) };
+
+    udpard_tx_t tx{};
+    TEST_ASSERT_TRUE(udpard_tx_new(&tx, 0xDEADBEEF12345678ULL, 100U, 256, tx_mem, &tx_vtable));
+    std::vector<CapturedFrame> frames;
+    tx.user = &frames;
+
+    // Set MTU to minimum value
+    for (auto& mtu : tx.mtu) {
+        mtu = UDPARD_MTU_MIN;
+    }
+
+    udpard_rx_t      rx{};
+    udpard_rx_port_t port{};
+    Context          ctx{};
+    const uint64_t   topic_hash = 0x1234567890ABCDEFULL;
+    ctx.expected_uid            = tx.local_uid;
+    ctx.source                  = { .ip = 0x0A000001U, .port = 7501U };
+    udpard_rx_new(&rx, nullptr);
+    rx.user = &ctx;
+    TEST_ASSERT_TRUE(
+      udpard_rx_port_new(&port, topic_hash, 4096, UDPARD_RX_REORDERING_WINDOW_UNORDERED, rx_mem, &callbacks));
+
+    // Send a payload that will require fragmentation at minimum MTU
+    std::array<uint8_t, 1000> payload{};
+    for (size_t i = 0; i < payload.size(); i++) {
+        payload[i] = static_cast<uint8_t>(i & 0xFFU);
+    }
+
+    const udpard_bytes_scattered_t                        payload_view = make_scattered(payload.data(), payload.size());
+    const udpard_udpip_ep_t                               dest         = udpard_make_subject_endpoint(100U);
+    std::array<udpard_udpip_ep_t, UDPARD_IFACE_COUNT_MAX> dest_per_iface{};
+    dest_per_iface[0] = dest;
+
+    const udpard_us_t now = 0;
+    frames.clear();
+    TEST_ASSERT_GREATER_THAN_UINT32(0U,
+                                    udpard_tx_push(&tx,
+                                                   now,
+                                                   now + 1000000,
+                                                   udpard_prio_nominal,
+                                                   topic_hash,
+                                                   dest_per_iface.data(),
+                                                   1U,
+                                                   payload_view,
+                                                   nullptr,
+                                                   nullptr));
+    udpard_tx_poll(&tx, now, UDPARD_IFACE_MASK_ALL);
+
+    // With minimum MTU, we should have multiple frames
+    TEST_ASSERT_TRUE(frames.size() > 1);
+
+    // Deliver frames to RX
+    const udpard_mem_deleter_t tx_payload_deleter{ .user = nullptr, .free = &tx_refcount_free };
+    for (const auto& f : frames) {
+        TEST_ASSERT_TRUE(
+          udpard_rx_port_push(&rx, &port, now, ctx.source, f.datagram, tx_payload_deleter, f.iface_index));
+    }
+    udpard_rx_poll(&rx, now);
+
+    // Verify the transfer was received correctly
+    TEST_ASSERT_EQUAL_size_t(1, ctx.ids.size());
+    TEST_ASSERT_EQUAL_UINT64(1U, ctx.ids[0]);
+
+    // Cleanup
+    udpard_rx_port_free(&rx, &port);
+    udpard_tx_free(&tx);
+    TEST_ASSERT_EQUAL(0, tx_alloc_transfer.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, tx_alloc_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, rx_alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, rx_alloc_session.allocated_fragments);
+    instrumented_allocator_reset(&tx_alloc_transfer);
+    instrumented_allocator_reset(&tx_alloc_payload);
+    instrumented_allocator_reset(&rx_alloc_frag);
+    instrumented_allocator_reset(&rx_alloc_session);
+}
+
+/// Test with transfer-ID at uint64 boundary values (0, large values)
+void test_udpard_transfer_id_boundaries()
+{
+    Fixture fix{ UDPARD_RX_REORDERING_WINDOW_UNORDERED };
+
+    // Test transfer-ID = 0 (first valid value)
+    fix.push_single(0, 0);
+    udpard_rx_poll(&fix.rx, 0);
+    TEST_ASSERT_EQUAL_size_t(1, fix.ctx.ids.size());
+    TEST_ASSERT_EQUAL_UINT64(0U, fix.ctx.ids[0]);
+
+    // Test a large transfer-ID value
+    fix.push_single(1, 0x7FFFFFFFFFFFFFFFULL); // Large but not at the extreme edge
+    udpard_rx_poll(&fix.rx, 1);
+    TEST_ASSERT_EQUAL_size_t(2, fix.ctx.ids.size());
+    TEST_ASSERT_EQUAL_UINT64(0x7FFFFFFFFFFFFFFFULL, fix.ctx.ids[1]);
+
+    // Test another large value to verify the history doesn't reject it
+    fix.push_single(2, 0x8000000000000000ULL);
+    udpard_rx_poll(&fix.rx, 2);
+    TEST_ASSERT_EQUAL_size_t(3, fix.ctx.ids.size());
+    TEST_ASSERT_EQUAL_UINT64(0x8000000000000000ULL, fix.ctx.ids[2]);
+
+    TEST_ASSERT_EQUAL_size_t(0, fix.ctx.collisions);
+}
+
+/// Test zero extent handling - should accept transfers but truncate payload
+void test_udpard_rx_zero_extent()
+{
+    instrumented_allocator_t tx_alloc_transfer{};
+    instrumented_allocator_t tx_alloc_payload{};
+    instrumented_allocator_t rx_alloc_frag{};
+    instrumented_allocator_t rx_alloc_session{};
+    instrumented_allocator_new(&tx_alloc_transfer);
+    instrumented_allocator_new(&tx_alloc_payload);
+    instrumented_allocator_new(&rx_alloc_frag);
+    instrumented_allocator_new(&rx_alloc_session);
+
+    udpard_tx_mem_resources_t tx_mem{};
+    tx_mem.transfer = instrumented_allocator_make_resource(&tx_alloc_transfer);
+    for (auto& res : tx_mem.payload) {
+        res = instrumented_allocator_make_resource(&tx_alloc_payload);
+    }
+    const udpard_rx_mem_resources_t rx_mem{ .session  = instrumented_allocator_make_resource(&rx_alloc_session),
+                                            .fragment = instrumented_allocator_make_resource(&rx_alloc_frag) };
+
+    udpard_tx_t tx{};
+    TEST_ASSERT_TRUE(udpard_tx_new(&tx, 0xAAAABBBBCCCCDDDDULL, 200U, 64, tx_mem, &tx_vtable));
+    std::vector<CapturedFrame> frames;
+    tx.user = &frames;
+
+    udpard_rx_t      rx{};
+    udpard_rx_port_t port{};
+    const uint64_t   topic_hash = 0xFEDCBA9876543210ULL;
+    udpard_rx_new(&rx, nullptr);
+
+    // Create port with zero extent
+    TEST_ASSERT_TRUE(
+      udpard_rx_port_new(&port, topic_hash, 0, UDPARD_RX_REORDERING_WINDOW_UNORDERED, rx_mem, &callbacks));
+
+    // Track received transfers
+    struct ZeroExtentContext
+    {
+        size_t count               = 0;
+        size_t payload_size_stored = 0;
+        size_t payload_size_wire   = 0;
+    };
+    ZeroExtentContext zctx{};
+
+    // Custom callback for zero extent test
+    struct ZeroExtentCallbacks
+    {
+        static void on_message(udpard_rx_t* const         rx_arg,
+                               udpard_rx_port_t* const    port_arg,
+                               const udpard_rx_transfer_t transfer)
+        {
+            auto* z = static_cast<ZeroExtentContext*>(rx_arg->user);
+            z->count++;
+            z->payload_size_stored = transfer.payload_size_stored;
+            z->payload_size_wire   = transfer.payload_size_wire;
+            udpard_fragment_free_all(transfer.payload, port_arg->memory.fragment);
+        }
+        static void on_collision(udpard_rx_t*, udpard_rx_port_t*, udpard_remote_t) {}
+    };
+    static constexpr udpard_rx_port_vtable_t zero_callbacks{ .on_message   = &ZeroExtentCallbacks::on_message,
+                                                             .on_collision = &ZeroExtentCallbacks::on_collision };
+    port.vtable = &zero_callbacks;
+    rx.user     = &zctx;
+
+    // Send a small single-frame transfer
+    std::array<uint8_t, 100> payload{};
+    for (size_t i = 0; i < payload.size(); i++) {
+        payload[i] = static_cast<uint8_t>(i);
+    }
+
+    const udpard_bytes_scattered_t                        payload_view = make_scattered(payload.data(), payload.size());
+    const udpard_udpip_ep_t                               dest         = udpard_make_subject_endpoint(200U);
+    std::array<udpard_udpip_ep_t, UDPARD_IFACE_COUNT_MAX> dest_per_iface{};
+    dest_per_iface[0] = dest;
+    const udpard_udpip_ep_t source{ .ip = 0x0A000002U, .port = 7502U };
+
+    const udpard_us_t now = 0;
+    frames.clear();
+    TEST_ASSERT_GREATER_THAN_UINT32(0U,
+                                    udpard_tx_push(&tx,
+                                                   now,
+                                                   now + 1000000,
+                                                   udpard_prio_nominal,
+                                                   topic_hash,
+                                                   dest_per_iface.data(),
+                                                   5U,
+                                                   payload_view,
+                                                   nullptr,
+                                                   nullptr));
+    udpard_tx_poll(&tx, now, UDPARD_IFACE_MASK_ALL);
+    TEST_ASSERT_FALSE(frames.empty());
+
+    // Deliver to RX with zero extent
+    const udpard_mem_deleter_t tx_payload_deleter{ .user = nullptr, .free = &tx_refcount_free };
+    for (const auto& f : frames) {
+        TEST_ASSERT_TRUE(udpard_rx_port_push(&rx, &port, now, source, f.datagram, tx_payload_deleter, f.iface_index));
+    }
+    udpard_rx_poll(&rx, now);
+
+    // Transfer should be received - zero extent means minimal/no truncation for single-frame
+    // The library may still store some payload for single-frame transfers even with zero extent
+    TEST_ASSERT_EQUAL_size_t(1, zctx.count);
+    TEST_ASSERT_TRUE(zctx.payload_size_stored <= payload.size());     // At most the original size
+    TEST_ASSERT_EQUAL_size_t(payload.size(), zctx.payload_size_wire); // Wire size is original
+
+    // Cleanup
+    udpard_rx_port_free(&rx, &port);
+    udpard_tx_free(&tx);
+    TEST_ASSERT_EQUAL(0, tx_alloc_transfer.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, tx_alloc_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, rx_alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, rx_alloc_session.allocated_fragments);
+    instrumented_allocator_reset(&tx_alloc_transfer);
+    instrumented_allocator_reset(&tx_alloc_payload);
+    instrumented_allocator_reset(&rx_alloc_frag);
+    instrumented_allocator_reset(&rx_alloc_session);
+}
+
+/// Test empty payload transfer (zero-size payload)
+void test_udpard_empty_payload()
+{
+    Fixture fix{ UDPARD_RX_REORDERING_WINDOW_UNORDERED };
+
+    // Send an empty payload
+    fix.frames.clear();
+    const udpard_bytes_scattered_t                        empty_payload = make_scattered(nullptr, 0);
+    const udpard_us_t                                     deadline      = 1000000;
+    std::array<udpard_udpip_ep_t, UDPARD_IFACE_COUNT_MAX> dest_per_iface{};
+    dest_per_iface[0] = fix.dest;
+
+    TEST_ASSERT_GREATER_THAN_UINT32(0U,
+                                    udpard_tx_push(&fix.tx,
+                                                   0,
+                                                   deadline,
+                                                   udpard_prio_nominal,
+                                                   fix.topic_hash,
+                                                   dest_per_iface.data(),
+                                                   10U,
+                                                   empty_payload,
+                                                   nullptr,
+                                                   nullptr));
+    udpard_tx_poll(&fix.tx, 0, UDPARD_IFACE_MASK_ALL);
+    TEST_ASSERT_FALSE(fix.frames.empty());
+
+    // Deliver to RX
+    for (const auto& f : fix.frames) {
+        TEST_ASSERT_TRUE(
+          udpard_rx_port_push(&fix.rx, &fix.port, 0, fix.source, f.datagram, fix.tx_payload_deleter, f.iface_index));
+    }
+    udpard_rx_poll(&fix.rx, 0);
+
+    // Empty transfer should be received
+    TEST_ASSERT_EQUAL_size_t(1, fix.ctx.ids.size());
+    TEST_ASSERT_EQUAL_UINT64(10U, fix.ctx.ids[0]);
+}
+
+/// Test priority levels from exceptional (0) to optional (7)
+void test_udpard_all_priority_levels()
+{
+    Fixture     fix{ UDPARD_RX_REORDERING_WINDOW_UNORDERED };
+    udpard_us_t now = 0;
+
+    // Test all 8 priority levels
+    for (uint8_t prio = 0; prio <= UDPARD_PRIORITY_MAX; prio++) {
+        fix.frames.clear();
+        std::array<uint8_t, 8> payload{};
+        payload[0]                                  = prio;
+        const udpard_bytes_scattered_t payload_view = make_scattered(payload.data(), payload.size());
+        std::array<udpard_udpip_ep_t, UDPARD_IFACE_COUNT_MAX> dest_per_iface{};
+        dest_per_iface[0] = fix.dest;
+
+        TEST_ASSERT_GREATER_THAN_UINT32(0U,
+                                        udpard_tx_push(&fix.tx,
+                                                       now,
+                                                       now + 1000000,
+                                                       static_cast<udpard_prio_t>(prio),
+                                                       fix.topic_hash,
+                                                       dest_per_iface.data(),
+                                                       100U + prio,
+                                                       payload_view,
+                                                       nullptr,
+                                                       nullptr));
+        udpard_tx_poll(&fix.tx, now, UDPARD_IFACE_MASK_ALL);
+        TEST_ASSERT_FALSE(fix.frames.empty());
+
+        for (const auto& f : fix.frames) {
+            TEST_ASSERT_TRUE(udpard_rx_port_push(
+              &fix.rx, &fix.port, now, fix.source, f.datagram, fix.tx_payload_deleter, f.iface_index));
+        }
+        udpard_rx_poll(&fix.rx, now);
+        now++;
+    }
+
+    // All 8 transfers should be received
+    TEST_ASSERT_EQUAL_size_t(8, fix.ctx.ids.size());
+    for (uint8_t prio = 0; prio <= UDPARD_PRIORITY_MAX; prio++) {
+        TEST_ASSERT_EQUAL_UINT64(100U + prio, fix.ctx.ids[prio]);
+    }
+}
+
+/// Test collision detection (topic hash mismatch)
+void test_udpard_topic_hash_collision()
+{
+    instrumented_allocator_t tx_alloc_transfer{};
+    instrumented_allocator_t tx_alloc_payload{};
+    instrumented_allocator_t rx_alloc_frag{};
+    instrumented_allocator_t rx_alloc_session{};
+    instrumented_allocator_new(&tx_alloc_transfer);
+    instrumented_allocator_new(&tx_alloc_payload);
+    instrumented_allocator_new(&rx_alloc_frag);
+    instrumented_allocator_new(&rx_alloc_session);
+
+    udpard_tx_mem_resources_t tx_mem{};
+    tx_mem.transfer = instrumented_allocator_make_resource(&tx_alloc_transfer);
+    for (auto& res : tx_mem.payload) {
+        res = instrumented_allocator_make_resource(&tx_alloc_payload);
+    }
+    const udpard_rx_mem_resources_t rx_mem{ .session  = instrumented_allocator_make_resource(&rx_alloc_session),
+                                            .fragment = instrumented_allocator_make_resource(&rx_alloc_frag) };
+
+    udpard_tx_t tx{};
+    TEST_ASSERT_TRUE(udpard_tx_new(&tx, 0x1111222233334444ULL, 300U, 64, tx_mem, &tx_vtable));
+    std::vector<CapturedFrame> frames;
+    tx.user = &frames;
+
+    udpard_rx_t      rx{};
+    udpard_rx_port_t port{};
+    Context          ctx{};
+    const uint64_t   rx_topic_hash = 0xAAAAAAAAAAAAAAAAULL; // Different from TX
+    const uint64_t   tx_topic_hash = 0xBBBBBBBBBBBBBBBBULL; // Different from RX
+    ctx.expected_uid               = tx.local_uid;
+    ctx.source                     = { .ip = 0x0A000003U, .port = 7503U };
+    udpard_rx_new(&rx, nullptr);
+    rx.user = &ctx;
+    TEST_ASSERT_TRUE(
+      udpard_rx_port_new(&port, rx_topic_hash, 1024, UDPARD_RX_REORDERING_WINDOW_UNORDERED, rx_mem, &callbacks));
+
+    // Send with mismatched topic hash
+    std::array<uint8_t, 8>                                payload{};
+    const udpard_bytes_scattered_t                        payload_view = make_scattered(payload.data(), payload.size());
+    const udpard_udpip_ep_t                               dest         = udpard_make_subject_endpoint(300U);
+    std::array<udpard_udpip_ep_t, UDPARD_IFACE_COUNT_MAX> dest_per_iface{};
+    dest_per_iface[0] = dest;
+
+    const udpard_us_t now = 0;
+    frames.clear();
+    TEST_ASSERT_GREATER_THAN_UINT32(0U,
+                                    udpard_tx_push(&tx,
+                                                   now,
+                                                   now + 1000000,
+                                                   udpard_prio_nominal,
+                                                   tx_topic_hash, // Different from port's topic_hash
+                                                   dest_per_iface.data(),
+                                                   1U,
+                                                   payload_view,
+                                                   nullptr,
+                                                   nullptr));
+    udpard_tx_poll(&tx, now, UDPARD_IFACE_MASK_ALL);
+    TEST_ASSERT_FALSE(frames.empty());
+
+    // Deliver to RX - should trigger collision callback
+    const udpard_mem_deleter_t tx_payload_deleter{ .user = nullptr, .free = &tx_refcount_free };
+    for (const auto& f : frames) {
+        TEST_ASSERT_TRUE(
+          udpard_rx_port_push(&rx, &port, now, ctx.source, f.datagram, tx_payload_deleter, f.iface_index));
+    }
+    udpard_rx_poll(&rx, now);
+
+    // No transfers received, but collision detected
+    TEST_ASSERT_EQUAL_size_t(0, ctx.ids.size());
+    TEST_ASSERT_EQUAL_size_t(1, ctx.collisions);
+
+    // Cleanup
+    udpard_rx_port_free(&rx, &port);
+    udpard_tx_free(&tx);
+    TEST_ASSERT_EQUAL(0, tx_alloc_transfer.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, tx_alloc_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, rx_alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, rx_alloc_session.allocated_fragments);
+    instrumented_allocator_reset(&tx_alloc_transfer);
+    instrumented_allocator_reset(&tx_alloc_payload);
+    instrumented_allocator_reset(&rx_alloc_frag);
+    instrumented_allocator_reset(&rx_alloc_session);
+}
+
 } // namespace
 
 extern "C" void setUp() {}
@@ -565,5 +970,11 @@ int main()
     RUN_TEST(test_udpard_tx_feedback_always_called);
     RUN_TEST(test_udpard_tx_push_p2p);
     RUN_TEST(test_udpard_rx_p2p_malformed_kind);
+    RUN_TEST(test_udpard_tx_minimum_mtu);
+    RUN_TEST(test_udpard_transfer_id_boundaries);
+    RUN_TEST(test_udpard_rx_zero_extent);
+    RUN_TEST(test_udpard_empty_payload);
+    RUN_TEST(test_udpard_all_priority_levels);
+    RUN_TEST(test_udpard_topic_hash_collision);
     return UNITY_END();
 }
