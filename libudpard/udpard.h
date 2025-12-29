@@ -91,7 +91,7 @@ extern "C"
 ///     uint64 transfer_id
 ///     # Payload follows only for KIND_RESPONSE.
 ///
-/// The extent of P2P ports must be at least this large to accommodate the header.
+/// The extent of P2P ports includes this header; udpard_rx_port_new_p2p adds it automatically.
 #define UDPARD_P2P_HEADER_BYTES 24U
 
 /// Timestamps supplied by the application must be non-negative monotonically increasing counts of microseconds.
@@ -180,7 +180,7 @@ typedef struct udpard_remote_t
     udpard_udpip_ep_t endpoints[UDPARD_IFACE_COUNT_MAX]; ///< Zeros in unavailable ifaces.
 } udpard_remote_t;
 
-/// Returns true if the given UDP/IP endpoint appears to be valid. Zero port or IP are considered invalid.
+/// Returns true if the given UDP/IP endpoint appears to be valid. Zero IP/port are considered invalid.
 bool udpard_is_valid_endpoint(const udpard_udpip_ep_t ep);
 
 /// Returns the destination multicast UDP/IP endpoint for the given subject-ID.
@@ -439,11 +439,11 @@ bool udpard_tx_new(udpard_tx_t* const              self,
 /// The user_transfer_reference is an opaque pointer that will be stored for each enqueued item of this transfer.
 /// The library itself does not use or check this value in any way, so it can be NULL if not needed.
 ///
-/// The function returns the number of payload fragments enqueued, which is always a positive number, on success.
+/// The function returns the number of datagrams enqueued, which is always a positive number, on success.
 /// In case of failure, the function returns zero. Runtime failures increment the corresponding error counters,
 /// while invocations with invalid arguments just return zero without modifying the queue state.
 ///
-/// The enqueued transfer will be emitted over all interfaces for which a valid (non-zero) remote endpoint is provided.
+/// The enqueued transfer will be emitted over all interfaces for which udpard_is_valid_endpoint(remote_ep[i]) is true.
 ///
 /// An attempt to push a transfer with a (topic hash, transfer-ID) pair that is already enqueued will fail,
 /// as that violates the transfer-ID uniqueness requirement stated above.
@@ -500,7 +500,7 @@ void udpard_tx_poll(udpard_tx_t* const self, const udpard_us_t now, const uint32
 void udpard_tx_refcount_inc(const udpard_bytes_t tx_payload_view);
 void udpard_tx_refcount_dec(const udpard_bytes_t tx_payload_view);
 
-/// Drops all enqueued items; afterward, the instance is safe to discard. Callbacks will not be invoked.
+/// Drops all enqueued items; afterward, the instance is safe to discard. Reliable transfer callbacks are still invoked.
 void udpard_tx_free(udpard_tx_t* const self);
 
 // =====================================================================================================================
@@ -604,8 +604,8 @@ typedef struct udpard_rx_t
     uint64_t errors_frame_malformed;    ///< A received frame was malformed and thus dropped.
     uint64_t errors_transfer_malformed; ///< A transfer could not be reassembled correctly.
 
-    /// Whenever an ack fails to transmit, the counter is incremented.
-    /// The specific error can be determined by checking the specific counters in the corresponding tx instance.
+    /// Incremented when an ack cannot be enqueued (including when tx is NULL).
+    /// If tx is available, inspect its error counters for details.
     uint64_t errors_ack_tx;
 
     /// The transmission pipeline is needed to manage ack transmission and removal of acknowledged transfers.
@@ -715,8 +715,8 @@ struct udpard_rx_transfer_t
     /// it is the sum of the sizes of all its fragments. For example, if the sender emitted a transfer of 2000
     /// bytes split into two frames, 1408 bytes in the first frame and 592 bytes in the second frame,
     /// then the payload_size_stored will be 2000 and the payload buffer will contain two fragments of 1408 and
-    /// 592 bytes. If the received payload exceeds the configured extent, (some of) the excess payload may be
-    /// discarded and the payload_size_stored will be set accordingly, but it may still exceed the extent somewhat.
+    /// 592 bytes. If the received payload exceeds the configured extent, fragments starting past the extent are
+    /// dropped but fragments crossing it are kept, so payload_size_stored may exceed the extent.
     ///
     /// The application is given ownership of the payload buffer, so it is required to free it after use;
     /// this requires freeing both the handles and the payload buffers they point to.
@@ -726,9 +726,9 @@ struct udpard_rx_transfer_t
     /// If the payload is empty, the corresponding buffer pointers may be NULL.
     size_t payload_size_stored;
 
-    /// The original size of the transfer payload before extent-based truncation, in bytes.
-    /// This value is provided for informational purposes only; the application should not attempt to access
-    /// the excess payload as it has already been discarded. Cannot be less than payload_size_stored.
+    /// The original size of the transfer payload before extent-based dropping, in bytes.
+    /// This may exceed the stored payload if fragments beyond the extent were skipped. Cannot be less than
+    /// payload_size_stored.
     size_t payload_size_wire;
 
     /// The payload is stored in a tree of fragments ordered by their offset within the payload.
@@ -786,8 +786,9 @@ void udpard_rx_poll(udpard_rx_t* const self, const udpard_us_t now);
 ///
 /// The extent defines the maximum possible size of received objects, considering also possible future data type
 /// versions with new fields. It is safe to pick larger values. Note well that the extent is not the same thing as
-/// the maximum size of the object, it is usually larger! Transfers that carry payloads that exceed the specified
-/// extent will be accepted anyway but the excess payload will be truncated away, as mandated by the Specification.
+/// the maximum size of the object, it is usually larger! Transfers that carry payloads beyond the specified extent
+/// still keep fragments that start before the extent, so the delivered payload may exceed it; fragments starting past
+/// the limit are dropped.
 ///
 /// The topic hash is needed to detect and ignore transfers that use different topics on the same subject-ID.
 /// The collision callback is invoked if a topic hash collision is detected.
@@ -841,7 +842,7 @@ void udpard_rx_port_free(udpard_rx_t* const rx, udpard_rx_port_t* const port);
 /// and k is the number of fragments retained in memory for the corresponding in-progress transfer.
 /// No data copying takes place.
 ///
-/// Returns true on successful processing, false if any of the arguments are invalid.
+/// Returns false if any of the arguments are invalid.
 bool udpard_rx_port_push(udpard_rx_t* const         rx,
                          udpard_rx_port_t* const    port,
                          const udpard_us_t          timestamp,
