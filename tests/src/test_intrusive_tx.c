@@ -19,6 +19,12 @@ typedef struct
     udpard_tx_feedback_t last;
 } feedback_state_t;
 
+typedef struct
+{
+    size_t      count;
+    udpard_us_t when[8];
+} eject_log_t;
+
 static void noop_free(void* const user, const size_t size, void* const pointer)
 {
     (void)user;
@@ -34,6 +40,16 @@ static bool eject_with_flag(udpard_tx_t* const tx, const udpard_tx_ejection_t ej
     if (st != NULL) {
         st->count++;
         return st->allow;
+    }
+    return true;
+}
+
+// Records ejection timestamps for later inspection.
+static bool eject_with_log(udpard_tx_t* const tx, const udpard_tx_ejection_t ejection)
+{
+    eject_log_t* const st = (eject_log_t*)tx->user;
+    if ((st != NULL) && (st->count < (sizeof(st->when) / sizeof(st->when[0])))) {
+        st->when[st->count++] = ejection.now;
     }
     return true;
 }
@@ -451,6 +467,107 @@ static void test_tx_ack_and_scheduler(void)
     instrumented_allocator_reset(&alloc);
 }
 
+static void test_tx_stage_if(void)
+{
+    // Exercises retransmission gating near deadline.
+    udpard_tx_t tx          = { 0 };
+    tx.ack_baseline_timeout = 10;
+
+    tx_transfer_t tr;
+    mem_zero(sizeof(tr), &tr);
+    tr.priority     = udpard_prio_nominal;
+    tr.deadline     = 1000;
+    tr.staged_until = 100;
+
+    udpard_us_t expected = tr.staged_until;
+
+    tx_stage_if(&tx, &tr);
+    expected += tx_ack_timeout(tx.ack_baseline_timeout, tr.priority, 0);
+    TEST_ASSERT_EQUAL_UINT8(1, tr.epoch);
+    TEST_ASSERT_EQUAL(expected, tr.staged_until);
+    TEST_ASSERT_NOT_NULL(tx.index_staged);
+    cavl2_remove(&tx.index_staged, &tr.index_staged);
+
+    tx_stage_if(&tx, &tr);
+    expected += tx_ack_timeout(tx.ack_baseline_timeout, tr.priority, 1);
+    TEST_ASSERT_EQUAL_UINT8(2, tr.epoch);
+    TEST_ASSERT_EQUAL(expected, tr.staged_until);
+    TEST_ASSERT_NOT_NULL(tx.index_staged);
+    cavl2_remove(&tx.index_staged, &tr.index_staged);
+
+    tx_stage_if(&tx, &tr);
+    expected += tx_ack_timeout(tx.ack_baseline_timeout, tr.priority, 2);
+    TEST_ASSERT_EQUAL_UINT8(3, tr.epoch);
+    TEST_ASSERT_EQUAL(expected, tr.staged_until);
+    TEST_ASSERT_NULL(tx.index_staged);
+}
+
+static void test_tx_stage_if_via_tx_push(void)
+{
+    // Tracks retransmission times via the scheduler.
+    instrumented_allocator_t alloc = { 0 };
+    instrumented_allocator_new(&alloc);
+    udpard_tx_mem_resources_t mem = { .transfer = instrumented_allocator_make_resource(&alloc) };
+    for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
+        mem.payload[i] = instrumented_allocator_make_resource(&alloc);
+    }
+
+    udpard_tx_t        tx  = { 0 };
+    eject_log_t        log = { 0 };
+    feedback_state_t   fb  = { 0 };
+    udpard_tx_vtable_t vt  = { .eject = eject_with_log };
+    TEST_ASSERT_TRUE(udpard_tx_new(&tx, 30U, 1U, 4U, mem, &vt));
+    tx.user                                        = &log;
+    tx.ack_baseline_timeout                        = 10;
+    udpard_udpip_ep_t dest[UDPARD_IFACE_COUNT_MAX] = { make_ep(1), { 0 } };
+
+    TEST_ASSERT_GREATER_THAN_UINT32(
+      0, udpard_tx_push(&tx, 0, 500, udpard_prio_nominal, 77, dest, 1, make_scattered(NULL, 0), record_feedback, &fb));
+
+    udpard_tx_poll(&tx, 0, UDPARD_IFACE_MASK_ALL);
+    udpard_tx_poll(&tx, 160, UDPARD_IFACE_MASK_ALL);
+    udpard_tx_poll(&tx, 400, UDPARD_IFACE_MASK_ALL);
+
+    TEST_ASSERT_EQUAL_size_t(2, log.count);
+    TEST_ASSERT_EQUAL(0, log.when[0]);
+    TEST_ASSERT_EQUAL(160, log.when[1]);
+    TEST_ASSERT_NULL(tx.index_staged);
+    udpard_tx_free(&tx);
+    instrumented_allocator_reset(&alloc);
+}
+
+static void test_tx_stage_if_short_deadline(void)
+{
+    // Ensures retransmission is skipped when deadline is too close.
+    instrumented_allocator_t alloc = { 0 };
+    instrumented_allocator_new(&alloc);
+    udpard_tx_mem_resources_t mem = { .transfer = instrumented_allocator_make_resource(&alloc) };
+    for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
+        mem.payload[i] = instrumented_allocator_make_resource(&alloc);
+    }
+
+    udpard_tx_t        tx  = { 0 };
+    eject_log_t        log = { 0 };
+    feedback_state_t   fb  = { 0 };
+    udpard_tx_vtable_t vt  = { .eject = eject_with_log };
+    TEST_ASSERT_TRUE(udpard_tx_new(&tx, 31U, 1U, 4U, mem, &vt));
+    tx.user                                        = &log;
+    tx.ack_baseline_timeout                        = 10;
+    udpard_udpip_ep_t dest[UDPARD_IFACE_COUNT_MAX] = { make_ep(1), { 0 } };
+
+    TEST_ASSERT_GREATER_THAN_UINT32(
+      0, udpard_tx_push(&tx, 0, 50, udpard_prio_nominal, 78, dest, 1, make_scattered(NULL, 0), record_feedback, &fb));
+
+    udpard_tx_poll(&tx, 0, UDPARD_IFACE_MASK_ALL);
+    udpard_tx_poll(&tx, 30, UDPARD_IFACE_MASK_ALL);
+    udpard_tx_poll(&tx, 60, UDPARD_IFACE_MASK_ALL);
+
+    TEST_ASSERT_EQUAL_size_t(1, log.count);
+    TEST_ASSERT_EQUAL(0, log.when[0]);
+    udpard_tx_free(&tx);
+    instrumented_allocator_reset(&alloc);
+}
+
 // Cancels transfers and reports outcome.
 static void test_tx_cancel(void)
 {
@@ -618,6 +735,9 @@ int main(void)
     RUN_TEST(test_tx_validation_and_free);
     RUN_TEST(test_tx_comparators_and_feedback);
     RUN_TEST(test_tx_spool_and_queue_errors);
+    RUN_TEST(test_tx_stage_if);
+    RUN_TEST(test_tx_stage_if_via_tx_push);
+    RUN_TEST(test_tx_stage_if_short_deadline);
     RUN_TEST(test_tx_cancel);
     RUN_TEST(test_tx_spool_deduplication);
     RUN_TEST(test_tx_ack_and_scheduler);
