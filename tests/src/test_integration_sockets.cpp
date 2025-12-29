@@ -481,7 +481,7 @@ void test_multiple_publishers()
 
             const udpard_bytes_scattered_t payload_view = make_scattered(payload.data(), payload.size());
             const udpard_us_t              now =
-              1000000LL + static_cast<udpard_us_t>(i) * 10000LL + static_cast<udpard_us_t>(tid) * 100LL;
+              1000000LL + (static_cast<udpard_us_t>(i) * 10000LL) + (static_cast<udpard_us_t>(tid) * 100LL);
             const uint64_t transfer_id = (static_cast<uint64_t>(i) * 1000ULL) + static_cast<uint64_t>(tid);
 
             TEST_ASSERT_GREATER_THAN_UINT32(0U,

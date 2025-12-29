@@ -7,3 +7,5 @@ Keep the code and comments very brief. Be sure every significant code block is p
 When building the code, don't hesitate to use multiple jobs to use all CPU cores.
 
 Run all tests in debug build to ensure that all assertion checks are enabled.
+
+It is best to use Clang-Format to format the code when done editing.
