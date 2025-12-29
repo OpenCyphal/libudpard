@@ -652,14 +652,10 @@ static void tx_transfer_retire(udpard_tx_t* const tx, tx_transfer_t* const tr, c
         delist(&tx->queue[i][tr->priority], &tr->queue[i]);
     }
     delist(&tx->agewise, &tr->agewise);
-    if (cavl2_is_inserted(tx->index_staged, &tr->index_staged)) {
-        cavl2_remove(&tx->index_staged, &tr->index_staged);
-    }
+    (void)cavl2_remove_if(&tx->index_staged, &tr->index_staged);
     cavl2_remove(&tx->index_deadline, &tr->index_deadline);
     cavl2_remove(&tx->index_transfer, &tr->index_transfer);
-    if (cavl2_is_inserted(tx->index_transfer_remote, &tr->index_transfer_remote)) {
-        cavl2_remove(&tx->index_transfer_remote, &tr->index_transfer_remote);
-    }
+    (void)cavl2_remove_if(&tx->index_transfer_remote, &tr->index_transfer_remote);
 
     // Free the memory. The payload memory may already be empty depending on where we were invoked from.
     tx_transfer_free_payload(tr);
@@ -1807,9 +1803,7 @@ static void rx_session_free(rx_session_t* const   self,
         rx_slot_reset(&self->slots[i], self->port->memory.fragment);
     }
     cavl2_remove(&self->port->index_session_by_remote_uid, &self->index_remote_uid);
-    if (cavl2_is_inserted(*sessions_by_reordering, &self->index_reordering_window)) {
-        cavl2_remove(sessions_by_reordering, &self->index_reordering_window);
-    }
+    (void)cavl2_remove_if(sessions_by_reordering, &self->index_reordering_window);
     delist(sessions_by_animation, &self->list_by_animation);
     mem_free(self->port->memory.session, sizeof(rx_session_t), self);
 }
@@ -1851,8 +1845,7 @@ static void rx_session_ordered_scan_slots(rx_session_t* const self,
                                           const bool          force_one)
 {
     // Reset the reordering window timer because we will either eject everything or arm it again later.
-    if (cavl2_is_inserted(rx->index_session_by_reordering, &self->index_reordering_window)) {
-        cavl2_remove(&rx->index_session_by_reordering, &self->index_reordering_window);
+    if (cavl2_remove_if(&rx->index_session_by_reordering, &self->index_reordering_window)) {
         self->reordering_window_deadline = BIG_BANG;
     }
     // We need to repeat the scan because each ejection may open up the window for the next in-sequence transfer.
