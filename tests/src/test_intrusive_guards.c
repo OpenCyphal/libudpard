@@ -56,9 +56,11 @@ static void on_collision_stub(udpard_rx_t* const rx, udpard_rx_port_t* const por
 static void test_mem_endpoint_list_guards(void)
 {
     // mem_same covers identical and divergent resources.
-    const udpard_mem_resource_t mem_a = make_mem((void*)1);
-    const udpard_mem_resource_t mem_b = make_mem((void*)2);
-    const udpard_mem_resource_t mem_c = { .user = (void*)1, .free = free_noop, .alloc = alloc_alt };
+    static char                 tag_a;
+    static char                 tag_b;
+    const udpard_mem_resource_t mem_a = make_mem(&tag_a);
+    const udpard_mem_resource_t mem_b = make_mem(&tag_b);
+    const udpard_mem_resource_t mem_c = { .user = &tag_a, .free = free_noop, .alloc = alloc_alt };
     TEST_ASSERT_TRUE(mem_same(mem_a, mem_a));
     TEST_ASSERT_FALSE(mem_same(mem_a, mem_b));
     TEST_ASSERT_FALSE(mem_same(mem_a, mem_c));
@@ -116,9 +118,11 @@ static void test_header_guard(void)
 static void test_tx_guards(void)
 {
     // Prepare reusable TX resources.
-    udpard_tx_mem_resources_t mem = { .transfer = make_mem((void*)11) };
+    static char               tx_tag;
+    static char               payload_tags[UDPARD_IFACE_COUNT_MAX];
+    udpard_tx_mem_resources_t mem = { .transfer = make_mem(&tx_tag) };
     for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
-        mem.payload[i] = make_mem((void*)(20 + i));
+        mem.payload[i] = make_mem(&payload_tags[i]);
     }
     const udpard_tx_vtable_t vt_ok = { .eject = eject_stub };
 
@@ -156,8 +160,9 @@ static void test_tx_guards(void)
 static void test_tx_predictor_sharing(void)
 {
     // Shared spool suppresses duplicate frame counts.
-    const udpard_mem_resource_t mem_shared                      = make_mem((void*)42);
-    const udpard_mem_resource_t mem_arr[UDPARD_IFACE_COUNT_MAX] = { mem_shared, mem_shared, make_mem((void*)77) };
+    static char                 shared_tag[2];
+    const udpard_mem_resource_t mem_shared                      = make_mem(&shared_tag[0]);
+    const udpard_mem_resource_t mem_arr[UDPARD_IFACE_COUNT_MAX] = { mem_shared, mem_shared, make_mem(&shared_tag[1]) };
     const udpard_udpip_ep_t     ep[UDPARD_IFACE_COUNT_MAX]      = { { .ip = 1U, .port = UDP_PORT },
                                                                     { .ip = 2U, .port = UDP_PORT },
                                                                     { 0U, 0U } };
@@ -168,7 +173,9 @@ static void test_tx_predictor_sharing(void)
 static void test_rx_guards(void)
 {
     // RX port creation guards reject invalid parameters.
-    const udpard_rx_mem_resources_t rx_mem = { .session = make_mem((void*)5), .fragment = make_mem((void*)6) };
+    static char                     rx_tag_a;
+    static char                     rx_tag_b;
+    const udpard_rx_mem_resources_t rx_mem = { .session = make_mem(&rx_tag_a), .fragment = make_mem(&rx_tag_b) };
     const udpard_rx_port_vtable_t   rx_vtb = { .on_message = on_message_stub, .on_collision = on_collision_stub };
     udpard_rx_port_t                port;
     TEST_ASSERT_FALSE(udpard_rx_port_new(NULL, 0, 0, 0, rx_mem, &rx_vtb));
@@ -196,13 +203,14 @@ static void test_rx_guards(void)
     udpard_rx_port_free(NULL, &port);
 
     // Fragments past extent are discarded early.
-    udpard_tree_t*              root     = NULL;
-    byte_t                      buf[1]   = { 0 };
-    size_t                      covered  = 0;
-    const rx_frame_base_t       frame    = { .offset  = 1U,
-                                             .payload = { .size = sizeof(buf), .data = buf },
-                                             .origin  = { .size = sizeof(buf), .data = buf } };
-    const udpard_mem_resource_t frag_mem = make_mem((void*)7);
+    udpard_tree_t*              root    = NULL;
+    byte_t                      buf[1]  = { 0 };
+    size_t                      covered = 0;
+    const rx_frame_base_t       frame   = { .offset  = 1U,
+                                            .payload = { .size = sizeof(buf), .data = buf },
+                                            .origin  = { .size = sizeof(buf), .data = buf } };
+    static char                 frag_tag;
+    const udpard_mem_resource_t frag_mem = make_mem(&frag_tag);
     const udpard_mem_deleter_t  deleter  = { .user = NULL, .free = free_noop };
     TEST_ASSERT_EQUAL(rx_fragment_tree_rejected,
                       rx_fragment_tree_update(&root, frag_mem, deleter, frame, 0U, 0U, &covered));
