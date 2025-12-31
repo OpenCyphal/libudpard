@@ -2135,6 +2135,7 @@ static void rx_port_accept_stateful(udpard_rx_t* const         rx,
 }
 
 /// The stateless strategy accepts only single-frame transfers and does not maintain any session state.
+/// It could be trivially extended to fallback to UNORDERED when multi-frame transfers are detected.
 static void rx_port_accept_stateless(udpard_rx_t* const         rx,
                                      udpard_rx_port_t* const    port,
                                      const udpard_us_t          timestamp,
