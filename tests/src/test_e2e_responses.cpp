@@ -427,6 +427,8 @@ void test_topic_with_p2p_response()
     udpard_tx_poll(&b_tx, now, UDPARD_IFACE_MASK_ALL);
     TEST_ASSERT_EQUAL_size_t(1, b_response_fb.count);
     TEST_ASSERT_TRUE(b_response_fb.success);
+    TEST_ASSERT_EQUAL_UINT64(topic_hash, b_response_fb.topic_hash);
+    TEST_ASSERT_EQUAL_UINT64(transfer_id, b_response_fb.transfer_id);
 
     // ================================================================================================================
     // CLEANUP
@@ -727,6 +729,8 @@ void test_topic_with_p2p_response_under_loss()
 
     TEST_ASSERT_EQUAL_size_t(1, b_response_fb.count);
     TEST_ASSERT_TRUE(b_response_fb.success);
+    TEST_ASSERT_EQUAL_UINT64(topic_hash, b_response_fb.topic_hash);
+    TEST_ASSERT_EQUAL_UINT64(transfer_id, b_response_fb.transfer_id);
 
     TEST_ASSERT_GREATER_OR_EQUAL_size_t(1, b_topic_ctx.message_count);
     TEST_ASSERT_EQUAL_size_t(1, a_response_ctx.response_count);

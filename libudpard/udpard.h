@@ -329,7 +329,8 @@ typedef struct udpard_tx_mem_resources_t
 } udpard_tx_mem_resources_t;
 
 /// Outcome notification for a reliable transfer previously scheduled for transmission.
-/// For P2P transfers, the topic hash and the transfer-ID values specify which message this is a response to.
+/// For P2P transfers, the topic hash and the transfer-ID are taken from the request header this response targets,
+/// not from the locally assigned response metadata.
 typedef struct udpard_tx_feedback_t
 {
     uint64_t topic_hash;

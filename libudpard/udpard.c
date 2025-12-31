@@ -606,8 +606,8 @@ typedef struct tx_transfer_t
     /// Constant transfer properties supplied by the client.
     /// The remote_* fields are identical to the local ones except in the case of P2P transfers, where
     /// they contain the values encoded in the P2P header. This is needed to find pending acks (to minimize duplicates),
-    /// and to report the correct values via the feedback callback.
-    /// By default, the remote_* fields equal the local ones.
+    /// and to report the correct values via the feedback callback for P2P transfers.
+    /// By default, upon construction, the remote_* fields equal the local ones, which is valid for ordinary messages.
     uint64_t          topic_hash;
     uint64_t          transfer_id;
     uint64_t          remote_topic_hash;
