@@ -143,11 +143,15 @@ static void test_tx_guards(void)
                                                                          { 0U, 0U } };
     const udpard_bytes_scattered_t empty_payload = { .bytes = { .size = 0U, .data = NULL }, .next = NULL };
     TEST_ASSERT_EQUAL_UINT32(
-      0, udpard_tx_push(&tx, 10, 5, udpard_prio_fast, 1U, endpoints, 1U, empty_payload, NULL, NULL));
+      0,
+      udpard_tx_push(&tx, 10, 5, udpard_prio_fast, 1U, endpoints, 1U, empty_payload, NULL, UDPARD_USER_CONTEXT_NULL));
     TEST_ASSERT_EQUAL_UINT32(
-      0, udpard_tx_push(NULL, 0, 0, udpard_prio_fast, 1U, endpoints, 1U, empty_payload, NULL, NULL));
+      0,
+      udpard_tx_push(NULL, 0, 0, udpard_prio_fast, 1U, endpoints, 1U, empty_payload, NULL, UDPARD_USER_CONTEXT_NULL));
     TEST_ASSERT_EQUAL_UINT32(
-      0, udpard_tx_push_p2p(NULL, 0, 0, udpard_prio_fast, 1U, 1U, (udpard_remote_t){ 0 }, empty_payload, NULL, NULL));
+      0,
+      udpard_tx_push_p2p(
+        NULL, 0, 0, udpard_prio_fast, 1U, 1U, (udpard_remote_t){ 0 }, empty_payload, NULL, UDPARD_USER_CONTEXT_NULL));
 
     // Poll and refcount no-ops on null data.
     udpard_tx_poll(NULL, 0, 0);

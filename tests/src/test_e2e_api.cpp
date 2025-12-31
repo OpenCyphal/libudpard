@@ -72,7 +72,7 @@ constexpr udpard_tx_vtable_t tx_vtable{ .eject = &capture_tx_frame };
 // Feedback callback records completion.
 void record_feedback(udpard_tx_t*, const udpard_tx_feedback_t fb)
 {
-    auto* st = static_cast<FeedbackState*>(fb.user_transfer_reference);
+    auto* st = static_cast<FeedbackState*>(fb.user.obj);
     if (st != nullptr) {
         st->count++;
         st->success     = fb.success;
@@ -235,7 +235,7 @@ void test_reliable_delivery_under_losses()
                                                    1U,
                                                    payload_view,
                                                    &record_feedback,
-                                                   &fb));
+                                                   make_user_context(&fb)));
 
     // Send until acked; drop first data frame and first ack.
     bool         first_round = true;
@@ -341,10 +341,17 @@ void test_reliable_stats_and_failures()
     FeedbackState                  fb_fail{};
     const udpard_udpip_ep_t        exp_dest[UDPARD_IFACE_COUNT_MAX] = { udpard_make_subject_endpoint(99U), {}, {} };
     const udpard_bytes_scattered_t exp_payload                      = make_scattered("ping", 4);
-    TEST_ASSERT_GREATER_THAN_UINT32(
-      0U,
-      udpard_tx_push(
-        &exp_tx, 0, 10, udpard_prio_fast, 0xABCULL, exp_dest, 5U, exp_payload, &record_feedback, &fb_fail));
+    TEST_ASSERT_GREATER_THAN_UINT32(0U,
+                                    udpard_tx_push(&exp_tx,
+                                                   0,
+                                                   10,
+                                                   udpard_prio_fast,
+                                                   0xABCULL,
+                                                   exp_dest,
+                                                   5U,
+                                                   exp_payload,
+                                                   &record_feedback,
+                                                   make_user_context(&fb_fail)));
     udpard_tx_poll(&exp_tx, 0, UDPARD_IFACE_MASK_ALL);
     for (const auto& f : exp_frames) {
         drop_frame(f);
@@ -395,10 +402,17 @@ void test_reliable_stats_and_failures()
     const udpard_udpip_ep_t        src_dest[UDPARD_IFACE_COUNT_MAX] = { udpard_make_subject_endpoint(12U), {}, {} };
     const udpard_bytes_scattered_t src_payload = make_scattered(ctx.expected.data(), ctx.expected.size());
     FeedbackState                  fb_ignore{};
-    TEST_ASSERT_GREATER_THAN_UINT32(
-      0U,
-      udpard_tx_push(
-        &src_tx, 0, 1000, udpard_prio_fast, port.topic_hash, src_dest, 7U, src_payload, &record_feedback, &fb_ignore));
+    TEST_ASSERT_GREATER_THAN_UINT32(0U,
+                                    udpard_tx_push(&src_tx,
+                                                   0,
+                                                   1000,
+                                                   udpard_prio_fast,
+                                                   port.topic_hash,
+                                                   src_dest,
+                                                   7U,
+                                                   src_payload,
+                                                   &record_feedback,
+                                                   make_user_context(&fb_ignore)));
     udpard_tx_poll(&src_tx, 0, UDPARD_IFACE_MASK_ALL);
     const udpard_mem_deleter_t tx_payload_deleter{ .user = nullptr, .free = &tx_refcount_free };
     for (const auto& f : src_frames) {

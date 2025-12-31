@@ -54,11 +54,11 @@ static bool eject_with_log(udpard_tx_t* const tx, const udpard_tx_ejection_t eje
     return true;
 }
 
-// Records feedback into the provided state via user_transfer_reference.
+// Records feedback into the provided state via user context.
 static void record_feedback(udpard_tx_t* const tx, const udpard_tx_feedback_t fb)
 {
     (void)tx;
-    feedback_state_t* const st = (feedback_state_t*)fb.user_transfer_reference;
+    feedback_state_t* const st = (feedback_state_t*)fb.user.obj;
     if (st != NULL) {
         st->count++;
         st->last = fb;
@@ -270,7 +270,8 @@ static void test_tx_spool_and_queue_errors(void)
     udpard_udpip_ep_t              ep[UDPARD_IFACE_COUNT_MAX] = { make_ep(1), { 0 } };
     byte_t                         big_buf[2000]              = { 0 };
     const udpard_bytes_scattered_t big_payload                = make_scattered(big_buf, sizeof(big_buf));
-    TEST_ASSERT_EQUAL_UINT32(0, udpard_tx_push(&tx, 0, 1000, udpard_prio_fast, 11, ep, 1, big_payload, NULL, NULL));
+    TEST_ASSERT_EQUAL_UINT32(
+      0, udpard_tx_push(&tx, 0, 1000, udpard_prio_fast, 11, ep, 1, big_payload, NULL, UDPARD_USER_CONTEXT_NULL));
     TEST_ASSERT_EQUAL_size_t(1, tx.errors_capacity);
 
     // Immediate rejection when the request exceeds limits.
@@ -316,13 +317,16 @@ static void test_tx_spool_and_queue_errors(void)
     tx.errors_capacity            = 0;
     TEST_ASSERT_TRUE(udpard_tx_new(&tx, 3U, 3U, 2U, mem, &(udpard_tx_vtable_t){ .eject = eject_with_flag }));
     TEST_ASSERT_EQUAL_UINT32(
-      0, udpard_tx_push(&tx, 0, 1000, udpard_prio_fast, 12, ep, 2, make_scattered(NULL, 0), NULL, NULL));
+      0,
+      udpard_tx_push(
+        &tx, 0, 1000, udpard_prio_fast, 12, ep, 2, make_scattered(NULL, 0), NULL, UDPARD_USER_CONTEXT_NULL));
     TEST_ASSERT_EQUAL_size_t(1, tx.errors_oom);
 
     // Spool OOM inside tx_push.
     alloc_payload.limit_fragments = 1;
     TEST_ASSERT_TRUE(udpard_tx_new(&tx, 4U, 4U, 4U, mem, &(udpard_tx_vtable_t){ .eject = eject_with_flag }));
-    TEST_ASSERT_EQUAL_UINT32(0, udpard_tx_push(&tx, 0, 1000, udpard_prio_fast, 13, ep, 3, big_payload, NULL, NULL));
+    TEST_ASSERT_EQUAL_UINT32(
+      0, udpard_tx_push(&tx, 0, 1000, udpard_prio_fast, 13, ep, 3, big_payload, NULL, UDPARD_USER_CONTEXT_NULL));
     TEST_ASSERT_EQUAL_size_t(1, tx.errors_oom);
 
     // Reliable transfer gets staged.
@@ -330,10 +334,17 @@ static void test_tx_spool_and_queue_errors(void)
     feedback_state_t fstate       = { 0 };
     TEST_ASSERT_TRUE(udpard_tx_new(&tx, 5U, 5U, 4U, mem, &(udpard_tx_vtable_t){ .eject = eject_with_flag }));
     tx.ack_baseline_timeout = 1;
-    TEST_ASSERT_GREATER_THAN_UINT32(
-      0,
-      udpard_tx_push(
-        &tx, 0, 100000, udpard_prio_nominal, 14, ep, 4, make_scattered(NULL, 0), record_feedback, &fstate));
+    TEST_ASSERT_GREATER_THAN_UINT32(0,
+                                    udpard_tx_push(&tx,
+                                                   0,
+                                                   100000,
+                                                   udpard_prio_nominal,
+                                                   14,
+                                                   ep,
+                                                   4,
+                                                   make_scattered(NULL, 0),
+                                                   record_feedback,
+                                                   make_user_context(&fstate)));
     TEST_ASSERT_NOT_NULL(tx.index_staged);
     udpard_tx_free(&tx);
     instrumented_allocator_reset(&alloc_payload);
@@ -353,9 +364,17 @@ static void test_tx_ack_and_scheduler(void)
     udpard_tx_t      tx1    = { 0 };
     TEST_ASSERT_TRUE(udpard_tx_new(&tx1, 10U, 1U, 8U, mem, &(udpard_tx_vtable_t){ .eject = eject_with_flag }));
     udpard_udpip_ep_t ep[UDPARD_IFACE_COUNT_MAX] = { make_ep(2), { 0 } };
-    TEST_ASSERT_EQUAL_UINT32(
-      1,
-      udpard_tx_push(&tx1, 0, 1000, udpard_prio_fast, 21, ep, 42, make_scattered(NULL, 0), record_feedback, &fstate));
+    TEST_ASSERT_EQUAL_UINT32(1,
+                             udpard_tx_push(&tx1,
+                                            0,
+                                            1000,
+                                            udpard_prio_fast,
+                                            21,
+                                            ep,
+                                            42,
+                                            make_scattered(NULL, 0),
+                                            record_feedback,
+                                            make_user_context(&fstate)));
     udpard_rx_t rx = { .tx = &tx1 };
     tx_receive_ack(&rx, 21, 42);
     TEST_ASSERT_EQUAL_size_t(1, fstate.count);
@@ -413,13 +432,13 @@ static void test_tx_ack_and_scheduler(void)
     tx4.errors_expiration = 0;
     tx_transfer_t* exp    = mem_alloc(mem.transfer, sizeof(tx_transfer_t));
     mem_zero(sizeof(*exp), exp);
-    exp->deadline                = 1;
-    exp->priority                = udpard_prio_slow;
-    exp->topic_hash              = 55;
-    exp->transfer_id             = 66;
-    exp->user_transfer_reference = &fstate;
-    exp->reliable                = true;
-    exp->feedback                = record_feedback;
+    exp->deadline    = 1;
+    exp->priority    = udpard_prio_slow;
+    exp->topic_hash  = 55;
+    exp->transfer_id = 66;
+    exp->user        = make_user_context(&fstate);
+    exp->reliable    = true;
+    exp->feedback    = record_feedback;
     (void)cavl2_find_or_insert(
       &tx4.index_deadline, &exp->deadline, tx_cavl_compare_deadline, &exp->index_deadline, cavl2_trivial_factory);
     (void)cavl2_find_or_insert(&tx4.index_transfer,
@@ -518,8 +537,17 @@ static void test_tx_stage_if_via_tx_push(void)
     tx.ack_baseline_timeout                        = 10;
     udpard_udpip_ep_t dest[UDPARD_IFACE_COUNT_MAX] = { make_ep(1), { 0 } };
 
-    TEST_ASSERT_GREATER_THAN_UINT32(
-      0, udpard_tx_push(&tx, 0, 500, udpard_prio_nominal, 77, dest, 1, make_scattered(NULL, 0), record_feedback, &fb));
+    TEST_ASSERT_GREATER_THAN_UINT32(0,
+                                    udpard_tx_push(&tx,
+                                                   0,
+                                                   500,
+                                                   udpard_prio_nominal,
+                                                   77,
+                                                   dest,
+                                                   1,
+                                                   make_scattered(NULL, 0),
+                                                   record_feedback,
+                                                   make_user_context(&fb)));
 
     udpard_tx_poll(&tx, 0, UDPARD_IFACE_MASK_ALL);
     udpard_tx_poll(&tx, 160, UDPARD_IFACE_MASK_ALL);
@@ -552,8 +580,17 @@ static void test_tx_stage_if_short_deadline(void)
     tx.ack_baseline_timeout                        = 10;
     udpard_udpip_ep_t dest[UDPARD_IFACE_COUNT_MAX] = { make_ep(1), { 0 } };
 
-    TEST_ASSERT_GREATER_THAN_UINT32(
-      0, udpard_tx_push(&tx, 0, 50, udpard_prio_nominal, 78, dest, 1, make_scattered(NULL, 0), record_feedback, &fb));
+    TEST_ASSERT_GREATER_THAN_UINT32(0,
+                                    udpard_tx_push(&tx,
+                                                   0,
+                                                   50,
+                                                   udpard_prio_nominal,
+                                                   78,
+                                                   dest,
+                                                   1,
+                                                   make_scattered(NULL, 0),
+                                                   record_feedback,
+                                                   make_user_context(&fb)));
 
     udpard_tx_poll(&tx, 0, UDPARD_IFACE_MASK_ALL);
     udpard_tx_poll(&tx, 30, UDPARD_IFACE_MASK_ALL);
@@ -584,8 +621,17 @@ static void test_tx_cancel(void)
     TEST_ASSERT_TRUE(udpard_tx_new(&tx, 20U, 1U, 8U, mem, &vt));
 
     // Reliable transfer cancels with failure feedback.
-    TEST_ASSERT_GREATER_THAN_UINT32(
-      0, udpard_tx_push(&tx, 0, 100, udpard_prio_fast, 200, ep, 1, make_scattered(NULL, 0), record_feedback, &fstate));
+    TEST_ASSERT_GREATER_THAN_UINT32(0,
+                                    udpard_tx_push(&tx,
+                                                   0,
+                                                   100,
+                                                   udpard_prio_fast,
+                                                   200,
+                                                   ep,
+                                                   1,
+                                                   make_scattered(NULL, 0),
+                                                   record_feedback,
+                                                   make_user_context(&fstate)));
     TEST_ASSERT_NOT_NULL(tx_transfer_find(&tx, 200, 1));
     TEST_ASSERT_TRUE(udpard_tx_cancel(&tx, 200, 1));
     TEST_ASSERT_NULL(tx_transfer_find(&tx, 200, 1));
@@ -596,7 +642,9 @@ static void test_tx_cancel(void)
 
     // Best-effort transfer cancels quietly.
     TEST_ASSERT_GREATER_THAN_UINT32(
-      0, udpard_tx_push(&tx, 0, 100, udpard_prio_fast, 201, ep, 2, make_scattered(NULL, 0), NULL, NULL));
+      0,
+      udpard_tx_push(
+        &tx, 0, 100, udpard_prio_fast, 201, ep, 2, make_scattered(NULL, 0), NULL, UDPARD_USER_CONTEXT_NULL));
     TEST_ASSERT_TRUE(udpard_tx_cancel(&tx, 201, 2));
     TEST_ASSERT_EQUAL_size_t(0, tx.enqueued_frames_count);
 
@@ -632,7 +680,7 @@ static void test_tx_spool_deduplication(void)
                                                    1,
                                                    make_scattered(payload_big, sizeof(payload_big)),
                                                    NULL,
-                                                   NULL));
+                                                   UDPARD_USER_CONTEXT_NULL));
     tx_transfer_t* tr = latest_transfer(&tx);
     TEST_ASSERT_EQUAL_size_t(frames_for(tx.mtu[0], sizeof(payload_big)), tx.enqueued_frames_count);
     TEST_ASSERT_EQUAL_PTR(tr->head[0], tr->head[1]);
@@ -657,7 +705,7 @@ static void test_tx_spool_deduplication(void)
                                                    2,
                                                    make_scattered(payload_small, sizeof(payload_small)),
                                                    NULL,
-                                                   NULL));
+                                                   UDPARD_USER_CONTEXT_NULL));
     tr = latest_transfer(&tx);
     TEST_ASSERT_EQUAL_size_t(1, tx.enqueued_frames_count);
     TEST_ASSERT_EQUAL_PTR(tr->head[0], tr->head[1]);
@@ -680,7 +728,7 @@ static void test_tx_spool_deduplication(void)
                                                    3,
                                                    make_scattered(payload_split, sizeof(payload_split)),
                                                    NULL,
-                                                   NULL));
+                                                   UDPARD_USER_CONTEXT_NULL));
     tr = latest_transfer(&tx);
     TEST_ASSERT_EQUAL_size_t(frames_for(tx.mtu[0], sizeof(payload_split)) +
                                frames_for(tx.mtu[1], sizeof(payload_split)),
@@ -710,7 +758,7 @@ static void test_tx_spool_deduplication(void)
                                                    4,
                                                    make_scattered(payload_one, sizeof(payload_one)),
                                                    NULL,
-                                                   NULL));
+                                                   UDPARD_USER_CONTEXT_NULL));
     tr = latest_transfer(&tx);
     TEST_ASSERT_EQUAL_size_t(2, tx.enqueued_frames_count);
     TEST_ASSERT_TRUE(tr->head[0] != tr->head[1]);

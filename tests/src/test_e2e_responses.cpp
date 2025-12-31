@@ -63,7 +63,7 @@ struct FeedbackState
 
 void record_feedback(udpard_tx_t*, const udpard_tx_feedback_t fb)
 {
-    auto* st = static_cast<FeedbackState*>(fb.user_transfer_reference);
+    auto* st = static_cast<FeedbackState*>(fb.user.obj);
     if (st != nullptr) {
         st->count++;
         st->success     = fb.success;
@@ -304,7 +304,7 @@ void test_topic_with_p2p_response()
                                                    transfer_id,
                                                    topic_payload_scat,
                                                    &record_feedback,
-                                                   &a_topic_fb));
+                                                   make_user_context(&a_topic_fb)));
     a_frames.clear();
     udpard_tx_poll(&a_tx, now, UDPARD_IFACE_MASK_ALL);
     TEST_ASSERT_FALSE(a_frames.empty());
@@ -377,7 +377,7 @@ void test_topic_with_p2p_response()
                                                        remote_a,
                                                        response_scat,
                                                        &record_feedback,
-                                                       &b_response_fb));
+                                                       make_user_context(&b_response_fb)));
 
     b_frames.clear();
     udpard_tx_poll(&b_tx, now, UDPARD_IFACE_MASK_ALL);
@@ -594,7 +594,7 @@ void test_topic_with_p2p_response_under_loss()
                                                    transfer_id,
                                                    topic_payload_scat,
                                                    &record_feedback,
-                                                   &a_topic_fb));
+                                                   make_user_context(&a_topic_fb)));
 
     // ================================================================================================================
     // SIMULATION LOOP WITH LOSSES
@@ -679,7 +679,7 @@ void test_topic_with_p2p_response_under_loss()
                                                                remote_a,
                                                                response_scat,
                                                                &record_feedback,
-                                                               &b_response_fb));
+                                                               make_user_context(&b_response_fb)));
         }
 
         // --- Node B transmits (responses) ---

@@ -608,15 +608,15 @@ typedef struct tx_transfer_t
     /// they contain the values encoded in the P2P header. This is needed to find pending acks (to minimize duplicates),
     /// and to report the correct values via the feedback callback for P2P transfers.
     /// By default, upon construction, the remote_* fields equal the local ones, which is valid for ordinary messages.
-    uint64_t          topic_hash;
-    uint64_t          transfer_id;
-    uint64_t          remote_topic_hash;
-    uint64_t          remote_transfer_id;
-    udpard_us_t       deadline;
-    bool              reliable;
-    udpard_prio_t     priority;
-    udpard_udpip_ep_t destination[UDPARD_IFACE_COUNT_MAX];
-    void*             user_transfer_reference;
+    uint64_t              topic_hash;
+    uint64_t              transfer_id;
+    uint64_t              remote_topic_hash;
+    uint64_t              remote_transfer_id;
+    udpard_us_t           deadline;
+    bool                  reliable;
+    udpard_prio_t         priority;
+    udpard_udpip_ep_t     destination[UDPARD_IFACE_COUNT_MAX];
+    udpard_user_context_t user;
 
     void (*feedback)(udpard_tx_t*, udpard_tx_feedback_t);
 } tx_transfer_t;
@@ -649,10 +649,12 @@ static void tx_transfer_free_payload(tx_transfer_t* const tr)
 static void tx_transfer_retire(udpard_tx_t* const tx, tx_transfer_t* const tr, const bool success)
 {
     // Construct the feedback object first before the transfer is destroyed.
-    const udpard_tx_feedback_t fb = { .topic_hash              = tr->remote_topic_hash,
-                                      .transfer_id             = tr->remote_transfer_id,
-                                      .user_transfer_reference = tr->user_transfer_reference,
-                                      .success                 = success };
+    const udpard_tx_feedback_t fb = {
+        .topic_hash  = tr->remote_topic_hash,
+        .transfer_id = tr->remote_transfer_id,
+        .user        = tr->user,
+        .success     = success,
+    };
     UDPARD_ASSERT(tr->reliable == (tr->feedback != NULL));
     // save the feedback pointer
     void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t) = tr->feedback;
@@ -876,8 +878,8 @@ static uint32_t tx_push(udpard_tx_t* const             tx,
                         const udpard_udpip_ep_t        endpoint[UDPARD_IFACE_COUNT_MAX],
                         const udpard_bytes_scattered_t payload,
                         void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t),
-                        void* const           user_transfer_reference,
-                        tx_transfer_t** const out_transfer)
+                        const udpard_user_context_t user,
+                        tx_transfer_t** const       out_transfer)
 {
     UDPARD_ASSERT(now <= deadline);
     UDPARD_ASSERT(tx != NULL);
@@ -900,17 +902,17 @@ static uint32_t tx_push(udpard_tx_t* const             tx,
         return 0;
     }
     mem_zero(sizeof(*tr), tr);
-    tr->epoch                   = 0;
-    tr->staged_until            = now;
-    tr->topic_hash              = meta.topic_hash;
-    tr->transfer_id             = meta.transfer_id;
-    tr->remote_topic_hash       = meta.topic_hash;
-    tr->remote_transfer_id      = meta.transfer_id;
-    tr->deadline                = deadline;
-    tr->reliable                = meta.flag_ack;
-    tr->priority                = meta.priority;
-    tr->user_transfer_reference = user_transfer_reference;
-    tr->feedback                = feedback;
+    tr->epoch              = 0;
+    tr->staged_until       = now;
+    tr->topic_hash         = meta.topic_hash;
+    tr->transfer_id        = meta.transfer_id;
+    tr->remote_topic_hash  = meta.topic_hash;
+    tr->remote_transfer_id = meta.transfer_id;
+    tr->deadline           = deadline;
+    tr->reliable           = meta.flag_ack;
+    tr->priority           = meta.priority;
+    tr->user               = user;
+    tr->feedback           = feedback;
     for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
         tr->destination[i] = endpoint[i];
         tr->head[i] = tr->cursor[i] = NULL;
@@ -1057,7 +1059,7 @@ static void tx_send_ack(udpard_rx_t* const    rx,
                                        remote.endpoints,
                                        (udpard_bytes_scattered_t){ .bytes = payload, .next = NULL },
                                        NULL,
-                                       NULL,
+                                       UDPARD_USER_CONTEXT_NULL,
                                        &tr);
         UDPARD_ASSERT(count <= 1);
         if (count == 1) { // ack is always a single-frame transfer, so we get either 0 or 1
@@ -1119,7 +1121,7 @@ uint32_t udpard_tx_push(udpard_tx_t* const             self,
                         const uint64_t                 transfer_id,
                         const udpard_bytes_scattered_t payload,
                         void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t),
-                        void* const user_transfer_reference)
+                        const udpard_user_context_t user)
 {
     uint32_t   out = 0;
     const bool ok  = (self != NULL) && (deadline >= now) && (now >= 0) && (self->local_uid != 0) &&
@@ -1136,7 +1138,7 @@ uint32_t udpard_tx_push(udpard_tx_t* const             self,
             .sender_uid            = self->local_uid,
             .topic_hash            = topic_hash,
         };
-        out = tx_push(self, now, deadline, meta, remote_ep, payload, feedback, user_transfer_reference, NULL);
+        out = tx_push(self, now, deadline, meta, remote_ep, payload, feedback, user, NULL);
     }
     return out;
 }
@@ -1150,7 +1152,7 @@ uint32_t udpard_tx_push_p2p(udpard_tx_t* const             self,
                             const udpard_remote_t          remote,
                             const udpard_bytes_scattered_t payload,
                             void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t),
-                            void* const user_transfer_reference)
+                            const udpard_user_context_t user)
 {
     uint32_t   out = 0;
     const bool ok  = (self != NULL) && (deadline >= now) && (now >= 0) && (self->local_uid != 0) &&
@@ -1179,8 +1181,7 @@ uint32_t udpard_tx_push_p2p(udpard_tx_t* const             self,
             .topic_hash            = remote.uid,
         };
         tx_transfer_t* tr = NULL;
-        out =
-          tx_push(self, now, deadline, meta, remote.endpoints, full_payload, feedback, user_transfer_reference, &tr);
+        out               = tx_push(self, now, deadline, meta, remote.endpoints, full_payload, feedback, user, &tr);
         if (out > 0) {
             UDPARD_ASSERT(tr != NULL);
             tr->remote_topic_hash  = request_topic_hash;
@@ -1252,13 +1253,13 @@ static void tx_eject_pending_frames(udpard_tx_t* const self, const udpard_us_t n
         const bool              last_attempt = !cavl2_is_inserted(self->index_staged, &tr->index_staged);
         const bool              last_frame  = frame_next == NULL; // if not last attempt we will have to rewind to head.
         const udpard_tx_ejection_t ejection = {
-            .now                     = now,
-            .deadline                = tr->deadline,
-            .iface_index             = ifindex,
-            .dscp                    = self->dscp_value_per_priority[tr->priority],
-            .destination             = tr->destination[ifindex],
-            .datagram                = tx_frame_view(frame),
-            .user_transfer_reference = tr->user_transfer_reference,
+            .now         = now,
+            .deadline    = tr->deadline,
+            .iface_index = ifindex,
+            .dscp        = self->dscp_value_per_priority[tr->priority],
+            .destination = tr->destination[ifindex],
+            .datagram    = tx_frame_view(frame),
+            .user        = tr->user,
         };
         if (!self->vtable->eject(self, ejection)) { // The easy case -- no progress was made at this time;
             break;                                  // don't change anything, just try again later as-is

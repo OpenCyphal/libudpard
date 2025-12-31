@@ -305,7 +305,7 @@ void test_single_frame_transfer()
                                                    transfer_id,
                                                    payload_view,
                                                    nullptr,
-                                                   nullptr));
+                                                   UDPARD_USER_CONTEXT_NULL));
 
     udpard_tx_poll(&pub.tx, now, UDPARD_IFACE_MASK_ALL);
     TEST_ASSERT_EQUAL_size_t(1, pub.frames.size());
@@ -359,10 +359,17 @@ void test_multi_frame_transfer()
     const udpard_us_t now      = 1000000;
     const udpard_us_t deadline = now + 5000000;
 
-    TEST_ASSERT_GREATER_THAN_UINT32(
-      0U,
-      udpard_tx_push(
-        &pub.tx, now, deadline, udpard_prio_nominal, topic_hash, dest_eps.data(), 100, payload_view, nullptr, nullptr));
+    TEST_ASSERT_GREATER_THAN_UINT32(0U,
+                                    udpard_tx_push(&pub.tx,
+                                                   now,
+                                                   deadline,
+                                                   udpard_prio_nominal,
+                                                   topic_hash,
+                                                   dest_eps.data(),
+                                                   100,
+                                                   payload_view,
+                                                   nullptr,
+                                                   UDPARD_USER_CONTEXT_NULL));
 
     udpard_tx_poll(&pub.tx, now, UDPARD_IFACE_MASK_ALL);
     TEST_ASSERT_TRUE(pub.frames.size() > 1U);
@@ -423,7 +430,7 @@ void test_multi_frame_with_reordering()
                                                    50,
                                                    payload_view,
                                                    nullptr,
-                                                   nullptr));
+                                                   UDPARD_USER_CONTEXT_NULL));
 
     udpard_tx_poll(&pub.tx, now, UDPARD_IFACE_MASK_ALL);
 
@@ -494,7 +501,7 @@ void test_multiple_publishers()
                                                            transfer_id,
                                                            payload_view,
                                                            nullptr,
-                                                           nullptr));
+                                                           UDPARD_USER_CONTEXT_NULL));
 
             udpard_tx_poll(&publishers[i].tx, now, UDPARD_IFACE_MASK_ALL);
         }
@@ -574,7 +581,7 @@ void test_partial_frame_loss()
                                                    50,
                                                    payload_view,
                                                    nullptr,
-                                                   nullptr));
+                                                   UDPARD_USER_CONTEXT_NULL));
 
     udpard_tx_poll(&pub.tx, now, UDPARD_IFACE_MASK_ALL);
     TEST_ASSERT_TRUE(pub.frames.size() > 1U);
@@ -632,7 +639,7 @@ void test_no_loss_baseline()
                                                    75,
                                                    payload_view,
                                                    nullptr,
-                                                   nullptr));
+                                                   UDPARD_USER_CONTEXT_NULL));
 
     udpard_tx_poll(&pub.tx, now, UDPARD_IFACE_MASK_ALL);
 
@@ -691,7 +698,7 @@ void test_extent_truncation()
                                                    100,
                                                    payload_view,
                                                    nullptr,
-                                                   nullptr));
+                                                   UDPARD_USER_CONTEXT_NULL));
 
     udpard_tx_poll(&pub.tx, now, UDPARD_IFACE_MASK_ALL);
 

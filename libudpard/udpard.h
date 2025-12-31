@@ -158,6 +158,20 @@ typedef struct udpard_bytes_mut_t
     void*  data;
 } udpard_bytes_mut_t;
 
+/// The library carries the user-provided context from inputs to outputs without interpreting it,
+/// allowing the application to associate its own data with various entities inside the library.
+typedef struct udpard_user_context_t
+{
+    void (*fun)(void);
+    void* obj;
+} udpard_user_context_t;
+#if defined(__cplusplus)
+#define UDPARD_USER_CONTEXT_NULL \
+    udpard_user_context_t {}
+#else
+#define UDPARD_USER_CONTEXT_NULL ((udpard_user_context_t){ .fun = NULL, .obj = NULL })
+#endif
+
 /// Zeros if invalid/unset/unavailable.
 typedef struct udpard_udpip_ep_t
 {
@@ -335,7 +349,8 @@ typedef struct udpard_tx_feedback_t
 {
     uint64_t topic_hash;
     uint64_t transfer_id;
-    void*    user_transfer_reference; ///< This is the same pointer that was passed to udpard_tx_push().
+
+    udpard_user_context_t user; ///< Same value that was passed to udpard_tx_push().
 
     bool success; ///< False if no ack was received from the remote end before deadline expiration or forced eviction.
 } udpard_tx_feedback_t;
@@ -362,8 +377,8 @@ typedef struct udpard_tx_ejection_t
     /// udpard_tx_refcount_dec() must be invoked to release the reference.
     udpard_bytes_t datagram;
 
-    /// This is the same pointer that was passed to udpard_tx_push().
-    void* user_transfer_reference;
+    /// This is the same value that was passed to udpard_tx_push().
+    udpard_user_context_t user;
 } udpard_tx_ejection_t;
 
 /// Virtual function table for the TX pipeline, to be provided by the application.
@@ -466,8 +481,7 @@ bool udpard_tx_new(udpard_tx_t* const              self,
 /// such that it is likely to be distinct per application startup (embedded systems can use noinit memory sections,
 /// hash uninitialized SRAM, use timers or ADC noise, etc).
 ///
-/// The user_transfer_reference is an opaque pointer that will be stored for each enqueued item of this transfer.
-/// The library itself does not use or check this value in any way, so it can be NULL if not needed.
+/// The user context value is carried through to the callbacks; use UDPARD_USER_CONTEXT_NULL if not needed.
 ///
 /// The function returns the number of datagrams enqueued, which is always a positive number, on success.
 /// In case of failure, the function returns zero. Runtime failures increment the corresponding error counters,
@@ -498,7 +512,7 @@ uint32_t udpard_tx_push(udpard_tx_t* const             self,
                         const uint64_t                 transfer_id,
                         const udpard_bytes_scattered_t payload,
                         void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t), // NULL if best-effort.
-                        void* const user_transfer_reference);
+                        const udpard_user_context_t user);
 
 /// This is a specialization of the general push function for P2P transfers.
 /// It is used to send P2P responses to messages received from topics; the request_* values shall be taken from
@@ -516,7 +530,7 @@ uint32_t udpard_tx_push_p2p(udpard_tx_t* const             self,
                             const udpard_remote_t          remote, // Endpoints may be invalid for some ifaces.
                             const udpard_bytes_scattered_t payload,
                             void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t), // NULL if best-effort.
-                            void* const user_transfer_reference);
+                            const udpard_user_context_t user);
 
 /// This should be invoked whenever the socket/NIC of this queue becomes ready to accept new datagrams for transmission.
 /// It is fine to also invoke it periodically unconditionally to drive the transmission process.

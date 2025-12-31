@@ -107,7 +107,7 @@ constexpr udpard_tx_vtable_t tx_vtable{ .eject = &capture_tx_frame };
 
 void record_feedback(udpard_tx_t*, const udpard_tx_feedback_t fb)
 {
-    auto* ctx = static_cast<Context*>(fb.user_transfer_reference);
+    auto* ctx = static_cast<Context*>(fb.user.obj);
     if (ctx != nullptr) {
         if (fb.success) {
             ctx->reliable_feedback_success++;
@@ -310,7 +310,7 @@ void test_udpard_tx_rx_end_to_end()
                                                        transfer_id,
                                                        payload_view,
                                                        reliable ? &record_feedback : nullptr,
-                                                       reliable ? &ctx : nullptr));
+                                                       reliable ? make_user_context(&ctx) : UDPARD_USER_CONTEXT_NULL));
         udpard_tx_poll(&tx, now, UDPARD_IFACE_MASK_ALL);
 
         // Shuffle and push frames into the RX pipeline, simulating out-of-order redundant arrival.

@@ -55,7 +55,7 @@ constexpr udpard_tx_vtable_t tx_vtable{ .eject = &capture_tx_frame };
 
 void fb_record(udpard_tx_t*, const udpard_tx_feedback_t fb)
 {
-    auto* st = static_cast<FbState*>(fb.user_transfer_reference);
+    auto* st = static_cast<FbState*>(fb.user.obj);
     if (st != nullptr) {
         st->count++;
         st->success = fb.success;
@@ -166,7 +166,7 @@ struct Fixture
                                                        transfer_id,
                                                        payload,
                                                        nullptr,
-                                                       nullptr));
+                                                       UDPARD_USER_CONTEXT_NULL));
         udpard_tx_poll(&tx, ts, UDPARD_IFACE_MASK_ALL);
         TEST_ASSERT_GREATER_THAN_UINT32(0U, static_cast<uint32_t>(frames.size()));
         for (const auto& [datagram, iface_index] : frames) {
@@ -325,8 +325,17 @@ void test_udpard_tx_feedback_always_called()
         tx.user = &frames;
         FbState           fb{};
         udpard_udpip_ep_t dests[UDPARD_IFACE_COUNT_MAX] = { endpoint, {} };
-        TEST_ASSERT_GREATER_THAN_UINT32(
-          0, udpard_tx_push(&tx, 10, 10, udpard_prio_fast, 1, dests, 11, make_scattered(nullptr, 0), fb_record, &fb));
+        TEST_ASSERT_GREATER_THAN_UINT32(0,
+                                        udpard_tx_push(&tx,
+                                                       10,
+                                                       10,
+                                                       udpard_prio_fast,
+                                                       1,
+                                                       dests,
+                                                       11,
+                                                       make_scattered(nullptr, 0),
+                                                       fb_record,
+                                                       make_user_context(&fb)));
         udpard_tx_poll(&tx, 11, UDPARD_IFACE_MASK_ALL);
         TEST_ASSERT_EQUAL_size_t(1, fb.count);
         TEST_ASSERT_FALSE(fb.success);
@@ -343,11 +352,27 @@ void test_udpard_tx_feedback_always_called()
         FbState           fb_old{};
         FbState           fb_new{};
         udpard_udpip_ep_t dests[UDPARD_IFACE_COUNT_MAX] = { endpoint, {} };
-        TEST_ASSERT_GREATER_THAN_UINT32(
-          0,
-          udpard_tx_push(&tx, 0, 1000, udpard_prio_fast, 2, dests, 21, make_scattered(nullptr, 0), fb_record, &fb_old));
-        (void)udpard_tx_push(
-          &tx, 0, 1000, udpard_prio_fast, 3, dests, 22, make_scattered(nullptr, 0), fb_record, &fb_new);
+        TEST_ASSERT_GREATER_THAN_UINT32(0,
+                                        udpard_tx_push(&tx,
+                                                       0,
+                                                       1000,
+                                                       udpard_prio_fast,
+                                                       2,
+                                                       dests,
+                                                       21,
+                                                       make_scattered(nullptr, 0),
+                                                       fb_record,
+                                                       make_user_context(&fb_old)));
+        (void)udpard_tx_push(&tx,
+                             0,
+                             1000,
+                             udpard_prio_fast,
+                             3,
+                             dests,
+                             22,
+                             make_scattered(nullptr, 0),
+                             fb_record,
+                             make_user_context(&fb_new));
         TEST_ASSERT_EQUAL_size_t(1, fb_old.count);
         TEST_ASSERT_FALSE(fb_old.success);
         TEST_ASSERT_GREATER_OR_EQUAL_UINT64(1, tx.errors_sacrifice);
@@ -364,8 +389,17 @@ void test_udpard_tx_feedback_always_called()
         tx.user = &frames;
         FbState           fb{};
         udpard_udpip_ep_t dests[UDPARD_IFACE_COUNT_MAX] = { endpoint, {} };
-        TEST_ASSERT_GREATER_THAN_UINT32(
-          0, udpard_tx_push(&tx, 0, 1000, udpard_prio_fast, 4, dests, 33, make_scattered(nullptr, 0), fb_record, &fb));
+        TEST_ASSERT_GREATER_THAN_UINT32(0,
+                                        udpard_tx_push(&tx,
+                                                       0,
+                                                       1000,
+                                                       udpard_prio_fast,
+                                                       4,
+                                                       dests,
+                                                       33,
+                                                       make_scattered(nullptr, 0),
+                                                       fb_record,
+                                                       make_user_context(&fb)));
         udpard_tx_free(&tx);
         TEST_ASSERT_EQUAL_size_t(1, fb.count);
         TEST_ASSERT_FALSE(fb.success);
@@ -430,7 +464,7 @@ void test_udpard_tx_push_p2p()
                                                        remote,
                                                        payload,
                                                        nullptr,
-                                                       nullptr));
+                                                       UDPARD_USER_CONTEXT_NULL));
     udpard_tx_poll(&tx, now, UDPARD_IFACE_MASK_ALL);
     TEST_ASSERT_FALSE(frames.empty());
 
@@ -519,7 +553,7 @@ void test_udpard_rx_p2p_malformed_kind()
                                                    42U,
                                                    payload,
                                                    nullptr,
-                                                   nullptr));
+                                                   UDPARD_USER_CONTEXT_NULL));
     udpard_tx_poll(&tx, now, UDPARD_IFACE_MASK_ALL);
     TEST_ASSERT_FALSE(frames.empty());
 
@@ -614,7 +648,7 @@ void test_udpard_tx_minimum_mtu()
                                                    1U,
                                                    payload_view,
                                                    nullptr,
-                                                   nullptr));
+                                                   UDPARD_USER_CONTEXT_NULL));
     udpard_tx_poll(&tx, now, UDPARD_IFACE_MASK_ALL);
 
     // With minimum MTU, we should have multiple frames
@@ -758,7 +792,7 @@ void test_udpard_rx_zero_extent()
                                                    5U,
                                                    payload_view,
                                                    nullptr,
-                                                   nullptr));
+                                                   UDPARD_USER_CONTEXT_NULL));
     udpard_tx_poll(&tx, now, UDPARD_IFACE_MASK_ALL);
     TEST_ASSERT_FALSE(frames.empty());
 
@@ -810,7 +844,7 @@ void test_udpard_empty_payload()
                                                    10U,
                                                    empty_payload,
                                                    nullptr,
-                                                   nullptr));
+                                                   UDPARD_USER_CONTEXT_NULL));
     udpard_tx_poll(&fix.tx, 0, UDPARD_IFACE_MASK_ALL);
     TEST_ASSERT_FALSE(fix.frames.empty());
 
@@ -851,7 +885,7 @@ void test_udpard_all_priority_levels()
                                                        100U + prio,
                                                        payload_view,
                                                        nullptr,
-                                                       nullptr));
+                                                       UDPARD_USER_CONTEXT_NULL));
         udpard_tx_poll(&fix.tx, now, UDPARD_IFACE_MASK_ALL);
         TEST_ASSERT_FALSE(fix.frames.empty());
 
@@ -926,7 +960,7 @@ void test_udpard_topic_hash_collision()
                                                    1U,
                                                    payload_view,
                                                    nullptr,
-                                                   nullptr));
+                                                   UDPARD_USER_CONTEXT_NULL));
     udpard_tx_poll(&tx, now, UDPARD_IFACE_MASK_ALL);
     TEST_ASSERT_FALSE(frames.empty());
 
