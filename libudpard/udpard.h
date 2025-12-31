@@ -162,10 +162,10 @@ typedef struct udpard_bytes_mut_t
 /// allowing the application to associate its own data with various entities inside the library.
 typedef struct udpard_user_context_t
 {
-    void (*fun)(void);
+    void (*fun)(void); // NOLINT(*-void-arg)
     void* obj;
 } udpard_user_context_t;
-#if defined(__cplusplus)
+#ifdef __cplusplus
 #define UDPARD_USER_CONTEXT_NULL \
     udpard_user_context_t {}
 #else
