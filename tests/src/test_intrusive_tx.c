@@ -181,15 +181,12 @@ static void test_tx_validation_and_free(void)
       &tx.index_deadline, &tr->deadline, tx_cavl_compare_deadline, &tr->index_deadline, cavl2_trivial_factory);
     (void)cavl2_find_or_insert(
       &tx.index_transfer, &key, tx_cavl_compare_transfer, &tr->index_transfer, cavl2_trivial_factory);
-    (void)cavl2_find_or_insert(&tx.index_transfer_remote,
-                               &key,
-                               tx_cavl_compare_transfer_remote,
-                               &tr->index_transfer_remote,
-                               cavl2_trivial_factory);
+    (void)cavl2_find_or_insert(
+      &tx.index_transfer_ack, &key, tx_cavl_compare_transfer_remote, &tr->index_transfer_ack, cavl2_trivial_factory);
     enlist_head(&tx.agewise, &tr->agewise);
     tx_transfer_retire(&tx, tr, true);
     TEST_ASSERT_NULL(tx.index_staged);
-    TEST_ASSERT_NULL(tx.index_transfer_remote);
+    TEST_ASSERT_NULL(tx.index_transfer_ack);
     instrumented_allocator_reset(&alloc_transfer);
     instrumented_allocator_reset(&alloc_payload);
 }
@@ -230,16 +227,16 @@ static void test_tx_comparators_and_feedback(void)
 
     // Remote comparator mirrors the above.
     tx_transfer_key_t rkey = { .topic_hash = 2, .transfer_id = 1 };
-    TEST_ASSERT_EQUAL(-1, tx_cavl_compare_transfer_remote(&rkey, &tr.index_transfer_remote));
+    TEST_ASSERT_EQUAL(-1, tx_cavl_compare_transfer_remote(&rkey, &tr.index_transfer_ack));
     rkey.topic_hash = 5;
-    TEST_ASSERT_EQUAL(1, tx_cavl_compare_transfer_remote(&rkey, &tr.index_transfer_remote));
+    TEST_ASSERT_EQUAL(1, tx_cavl_compare_transfer_remote(&rkey, &tr.index_transfer_ack));
     rkey.topic_hash  = tr.remote_topic_hash;
     rkey.transfer_id = 2;
-    TEST_ASSERT_EQUAL(-1, tx_cavl_compare_transfer_remote(&rkey, &tr.index_transfer_remote));
+    TEST_ASSERT_EQUAL(-1, tx_cavl_compare_transfer_remote(&rkey, &tr.index_transfer_ack));
     rkey.transfer_id = 6;
-    TEST_ASSERT_EQUAL(1, tx_cavl_compare_transfer_remote(&rkey, &tr.index_transfer_remote));
+    TEST_ASSERT_EQUAL(1, tx_cavl_compare_transfer_remote(&rkey, &tr.index_transfer_ack));
     rkey.transfer_id = tr.remote_transfer_id;
-    TEST_ASSERT_EQUAL(0, tx_cavl_compare_transfer_remote(&rkey, &tr.index_transfer_remote));
+    TEST_ASSERT_EQUAL(0, tx_cavl_compare_transfer_remote(&rkey, &tr.index_transfer_ack));
 }
 
 static void test_tx_spool_and_queue_errors(void)
@@ -372,10 +369,10 @@ static void test_tx_ack_and_scheduler(void)
     prior.destination[0]     = make_ep(3);
     prior.remote_topic_hash  = 7;
     prior.remote_transfer_id = 8;
-    cavl2_find_or_insert(&tx2.index_transfer_remote,
+    cavl2_find_or_insert(&tx2.index_transfer_ack,
                          &(tx_transfer_key_t){ .topic_hash = 7, .transfer_id = 8 },
                          tx_cavl_compare_transfer_remote,
-                         &prior.index_transfer_remote,
+                         &prior.index_transfer_ack,
                          cavl2_trivial_factory);
     rx.errors_ack_tx = 0;
     rx.tx            = &tx2;

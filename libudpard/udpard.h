@@ -329,6 +329,7 @@ typedef struct udpard_tx_mem_resources_t
 } udpard_tx_mem_resources_t;
 
 /// Outcome notification for a reliable transfer previously scheduled for transmission.
+/// For P2P transfers, the topic hash and the transfer-ID values specify which message this is a response to.
 typedef struct udpard_tx_feedback_t
 {
     uint64_t topic_hash;
@@ -427,7 +428,7 @@ struct udpard_tx_t
     udpard_tree_t* index_staged;
     udpard_tree_t* index_deadline;
     udpard_tree_t* index_transfer;
-    udpard_tree_t* index_transfer_remote;
+    udpard_tree_t* index_transfer_ack;
 
     /// Opaque pointer for the application use only. Not accessed by the library.
     void* user;
@@ -500,7 +501,8 @@ uint32_t udpard_tx_push(udpard_tx_t* const             self,
 
 /// This is a specialization of the general push function for P2P transfers.
 /// It is used to send P2P responses to messages received from topics; the request_* values shall be taken from
-/// the message transfer that is being responded to.
+/// the message transfer that is being responded to. The topic_hash and the transfer_id fields of the feedback struct
+/// will be set to the request_topic_hash and request_transfer_id values, respectively.
 /// P2P transfers are a bit more complex because they carry some additional metadata that is automatically
 /// composed/parsed by the library transparently for the application.
 /// The size of the serialized payload will include UDPARD_P2P_HEADER_BYTES additional bytes for the P2P header.

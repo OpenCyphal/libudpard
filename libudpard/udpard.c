@@ -208,6 +208,17 @@ static void bytes_scattered_read(bytes_scattered_reader_t* const reader, const s
     }
 }
 
+static size_t bytes_scattered_size(const udpard_bytes_scattered_t head)
+{
+    size_t                          size    = head.bytes.size;
+    const udpard_bytes_scattered_t* current = head.next;
+    while (current != NULL) {
+        size += current->bytes.size;
+        current = current->next;
+    }
+    return size;
+}
+
 /// We require that the fragment tree does not contain fully-contained or equal-range fragments. This implies that no
 /// two fragments have the same offset, and that fragments ordered by offset also order by their ends.
 static int32_t cavl_compare_fragment_offset(const void* const user, const udpard_tree_t* const node)
@@ -579,6 +590,7 @@ typedef struct tx_transfer_t
     udpard_tree_t        index_transfer; ///< Specific transfer lookup for ack management. Key: tx_transfer_key_t
     udpard_list_member_t queue[UDPARD_IFACE_COUNT_MAX]; ///< Listed when ready for transmission.
     udpard_list_member_t agewise;                       ///< Listed when created; oldest at the tail.
+    udpard_tree_t        index_transfer_ack; ///< Only for acks. Key: tx_transfer_key_t but referencing remote_*.
 
     /// We always keep a pointer to the head, plus a cursor that scans the frames during transmission.
     /// Both are NULL if the payload is destroyed.
@@ -592,8 +604,14 @@ typedef struct tx_transfer_t
     udpard_us_t  staged_until;
 
     /// Constant transfer properties supplied by the client.
+    /// The remote_* fields are identical to the local ones except in the case of P2P transfers, where
+    /// they contain the values encoded in the P2P header. This is needed to find pending acks (to minimize duplicates),
+    /// and to report the correct values via the feedback callback.
+    /// By default, the remote_* fields equal the local ones.
     uint64_t          topic_hash;
     uint64_t          transfer_id;
+    uint64_t          remote_topic_hash;
+    uint64_t          remote_transfer_id;
     udpard_us_t       deadline;
     bool              reliable;
     udpard_prio_t     priority;
@@ -601,14 +619,6 @@ typedef struct tx_transfer_t
     void*             user_transfer_reference;
 
     void (*feedback)(udpard_tx_t*, udpard_tx_feedback_t);
-
-    /// These entities are specific to outgoing acks only. I considered extracting them into a polymorphic
-    /// tx_transfer_ack_t subtype with a virtual destructor, but it adds a bit more complexity than I would like
-    /// to tolerate for a gain of only a dozen bytes per transfer object.
-    /// These are unused for non-ack transfers.
-    udpard_tree_t index_transfer_remote; ///< Key: tx_transfer_key_t but referencing the remotes.
-    uint64_t      remote_topic_hash;
-    uint64_t      remote_transfer_id;
 } tx_transfer_t;
 
 static bool tx_validate_mem_resources(const udpard_tx_mem_resources_t memory)
@@ -639,8 +649,8 @@ static void tx_transfer_free_payload(tx_transfer_t* const tr)
 static void tx_transfer_retire(udpard_tx_t* const tx, tx_transfer_t* const tr, const bool success)
 {
     // Construct the feedback object first before the transfer is destroyed.
-    const udpard_tx_feedback_t fb = { .topic_hash              = tr->topic_hash,
-                                      .transfer_id             = tr->transfer_id,
+    const udpard_tx_feedback_t fb = { .topic_hash              = tr->remote_topic_hash,
+                                      .transfer_id             = tr->remote_transfer_id,
                                       .user_transfer_reference = tr->user_transfer_reference,
                                       .success                 = success };
     UDPARD_ASSERT(tr->reliable == (tr->feedback != NULL));
@@ -655,7 +665,7 @@ static void tx_transfer_retire(udpard_tx_t* const tx, tx_transfer_t* const tr, c
     (void)cavl2_remove_if(&tx->index_staged, &tr->index_staged);
     cavl2_remove(&tx->index_deadline, &tr->index_deadline);
     cavl2_remove(&tx->index_transfer, &tr->index_transfer);
-    (void)cavl2_remove_if(&tx->index_transfer_remote, &tr->index_transfer_remote);
+    (void)cavl2_remove_if(&tx->index_transfer_ack, &tr->index_transfer_ack);
 
     // Free the memory. The payload memory may already be empty depending on where we were invoked from.
     tx_transfer_free_payload(tr);
@@ -712,7 +722,7 @@ static int32_t tx_cavl_compare_transfer(const void* const user, const udpard_tre
 static int32_t tx_cavl_compare_transfer_remote(const void* const user, const udpard_tree_t* const node)
 {
     const tx_transfer_key_t* const key = (const tx_transfer_key_t*)user;
-    const tx_transfer_t* const tr = CAVL2_TO_OWNER(node, tx_transfer_t, index_transfer_remote); // clang-format off
+    const tx_transfer_t* const tr = CAVL2_TO_OWNER(node, tx_transfer_t, index_transfer_ack); // clang-format off
     if (key->topic_hash  < tr->remote_topic_hash)  { return -1; }
     if (key->topic_hash  > tr->remote_topic_hash)  { return +1; }
     if (key->transfer_id < tr->remote_transfer_id) { return -1; }
@@ -894,6 +904,8 @@ static uint32_t tx_push(udpard_tx_t* const             tx,
     tr->staged_until            = now;
     tr->topic_hash              = meta.topic_hash;
     tr->transfer_id             = meta.transfer_id;
+    tr->remote_topic_hash       = meta.topic_hash;
+    tr->remote_transfer_id      = meta.transfer_id;
     tr->deadline                = deadline;
     tr->reliable                = meta.flag_ack;
     tr->priority                = meta.priority;
@@ -1001,9 +1013,9 @@ static void tx_send_ack(udpard_rx_t* const    rx,
         // Check if an ack for this transfer is already enqueued.
         const tx_transfer_key_t key = { .topic_hash = topic_hash, .transfer_id = transfer_id };
         tx_transfer_t* const    prior =
-          CAVL2_TO_OWNER(cavl2_find(tx->index_transfer_remote, &key, &tx_cavl_compare_transfer_remote),
+          CAVL2_TO_OWNER(cavl2_find(tx->index_transfer_ack, &key, &tx_cavl_compare_transfer_remote),
                          tx_transfer_t,
-                         index_transfer_remote);
+                         index_transfer_ack);
         const uint32_t prior_ep_mask = (prior != NULL) ? valid_ep_mask(prior->destination) : 0U;
         const uint32_t new_ep_mask   = valid_ep_mask(remote.endpoints);
         const bool     new_better    = (new_ep_mask & (~prior_ep_mask)) != 0U;
@@ -1052,10 +1064,10 @@ static void tx_send_ack(udpard_rx_t* const    rx,
             UDPARD_ASSERT(tr != NULL);
             tr->remote_topic_hash  = topic_hash;
             tr->remote_transfer_id = transfer_id;
-            (void)cavl2_find_or_insert(&tx->index_transfer_remote,
+            (void)cavl2_find_or_insert(&tx->index_transfer_ack,
                                        &key,
                                        tx_cavl_compare_transfer_remote,
-                                       &tr->index_transfer_remote,
+                                       &tr->index_transfer_ack,
                                        cavl2_trivial_factory);
         } else {
             rx->errors_ack_tx++;
@@ -1115,23 +1127,15 @@ uint32_t udpard_tx_push(udpard_tx_t* const             self,
                     ((payload.bytes.data != NULL) || (payload.bytes.size == 0U)) &&
                     (tx_transfer_find(self, topic_hash, transfer_id) == NULL);
     if (ok) {
-        // Before attempting to enqueue a new transfer, we need to update the transmission scheduler.
-        // It may release some items from the tx queue, and it may also promote some staged transfers to the queue.
         udpard_tx_poll(self, now, UDPARD_IFACE_MASK_ALL);
-        // Compute the total payload size.
-        size_t                          size    = payload.bytes.size;
-        const udpard_bytes_scattered_t* current = payload.next;
-        while (current != NULL) {
-            size += current->bytes.size;
-            current = current->next;
+        const meta_t meta = {
+            .priority              = priority,
+            .flag_ack              = feedback != NULL,
+            .transfer_payload_size = (uint32_t)bytes_scattered_size(payload),
+            .transfer_id           = transfer_id,
+            .sender_uid            = self->local_uid,
+            .topic_hash            = topic_hash,
         };
-        // Enqueue the transfer.
-        const meta_t meta = { .priority              = priority,
-                              .flag_ack              = feedback != NULL,
-                              .transfer_payload_size = (uint32_t)size,
-                              .transfer_id           = transfer_id,
-                              .sender_uid            = self->local_uid,
-                              .topic_hash            = topic_hash };
         out = tx_push(self, now, deadline, meta, remote_ep, payload, feedback, user_transfer_reference, NULL);
     }
     return out;
@@ -1148,9 +1152,13 @@ uint32_t udpard_tx_push_p2p(udpard_tx_t* const             self,
                             void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t),
                             void* const user_transfer_reference)
 {
-    uint32_t out = 0;
-    if (self != NULL) {
-        // Serialize the P2P header.
+    uint32_t   out = 0;
+    const bool ok  = (self != NULL) && (deadline >= now) && (now >= 0) && (self->local_uid != 0) &&
+                    (valid_ep_mask(remote.endpoints) != 0) && (priority <= UDPARD_PRIORITY_MAX) &&
+                    ((payload.bytes.data != NULL) || (payload.bytes.size == 0U));
+    if (ok) {
+        udpard_tx_poll(self, now, UDPARD_IFACE_MASK_ALL);
+        // Serialize the P2P header and prepend it to the payload.
         byte_t  header[UDPARD_P2P_HEADER_BYTES];
         byte_t* ptr = header;
         *ptr++      = P2P_KIND_RESPONSE;
@@ -1159,20 +1167,25 @@ uint32_t udpard_tx_push_p2p(udpard_tx_t* const             self,
         ptr = serialize_u64(ptr, request_transfer_id);
         UDPARD_ASSERT((ptr - header) == UDPARD_P2P_HEADER_BYTES);
         (void)ptr;
-        // Construct the full P2P payload with the header prepended. No copying needed!
-        const udpard_bytes_scattered_t headed_payload = { .bytes = { .size = UDPARD_P2P_HEADER_BYTES, .data = header },
-                                                          .next  = &payload };
-        // Enqueue the transfer.
-        out = udpard_tx_push(self,
-                             now,
-                             deadline,
-                             priority,
-                             remote.uid,
-                             remote.endpoints,
-                             self->p2p_transfer_id++,
-                             headed_payload,
-                             feedback,
-                             user_transfer_reference);
+        const udpard_bytes_scattered_t full_payload = { .bytes = { .size = UDPARD_P2P_HEADER_BYTES, .data = header },
+                                                        .next  = &payload };
+        // Enqueue the transfer, having propagated the scheduler state beforehand.
+        const meta_t meta = {
+            .priority              = priority,
+            .flag_ack              = feedback != NULL,
+            .transfer_payload_size = (uint32_t)bytes_scattered_size(full_payload),
+            .transfer_id           = self->p2p_transfer_id++,
+            .sender_uid            = self->local_uid,
+            .topic_hash            = remote.uid,
+        };
+        tx_transfer_t* tr = NULL;
+        out =
+          tx_push(self, now, deadline, meta, remote.endpoints, full_payload, feedback, user_transfer_reference, &tr);
+        if (out > 0) {
+            UDPARD_ASSERT(tr != NULL);
+            tr->remote_topic_hash  = request_topic_hash;
+            tr->remote_transfer_id = request_transfer_id;
+        }
     }
     return out;
 }
