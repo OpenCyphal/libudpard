@@ -63,7 +63,7 @@ struct FeedbackState
 
 void record_feedback(udpard_tx_t*, const udpard_tx_feedback_t fb)
 {
-    auto* st = static_cast<FeedbackState*>(fb.user.obj);
+    auto* st = static_cast<FeedbackState*>(fb.user.data[0]);
     if (st != nullptr) {
         st->count++;
         st->success     = fb.success;

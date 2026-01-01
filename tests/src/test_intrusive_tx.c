@@ -58,7 +58,7 @@ static bool eject_with_log(udpard_tx_t* const tx, const udpard_tx_ejection_t eje
 static void record_feedback(udpard_tx_t* const tx, const udpard_tx_feedback_t fb)
 {
     (void)tx;
-    feedback_state_t* const st = (feedback_state_t*)fb.user.obj;
+    feedback_state_t* const st = (feedback_state_t*)fb.user.data[0];
     if (st != NULL) {
         st->count++;
         st->last = fb;

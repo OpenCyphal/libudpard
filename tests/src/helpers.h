@@ -67,7 +67,8 @@ static inline udpard_bytes_scattered_t make_scattered(const void* const data, co
 // Wraps an application pointer for user context plumbing.
 static inline udpard_user_context_t make_user_context(void* const obj)
 {
-    udpard_user_context_t out = { .fun = NULL, .obj = obj };
+    udpard_user_context_t out = UDPARD_USER_CONTEXT_NULL;
+    out.data[0]               = obj;
     return out;
 }
 
