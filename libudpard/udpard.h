@@ -162,7 +162,7 @@ typedef struct udpard_bytes_mut_t
 /// allowing the application to associate its own data with various entities inside the library.
 typedef struct udpard_user_context_t
 {
-    void* data[5]; ///< The size is chosen rather arbitrarily; the library doesn't care. Can be configured ad-hoc.
+    void* data[6]; ///< The size is chosen rather arbitrarily; the library doesn't care. Can be configured ad-hoc.
 } udpard_user_context_t;
 #ifdef __cplusplus
 #define UDPARD_USER_CONTEXT_NULL \
