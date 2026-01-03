@@ -61,7 +61,11 @@ typedef unsigned char byte_t; ///< For compatibility with platforms where byte s
 
 /// In the ORDERED reassembly mode, with the most recently received transfer-ID N, the library will reject
 /// transfers with transfer-ID less than or equal to N-ORDERING_WINDOW (modulo 2^64) as late.
-#define RX_TRANSFER_ORDERING_WINDOW 1024U
+/// This limit is chosen rather arbitrarily; its value does not affect the resource utilization in any way.
+/// One trade-off to keep in mind is that a very large window may somewhat increase the likelihood of choosing a new
+/// random transfer-ID that falls within the window, thus being rejected as late by receivers; however, given the
+/// 64-bit ID space, this value will have to be extremely large to have any measurable effect on that probability.
+#define RX_TRANSFER_ORDERING_WINDOW 8192U
 
 #define UDP_PORT          9382U
 #define IPv4_MCAST_PREFIX 0xEF000000UL

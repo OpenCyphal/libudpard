@@ -303,6 +303,41 @@ void test_udpard_rx_ordered_head_advanced_late()
     TEST_ASSERT_EQUAL_size_t(0, fix.ctx.collisions);
 }
 
+/// ORDERED mode rejects transfer-IDs far behind the recent history window.
+void test_udpard_rx_ordered_reject_far_past()
+{
+    Fixture     fix{ 50 };
+    udpard_us_t now = 0;
+
+    fix.push_single(now, 200000);
+    udpard_rx_poll(&fix.rx, now);
+
+    now = 60;
+    udpard_rx_poll(&fix.rx, now);
+
+    const uint64_t late_tid_close = 200000 - 1000;
+    fix.push_single(++now, late_tid_close);
+    udpard_rx_poll(&fix.rx, now);
+    udpard_rx_poll(&fix.rx, now + 100);
+
+    const uint64_t far_past_tid = 200000 - 100000;
+    fix.push_single(++now, far_past_tid);
+    udpard_rx_poll(&fix.rx, now);
+    udpard_rx_poll(&fix.rx, now + 50);
+
+    const uint64_t recent_tid = 200001;
+    fix.push_single(++now, recent_tid);
+    udpard_rx_poll(&fix.rx, now);
+    udpard_rx_poll(&fix.rx, now + 50);
+
+    constexpr std::array<uint64_t, 3> expected{ 200000, far_past_tid, recent_tid };
+    TEST_ASSERT_EQUAL_size_t(expected.size(), fix.ctx.ids.size());
+    for (size_t i = 0; i < expected.size(); i++) {
+        TEST_ASSERT_EQUAL_UINT64(expected[i], fix.ctx.ids[i]);
+    }
+    TEST_ASSERT_EQUAL_size_t(0, fix.ctx.collisions);
+}
+
 // Feedback must fire regardless of disposal path.
 void test_udpard_tx_feedback_always_called()
 {
@@ -1001,6 +1036,7 @@ int main()
     RUN_TEST(test_udpard_rx_unordered_duplicates);
     RUN_TEST(test_udpard_rx_ordered_out_of_order);
     RUN_TEST(test_udpard_rx_ordered_head_advanced_late);
+    RUN_TEST(test_udpard_rx_ordered_reject_far_past);
     RUN_TEST(test_udpard_tx_feedback_always_called);
     RUN_TEST(test_udpard_tx_push_p2p);
     RUN_TEST(test_udpard_rx_p2p_malformed_kind);
