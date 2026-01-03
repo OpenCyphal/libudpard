@@ -1301,6 +1301,24 @@ void udpard_tx_poll(udpard_tx_t* const self, const udpard_us_t now, const uint32
     }
 }
 
+uint32_t udpard_tx_pending_iface_mask(const udpard_tx_t* const self)
+{
+    uint32_t mask = 0;
+    if (self != NULL) {
+        // Even though it's constant-time, I still mildly dislike this loop. Shall it become a bottleneck,
+        // we could modify the TX state to keep a mask of pending interfaces updated incrementally.
+        for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
+            for (size_t p = 0; p < UDPARD_PRIORITY_COUNT; p++) {
+                if (self->queue[i][p].head != NULL) {
+                    mask |= (1U << i);
+                    break;
+                }
+            }
+        }
+    }
+    return mask;
+}
+
 void udpard_tx_refcount_inc(const udpard_bytes_t tx_payload_view)
 {
     if (tx_payload_view.data != NULL) {

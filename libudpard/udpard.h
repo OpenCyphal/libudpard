@@ -540,6 +540,11 @@ uint32_t udpard_tx_push_p2p(udpard_tx_t* const             self,
 /// The function may deallocate memory. The time complexity is logarithmic in the number of enqueued transfers.
 void udpard_tx_poll(udpard_tx_t* const self, const udpard_us_t now, const uint32_t iface_mask);
 
+/// Returns a bitmask of interfaces that have pending transmissions. This is useful for IO multiplexing loops.
+/// Zero indicates that there are no pending transmissions.
+/// Which interfaces are usable is defined by the remote endpoints provided when pushing transfers.
+uint32_t udpard_tx_pending_iface_mask(const udpard_tx_t* const self);
+
 /// When a datagram is ejected and the application opts to keep it, these functions must be used to manage the
 /// datagram buffer lifetime. The datagram will be freed once the reference count reaches zero.
 void udpard_tx_refcount_inc(const udpard_bytes_t tx_payload_view);
