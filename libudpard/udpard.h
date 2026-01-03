@@ -480,6 +480,7 @@ bool udpard_tx_new(udpard_tx_t* const              self,
 /// There shall be a separate transfer-ID counter per topic. The initial value shall be chosen randomly
 /// such that it is likely to be distinct per application startup (embedded systems can use noinit memory sections,
 /// hash uninitialized SRAM, use timers or ADC noise, etc).
+/// Related thread on random transfer-ID init: https://forum.opencyphal.org/t/improve-the-transfer-id-timeout/2375
 ///
 /// The user context value is carried through to the callbacks; use UDPARD_USER_CONTEXT_NULL if not needed.
 ///
