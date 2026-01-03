@@ -42,16 +42,16 @@ void tx_refcount_free(void* const user, const size_t size, void* const payload)
     udpard_tx_refcount_dec(udpard_bytes_t{ .size = size, .data = payload });
 }
 
-bool capture_tx_frame(udpard_tx_t* const tx, const udpard_tx_ejection_t ejection)
+bool capture_tx_frame(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejection)
 {
     auto* frames = static_cast<std::vector<CapturedFrame>*>(tx->user);
     if (frames == nullptr) {
         return false;
     }
-    udpard_tx_refcount_inc(ejection.datagram);
-    void* const data = const_cast<void*>(ejection.datagram.data); // NOLINT(cppcoreguidelines-pro-type-const-cast)
-    frames->push_back(CapturedFrame{ .datagram    = { .size = ejection.datagram.size, .data = data },
-                                     .iface_index = ejection.iface_index });
+    udpard_tx_refcount_inc(ejection->datagram);
+    void* const data = const_cast<void*>(ejection->datagram.data); // NOLINT(cppcoreguidelines-pro-type-const-cast)
+    frames->push_back(CapturedFrame{ .datagram    = { .size = ejection->datagram.size, .data = data },
+                                     .iface_index = ejection->iface_index });
     return true;
 }
 

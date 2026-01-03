@@ -1251,25 +1251,23 @@ static void tx_eject_pending_frames(udpard_tx_t* const self, const udpard_us_t n
         const tx_frame_t* const frame        = tr->cursor[ifindex];
         tx_frame_t* const       frame_next   = frame->next;
         const bool              last_attempt = !cavl2_is_inserted(self->index_staged, &tr->index_staged);
-        const bool              last_frame  = frame_next == NULL; // if not last attempt we will have to rewind to head.
-        const udpard_tx_ejection_t ejection = {
-            .now         = now,
-            .deadline    = tr->deadline,
-            .iface_index = ifindex,
-            .dscp        = self->dscp_value_per_priority[tr->priority],
-            .destination = tr->destination[ifindex],
-            .datagram    = tx_frame_view(frame),
-            .user        = tr->user,
-        };
-        if (!self->vtable->eject(self, ejection)) { // The easy case -- no progress was made at this time;
-            break;                                  // don't change anything, just try again later as-is
+        const bool              last_frame = frame_next == NULL; // if not last attempt we will have to rewind to head.
+        udpard_tx_ejection_t    ejection   = { .now         = now,
+                                               .deadline    = tr->deadline,
+                                               .iface_index = ifindex,
+                                               .dscp        = self->dscp_value_per_priority[tr->priority],
+                                               .destination = tr->destination[ifindex],
+                                               .datagram    = tx_frame_view(frame),
+                                               .user        = tr->user };
+        if (!self->vtable->eject(self, &ejection)) { // The easy case -- no progress was made at this time;
+            break;                                   // don't change anything, just try again later as-is
         }
 
         // Frame ejected successfully. Update the transfer state to get ready for the next frame.
         if (last_attempt) { // no need to keep frames that we will no longer use; free early to reduce pressure
             UDPARD_ASSERT(tr->head[ifindex] == tr->cursor[ifindex]);
             tr->head[ifindex] = frame_next;
-            udpard_tx_refcount_dec(ejection.datagram);
+            udpard_tx_refcount_dec(tx_frame_view(frame));
         }
         tr->cursor[ifindex] = frame_next;
 

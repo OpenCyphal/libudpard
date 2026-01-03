@@ -99,7 +99,7 @@ struct CapturedFrame
 // Callbacks
 // =====================================================================================================================
 
-bool capture_frame(udpard_tx_t* const tx, const udpard_tx_ejection_t ejection)
+bool capture_frame(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejection)
 {
     auto* frames = static_cast<std::vector<CapturedFrame>*>(tx->user);
     if (frames == nullptr) {
@@ -107,9 +107,9 @@ bool capture_frame(udpard_tx_t* const tx, const udpard_tx_ejection_t ejection)
     }
 
     CapturedFrame frame{};
-    frame.data.assign(static_cast<const uint8_t*>(ejection.datagram.data),
-                      static_cast<const uint8_t*>(ejection.datagram.data) + ejection.datagram.size);
-    frame.iface_index = ejection.iface_index;
+    frame.data.assign(static_cast<const uint8_t*>(ejection->datagram.data),
+                      static_cast<const uint8_t*>(ejection->datagram.data) + ejection->datagram.size);
+    frame.iface_index = ejection->iface_index;
     frames->push_back(frame);
 
     return true;

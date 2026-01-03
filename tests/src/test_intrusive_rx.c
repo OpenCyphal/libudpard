@@ -1603,25 +1603,25 @@ typedef struct
     size_t                   captured_count;
 } tx_fixture_t;
 
-static bool tx_capture_ack(udpard_tx_t* const tx, const udpard_tx_ejection_t ejection)
+static bool tx_capture_ack(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejection)
 {
     tx_fixture_t* const self = (tx_fixture_t*)tx->user;
     if ((self == NULL) || (self->captured_count >= (sizeof(self->captured) / sizeof(self->captured[0])))) {
         return false;
     }
-    udpard_tx_refcount_inc(ejection.datagram);
+    udpard_tx_refcount_inc(ejection->datagram);
     meta_t         meta         = { 0 };
     uint32_t       frame_index  = 0;
     uint32_t       frame_offset = 0;
     uint32_t       prefix_crc   = 0;
     udpard_bytes_t payload      = { 0 };
-    const bool     ok =
-      header_deserialize((udpard_bytes_mut_t){ .size = ejection.datagram.size, .data = (void*)ejection.datagram.data },
-                         &meta,
-                         &frame_index,
-                         &frame_offset,
-                         &prefix_crc,
-                         &payload);
+    const bool     ok           = header_deserialize(
+      (udpard_bytes_mut_t){ .size = ejection->datagram.size, .data = (void*)ejection->datagram.data },
+      &meta,
+      &frame_index,
+      &frame_offset,
+      &prefix_crc,
+      &payload);
     if (ok && (frame_index == 0U) && (frame_offset == 0U) && (payload.size == UDPARD_P2P_HEADER_BYTES)) {
         const byte_t* const pl = (const byte_t*)payload.data;
         if (pl[0] == P2P_KIND_ACK) {
@@ -1629,12 +1629,12 @@ static bool tx_capture_ack(udpard_tx_t* const tx, const udpard_tx_ejection_t eje
             info->priority            = meta.priority;
             info->transfer_id         = meta.transfer_id;
             info->topic_hash          = meta.topic_hash;
-            info->destination         = ejection.destination;
+            info->destination         = ejection->destination;
             (void)deserialize_u64(pl + 8U, &info->acked_topic_hash);
             (void)deserialize_u64(pl + 16U, &info->acked_transfer_id);
         }
     }
-    udpard_tx_refcount_dec(ejection.datagram);
+    udpard_tx_refcount_dec(ejection->datagram);
     return true;
 }
 

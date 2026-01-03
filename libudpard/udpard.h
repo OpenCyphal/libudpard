@@ -365,6 +365,7 @@ typedef struct udpard_tx_ejection_t
 
     /// Specifies when the frame should be considered expired and dropped if not yet transmitted by then;
     /// it is optional to use depending on the implementation of the NIC driver (most traditional drivers ignore it).
+    /// The library guarantees that now >= deadline at the time of ejection -- expired frames are purged beforehand.
     udpard_us_t deadline;
 
     uint_fast8_t      iface_index; ///< The interface index on which the datagram is to be transmitted.
@@ -385,7 +386,7 @@ typedef struct udpard_tx_vtable_t
 {
     /// Invoked from udpard_tx_poll() et al to push outgoing UDP datagrams into the socket/NIC driver.
     /// The callback must not mutate the TX pipeline (no udpard_tx_push/cancel/free).
-    bool (*eject)(udpard_tx_t*, udpard_tx_ejection_t);
+    bool (*eject)(udpard_tx_t*, udpard_tx_ejection_t*);
 } udpard_tx_vtable_t;
 
 /// The application must create a single instance of this struct to manage the TX pipeline.

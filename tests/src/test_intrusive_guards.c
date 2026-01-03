@@ -32,7 +32,7 @@ static udpard_mem_resource_t make_mem(void* const tag)
     return out;
 }
 
-static bool eject_stub(udpard_tx_t* const tx, const udpard_tx_ejection_t ejection)
+static bool eject_stub(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejection)
 {
     (void)tx;
     (void)ejection;

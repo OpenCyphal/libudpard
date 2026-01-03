@@ -33,7 +33,7 @@ static void noop_free(void* const user, const size_t size, void* const pointer)
 }
 
 // Ejects with a configurable outcome.
-static bool eject_with_flag(udpard_tx_t* const tx, const udpard_tx_ejection_t ejection)
+static bool eject_with_flag(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejection)
 {
     (void)ejection;
     eject_state_t* const st = (eject_state_t*)tx->user;
@@ -45,11 +45,11 @@ static bool eject_with_flag(udpard_tx_t* const tx, const udpard_tx_ejection_t ej
 }
 
 // Records ejection timestamps for later inspection.
-static bool eject_with_log(udpard_tx_t* const tx, const udpard_tx_ejection_t ejection)
+static bool eject_with_log(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejection)
 {
     eject_log_t* const st = (eject_log_t*)tx->user;
     if ((st != NULL) && (st->count < (sizeof(st->when) / sizeof(st->when[0])))) {
-        st->when[st->count++] = ejection.now;
+        st->when[st->count++] = ejection->now;
     }
     return true;
 }
