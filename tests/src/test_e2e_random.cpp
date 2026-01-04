@@ -107,7 +107,7 @@ constexpr udpard_tx_vtable_t tx_vtable{ .eject = &capture_tx_frame };
 
 void record_feedback(udpard_tx_t*, const udpard_tx_feedback_t fb)
 {
-    auto* ctx = static_cast<Context*>(fb.user.data[0]);
+    auto* ctx = static_cast<Context*>(fb.user.ptr[0]);
     if (ctx != nullptr) {
         if (fb.success) {
             ctx->reliable_feedback_success++;

@@ -72,7 +72,7 @@ constexpr udpard_tx_vtable_t tx_vtable{ .eject = &capture_tx_frame };
 // Feedback callback records completion.
 void record_feedback(udpard_tx_t*, const udpard_tx_feedback_t fb)
 {
-    auto* st = static_cast<FeedbackState*>(fb.user.data[0]);
+    auto* st = static_cast<FeedbackState*>(fb.user.ptr[0]);
     if (st != nullptr) {
         st->count++;
         st->success     = fb.success;

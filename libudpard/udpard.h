@@ -158,17 +158,21 @@ typedef struct udpard_bytes_mut_t
     void*  data;
 } udpard_bytes_mut_t;
 
+/// The size can be changed arbitrarily. This value is compromise between copy size and footprint and utility.
+#define UDPARD_USER_CONTEXT_PTR_COUNT 6
+
 /// The library carries the user-provided context from inputs to outputs without interpreting it,
 /// allowing the application to associate its own data with various entities inside the library.
-typedef struct udpard_user_context_t
+typedef union udpard_user_context_t
 {
-    void* data[6]; ///< The size is chosen rather arbitrarily; the library doesn't care. Can be configured ad-hoc.
+    void* ptr[UDPARD_USER_CONTEXT_PTR_COUNT];
+    unsigned char bytes[sizeof(void*) * UDPARD_USER_CONTEXT_PTR_COUNT];
 } udpard_user_context_t;
 #ifdef __cplusplus
 #define UDPARD_USER_CONTEXT_NULL \
     udpard_user_context_t {}
 #else
-#define UDPARD_USER_CONTEXT_NULL ((udpard_user_context_t){ .data = { NULL } })
+#define UDPARD_USER_CONTEXT_NULL ((udpard_user_context_t){ .ptr = { NULL } })
 #endif
 
 /// Zeros if invalid/unset/unavailable.
