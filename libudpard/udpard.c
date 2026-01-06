@@ -650,14 +650,30 @@ static void tx_transfer_free_payload(tx_transfer_t* const tr)
     }
 }
 
+/// Currently, we use a very simple implementation that ceases delivery attempts after the first acknowledgment
+/// is received, similar to the CAN bus. Such mode of reliability is useful in the following scenarios:
+///
+/// - With topics with a single subscriber, or sent via P2P transport (responses to published messages).
+///   With a single recipient, a single acknowledgement is sufficient to guarantee delivery.
+///
+/// - The application only cares about one acknowledgement (anycast), e.g., with modular redundant nodes.
+///
+/// - The application assumes that if one copy was delivered successfully, then other copies have likely
+///   succeeded as well (depends on the required reliability guarantees), similar to the CAN bus.
+///
+/// In the future, there are plans to extend this mechanism to track the number of acknowledgements per topic,
+/// such that we can retain transfers until a specified number of acknowledgements have been received. A remote
+/// node can be considered to have disappeared if it failed to acknowledge a transfer after the maximum number
+/// of attempts have been made. This is somewhat similar in principle to the connection-oriented DDS/RTPS approach,
+/// where pub/sub associations are established and removed automatically, transparently to the application.
 static void tx_transfer_retire(udpard_tx_t* const tx, tx_transfer_t* const tr, const bool success)
 {
     // Construct the feedback object first before the transfer is destroyed.
     const udpard_tx_feedback_t fb = {
-        .topic_hash  = tr->remote_topic_hash,
-        .transfer_id = tr->remote_transfer_id,
-        .user        = tr->user,
-        .success     = success,
+        .topic_hash       = tr->remote_topic_hash,
+        .transfer_id      = tr->remote_transfer_id,
+        .user             = tr->user,
+        .acknowledgements = success ? 1 : 0,
     };
     UDPARD_ASSERT(tr->reliable == (tr->feedback != NULL));
     // save the feedback pointer

@@ -165,7 +165,7 @@ typedef struct udpard_bytes_mut_t
 /// allowing the application to associate its own data with various entities inside the library.
 typedef union udpard_user_context_t
 {
-    void* ptr[UDPARD_USER_CONTEXT_PTR_COUNT];
+    void*         ptr[UDPARD_USER_CONTEXT_PTR_COUNT];
     unsigned char bytes[sizeof(void*) * UDPARD_USER_CONTEXT_PTR_COUNT];
 } udpard_user_context_t;
 #ifdef __cplusplus
@@ -305,21 +305,12 @@ size_t udpard_fragment_gather(const udpard_fragment_t** cursor,
 /// Thus the transmission pipeline is inherently remote-controlled by other nodes and one needs to keep in mind
 /// that new frames may appear in the TX pipeline even while the application is idle.
 ///
-/// The reliable delivery mechanism guarantees either that a message is delivered successfully to at least one
-/// remote subscriber, or could not be delivered to any remote subscriber before the specified deadline.
+/// The reliable delivery mechanism informs the application about the number of remote subscribers that confirmed the
+/// reception of each reliable message. The library uses heuristics to determine the number of attempts needed to
+/// deliver the message, but it is guaranteed to cease attempts by the specified deadline.
 /// Rudimentary congestion control is implemented by exponential backoff of retransmission intervals.
 /// The reliability is chosen by the publisher on a per-message basis; as such, the same topic may carry both
 /// reliable and unreliable messages depending on who is publishing at any given time.
-///
-/// It is assumed that reliable messages are used in either of the following scenarios:
-///
-/// - Published on topics with a single subscriber, or sent via P2P transport (responses to published messages).
-///   With a single subscriber a single acknowledgement is sufficient to guarantee delivery.
-///
-/// - The application only cares about one acknowledgement (anycast), e.g., with modular redundant nodes.
-///
-/// - The application assumes that if one copy was delivered successfully, then other copies have likely
-///   succeeded as well (depends on the required reliability guarantees), similar to the CAN bus.
 ///
 /// Reliable messages published over high-fanout topics will generate a large amount of feedback acknowledgments,
 /// which must be kept in mind when designing the network.
@@ -350,12 +341,10 @@ typedef struct udpard_tx_mem_resources_t
 /// not from the locally assigned response metadata.
 typedef struct udpard_tx_feedback_t
 {
-    uint64_t topic_hash;
-    uint64_t transfer_id;
-
+    uint64_t              topic_hash;
+    uint64_t              transfer_id;
     udpard_user_context_t user; ///< Same value that was passed to udpard_tx_push().
-
-    bool success; ///< False if no ack was received from the remote end before deadline expiration or forced eviction.
+    uint32_t acknowledgements;  ///< The number of remote nodes that acknowledged the reception of the transfer.
 } udpard_tx_feedback_t;
 
 /// Request to transmit a UDP datagram over the specified interface to the given destination endpoint.
@@ -498,12 +487,12 @@ bool udpard_tx_new(udpard_tx_t* const              self,
 /// as that violates the transfer-ID uniqueness requirement stated above.
 ///
 /// The feedback callback is set to NULL for best-effort (non-acknowledged) transfers. Otherwise, the transfer is
-/// treated as reliable, requesting a delivery acknowledgement from at least one remote node (subscriber),
-/// with repeated retransmissions until an acknowledgement is received or the deadline has expired.
+/// treated as reliable, requesting a delivery acknowledgement from remote subscribers with repeated retransmissions if
+/// necessary; it is guaranteed that delivery attempts will cease no later than by the specified deadline.
 /// The feedback callback is ALWAYS invoked EXACTLY ONCE per reliable transfer pushed via udpard_tx_push() successfully,
-/// indicating either success (acknowledgment received before deadline) or failure (deadline expired without ack).
-/// The retransmission delay is increased exponentially with each retransmission attempt; please refer to
-/// udpard_tx_t::ack_baseline_timeout for details.
+/// indicating the number of remote nodes that acknowledged the reception of the transfer.
+/// The retransmission delay is increased exponentially with each retransmission attempt as a means of congestion
+/// control and latency adaptation; please refer to udpard_tx_t::ack_baseline_timeout for details.
 ///
 /// On success, the function allocates a single transfer state instance and a number of payload fragments.
 /// The time complexity is O(p + log e), where p is the transfer payload size, and e is the number of
@@ -623,9 +612,11 @@ void udpard_tx_free(udpard_tx_t* const self);
 /// This mode requires much more bookkeeping which results in a greater processing load per received fragment/transfer.
 ///
 /// The ORDERED mode is used if the reordering window is non-negative. Zero is not really a special case, it
-/// simply means that out-of-order transfers are not waited for at all (declared permanently lost immediately).
-/// This should be the default option for most subscriptions; in particular, it is intended for state estimators
-/// and control systems where ordering is critical.
+/// simply means that out-of-order transfers are not waited for at all (declared permanently lost immediately),
+/// and no received transfer is delayed before ejection to the application.
+///
+/// The ORDERED mode is mostly intended for applications like state estimators, control systems, and data streaming
+/// where ordering is critical.
 ///
 ///     UNORDERED
 ///
@@ -641,6 +632,7 @@ void udpard_tx_free(udpard_tx_t* const self);
 /// therefore, the UNORDERED mode is preferred for request-response topics.
 ///
 /// The UNORDERED mode is used if the reordering window duration is set to UDPARD_RX_REORDERING_WINDOW_UNORDERED.
+/// This should be the default mode for most use cases.
 ///
 ///     STATELESS
 ///
