@@ -109,7 +109,7 @@ void record_feedback(udpard_tx_t*, const udpard_tx_feedback_t fb)
 {
     auto* ctx = static_cast<Context*>(fb.user.ptr[0]);
     if (ctx != nullptr) {
-        if (fb.success) {
+        if (fb.acknowledgements > 0U) {
             ctx->reliable_feedback_success++;
         } else {
             ctx->reliable_feedback_failure++;

@@ -21,9 +21,9 @@ constexpr udpard_rx_port_p2p_vtable_t p2p_callbacks{ &on_message_p2p };
 
 struct FbState
 {
-    size_t   count   = 0;
-    bool     success = false;
-    uint64_t tid     = 0;
+    size_t   count            = 0;
+    uint32_t acknowledgements = 0;
+    uint64_t tid              = 0;
 };
 
 struct CapturedFrame
@@ -58,8 +58,8 @@ void fb_record(udpard_tx_t*, const udpard_tx_feedback_t fb)
     auto* st = static_cast<FbState*>(fb.user.ptr[0]);
     if (st != nullptr) {
         st->count++;
-        st->success = fb.success;
-        st->tid     = fb.transfer_id;
+        st->acknowledgements = fb.acknowledgements;
+        st->tid              = fb.transfer_id;
     }
 }
 
@@ -373,7 +373,7 @@ void test_udpard_tx_feedback_always_called()
                                                        make_user_context(&fb)));
         udpard_tx_poll(&tx, 11, UDPARD_IFACE_MASK_ALL);
         TEST_ASSERT_EQUAL_size_t(1, fb.count);
-        TEST_ASSERT_FALSE(fb.success);
+        TEST_ASSERT_EQUAL_UINT32(0, fb.acknowledgements);
         release_frames(frames);
         udpard_tx_free(&tx);
     }
@@ -409,7 +409,7 @@ void test_udpard_tx_feedback_always_called()
                              fb_record,
                              make_user_context(&fb_new));
         TEST_ASSERT_EQUAL_size_t(1, fb_old.count);
-        TEST_ASSERT_FALSE(fb_old.success);
+        TEST_ASSERT_EQUAL_UINT32(0, fb_old.acknowledgements);
         TEST_ASSERT_GREATER_OR_EQUAL_UINT64(1, tx.errors_sacrifice);
         TEST_ASSERT_EQUAL_size_t(0, fb_new.count);
         release_frames(frames);
@@ -437,7 +437,7 @@ void test_udpard_tx_feedback_always_called()
                                                        make_user_context(&fb)));
         udpard_tx_free(&tx);
         TEST_ASSERT_EQUAL_size_t(1, fb.count);
-        TEST_ASSERT_FALSE(fb.success);
+        TEST_ASSERT_EQUAL_UINT32(0, fb.acknowledgements);
         release_frames(frames);
     }
 

@@ -21,9 +21,9 @@ struct CapturedFrame
 
 struct FeedbackState
 {
-    size_t   count       = 0;
-    bool     success     = false;
-    uint64_t transfer_id = 0;
+    size_t   count            = 0;
+    uint32_t acknowledgements = 0;
+    uint64_t transfer_id      = 0;
 };
 
 struct RxContext
@@ -75,8 +75,8 @@ void record_feedback(udpard_tx_t*, const udpard_tx_feedback_t fb)
     auto* st = static_cast<FeedbackState*>(fb.user.ptr[0]);
     if (st != nullptr) {
         st->count++;
-        st->success     = fb.success;
-        st->transfer_id = fb.transfer_id;
+        st->acknowledgements = fb.acknowledgements;
+        st->transfer_id      = fb.transfer_id;
     }
 }
 
@@ -290,7 +290,7 @@ void test_reliable_delivery_under_losses()
     }
 
     TEST_ASSERT_EQUAL_size_t(1, fb.count);
-    TEST_ASSERT_TRUE(fb.success);
+    TEST_ASSERT_EQUAL_UINT32(1, fb.acknowledgements);
     TEST_ASSERT_EQUAL_size_t(1, ctx.received);
     TEST_ASSERT_EQUAL_size_t(0, ctx.collisions);
 
@@ -359,7 +359,7 @@ void test_reliable_stats_and_failures()
     exp_frames.clear();
     udpard_tx_poll(&exp_tx, 20, UDPARD_IFACE_MASK_ALL);
     TEST_ASSERT_EQUAL_size_t(1, fb_fail.count);
-    TEST_ASSERT_FALSE(fb_fail.success);
+    TEST_ASSERT_EQUAL_UINT32(0, fb_fail.acknowledgements);
     TEST_ASSERT_GREATER_THAN_UINT64(0, exp_tx.errors_expiration);
     udpard_tx_free(&exp_tx);
     TEST_ASSERT_EQUAL_size_t(0, exp_alloc_transfer.allocated_fragments);

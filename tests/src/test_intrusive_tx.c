@@ -645,7 +645,7 @@ static void test_tx_cancel(void)
     TEST_ASSERT_TRUE(udpard_tx_cancel(&tx, 200, 1));
     TEST_ASSERT_NULL(tx_transfer_find(&tx, 200, 1));
     TEST_ASSERT_EQUAL_size_t(1, fstate.count);
-    TEST_ASSERT_FALSE(fstate.last.success);
+    TEST_ASSERT_EQUAL_UINT32(0, fstate.last.acknowledgements);
     TEST_ASSERT_EQUAL_size_t(0, tx.enqueued_frames_count);
     TEST_ASSERT_FALSE(udpard_tx_cancel(&tx, 200, 1));
 

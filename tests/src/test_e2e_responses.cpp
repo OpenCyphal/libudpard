@@ -55,10 +55,10 @@ constexpr udpard_mem_deleter_t tx_payload_deleter{ .user = nullptr, .free = &tx_
 
 struct FeedbackState
 {
-    size_t   count       = 0;
-    bool     success     = false;
-    uint64_t topic_hash  = 0;
-    uint64_t transfer_id = 0;
+    size_t   count            = 0;
+    uint32_t acknowledgements = 0;
+    uint64_t topic_hash       = 0;
+    uint64_t transfer_id      = 0;
 };
 
 void record_feedback(udpard_tx_t*, const udpard_tx_feedback_t fb)
@@ -66,9 +66,9 @@ void record_feedback(udpard_tx_t*, const udpard_tx_feedback_t fb)
     auto* st = static_cast<FeedbackState*>(fb.user.ptr[0]);
     if (st != nullptr) {
         st->count++;
-        st->success     = fb.success;
-        st->topic_hash  = fb.topic_hash;
-        st->transfer_id = fb.transfer_id;
+        st->acknowledgements = fb.acknowledgements;
+        st->topic_hash       = fb.topic_hash;
+        st->transfer_id      = fb.transfer_id;
     }
 }
 
@@ -353,7 +353,7 @@ void test_topic_with_p2p_response()
     now += 100;
     udpard_tx_poll(&a_tx, now, UDPARD_IFACE_MASK_ALL);
     TEST_ASSERT_EQUAL_size_t(1, a_topic_fb.count);
-    TEST_ASSERT_TRUE(a_topic_fb.success);
+    TEST_ASSERT_EQUAL_UINT32(1, a_topic_fb.acknowledgements);
     TEST_ASSERT_EQUAL_UINT64(topic_hash, a_topic_fb.topic_hash);
     TEST_ASSERT_EQUAL_UINT64(transfer_id, a_topic_fb.transfer_id);
 
@@ -426,7 +426,7 @@ void test_topic_with_p2p_response()
     now += 100;
     udpard_tx_poll(&b_tx, now, UDPARD_IFACE_MASK_ALL);
     TEST_ASSERT_EQUAL_size_t(1, b_response_fb.count);
-    TEST_ASSERT_TRUE(b_response_fb.success);
+    TEST_ASSERT_EQUAL_UINT32(1, b_response_fb.acknowledgements);
     TEST_ASSERT_EQUAL_UINT64(topic_hash, b_response_fb.topic_hash);
     TEST_ASSERT_EQUAL_UINT64(transfer_id, b_response_fb.transfer_id);
 
@@ -725,10 +725,10 @@ void test_topic_with_p2p_response_under_loss()
     TEST_ASSERT_TRUE(first_resp_ack_dropped);
 
     TEST_ASSERT_EQUAL_size_t(1, a_topic_fb.count);
-    TEST_ASSERT_TRUE(a_topic_fb.success);
+    TEST_ASSERT_EQUAL_UINT32(1, a_topic_fb.acknowledgements);
 
     TEST_ASSERT_EQUAL_size_t(1, b_response_fb.count);
-    TEST_ASSERT_TRUE(b_response_fb.success);
+    TEST_ASSERT_EQUAL_UINT32(1, b_response_fb.acknowledgements);
     TEST_ASSERT_EQUAL_UINT64(topic_hash, b_response_fb.topic_hash);
     TEST_ASSERT_EQUAL_UINT64(transfer_id, b_response_fb.transfer_id);
 
