@@ -56,7 +56,7 @@ constexpr udpard_mem_deleter_t tx_payload_deleter{ .user = nullptr, .free = &tx_
 struct FeedbackState
 {
     size_t   count            = 0;
-    uint32_t acknowledgements = 0;
+    uint16_t acknowledgements = 0;
     uint64_t topic_hash       = 0;
     uint64_t transfer_id      = 0;
 };

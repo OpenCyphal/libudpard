@@ -22,7 +22,7 @@ struct CapturedFrame
 struct FeedbackState
 {
     size_t   count            = 0;
-    uint32_t acknowledgements = 0;
+    uint16_t acknowledgements = 0;
     uint64_t transfer_id      = 0;
 };
 

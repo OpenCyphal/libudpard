@@ -22,7 +22,7 @@ constexpr udpard_rx_port_p2p_vtable_t p2p_callbacks{ &on_message_p2p };
 struct FbState
 {
     size_t   count            = 0;
-    uint32_t acknowledgements = 0;
+    uint16_t acknowledgements = 0;
     uint64_t tid              = 0;
 };
 

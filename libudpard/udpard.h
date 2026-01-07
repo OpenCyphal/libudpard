@@ -344,7 +344,7 @@ typedef struct udpard_tx_feedback_t
     uint64_t              topic_hash;
     uint64_t              transfer_id;
     udpard_user_context_t user; ///< Same value that was passed to udpard_tx_push().
-    uint32_t acknowledgements;  ///< The number of remote nodes that acknowledged the reception of the transfer.
+    uint16_t acknowledgements;  ///< The number of remote nodes that acknowledged the reception of the transfer.
 } udpard_tx_feedback_t;
 
 /// Request to transmit a UDP datagram over the specified interface to the given destination endpoint.
