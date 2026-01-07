@@ -341,10 +341,14 @@ typedef struct udpard_tx_mem_resources_t
 /// not from the locally assigned response metadata.
 typedef struct udpard_tx_feedback_t
 {
-    uint64_t              topic_hash;
-    uint64_t              transfer_id;
+    uint64_t topic_hash;
+    uint64_t transfer_id;
+
     udpard_user_context_t user; ///< Same value that was passed to udpard_tx_push().
-    uint16_t acknowledgements;  ///< The number of remote nodes that acknowledged the reception of the transfer.
+
+    /// The number of remote nodes that acknowledged the reception of the transfer.
+    /// For P2P transfers, this value is either 0 (failure) or 1 (success).
+    uint16_t acknowledgements;
 } udpard_tx_feedback_t;
 
 /// Request to transmit a UDP datagram over the specified interface to the given destination endpoint.
