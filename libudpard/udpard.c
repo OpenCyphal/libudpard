@@ -661,7 +661,7 @@ static void tx_transfer_free_payload(tx_transfer_t* const tr)
 /// - The application assumes that if one copy was delivered successfully, then other copies have likely
 ///   succeeded as well (depends on the required reliability guarantees), similar to the CAN bus.
 ///
-/// In the future, there are plans to extend this mechanism to track the number of acknowledgements per topic,
+/// TODO In the future, there are plans to extend this mechanism to track the number of acknowledgements per topic,
 /// such that we can retain transfers until a specified number of acknowledgements have been received. A remote
 /// node can be considered to have disappeared if it failed to acknowledge a transfer after the maximum number
 /// of attempts have been made. This is somewhat similar in principle to the connection-oriented DDS/RTPS approach,
