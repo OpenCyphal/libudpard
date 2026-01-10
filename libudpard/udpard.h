@@ -204,26 +204,34 @@ bool udpard_is_valid_endpoint(const udpard_udpip_ep_t ep);
 /// For P2P use the unicast node address directly instead, as provided by the RX pipeline per received transfer.
 udpard_udpip_ep_t udpard_make_subject_endpoint(const uint32_t subject_id);
 
-/// The semantics are similar to malloc/free.
+/// The memory resource semantics are similar to malloc/free.
 /// Consider using O1Heap: https://github.com/pavel-kirienko/o1heap.
 /// The API documentation is written on the assumption that the memory management functions are O(1).
-/// The user pointer is taken from the corresponding field of the memory resource structure.
-typedef void* (*udpard_mem_alloc_t)(void* const user, const size_t size);
-typedef void (*udpard_mem_free_t)(void* const user, const size_t size, void* const pointer);
+typedef struct udpard_deleter_t udpard_deleter_t;
+typedef struct udpard_mem_t     udpard_mem_t;
 
-/// A kind of memory resource that can only be used to free memory previously allocated by the user.
-typedef struct udpard_mem_deleter_t
+typedef struct udpard_deleter_vtable_t
 {
-    void*             user;
-    udpard_mem_free_t free;
-} udpard_mem_deleter_t;
+    void (*free)(void* context, size_t size, void* pointer);
+} udpard_deleter_vtable_t;
 
-typedef struct udpard_mem_resource_t
+struct udpard_deleter_t
 {
-    void*              user;
-    udpard_mem_free_t  free;
-    udpard_mem_alloc_t alloc;
-} udpard_mem_resource_t;
+    const udpard_deleter_vtable_t* vtable;
+    void*                          context;
+};
+
+typedef struct udpard_mem_vtable_t
+{
+    udpard_deleter_vtable_t base;
+    void* (*alloc)(void* context, size_t size);
+} udpard_mem_vtable_t;
+
+struct udpard_mem_t
+{
+    const udpard_mem_vtable_t* vtable;
+    void*                      context;
+};
 
 /// This type represents payload as a binary tree of its fragments ordered by offset to eliminate data copying.
 /// The fragments are guaranteed to be non-redundant and non-overlapping; therefore, they are also ordered by their
@@ -250,7 +258,7 @@ typedef struct udpard_fragment_t
     /// We provide a dedicated deleter per fragment to allow NIC drivers to manage the memory directly,
     /// which allows DMA access to the fragment data without copying.
     /// See https://github.com/OpenCyphal-Garage/libcyphal/issues/352#issuecomment-2163056622
-    udpard_mem_deleter_t payload_deleter;
+    udpard_deleter_t payload_deleter;
 } udpard_fragment_t;
 
 /// Frees the memory allocated for the payload and its fragment headers using the correct memory resources: the memory
@@ -258,7 +266,7 @@ typedef struct udpard_fragment_t
 /// All fragments in the tree will be freed and invalidated.
 /// The passed fragment can be any fragment inside the tree (not necessarily the root).
 /// If the fragment argument is NULL, the function has no effect. The complexity is linear in the number of fragments.
-void udpard_fragment_free_all(udpard_fragment_t* const frag, const udpard_mem_resource_t mem_fragment);
+void udpard_fragment_free_all(udpard_fragment_t* const frag, const udpard_mem_t mem_fragment);
 
 /// Given any fragment in a transfer, returns the fragment that contains the given payload offset.
 /// Returns NULL if the offset points beyond the stored payload, or if frag is NULL.
@@ -322,7 +330,7 @@ typedef struct udpard_tx_mem_resources_t
 {
     /// The queue bookkeeping structures are allocated per outgoing transfer, i.e., one per udpard_tx_push().
     /// Each allocation is sizeof(tx_transfer_t).
-    udpard_mem_resource_t transfer;
+    udpard_mem_t transfer;
 
     /// The UDP datagram payload buffers are allocated per frame, each at most HEADER_SIZE+MTU+sizeof(tx_frame_t).
     /// These may be distinct per interface to allow each interface to draw buffers from a specific memory region
@@ -331,7 +339,7 @@ typedef struct udpard_tx_mem_resources_t
     /// IMPORTANT: DISTINCT MEMORY RESOURCES INCREASE TX MEMORY USAGE AND DATA COPYING.
     /// If possible, it is recommended to use the same memory resource for all interfaces, because the library will be
     /// able to avoid frame duplication and instead reuse each frame across all interfaces when the MTUs are identical.
-    udpard_mem_resource_t payload[UDPARD_IFACE_COUNT_MAX];
+    udpard_mem_t payload[UDPARD_IFACE_COUNT_MAX];
 } udpard_tx_mem_resources_t;
 
 /// Outcome notification for a reliable transfer previously scheduled for transmission.
@@ -681,11 +689,11 @@ typedef struct udpard_rx_mem_resources_t
 {
     /// Provides memory for rx_session_t described below.
     /// Each instance is fixed-size, so a trivial zero-fragmentation block allocator is sufficient.
-    udpard_mem_resource_t session;
+    udpard_mem_t session;
 
     /// The udpard_fragment_t handles are allocated per payload fragment; each contains a pointer to its fragment.
     /// Each instance is of a very small fixed size, so a trivial zero-fragmentation block allocator is sufficient.
-    udpard_mem_resource_t fragment;
+    udpard_mem_t fragment;
 } udpard_rx_mem_resources_t;
 
 typedef struct udpard_rx_port_t         udpard_rx_port_t;
@@ -901,13 +909,13 @@ void udpard_rx_port_free(udpard_rx_t* const rx, udpard_rx_port_t* const port);
 /// No data copying takes place.
 ///
 /// Returns false if any of the arguments are invalid.
-bool udpard_rx_port_push(udpard_rx_t* const         rx,
-                         udpard_rx_port_t* const    port,
-                         const udpard_us_t          timestamp,
-                         const udpard_udpip_ep_t    source_ep,
-                         const udpard_bytes_mut_t   datagram_payload,
-                         const udpard_mem_deleter_t payload_deleter,
-                         const uint_fast8_t         iface_index);
+bool udpard_rx_port_push(udpard_rx_t* const       rx,
+                         udpard_rx_port_t* const  port,
+                         const udpard_us_t        timestamp,
+                         const udpard_udpip_ep_t  source_ep,
+                         const udpard_bytes_mut_t datagram_payload,
+                         const udpard_deleter_t   payload_deleter,
+                         const uint_fast8_t       iface_index);
 
 #ifdef __cplusplus
 }

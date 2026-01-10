@@ -93,29 +93,31 @@ static udpard_us_t later(const udpard_us_t a, const udpard_us_t b) { return max_
 
 /// Two memory resources are considered identical if they share the same user pointer and the same allocation function.
 /// The deallocation function is intentionally excluded from the comparison.
-static bool mem_same(const udpard_mem_resource_t a, const udpard_mem_resource_t b)
+static bool mem_same(const udpard_mem_t a, const udpard_mem_t b)
 {
-    return (a.user == b.user) && (a.alloc == b.alloc);
+    return (a.context == b.context) && (a.vtable == b.vtable);
 }
 
-static void* mem_alloc(const udpard_mem_resource_t memory, const size_t size)
+static void* mem_alloc(const udpard_mem_t memory, const size_t size)
 {
-    UDPARD_ASSERT(memory.alloc != NULL);
-    return memory.alloc(memory.user, size);
+    return memory.vtable->alloc(memory.context, size);
 }
 
-static void mem_free(const udpard_mem_resource_t memory, const size_t size, void* const data)
+static void mem_free(const udpard_mem_t memory, const size_t size, void* const data)
 {
-    UDPARD_ASSERT(memory.free != NULL);
-    memory.free(memory.user, size, data);
+    memory.vtable->base.free(memory.context, size, data);
 }
 
-static void mem_free_payload(const udpard_mem_deleter_t memory, const udpard_bytes_mut_t payload)
+static void mem_free_payload(const udpard_deleter_t memory, const udpard_bytes_mut_t payload)
 {
-    UDPARD_ASSERT(memory.free != NULL);
     if (payload.data != NULL) {
-        memory.free(memory.user, payload.size, payload.data);
+        memory.vtable->free(memory.context, payload.size, payload.data);
     }
+}
+
+static udpard_deleter_t mem_make_deleter(const udpard_mem_t memory)
+{
+    return (udpard_deleter_t){ .vtable = &memory.vtable->base, .context = memory.context };
 }
 
 static byte_t* serialize_u32(byte_t* ptr, const uint32_t value)
@@ -244,7 +246,7 @@ static int32_t cavl_compare_fragment_end(const void* const user, const udpard_tr
 }
 
 // NOLINTNEXTLINE(misc-no-recursion)
-void udpard_fragment_free_all(udpard_fragment_t* const frag, const udpard_mem_resource_t mem_fragment)
+void udpard_fragment_free_all(udpard_fragment_t* const frag, const udpard_mem_t mem_fragment)
 {
     if (frag != NULL) {
         // Descend the tree
@@ -541,12 +543,12 @@ static bool header_deserialize(const udpard_bytes_mut_t dgram_payload,
 
 typedef struct tx_frame_t
 {
-    size_t               refcount;
-    udpard_mem_deleter_t deleter;
-    size_t*              objcount;
-    struct tx_frame_t*   next;
-    size_t               size;
-    byte_t               data[];
+    size_t             refcount;
+    udpard_deleter_t   deleter;
+    size_t*            objcount;
+    struct tx_frame_t* next;
+    size_t             size;
+    byte_t             data[];
 } tx_frame_t;
 
 static udpard_bytes_t tx_frame_view(const tx_frame_t* const frame)
@@ -559,12 +561,12 @@ static tx_frame_t* tx_frame_from_view(const udpard_bytes_t view)
     return (tx_frame_t*)ptr_unbias(view.data, offsetof(tx_frame_t, data));
 }
 
-static tx_frame_t* tx_frame_new(udpard_tx_t* const tx, const udpard_mem_resource_t mem, const size_t data_size)
+static tx_frame_t* tx_frame_new(udpard_tx_t* const tx, const udpard_mem_t mem, const size_t data_size)
 {
     tx_frame_t* const frame = (tx_frame_t*)mem_alloc(mem, sizeof(tx_frame_t) + data_size);
     if (frame != NULL) {
         frame->refcount = 1U;
-        frame->deleter  = (udpard_mem_deleter_t){ .user = mem.user, .free = mem.free };
+        frame->deleter  = mem_make_deleter(mem);
         frame->objcount = &tx->enqueued_frames_count;
         frame->next     = NULL;
         frame->size     = data_size;
@@ -628,11 +630,15 @@ typedef struct tx_transfer_t
 static bool tx_validate_mem_resources(const udpard_tx_mem_resources_t memory)
 {
     for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
-        if ((memory.payload[i].alloc == NULL) || (memory.payload[i].free == NULL)) {
+        if ((memory.payload[i].vtable == NULL) ||            //
+            (memory.payload[i].vtable->base.free == NULL) || //
+            (memory.payload[i].vtable->alloc == NULL)) {
             return false;
         }
     }
-    return (memory.transfer.alloc != NULL) && (memory.transfer.free != NULL);
+    return (memory.transfer.vtable != NULL) &&            //
+           (memory.transfer.vtable->base.free != NULL) && //
+           (memory.transfer.vtable->alloc != NULL);
 }
 
 static void tx_transfer_free_payload(tx_transfer_t* const tr)
@@ -772,7 +778,7 @@ static bool tx_is_pending(const udpard_tx_t* const tx, const tx_transfer_t* cons
 
 /// Returns the head of the transfer chain; NULL on OOM.
 static tx_frame_t* tx_spool(udpard_tx_t* const             tx,
-                            const udpard_mem_resource_t    memory,
+                            const udpard_mem_t             memory,
                             const size_t                   mtu,
                             const meta_t                   meta,
                             const udpard_bytes_scattered_t payload)
@@ -857,20 +863,20 @@ static void tx_stage_if(udpard_tx_t* const tx, tx_transfer_t* const tr)
 /// Either they will share the same spool, or there is only a single frame so the MTU difference does not matter.
 /// The allocator requirement is important because it is possible that distinct NICs may not be able to reach the
 /// same memory region via DMA.
-static bool tx_spool_shareable(const size_t                mtu_a,
-                               const udpard_mem_resource_t mem_a,
-                               const size_t                mtu_b,
-                               const udpard_mem_resource_t mem_b,
-                               const size_t                payload_size)
+static bool tx_spool_shareable(const size_t       mtu_a,
+                               const udpard_mem_t mem_a,
+                               const size_t       mtu_b,
+                               const udpard_mem_t mem_b,
+                               const size_t       payload_size)
 {
     return ((mtu_a == mtu_b) || (payload_size <= smaller(mtu_a, mtu_b))) && mem_same(mem_a, mem_b);
 }
 
 /// The prediction takes into account that some interfaces may share the same frame spool.
-static size_t tx_predict_frame_count(const size_t                mtu[UDPARD_IFACE_COUNT_MAX],
-                                     const udpard_mem_resource_t memory[UDPARD_IFACE_COUNT_MAX],
-                                     const udpard_udpip_ep_t     endpoint[UDPARD_IFACE_COUNT_MAX],
-                                     const size_t                payload_size)
+static size_t tx_predict_frame_count(const size_t            mtu[UDPARD_IFACE_COUNT_MAX],
+                                     const udpard_mem_t      memory[UDPARD_IFACE_COUNT_MAX],
+                                     const udpard_udpip_ep_t endpoint[UDPARD_IFACE_COUNT_MAX],
+                                     const size_t            payload_size)
 {
     UDPARD_ASSERT(valid_ep_mask(endpoint) != 0); // The caller ensures that at least one endpoint is valid.
     size_t n_frames_total = 0;
@@ -1354,7 +1360,7 @@ void udpard_tx_refcount_dec(const udpard_bytes_t tx_payload_view)
         frame->refcount--;
         if (frame->refcount == 0U) {
             --*frame->objcount;
-            frame->deleter.free(frame->deleter.user, sizeof(tx_frame_t) + tx_payload_view.size, frame);
+            frame->deleter.vtable->free(frame->deleter.context, sizeof(tx_frame_t) + tx_payload_view.size, frame);
         }
     }
 }
@@ -1471,9 +1477,9 @@ static size_t rx_fragment_tree_update_covered_prefix(udpard_tree_t* const root,
 }
 
 /// If NULL, the payload ownership could not be transferred due to OOM. The caller still owns the payload.
-static udpard_fragment_t* rx_fragment_new(const udpard_mem_resource_t memory,
-                                          const udpard_mem_deleter_t  payload_deleter,
-                                          const rx_frame_base_t       frame)
+static udpard_fragment_t* rx_fragment_new(const udpard_mem_t     memory,
+                                          const udpard_deleter_t payload_deleter,
+                                          const rx_frame_base_t  frame)
 {
     udpard_fragment_t* const mew = mem_alloc(memory, sizeof(udpard_fragment_t));
     if (mew != NULL) {
@@ -1498,13 +1504,13 @@ typedef enum
 } rx_fragment_tree_update_result_t;
 
 /// Takes ownership of the frame payload; either a new fragment is inserted or the payload is freed.
-static rx_fragment_tree_update_result_t rx_fragment_tree_update(udpard_tree_t** const       root,
-                                                                const udpard_mem_resource_t fragment_memory,
-                                                                const udpard_mem_deleter_t  payload_deleter,
-                                                                const rx_frame_base_t       frame,
-                                                                const size_t                transfer_payload_size,
-                                                                const size_t                extent,
-                                                                size_t* const               covered_prefix_io)
+static rx_fragment_tree_update_result_t rx_fragment_tree_update(udpard_tree_t** const  root,
+                                                                const udpard_mem_t     fragment_memory,
+                                                                const udpard_deleter_t payload_deleter,
+                                                                const rx_frame_base_t  frame,
+                                                                const size_t           transfer_payload_size,
+                                                                const size_t           extent,
+                                                                size_t* const          covered_prefix_io)
 {
     const size_t left  = frame.offset;
     const size_t right = frame.offset + frame.payload.size;
@@ -1678,7 +1684,7 @@ typedef struct
     udpard_tree_t* fragments;
 } rx_slot_t;
 
-static void rx_slot_reset(rx_slot_t* const slot, const udpard_mem_resource_t fragment_memory)
+static void rx_slot_reset(rx_slot_t* const slot, const udpard_mem_t fragment_memory)
 {
     udpard_fragment_free_all((udpard_fragment_t*)slot->fragments, fragment_memory);
     slot->fragments      = NULL;
@@ -1689,14 +1695,14 @@ static void rx_slot_reset(rx_slot_t* const slot, const udpard_mem_resource_t fra
 }
 
 /// The caller will accept the ownership of the fragments iff the resulting state is done.
-static void rx_slot_update(rx_slot_t* const            slot,
-                           const udpard_us_t           ts,
-                           const udpard_mem_resource_t fragment_memory,
-                           const udpard_mem_deleter_t  payload_deleter,
-                           rx_frame_t* const           frame,
-                           const size_t                extent,
-                           uint64_t* const             errors_oom,
-                           uint64_t* const             errors_transfer_malformed)
+static void rx_slot_update(rx_slot_t* const       slot,
+                           const udpard_us_t      ts,
+                           const udpard_mem_t     fragment_memory,
+                           const udpard_deleter_t payload_deleter,
+                           rx_frame_t* const      frame,
+                           const size_t           extent,
+                           uint64_t* const        errors_oom,
+                           uint64_t* const        errors_transfer_malformed)
 {
     if (slot->state != rx_slot_busy) {
         rx_slot_reset(slot, fragment_memory);
@@ -1785,10 +1791,10 @@ typedef struct udpard_rx_port_vtable_private_t
                    udpard_us_t,
                    udpard_udpip_ep_t,
                    rx_frame_t*,
-                   udpard_mem_deleter_t,
+                   udpard_deleter_t,
                    uint_fast8_t);
     /// Takes ownership of the frame payload.
-    void (*update_session)(rx_session_t*, udpard_rx_t*, udpard_us_t, rx_frame_t*, udpard_mem_deleter_t);
+    void (*update_session)(rx_session_t*, udpard_rx_t*, udpard_us_t, rx_frame_t*, udpard_deleter_t);
 } udpard_rx_port_vtable_private_t;
 
 /// True iff the given transfer-ID was recently ejected.
@@ -2040,13 +2046,13 @@ static rx_slot_t* rx_session_get_slot(rx_session_t* const self,
     return slot;
 }
 
-static void rx_session_update(rx_session_t* const        self,
-                              udpard_rx_t* const         rx,
-                              const udpard_us_t          ts,
-                              const udpard_udpip_ep_t    src_ep,
-                              rx_frame_t* const          frame,
-                              const udpard_mem_deleter_t payload_deleter,
-                              const uint_fast8_t         ifindex)
+static void rx_session_update(rx_session_t* const     self,
+                              udpard_rx_t* const      rx,
+                              const udpard_us_t       ts,
+                              const udpard_udpip_ep_t src_ep,
+                              rx_frame_t* const       frame,
+                              const udpard_deleter_t  payload_deleter,
+                              const uint_fast8_t      ifindex)
 {
     UDPARD_ASSERT(self->remote.uid == frame->meta.sender_uid);
     UDPARD_ASSERT(frame->meta.topic_hash == self->port->topic_hash); // must be checked by the caller beforehand
@@ -2074,11 +2080,11 @@ static void rx_session_update(rx_session_t* const        self,
 
 /// The ORDERED mode implementation. May delay incoming transfers to maintain strict transfer-ID ordering.
 /// The ORDERED mode is much more complex and CPU-heavy.
-static void rx_session_update_ordered(rx_session_t* const        self,
-                                      udpard_rx_t* const         rx,
-                                      const udpard_us_t          ts,
-                                      rx_frame_t* const          frame,
-                                      const udpard_mem_deleter_t payload_deleter)
+static void rx_session_update_ordered(rx_session_t* const    self,
+                                      udpard_rx_t* const     rx,
+                                      const udpard_us_t      ts,
+                                      rx_frame_t* const      frame,
+                                      const udpard_deleter_t payload_deleter)
 {
     // The queries here may be a bit time-consuming. If this becomes a problem, there are many ways to optimize this.
     const bool is_ejected         = rx_session_is_transfer_ejected(self, frame->meta.transfer_id);
@@ -2120,11 +2126,11 @@ static void rx_session_update_ordered(rx_session_t* const        self,
 
 /// The UNORDERED mode implementation. Ejects every transfer immediately upon completion without delay.
 /// The reordering timer is not used.
-static void rx_session_update_unordered(rx_session_t* const        self,
-                                        udpard_rx_t* const         rx,
-                                        const udpard_us_t          ts,
-                                        rx_frame_t* const          frame,
-                                        const udpard_mem_deleter_t payload_deleter)
+static void rx_session_update_unordered(rx_session_t* const    self,
+                                        udpard_rx_t* const     rx,
+                                        const udpard_us_t      ts,
+                                        rx_frame_t* const      frame,
+                                        const udpard_deleter_t payload_deleter)
 {
     UDPARD_ASSERT(self->port->reordering_window < 0);
     // We do not check interned transfers because in the UNORDERED mode they are never interned, always ejected ASAP.
@@ -2158,13 +2164,13 @@ static void rx_session_update_unordered(rx_session_t* const        self,
 }
 
 /// The stateful strategy maintains a dedicated session per remote node, indexed in a fast AVL tree.
-static void rx_port_accept_stateful(udpard_rx_t* const         rx,
-                                    udpard_rx_port_t* const    port,
-                                    const udpard_us_t          timestamp,
-                                    const udpard_udpip_ep_t    source_ep,
-                                    rx_frame_t* const          frame,
-                                    const udpard_mem_deleter_t payload_deleter,
-                                    const uint_fast8_t         iface_index)
+static void rx_port_accept_stateful(udpard_rx_t* const      rx,
+                                    udpard_rx_port_t* const port,
+                                    const udpard_us_t       timestamp,
+                                    const udpard_udpip_ep_t source_ep,
+                                    rx_frame_t* const       frame,
+                                    const udpard_deleter_t  payload_deleter,
+                                    const uint_fast8_t      iface_index)
 {
     rx_session_factory_args_t fac_args = { .owner                 = port,
                                            .sessions_by_animation = &rx->list_session_by_animation,
@@ -2186,13 +2192,13 @@ static void rx_port_accept_stateful(udpard_rx_t* const         rx,
 
 /// The stateless strategy accepts only single-frame transfers and does not maintain any session state.
 /// It could be trivially extended to fallback to UNORDERED when multi-frame transfers are detected.
-static void rx_port_accept_stateless(udpard_rx_t* const         rx,
-                                     udpard_rx_port_t* const    port,
-                                     const udpard_us_t          timestamp,
-                                     const udpard_udpip_ep_t    source_ep,
-                                     rx_frame_t* const          frame,
-                                     const udpard_mem_deleter_t payload_deleter,
-                                     const uint_fast8_t         iface_index)
+static void rx_port_accept_stateless(udpard_rx_t* const      rx,
+                                     udpard_rx_port_t* const port,
+                                     const udpard_us_t       timestamp,
+                                     const udpard_udpip_ep_t source_ep,
+                                     rx_frame_t* const       frame,
+                                     const udpard_deleter_t  payload_deleter,
+                                     const uint_fast8_t      iface_index)
 {
     const size_t required_size = smaller(port->extent, frame->meta.transfer_payload_size);
     const bool   full_transfer = (frame->base.offset == 0) && (frame->base.payload.size >= required_size);
@@ -2236,8 +2242,10 @@ static const udpard_rx_port_vtable_private_t rx_port_vtb_stateless = { .accept  
 
 static bool rx_validate_mem_resources(const udpard_rx_mem_resources_t memory)
 {
-    return (memory.session.alloc != NULL) && (memory.session.free != NULL) && //
-           (memory.fragment.alloc != NULL) && (memory.fragment.free != NULL);
+    return (memory.session.vtable != NULL) && (memory.session.vtable->base.free != NULL) &&
+           (memory.session.vtable->alloc != NULL) && //
+           (memory.fragment.vtable != NULL) && (memory.fragment.vtable->base.free != NULL) &&
+           (memory.fragment.vtable->alloc != NULL);
 }
 
 void udpard_rx_new(udpard_rx_t* const self, udpard_tx_t* const tx)
@@ -2395,17 +2403,17 @@ void udpard_rx_port_free(udpard_rx_t* const rx, udpard_rx_port_t* const port)
     }
 }
 
-bool udpard_rx_port_push(udpard_rx_t* const         rx,
-                         udpard_rx_port_t* const    port,
-                         const udpard_us_t          timestamp,
-                         const udpard_udpip_ep_t    source_ep,
-                         const udpard_bytes_mut_t   datagram_payload,
-                         const udpard_mem_deleter_t payload_deleter,
-                         const uint_fast8_t         iface_index)
+bool udpard_rx_port_push(udpard_rx_t* const       rx,
+                         udpard_rx_port_t* const  port,
+                         const udpard_us_t        timestamp,
+                         const udpard_udpip_ep_t  source_ep,
+                         const udpard_bytes_mut_t datagram_payload,
+                         const udpard_deleter_t   payload_deleter,
+                         const uint_fast8_t       iface_index)
 {
     const bool ok = (rx != NULL) && (port != NULL) && (timestamp >= 0) && udpard_is_valid_endpoint(source_ep) &&
-                    (datagram_payload.data != NULL) && (payload_deleter.free != NULL) &&
-                    (iface_index < UDPARD_IFACE_COUNT_MAX);
+                    (datagram_payload.data != NULL) && (iface_index < UDPARD_IFACE_COUNT_MAX) &&
+                    (payload_deleter.vtable != NULL) && (payload_deleter.vtable->free != NULL);
     if (ok) {
         rx_frame_t frame       = { 0 };
         uint32_t   frame_index = 0;
