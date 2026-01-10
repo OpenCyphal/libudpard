@@ -2336,6 +2336,11 @@ static void rx_p2p_on_message(udpard_rx_t* const rx, udpard_rx_port_t* const por
     transfer.payload_size_stored -= UDPARD_P2P_HEADER_BYTES;
     frag0->view.size -= UDPARD_P2P_HEADER_BYTES;
     frag0->view.data = UDPARD_P2P_HEADER_BYTES + (byte_t*)(frag0->view.data);
+    // We trimmed the first fragment, hence the offsets of all subsequent fragments need tweaking.
+    for (udpard_fragment_t* f = udpard_fragment_next(frag0); f != NULL; f = udpard_fragment_next(f)) {
+        UDPARD_ASSERT(f->offset >= UDPARD_P2P_HEADER_BYTES); // checked this earlier indirectly
+        f->offset -= UDPARD_P2P_HEADER_BYTES;
+    }
 
     // Process the data depending on the kind.
     if (kind == P2P_KIND_ACK) {
