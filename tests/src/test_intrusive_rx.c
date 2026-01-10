@@ -2560,6 +2560,88 @@ static void test_rx_port(void)
     instrumented_allocator_reset(&alloc_payload);
 }
 
+static void test_rx_p2p_fragment_offsets(void)
+{
+    // P2P header trimming must realign fragment offsets.
+    instrumented_allocator_t alloc_frag    = { 0 };
+    instrumented_allocator_t alloc_payload = { 0 };
+    instrumented_allocator_new(&alloc_frag);
+    instrumented_allocator_new(&alloc_payload);
+    const udpard_mem_resource_t mem_frag    = instrumented_allocator_make_resource(&alloc_frag);
+    const udpard_mem_resource_t mem_payload = instrumented_allocator_make_resource(&alloc_payload);
+    const udpard_mem_deleter_t  del_payload = instrumented_allocator_make_deleter(&alloc_payload);
+
+    udpard_rx_t rx;
+    udpard_rx_new(&rx, NULL);
+    callback_result_t cb_result = { 0 };
+    rx.user                     = &cb_result;
+
+    udpard_rx_port_p2p_t port =
+      (udpard_rx_port_p2p_t){ .vtable = &callbacks_p2p, .base = { .memory = { .fragment = mem_frag } } };
+
+    const uint64_t topic_hash                                      = 0xABCDEF0102030405ULL;
+    const uint64_t tid                                             = 7;
+    const uint8_t  body[]                                          = { 'p', '2', 'p', 'x', 'y' };
+    uint8_t        payload[UDPARD_P2P_HEADER_BYTES + sizeof(body)] = { 0 };
+    uint8_t*       ptr                                             = payload;
+    *ptr++                                                         = P2P_KIND_RESPONSE;
+    ptr += 7U;
+    ptr = serialize_u64(ptr, topic_hash);
+    ptr = serialize_u64(ptr, tid);
+    memcpy(ptr, body, sizeof(body));
+
+    const size_t   total_size = sizeof(payload);
+    const size_t   first_size = UDPARD_P2P_HEADER_BYTES + 2U;
+    udpard_tree_t* root       = NULL;
+    size_t         covered    = 0;
+    TEST_ASSERT_EQUAL(rx_fragment_tree_accepted,
+                      rx_fragment_tree_update(&root,
+                                              mem_frag,
+                                              del_payload,
+                                              make_frame_base(mem_payload, 0, first_size, payload),
+                                              total_size,
+                                              total_size,
+                                              &covered));
+    TEST_ASSERT_EQUAL(
+      rx_fragment_tree_done,
+      rx_fragment_tree_update(&root,
+                              mem_frag,
+                              del_payload,
+                              make_frame_base(mem_payload, first_size, total_size - first_size, payload + first_size),
+                              total_size,
+                              total_size,
+                              &covered));
+
+    udpard_rx_transfer_t transfer = { .priority            = udpard_prio_fast,
+                                      .payload_size_stored = total_size,
+                                      .payload_size_wire   = total_size,
+                                      .payload             = (udpard_fragment_t*)root };
+    rx_p2p_on_message(&rx, (udpard_rx_port_t*)&port, transfer);
+
+    TEST_ASSERT_EQUAL(1, cb_result.message.count);
+    TEST_ASSERT_EQUAL_UINT64(topic_hash, cb_result.p2p_topic_hash);
+    TEST_ASSERT_EQUAL_UINT64(tid, cb_result.message.history[0].transfer_id);
+    TEST_ASSERT_EQUAL_size_t(sizeof(body), cb_result.message.history[0].payload_size_stored);
+
+    udpard_fragment_t* frag0 = udpard_fragment_seek(cb_result.message.history[0].payload, 0);
+    TEST_ASSERT_NOT_NULL(frag0);
+    udpard_fragment_t* frag1 = udpard_fragment_next(frag0);
+    TEST_ASSERT_NOT_NULL(frag1);
+    TEST_ASSERT_EQUAL_size_t(0, frag0->offset);
+    TEST_ASSERT_EQUAL_size_t(first_size - UDPARD_P2P_HEADER_BYTES, frag0->view.size);
+    TEST_ASSERT_EQUAL_size_t(frag0->view.size, frag1->offset);
+    TEST_ASSERT_EQUAL_size_t(sizeof(body) - frag0->view.size, frag1->view.size);
+    TEST_ASSERT_EQUAL_MEMORY(body, frag0->view.data, frag0->view.size);
+    TEST_ASSERT_EQUAL_MEMORY(body + frag0->view.size, frag1->view.data, frag1->view.size);
+
+    udpard_fragment_free_all(cb_result.message.history[0].payload, mem_frag);
+    cb_result.message.history[0].payload = NULL;
+    TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
+    instrumented_allocator_reset(&alloc_frag);
+    instrumented_allocator_reset(&alloc_payload);
+}
+
 static void test_rx_port_timeouts(void)
 {
     // Sessions are retired after SESSION_LIFETIME.
@@ -3002,6 +3084,7 @@ int main(void)
     RUN_TEST(test_rx_session_ordered_zero_reordering_window);
 
     RUN_TEST(test_rx_port);
+    RUN_TEST(test_rx_p2p_fragment_offsets);
     RUN_TEST(test_rx_port_timeouts);
     RUN_TEST(test_rx_port_oom);
     RUN_TEST(test_rx_port_free_loop);
