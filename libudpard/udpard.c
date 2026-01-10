@@ -824,7 +824,7 @@ static tx_frame_t* tx_spool(udpard_tx_t* const             tx,
 static udpard_us_t tx_ack_timeout(const udpard_us_t baseline, const udpard_prio_t prio, const size_t attempts)
 {
     UDPARD_ASSERT(baseline > 0);
-    UDPARD_ASSERT(prio <= UDPARD_PRIORITY_MAX);
+    UDPARD_ASSERT(prio < UDPARD_PRIORITY_COUNT);
     return baseline * (1LL << smaller((size_t)prio + attempts, 62)); // NOLINT(*-signed-bitwise)
 }
 
@@ -1145,7 +1145,7 @@ uint32_t udpard_tx_push(udpard_tx_t* const             self,
 {
     uint32_t   out = 0;
     const bool ok  = (self != NULL) && (deadline >= now) && (now >= 0) && (self->local_uid != 0) &&
-                    (valid_ep_mask(remote_ep) != 0) && (priority <= UDPARD_PRIORITY_MAX) &&
+                    (valid_ep_mask(remote_ep) != 0) && (priority < UDPARD_PRIORITY_COUNT) &&
                     ((payload.bytes.data != NULL) || (payload.bytes.size == 0U)) &&
                     (tx_transfer_find(self, topic_hash, transfer_id) == NULL);
     if (ok) {
@@ -1176,7 +1176,7 @@ uint32_t udpard_tx_push_p2p(udpard_tx_t* const             self,
 {
     uint32_t   out = 0;
     const bool ok  = (self != NULL) && (deadline >= now) && (now >= 0) && (self->local_uid != 0) &&
-                    (valid_ep_mask(remote.endpoints) != 0) && (priority <= UDPARD_PRIORITY_MAX) &&
+                    (valid_ep_mask(remote.endpoints) != 0) && (priority < UDPARD_PRIORITY_COUNT) &&
                     ((payload.bytes.data != NULL) || (payload.bytes.size == 0U));
     if (ok) {
         udpard_tx_poll(self, now, UDPARD_IFACE_MASK_ALL);

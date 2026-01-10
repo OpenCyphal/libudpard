@@ -61,8 +61,8 @@ extern "C"
 #define UDPARD_VERSION_MINOR 0
 
 /// The version number of the Cyphal specification implemented by this library.
-#define UDPARD_CYPHAL_SPECIFICATION_VERSION_MAJOR 1
-#define UDPARD_CYPHAL_SPECIFICATION_VERSION_MINOR 1
+#define UDPARD_CYPHAL_VERSION_MAJOR 1
+#define UDPARD_CYPHAL_VERSION_MINOR 1
 
 /// RFC 791 states that hosts must be prepared to accept datagrams of up to 576 octets and it is expected that this
 /// library will receive non IP-fragmented datagrams thus the minimum MTU should be larger than 576.
@@ -106,9 +106,6 @@ typedef int64_t udpard_us_t;
 /// In IPv6 networks, 32 bits are supported.
 #define UDPARD_IPv4_SUBJECT_ID_MAX 0x7FFFFFUL
 
-#define UDPARD_PRIORITY_MAX   7U
-#define UDPARD_PRIORITY_COUNT (UDPARD_PRIORITY_MAX + 1U)
-
 typedef enum udpard_prio_t
 {
     udpard_prio_exceptional = 0,
@@ -120,6 +117,7 @@ typedef enum udpard_prio_t
     udpard_prio_slow        = 6,
     udpard_prio_optional    = 7,
 } udpard_prio_t;
+#define UDPARD_PRIORITY_COUNT 8U
 
 typedef struct udpard_tree_t
 {

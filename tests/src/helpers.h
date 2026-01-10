@@ -17,7 +17,7 @@
 #error "Library version not defined"
 #endif
 
-#if !(defined(UDPARD_CYPHAL_SPECIFICATION_VERSION_MAJOR) && defined(UDPARD_CYPHAL_SPECIFICATION_VERSION_MINOR))
+#if !(defined(UDPARD_CYPHAL_VERSION_MAJOR) && defined(UDPARD_CYPHAL_VERSION_MINOR))
 #error "Cyphal specification version not defined"
 #endif
 
