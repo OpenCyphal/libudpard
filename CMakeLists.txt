@@ -20,7 +20,6 @@ if (NOT clang_format)
     message(STATUS "Could not locate clang-format")
 else ()
     file(GLOB_RECURSE format_files
-            ${CMAKE_CURRENT_SOURCE_DIR}/demo/*.[ch]
             ${CMAKE_CURRENT_SOURCE_DIR}/libudpard/*.[ch]
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/*.[ch]
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/*.[ch]pp)
