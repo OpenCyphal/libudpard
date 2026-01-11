@@ -12,21 +12,20 @@
 namespace {
 
 /// The data is copied.
-udpard_fragment_t* make_test_fragment(const udpard_mem_resource_t& fragment_memory,
-                                      const udpard_mem_resource_t& payload_memory,
-                                      const udpard_mem_deleter_t   payload_deleter,
-                                      const size_t                 offset,
-                                      const size_t                 size,
-                                      const void*                  data)
+udpard_fragment_t* make_test_fragment(const udpard_mem_t&    fragment_memory,
+                                      const udpard_mem_t&    payload_memory,
+                                      const udpard_deleter_t payload_deleter,
+                                      const size_t           offset,
+                                      const size_t           size,
+                                      const void*            data)
 {
-    auto* frag =
-      static_cast<udpard_fragment_t*>(fragment_memory.alloc(fragment_memory.user, sizeof(udpard_fragment_t)));
+    auto* frag = static_cast<udpard_fragment_t*>(mem_res_alloc(fragment_memory, sizeof(udpard_fragment_t)));
     if (frag == nullptr) {
         return nullptr;
     }
-    void* payload_data = payload_memory.alloc(payload_memory.user, size);
+    void* payload_data = mem_res_alloc(payload_memory, size);
     if (payload_data == nullptr) {
-        fragment_memory.free(fragment_memory.user, sizeof(udpard_fragment_t), frag);
+        mem_res_free(fragment_memory, sizeof(udpard_fragment_t), frag);
         return nullptr;
     }
     if (size > 0 && data != nullptr) {
@@ -46,12 +45,12 @@ void test_udpard_fragment_seek()
 {
     instrumented_allocator_t alloc_frag{};
     instrumented_allocator_new(&alloc_frag);
-    const udpard_mem_resource_t mem_frag = instrumented_allocator_make_resource(&alloc_frag);
+    const udpard_mem_t mem_frag = instrumented_allocator_make_resource(&alloc_frag);
 
     instrumented_allocator_t alloc_payload{};
     instrumented_allocator_new(&alloc_payload);
-    const udpard_mem_resource_t mem_payload = instrumented_allocator_make_resource(&alloc_payload);
-    const udpard_mem_deleter_t  del_payload = instrumented_allocator_make_deleter(&alloc_payload);
+    const udpard_mem_t     mem_payload = instrumented_allocator_make_resource(&alloc_payload);
+    const udpard_deleter_t del_payload = instrumented_allocator_make_deleter(&alloc_payload);
 
     // Test 1: Single fragment at offset 0 (root node).
     // Note: udpard_fragment_seek() uses the index_offset tree structure internally,
@@ -79,8 +78,8 @@ void test_udpard_fragment_seek()
     TEST_ASSERT_NULL(udpard_fragment_seek(single, 100));
 
     // Cleanup.
-    mem_payload.free(mem_payload.user, single->origin.size, single->origin.data);
-    mem_frag.free(mem_frag.user, sizeof(udpard_fragment_t), single);
+    mem_res_free(mem_payload, single->origin.size, single->origin.data);
+    mem_res_free(mem_frag, sizeof(udpard_fragment_t), single);
     TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
     TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
 
@@ -138,12 +137,12 @@ void test_udpard_fragment_seek()
     TEST_ASSERT_NULL(udpard_fragment_seek(right, 14)); // beyond all fragments
 
     // Cleanup.
-    mem_payload.free(mem_payload.user, left->origin.size, left->origin.data);
-    mem_frag.free(mem_frag.user, sizeof(udpard_fragment_t), left);
-    mem_payload.free(mem_payload.user, root->origin.size, root->origin.data);
-    mem_frag.free(mem_frag.user, sizeof(udpard_fragment_t), root);
-    mem_payload.free(mem_payload.user, right->origin.size, right->origin.data);
-    mem_frag.free(mem_frag.user, sizeof(udpard_fragment_t), right);
+    mem_res_free(mem_payload, left->origin.size, left->origin.data);
+    mem_res_free(mem_frag, sizeof(udpard_fragment_t), left);
+    mem_res_free(mem_payload, root->origin.size, root->origin.data);
+    mem_res_free(mem_frag, sizeof(udpard_fragment_t), root);
+    mem_res_free(mem_payload, right->origin.size, right->origin.data);
+    mem_res_free(mem_frag, sizeof(udpard_fragment_t), right);
     TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
     TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
 }
@@ -152,12 +151,12 @@ void test_udpard_fragment_gather()
 {
     instrumented_allocator_t alloc_frag{};
     instrumented_allocator_new(&alloc_frag);
-    const udpard_mem_resource_t mem_frag = instrumented_allocator_make_resource(&alloc_frag);
+    const udpard_mem_t mem_frag = instrumented_allocator_make_resource(&alloc_frag);
 
     instrumented_allocator_t alloc_payload{};
     instrumented_allocator_new(&alloc_payload);
-    const udpard_mem_resource_t mem_payload = instrumented_allocator_make_resource(&alloc_payload);
-    const udpard_mem_deleter_t  del_payload = instrumented_allocator_make_deleter(&alloc_payload);
+    const udpard_mem_t     mem_payload = instrumented_allocator_make_resource(&alloc_payload);
+    const udpard_deleter_t del_payload = instrumented_allocator_make_deleter(&alloc_payload);
 
     // Test 1: NULL fragment returns 0.
     char                     buf[100]; // NOLINT(*-avoid-c-arrays)
@@ -197,8 +196,8 @@ void test_udpard_fragment_gather()
     TEST_ASSERT_EQUAL_PTR(single, cursor);
 
     // Cleanup single fragment.
-    mem_payload.free(mem_payload.user, single->origin.size, single->origin.data);
-    mem_frag.free(mem_frag.user, sizeof(udpard_fragment_t), single);
+    mem_res_free(mem_payload, single->origin.size, single->origin.data);
+    mem_res_free(mem_frag, sizeof(udpard_fragment_t), single);
 
     // Test 6: Multiple fragments forming a tree.
     // Create tree: root at offset 5 ("MID"), left at offset 0 ("ABCDE"), right at offset 8 ("WXYZ")
@@ -301,12 +300,12 @@ void test_udpard_fragment_gather()
     TEST_ASSERT_EQUAL_PTR(root, cursor);
 
     // Cleanup.
-    mem_payload.free(mem_payload.user, left->origin.size, left->origin.data);
-    mem_frag.free(mem_frag.user, sizeof(udpard_fragment_t), left);
-    mem_payload.free(mem_payload.user, root->origin.size, root->origin.data);
-    mem_frag.free(mem_frag.user, sizeof(udpard_fragment_t), root);
-    mem_payload.free(mem_payload.user, right->origin.size, right->origin.data);
-    mem_frag.free(mem_frag.user, sizeof(udpard_fragment_t), right);
+    mem_res_free(mem_payload, left->origin.size, left->origin.data);
+    mem_res_free(mem_frag, sizeof(udpard_fragment_t), left);
+    mem_res_free(mem_payload, root->origin.size, root->origin.data);
+    mem_res_free(mem_frag, sizeof(udpard_fragment_t), root);
+    mem_res_free(mem_payload, right->origin.size, right->origin.data);
+    mem_res_free(mem_frag, sizeof(udpard_fragment_t), right);
     TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
     TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
 }

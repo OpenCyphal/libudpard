@@ -32,6 +32,9 @@ static void noop_free(void* const user, const size_t size, void* const pointer)
     (void)pointer;
 }
 
+// No-op memory vtable for guard checks.
+static const udpard_mem_vtable_t mem_vtable_noop_alloc = { .base = { .free = noop_free }, .alloc = dummy_alloc };
+
 // Ejects with a configurable outcome.
 static bool eject_with_flag(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejection)
 {
@@ -279,8 +282,7 @@ static void test_tx_spool_and_queue_errors(void)
     mem_zero(sizeof(tx_limit), &tx_limit);
     tx_limit.enqueued_frames_limit = 1;
     tx_limit.enqueued_frames_count = 0;
-    tx_limit.memory.transfer.free  = noop_free;
-    tx_limit.memory.transfer.alloc = dummy_alloc;
+    tx_limit.memory.transfer       = (udpard_mem_t){ .vtable = &mem_vtable_noop_alloc, .context = NULL };
     TEST_ASSERT_FALSE(tx_ensure_queue_space(&tx_limit, 3));
 
     // Sacrifice clears space when the queue is full.
@@ -289,8 +291,7 @@ static void test_tx_spool_and_queue_errors(void)
     tx_sac.enqueued_frames_limit = 1;
     tx_sac.enqueued_frames_count = 1;
     tx_sac.errors_sacrifice      = 0;
-    tx_sac.memory.transfer.free  = noop_free;
-    tx_sac.memory.transfer.alloc = dummy_alloc;
+    tx_sac.memory.transfer       = (udpard_mem_t){ .vtable = &mem_vtable_noop_alloc, .context = NULL };
     tx_transfer_t victim;
     mem_zero(sizeof(victim), &victim);
     victim.priority    = udpard_prio_fast;
@@ -413,7 +414,7 @@ static void test_tx_ack_and_scheduler(void)
     udpard_tx_free(&tx3);
 
     // Ack push failure with TX present.
-    udpard_tx_mem_resources_t fail_mem = { .transfer = { .user = NULL, .alloc = dummy_alloc, .free = noop_free } };
+    udpard_tx_mem_resources_t fail_mem = { .transfer = { .vtable = &mem_vtable_noop_alloc, .context = NULL } };
     for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
         fail_mem.payload[i] = fail_mem.transfer;
     }

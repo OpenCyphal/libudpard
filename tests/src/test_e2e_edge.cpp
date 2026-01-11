@@ -38,6 +38,9 @@ void tx_refcount_free(void* const user, const size_t size, void* const payload)
     udpard_tx_refcount_dec(udpard_bytes_t{ .size = size, .data = payload });
 }
 
+// Shared deleter for captured TX frames.
+constexpr udpard_deleter_vtable_t tx_refcount_deleter_vt{ .free = &tx_refcount_free };
+
 bool capture_tx_frame(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejection)
 {
     auto* frames = static_cast<std::vector<CapturedFrame>*>(tx->user);
@@ -89,7 +92,7 @@ struct Fixture
     udpard_tx_t                tx{};
     udpard_rx_t                rx{};
     udpard_rx_port_t           port{};
-    udpard_mem_deleter_t       tx_payload_deleter{};
+    udpard_deleter_t           tx_payload_deleter{};
     std::vector<CapturedFrame> frames;
     Context                    ctx{};
     udpard_udpip_ep_t          dest{};
@@ -114,7 +117,7 @@ struct Fixture
         }
         const udpard_rx_mem_resources_t rx_mem{ .session  = instrumented_allocator_make_resource(&rx_alloc_session),
                                                 .fragment = instrumented_allocator_make_resource(&rx_alloc_frag) };
-        tx_payload_deleter = udpard_mem_deleter_t{ .user = nullptr, .free = &tx_refcount_free };
+        tx_payload_deleter = udpard_deleter_t{ .vtable = &tx_refcount_deleter_vt, .context = nullptr };
         source             = { .ip = 0x0A000001U, .port = 7501U };
         dest               = udpard_make_subject_endpoint(222U);
 
@@ -503,7 +506,7 @@ void test_udpard_tx_push_p2p()
     udpard_tx_poll(&tx, now, UDPARD_IFACE_MASK_ALL);
     TEST_ASSERT_FALSE(frames.empty());
 
-    const udpard_mem_deleter_t tx_payload_deleter{ .user = nullptr, .free = &tx_refcount_free };
+    const udpard_deleter_t tx_payload_deleter{ .vtable = &tx_refcount_deleter_vt, .context = nullptr };
     for (const auto& f : frames) {
         TEST_ASSERT_TRUE(udpard_rx_port_push(
           &rx, reinterpret_cast<udpard_rx_port_t*>(&port), now, source, f.datagram, tx_payload_deleter, f.iface_index));
@@ -594,7 +597,7 @@ void test_udpard_rx_p2p_malformed_kind()
 
     // Push the frame to RX P2P port.
     TEST_ASSERT_EQUAL_UINT64(0, rx.errors_transfer_malformed);
-    const udpard_mem_deleter_t tx_payload_deleter{ .user = nullptr, .free = &tx_refcount_free };
+    const udpard_deleter_t tx_payload_deleter{ .vtable = &tx_refcount_deleter_vt, .context = nullptr };
     for (const auto& f : frames) {
         TEST_ASSERT_TRUE(udpard_rx_port_push(
           &rx, reinterpret_cast<udpard_rx_port_t*>(&port), now, source, f.datagram, tx_payload_deleter, f.iface_index));
@@ -690,7 +693,7 @@ void test_udpard_tx_minimum_mtu()
     TEST_ASSERT_TRUE(frames.size() > 1);
 
     // Deliver frames to RX
-    const udpard_mem_deleter_t tx_payload_deleter{ .user = nullptr, .free = &tx_refcount_free };
+    const udpard_deleter_t tx_payload_deleter{ .vtable = &tx_refcount_deleter_vt, .context = nullptr };
     for (const auto& f : frames) {
         TEST_ASSERT_TRUE(
           udpard_rx_port_push(&rx, &port, now, ctx.source, f.datagram, tx_payload_deleter, f.iface_index));
@@ -832,7 +835,7 @@ void test_udpard_rx_zero_extent()
     TEST_ASSERT_FALSE(frames.empty());
 
     // Deliver to RX with zero extent
-    const udpard_mem_deleter_t tx_payload_deleter{ .user = nullptr, .free = &tx_refcount_free };
+    const udpard_deleter_t tx_payload_deleter{ .vtable = &tx_refcount_deleter_vt, .context = nullptr };
     for (const auto& f : frames) {
         TEST_ASSERT_TRUE(udpard_rx_port_push(&rx, &port, now, source, f.datagram, tx_payload_deleter, f.iface_index));
     }
@@ -902,7 +905,7 @@ void test_udpard_all_priority_levels()
     udpard_us_t now = 0;
 
     // Test all 8 priority levels
-    for (uint8_t prio = 0; prio <= UDPARD_PRIORITY_MAX; prio++) {
+    for (uint8_t prio = 0; prio < UDPARD_PRIORITY_COUNT; prio++) {
         fix.frames.clear();
         std::array<uint8_t, 8> payload{};
         payload[0]                                  = prio;
@@ -933,8 +936,8 @@ void test_udpard_all_priority_levels()
     }
 
     // All 8 transfers should be received
-    TEST_ASSERT_EQUAL_size_t(8, fix.ctx.ids.size());
-    for (uint8_t prio = 0; prio <= UDPARD_PRIORITY_MAX; prio++) {
+    TEST_ASSERT_EQUAL_size_t(UDPARD_PRIORITY_COUNT, fix.ctx.ids.size());
+    for (uint8_t prio = 0; prio < UDPARD_PRIORITY_COUNT; prio++) {
         TEST_ASSERT_EQUAL_UINT64(100U + prio, fix.ctx.ids[prio]);
     }
 }
@@ -1000,7 +1003,7 @@ void test_udpard_topic_hash_collision()
     TEST_ASSERT_FALSE(frames.empty());
 
     // Deliver to RX - should trigger collision callback
-    const udpard_mem_deleter_t tx_payload_deleter{ .user = nullptr, .free = &tx_refcount_free };
+    const udpard_deleter_t tx_payload_deleter{ .vtable = &tx_refcount_deleter_vt, .context = nullptr };
     for (const auto& f : frames) {
         TEST_ASSERT_TRUE(
           udpard_rx_port_push(&rx, &port, now, ctx.source, f.datagram, tx_payload_deleter, f.iface_index));

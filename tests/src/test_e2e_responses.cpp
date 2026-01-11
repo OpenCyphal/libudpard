@@ -46,8 +46,10 @@ void drop_frame(const CapturedFrame& frame)
     udpard_tx_refcount_dec(udpard_bytes_t{ .size = frame.datagram.size, .data = frame.datagram.data });
 }
 
-constexpr udpard_tx_vtable_t   tx_vtable{ .eject = &capture_tx_frame };
-constexpr udpard_mem_deleter_t tx_payload_deleter{ .user = nullptr, .free = &tx_refcount_free };
+constexpr udpard_tx_vtable_t tx_vtable{ .eject = &capture_tx_frame };
+// Shared deleter for captured TX frames.
+constexpr udpard_deleter_vtable_t tx_refcount_deleter_vt{ .free = &tx_refcount_free };
+constexpr udpard_deleter_t        tx_payload_deleter{ .vtable = &tx_refcount_deleter_vt, .context = nullptr };
 
 // --------------------------------------------------------------------------------------------------------------------
 // FEEDBACK AND CONTEXT STRUCTURES

@@ -19,12 +19,12 @@ static size_t tree_count(udpard_tree_t* const root) // how many make a forest?
 }
 
 /// Allocates the payload on the heap, emulating normal frame reception.
-static rx_frame_base_t make_frame_base(const udpard_mem_resource_t mem_payload,
-                                       const size_t                offset,
-                                       const size_t                size,
-                                       const void* const           payload)
+static rx_frame_base_t make_frame_base(const udpard_mem_t mem_payload,
+                                       const size_t       offset,
+                                       const size_t       size,
+                                       const void* const  payload)
 {
-    void* data = mem_payload.alloc(mem_payload.user, size);
+    void* data = mem_res_alloc(mem_payload, size);
     if (size > 0) {
         memcpy(data, payload, size);
     }
@@ -33,9 +33,9 @@ static rx_frame_base_t make_frame_base(const udpard_mem_resource_t mem_payload,
                               .origin  = { .data = data, .size = size } };
 }
 /// The payload string cannot contain NUL characters.
-static rx_frame_base_t make_frame_base_str(const udpard_mem_resource_t mem_payload,
-                                           const size_t                offset,
-                                           const char* const           payload)
+static rx_frame_base_t make_frame_base_str(const udpard_mem_t mem_payload,
+                                           const size_t       offset,
+                                           const char* const  payload)
 {
     return make_frame_base(mem_payload, offset, (payload != NULL) ? (strlen(payload) + 1) : 0U, payload);
 }
@@ -43,11 +43,11 @@ static rx_frame_base_t make_frame_base_str(const udpard_mem_resource_t mem_paylo
 /// The created frame will copy the given full transfer payload at the specified offset, of the specified size.
 /// The full transfer payload can be invalidated after this call. It is needed here so that we could compute the
 /// CRC prefix correctly, which covers the transfer payload bytes in [0,(offset+size)].
-static rx_frame_t make_frame(const meta_t                meta,
-                             const udpard_mem_resource_t mem_payload,
-                             const void* const           full_transfer_payload,
-                             const size_t                frame_payload_offset,
-                             const size_t                frame_payload_size)
+static rx_frame_t make_frame(const meta_t       meta,
+                             const udpard_mem_t mem_payload,
+                             const void* const  full_transfer_payload,
+                             const size_t       frame_payload_offset,
+                             const size_t       frame_payload_size)
 {
     rx_frame_base_t base = make_frame_base(mem_payload,
                                            frame_payload_offset,
@@ -57,11 +57,11 @@ static rx_frame_t make_frame(const meta_t                meta,
     return (rx_frame_t){ .base = base, .meta = meta };
 }
 /// A helper that creates a frame in static storage and returns a reference to it. This is a testing aid.
-static rx_frame_t* make_frame_ptr(const meta_t                meta,
-                                  const udpard_mem_resource_t mem_payload,
-                                  const void* const           full_transfer_payload,
-                                  const size_t                frame_payload_offset,
-                                  const size_t                frame_payload_size)
+static rx_frame_t* make_frame_ptr(const meta_t       meta,
+                                  const udpard_mem_t mem_payload,
+                                  const void* const  full_transfer_payload,
+                                  const size_t       frame_payload_offset,
+                                  const size_t       frame_payload_size)
 {
     static rx_frame_t frame;
     frame = make_frame(meta, mem_payload, full_transfer_payload, frame_payload_offset, frame_payload_size);
@@ -153,12 +153,12 @@ static void test_rx_fragment_tree_update_a(void)
 {
     instrumented_allocator_t alloc_frag = { 0 };
     instrumented_allocator_new(&alloc_frag);
-    const udpard_mem_resource_t mem_frag = instrumented_allocator_make_resource(&alloc_frag);
+    const udpard_mem_t mem_frag = instrumented_allocator_make_resource(&alloc_frag);
 
     instrumented_allocator_t alloc_payload = { 0 };
     instrumented_allocator_new(&alloc_payload);
-    const udpard_mem_resource_t mem_payload = instrumented_allocator_make_resource(&alloc_payload);
-    const udpard_mem_deleter_t  del_payload = instrumented_allocator_make_deleter(&alloc_payload);
+    const udpard_mem_t     mem_payload = instrumented_allocator_make_resource(&alloc_payload);
+    const udpard_deleter_t del_payload = instrumented_allocator_make_deleter(&alloc_payload);
 
     // Empty payload test
     {
@@ -859,12 +859,12 @@ static void test_rx_fragment_tree_update_exhaustive(void)
 {
     instrumented_allocator_t alloc_frag = { 0 };
     instrumented_allocator_new(&alloc_frag);
-    const udpard_mem_resource_t mem_frag = instrumented_allocator_make_resource(&alloc_frag);
+    const udpard_mem_t mem_frag = instrumented_allocator_make_resource(&alloc_frag);
 
     instrumented_allocator_t alloc_payload = { 0 };
     instrumented_allocator_new(&alloc_payload);
-    const udpard_mem_resource_t mem_payload = instrumented_allocator_make_resource(&alloc_payload);
-    const udpard_mem_deleter_t  del_payload = instrumented_allocator_make_deleter(&alloc_payload);
+    const udpard_mem_t     mem_payload = instrumented_allocator_make_resource(&alloc_payload);
+    const udpard_deleter_t del_payload = instrumented_allocator_make_deleter(&alloc_payload);
 
     const char   payload[]      = "0123456789";
     const size_t payload_length = strlen(payload);
@@ -926,7 +926,7 @@ static void test_rx_fragment_tree_update_exhaustive(void)
             const substring_t sub = substrings[schedule[sched_idx]];
 
             // Allocate and copy the substring payload.
-            char* const frag_data = mem_payload.alloc(mem_payload.user, sub.length);
+            char* const frag_data = mem_res_alloc(mem_payload, sub.length);
             memcpy(frag_data, payload + sub.offset, sub.length);
 
             const rx_frame_base_t frame = { .offset  = sub.offset,
@@ -987,7 +987,7 @@ static void test_rx_fragment_tree_update_exhaustive(void)
         for (size_t sched_idx = 0; sched_idx < schedule_length; sched_idx++) {
             const substring_t sub = substrings[schedule[sched_idx]];
 
-            char* const frag_data = mem_payload.alloc(mem_payload.user, sub.length);
+            char* const frag_data = mem_res_alloc(mem_payload, sub.length);
             memcpy(frag_data, payload + sub.offset, sub.length);
 
             const rx_frame_base_t frame = { .offset  = sub.offset,
@@ -1034,12 +1034,12 @@ static void test_rx_fragment_tree_oom(void)
 {
     instrumented_allocator_t alloc_frag = { 0 };
     instrumented_allocator_new(&alloc_frag);
-    const udpard_mem_resource_t mem_frag = instrumented_allocator_make_resource(&alloc_frag);
+    const udpard_mem_t mem_frag = instrumented_allocator_make_resource(&alloc_frag);
 
     instrumented_allocator_t alloc_payload = { 0 };
     instrumented_allocator_new(&alloc_payload);
-    const udpard_mem_resource_t mem_payload = instrumented_allocator_make_resource(&alloc_payload);
-    const udpard_mem_deleter_t  del_payload = instrumented_allocator_make_deleter(&alloc_payload);
+    const udpard_mem_t     mem_payload = instrumented_allocator_make_resource(&alloc_payload);
+    const udpard_deleter_t del_payload = instrumented_allocator_make_deleter(&alloc_payload);
 
     // Test OOM during fragment allocation
     {
@@ -1181,12 +1181,12 @@ static void test_rx_slot_update(void)
 {
     instrumented_allocator_t alloc_frag = { 0 };
     instrumented_allocator_new(&alloc_frag);
-    const udpard_mem_resource_t mem_frag = instrumented_allocator_make_resource(&alloc_frag);
+    const udpard_mem_t mem_frag = instrumented_allocator_make_resource(&alloc_frag);
 
     instrumented_allocator_t alloc_payload = { 0 };
     instrumented_allocator_new(&alloc_payload);
-    const udpard_mem_resource_t mem_payload = instrumented_allocator_make_resource(&alloc_payload);
-    const udpard_mem_deleter_t  del_payload = instrumented_allocator_make_deleter(&alloc_payload);
+    const udpard_mem_t     mem_payload = instrumented_allocator_make_resource(&alloc_payload);
+    const udpard_deleter_t del_payload = instrumented_allocator_make_deleter(&alloc_payload);
 
     uint64_t errors_oom                = 0;
     uint64_t errors_transfer_malformed = 0;
@@ -1727,16 +1727,16 @@ static void test_rx_ack_enqueued(void)
 {
     instrumented_allocator_t alloc_frag = { 0 };
     instrumented_allocator_new(&alloc_frag);
-    const udpard_mem_resource_t mem_frag = instrumented_allocator_make_resource(&alloc_frag);
+    const udpard_mem_t mem_frag = instrumented_allocator_make_resource(&alloc_frag);
 
     instrumented_allocator_t alloc_session = { 0 };
     instrumented_allocator_new(&alloc_session);
-    const udpard_mem_resource_t mem_session = instrumented_allocator_make_resource(&alloc_session);
+    const udpard_mem_t mem_session = instrumented_allocator_make_resource(&alloc_session);
 
     instrumented_allocator_t alloc_payload = { 0 };
     instrumented_allocator_new(&alloc_payload);
-    const udpard_mem_resource_t mem_payload = instrumented_allocator_make_resource(&alloc_payload);
-    const udpard_mem_deleter_t  del_payload = instrumented_allocator_make_deleter(&alloc_payload);
+    const udpard_mem_t     mem_payload = instrumented_allocator_make_resource(&alloc_payload);
+    const udpard_deleter_t del_payload = instrumented_allocator_make_deleter(&alloc_payload);
 
     const udpard_rx_mem_resources_t rx_mem = { .fragment = mem_frag, .session = mem_session };
 
@@ -1820,16 +1820,16 @@ static void test_rx_session_ordered(void)
 {
     instrumented_allocator_t alloc_frag = { 0 };
     instrumented_allocator_new(&alloc_frag);
-    const udpard_mem_resource_t mem_frag = instrumented_allocator_make_resource(&alloc_frag);
+    const udpard_mem_t mem_frag = instrumented_allocator_make_resource(&alloc_frag);
 
     instrumented_allocator_t alloc_session = { 0 };
     instrumented_allocator_new(&alloc_session);
-    const udpard_mem_resource_t mem_session = instrumented_allocator_make_resource(&alloc_session);
+    const udpard_mem_t mem_session = instrumented_allocator_make_resource(&alloc_session);
 
     instrumented_allocator_t alloc_payload = { 0 };
     instrumented_allocator_new(&alloc_payload);
-    const udpard_mem_resource_t mem_payload = instrumented_allocator_make_resource(&alloc_payload);
-    const udpard_mem_deleter_t  del_payload = instrumented_allocator_make_deleter(&alloc_payload);
+    const udpard_mem_t     mem_payload = instrumented_allocator_make_resource(&alloc_payload);
+    const udpard_deleter_t del_payload = instrumented_allocator_make_deleter(&alloc_payload);
 
     const udpard_rx_mem_resources_t rx_mem = { .fragment = mem_frag, .session = mem_session };
 
@@ -1967,10 +1967,10 @@ static void test_rx_session_unordered(void)
     instrumented_allocator_new(&alloc_session);
     instrumented_allocator_t alloc_payload = { 0 };
     instrumented_allocator_new(&alloc_payload);
-    const udpard_mem_resource_t     mem_frag    = instrumented_allocator_make_resource(&alloc_frag);
-    const udpard_mem_resource_t     mem_session = instrumented_allocator_make_resource(&alloc_session);
-    const udpard_mem_resource_t     mem_payload = instrumented_allocator_make_resource(&alloc_payload);
-    const udpard_mem_deleter_t      del_payload = instrumented_allocator_make_deleter(&alloc_payload);
+    const udpard_mem_t              mem_frag    = instrumented_allocator_make_resource(&alloc_frag);
+    const udpard_mem_t              mem_session = instrumented_allocator_make_resource(&alloc_session);
+    const udpard_mem_t              mem_payload = instrumented_allocator_make_resource(&alloc_payload);
+    const udpard_deleter_t          del_payload = instrumented_allocator_make_deleter(&alloc_payload);
     const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
 
     udpard_rx_t rx;
@@ -2106,14 +2106,14 @@ static void test_rx_session_unordered_reject_old(void)
     // Memory and rx with TX for ack replay.
     instrumented_allocator_t alloc_frag = { 0 };
     instrumented_allocator_new(&alloc_frag);
-    const udpard_mem_resource_t mem_frag      = instrumented_allocator_make_resource(&alloc_frag);
-    instrumented_allocator_t    alloc_session = { 0 };
+    const udpard_mem_t       mem_frag      = instrumented_allocator_make_resource(&alloc_frag);
+    instrumented_allocator_t alloc_session = { 0 };
     instrumented_allocator_new(&alloc_session);
-    const udpard_mem_resource_t mem_session   = instrumented_allocator_make_resource(&alloc_session);
-    instrumented_allocator_t    alloc_payload = { 0 };
+    const udpard_mem_t       mem_session   = instrumented_allocator_make_resource(&alloc_session);
+    instrumented_allocator_t alloc_payload = { 0 };
     instrumented_allocator_new(&alloc_payload);
-    const udpard_mem_resource_t     mem_payload = instrumented_allocator_make_resource(&alloc_payload);
-    const udpard_mem_deleter_t      del_payload = instrumented_allocator_make_deleter(&alloc_payload);
+    const udpard_mem_t              mem_payload = instrumented_allocator_make_resource(&alloc_payload);
+    const udpard_deleter_t          del_payload = instrumented_allocator_make_deleter(&alloc_payload);
     const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
 
     tx_fixture_t tx_fix = { 0 };
@@ -2216,10 +2216,10 @@ static void test_rx_session_unordered_duplicates(void)
     instrumented_allocator_new(&alloc_session);
     instrumented_allocator_t alloc_payload = { 0 };
     instrumented_allocator_new(&alloc_payload);
-    const udpard_mem_resource_t     mem_frag    = instrumented_allocator_make_resource(&alloc_frag);
-    const udpard_mem_resource_t     mem_session = instrumented_allocator_make_resource(&alloc_session);
-    const udpard_mem_resource_t     mem_payload = instrumented_allocator_make_resource(&alloc_payload);
-    const udpard_mem_deleter_t      del_payload = instrumented_allocator_make_deleter(&alloc_payload);
+    const udpard_mem_t              mem_frag    = instrumented_allocator_make_resource(&alloc_frag);
+    const udpard_mem_t              mem_session = instrumented_allocator_make_resource(&alloc_session);
+    const udpard_mem_t              mem_payload = instrumented_allocator_make_resource(&alloc_payload);
+    const udpard_deleter_t          del_payload = instrumented_allocator_make_deleter(&alloc_payload);
     const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
 
     udpard_rx_t rx;
@@ -2292,10 +2292,10 @@ static void test_rx_session_ordered_reject_stale_after_jump(void)
     instrumented_allocator_new(&alloc_session);
     instrumented_allocator_t alloc_payload = { 0 };
     instrumented_allocator_new(&alloc_payload);
-    const udpard_mem_resource_t     mem_frag    = instrumented_allocator_make_resource(&alloc_frag);
-    const udpard_mem_resource_t     mem_session = instrumented_allocator_make_resource(&alloc_session);
-    const udpard_mem_resource_t     mem_payload = instrumented_allocator_make_resource(&alloc_payload);
-    const udpard_mem_deleter_t      del_payload = instrumented_allocator_make_deleter(&alloc_payload);
+    const udpard_mem_t              mem_frag    = instrumented_allocator_make_resource(&alloc_frag);
+    const udpard_mem_t              mem_session = instrumented_allocator_make_resource(&alloc_session);
+    const udpard_mem_t              mem_payload = instrumented_allocator_make_resource(&alloc_payload);
+    const udpard_deleter_t          del_payload = instrumented_allocator_make_deleter(&alloc_payload);
     const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
 
     udpard_rx_t rx;
@@ -2399,10 +2399,10 @@ static void test_rx_session_ordered_zero_reordering_window(void)
     instrumented_allocator_new(&alloc_session);
     instrumented_allocator_t alloc_payload = { 0 };
     instrumented_allocator_new(&alloc_payload);
-    const udpard_mem_resource_t     mem_frag    = instrumented_allocator_make_resource(&alloc_frag);
-    const udpard_mem_resource_t     mem_session = instrumented_allocator_make_resource(&alloc_session);
-    const udpard_mem_resource_t     mem_payload = instrumented_allocator_make_resource(&alloc_payload);
-    const udpard_mem_deleter_t      del_payload = instrumented_allocator_make_deleter(&alloc_payload);
+    const udpard_mem_t              mem_frag    = instrumented_allocator_make_resource(&alloc_frag);
+    const udpard_mem_t              mem_session = instrumented_allocator_make_resource(&alloc_session);
+    const udpard_mem_t              mem_payload = instrumented_allocator_make_resource(&alloc_payload);
+    const udpard_deleter_t          del_payload = instrumented_allocator_make_deleter(&alloc_payload);
     const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
 
     udpard_rx_t rx;
@@ -2493,10 +2493,10 @@ static void test_rx_port(void)
     instrumented_allocator_new(&alloc_session);
     instrumented_allocator_t alloc_payload = { 0 };
     instrumented_allocator_new(&alloc_payload);
-    const udpard_mem_resource_t     mem_frag    = instrumented_allocator_make_resource(&alloc_frag);
-    const udpard_mem_resource_t     mem_session = instrumented_allocator_make_resource(&alloc_session);
-    const udpard_mem_resource_t     mem_payload = instrumented_allocator_make_resource(&alloc_payload);
-    const udpard_mem_deleter_t      del_payload = instrumented_allocator_make_deleter(&alloc_payload);
+    const udpard_mem_t              mem_frag    = instrumented_allocator_make_resource(&alloc_frag);
+    const udpard_mem_t              mem_session = instrumented_allocator_make_resource(&alloc_session);
+    const udpard_mem_t              mem_payload = instrumented_allocator_make_resource(&alloc_payload);
+    const udpard_deleter_t          del_payload = instrumented_allocator_make_deleter(&alloc_payload);
     const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
 
     udpard_rx_t rx;
@@ -2530,7 +2530,7 @@ static void test_rx_port(void)
     header_serialize(dgram, meta, 0, 0, frame->base.crc);
     memcpy(dgram + HEADER_SIZE_BYTES, payload, sizeof(payload));
     mem_free(mem_payload, frame->base.origin.size, frame->base.origin.data);
-    void* push_payload = mem_payload.alloc(mem_payload.user, sizeof(dgram));
+    void* push_payload = mem_res_alloc(mem_payload, sizeof(dgram));
     memcpy(push_payload, dgram, sizeof(dgram));
 
     udpard_us_t now = 0;
@@ -2567,9 +2567,9 @@ static void test_rx_p2p_fragment_offsets(void)
     instrumented_allocator_t alloc_payload = { 0 };
     instrumented_allocator_new(&alloc_frag);
     instrumented_allocator_new(&alloc_payload);
-    const udpard_mem_resource_t mem_frag    = instrumented_allocator_make_resource(&alloc_frag);
-    const udpard_mem_resource_t mem_payload = instrumented_allocator_make_resource(&alloc_payload);
-    const udpard_mem_deleter_t  del_payload = instrumented_allocator_make_deleter(&alloc_payload);
+    const udpard_mem_t     mem_frag    = instrumented_allocator_make_resource(&alloc_frag);
+    const udpard_mem_t     mem_payload = instrumented_allocator_make_resource(&alloc_payload);
+    const udpard_deleter_t del_payload = instrumented_allocator_make_deleter(&alloc_payload);
 
     udpard_rx_t rx;
     udpard_rx_new(&rx, NULL);
@@ -2651,10 +2651,10 @@ static void test_rx_port_timeouts(void)
     instrumented_allocator_new(&alloc_session);
     instrumented_allocator_t alloc_payload = { 0 };
     instrumented_allocator_new(&alloc_payload);
-    const udpard_mem_resource_t     mem_frag    = instrumented_allocator_make_resource(&alloc_frag);
-    const udpard_mem_resource_t     mem_session = instrumented_allocator_make_resource(&alloc_session);
-    const udpard_mem_resource_t     mem_payload = instrumented_allocator_make_resource(&alloc_payload);
-    const udpard_mem_deleter_t      del_payload = instrumented_allocator_make_deleter(&alloc_payload);
+    const udpard_mem_t              mem_frag    = instrumented_allocator_make_resource(&alloc_frag);
+    const udpard_mem_t              mem_session = instrumented_allocator_make_resource(&alloc_session);
+    const udpard_mem_t              mem_payload = instrumented_allocator_make_resource(&alloc_payload);
+    const udpard_deleter_t          del_payload = instrumented_allocator_make_deleter(&alloc_payload);
     const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
 
     udpard_rx_t rx;
@@ -2677,7 +2677,7 @@ static void test_rx_port_timeouts(void)
     header_serialize(dgram, meta, 0, 0, frame->base.crc);
     memcpy(dgram + HEADER_SIZE_BYTES, payload_bytes, sizeof(payload_bytes));
     mem_free(mem_payload, frame->base.origin.size, frame->base.origin.data);
-    void* payload_buf = mem_payload.alloc(mem_payload.user, sizeof(dgram));
+    void* payload_buf = mem_res_alloc(mem_payload, sizeof(dgram));
     memcpy(payload_buf, dgram, sizeof(dgram));
 
     udpard_us_t now = 0;
@@ -2714,10 +2714,10 @@ static void test_rx_port_oom(void)
     alloc_session.limit_fragments          = 0; // force allocation failure
     instrumented_allocator_t alloc_payload = { 0 };
     instrumented_allocator_new(&alloc_payload);
-    const udpard_mem_resource_t     mem_frag    = instrumented_allocator_make_resource(&alloc_frag);
-    const udpard_mem_resource_t     mem_session = instrumented_allocator_make_resource(&alloc_session);
-    const udpard_mem_resource_t     mem_payload = instrumented_allocator_make_resource(&alloc_payload);
-    const udpard_mem_deleter_t      del_payload = instrumented_allocator_make_deleter(&alloc_payload);
+    const udpard_mem_t              mem_frag    = instrumented_allocator_make_resource(&alloc_frag);
+    const udpard_mem_t              mem_session = instrumented_allocator_make_resource(&alloc_session);
+    const udpard_mem_t              mem_payload = instrumented_allocator_make_resource(&alloc_payload);
+    const udpard_deleter_t          del_payload = instrumented_allocator_make_deleter(&alloc_payload);
     const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
 
     udpard_rx_t rx;
@@ -2741,7 +2741,7 @@ static void test_rx_port_oom(void)
     header_serialize(dgram, meta, 0, 0, frame->base.crc);
     memcpy(dgram + HEADER_SIZE_BYTES, payload_bytes, sizeof(payload_bytes));
     mem_free(mem_payload, frame->base.origin.size, frame->base.origin.data);
-    void* payload_buf = mem_payload.alloc(mem_payload.user, sizeof(dgram));
+    void* payload_buf = mem_res_alloc(mem_payload, sizeof(dgram));
     memcpy(payload_buf, dgram, sizeof(dgram));
 
     udpard_us_t now = 0;
@@ -2772,10 +2772,10 @@ static void test_rx_port_free_loop(void)
     instrumented_allocator_new(&alloc_session);
     instrumented_allocator_t alloc_payload = { 0 };
     instrumented_allocator_new(&alloc_payload);
-    const udpard_mem_resource_t     mem_frag    = instrumented_allocator_make_resource(&alloc_frag);
-    const udpard_mem_resource_t     mem_session = instrumented_allocator_make_resource(&alloc_session);
-    const udpard_mem_resource_t     mem_payload = instrumented_allocator_make_resource(&alloc_payload);
-    const udpard_mem_deleter_t      del_payload = instrumented_allocator_make_deleter(&alloc_payload);
+    const udpard_mem_t              mem_frag    = instrumented_allocator_make_resource(&alloc_frag);
+    const udpard_mem_t              mem_session = instrumented_allocator_make_resource(&alloc_session);
+    const udpard_mem_t              mem_payload = instrumented_allocator_make_resource(&alloc_payload);
+    const udpard_deleter_t          del_payload = instrumented_allocator_make_deleter(&alloc_payload);
     const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
 
     udpard_rx_t rx;
@@ -2805,7 +2805,7 @@ static void test_rx_port_free_loop(void)
         header_serialize(dgram, meta, 0, 0, frame->base.crc);
         memcpy(dgram + HEADER_SIZE_BYTES, payload, 4);
         mem_free(mem_payload, frame->base.origin.size, frame->base.origin.data);
-        void* push_payload = mem_payload.alloc(mem_payload.user, sizeof(dgram));
+        void* push_payload = mem_res_alloc(mem_payload, sizeof(dgram));
         memcpy(push_payload, dgram, sizeof(dgram));
         now += 1000;
         TEST_ASSERT(udpard_rx_port_push(&rx,
@@ -2831,7 +2831,7 @@ static void test_rx_port_free_loop(void)
         header_serialize(dgram, meta, 0, 0, frame->base.crc);
         memcpy(dgram + HEADER_SIZE_BYTES, payload, 3);
         mem_free(mem_payload, frame->base.origin.size, frame->base.origin.data);
-        void* push_payload = mem_payload.alloc(mem_payload.user, sizeof(dgram));
+        void* push_payload = mem_res_alloc(mem_payload, sizeof(dgram));
         memcpy(push_payload, dgram, sizeof(dgram));
         now += 1000;
         TEST_ASSERT(udpard_rx_port_push(&rx,
@@ -2897,7 +2897,7 @@ static void test_rx_additional_coverage(void)
                                                                                .on_collision = stub_on_collision },
                               .reordering_window = 10,
                               .topic_hash        = 1 };
-    rx_session_t*    ses  = mem.session.alloc(mem.session.user, sizeof(rx_session_t));
+    rx_session_t*    ses  = mem_res_alloc(mem.session, sizeof(rx_session_t));
     TEST_ASSERT_NOT_NULL(ses);
     mem_zero(sizeof(*ses), ses);
     ses->port                 = &port;
@@ -2972,7 +2972,7 @@ static void test_rx_additional_coverage(void)
     rx_frame_t frame;
     byte_t     payload[4] = { 1, 2, 3, 4 };
     mem_zero(sizeof(frame), &frame);
-    void* payload_buf = mem.fragment.alloc(mem.fragment.user, sizeof(payload));
+    void* payload_buf = mem_res_alloc(mem.fragment, sizeof(payload));
     memcpy(payload_buf, payload, sizeof(payload));
     frame.base.payload               = (udpard_bytes_t){ .data = payload_buf, .size = sizeof(payload) };
     frame.base.origin                = (udpard_bytes_mut_t){ .data = payload_buf, .size = sizeof(payload) };
@@ -3001,10 +3001,10 @@ static void test_rx_additional_coverage(void)
     udpard_rx_port_p2p_t port_p2p = { .vtable = &(udpard_rx_port_p2p_vtable_t){ .on_message = stub_on_message_p2p },
                                       .base   = { .memory = mem } };
     byte_t               p2p_header[UDPARD_P2P_HEADER_BYTES] = { P2P_KIND_ACK };
-    void*                ack_buf = mem.fragment.alloc(mem.fragment.user, UDPARD_P2P_HEADER_BYTES);
+    void*                ack_buf                             = mem_res_alloc(mem.fragment, UDPARD_P2P_HEADER_BYTES);
     TEST_ASSERT_NOT_NULL(ack_buf);
     memcpy(ack_buf, p2p_header, UDPARD_P2P_HEADER_BYTES);
-    udpard_fragment_t* frag = (udpard_fragment_t*)mem.fragment.alloc(mem.fragment.user, sizeof(udpard_fragment_t));
+    udpard_fragment_t* frag = (udpard_fragment_t*)mem_res_alloc(mem.fragment, sizeof(udpard_fragment_t));
     TEST_ASSERT_NOT_NULL(frag);
     mem_zero(sizeof(*frag), frag);
     frag->view                    = (udpard_bytes_t){ .data = ack_buf, .size = UDPARD_P2P_HEADER_BYTES };
@@ -3014,13 +3014,13 @@ static void test_rx_additional_coverage(void)
                                       .payload_size_stored = UDPARD_P2P_HEADER_BYTES,
                                       .payload_size_wire   = UDPARD_P2P_HEADER_BYTES };
     rx_p2p_on_message(&rx, (udpard_rx_port_t*)&port_p2p, transfer);
-    udpard_fragment_t* frag_short = mem.fragment.alloc(mem.fragment.user, sizeof(udpard_fragment_t));
+    udpard_fragment_t* frag_short = mem_res_alloc(mem.fragment, sizeof(udpard_fragment_t));
     TEST_ASSERT_NOT_NULL(frag_short);
     mem_zero(sizeof(*frag_short), frag_short);
     byte_t small_buf[UDPARD_P2P_HEADER_BYTES - 1] = { 0 };
     frag_short->view                              = (udpard_bytes_t){ .data = small_buf, .size = sizeof(small_buf) };
-    frag_short->origin = (udpard_bytes_mut_t){ .data = mem.fragment.alloc(mem.fragment.user, sizeof(small_buf)),
-                                               .size = sizeof(small_buf) };
+    frag_short->origin =
+      (udpard_bytes_mut_t){ .data = mem_res_alloc(mem.fragment, sizeof(small_buf)), .size = sizeof(small_buf) };
     frag_short->payload_deleter = instrumented_allocator_make_deleter(&alloc_frag);
     memcpy(frag_short->origin.data, small_buf, sizeof(small_buf));
     transfer.payload             = frag_short;
@@ -3035,7 +3035,7 @@ static void test_rx_additional_coverage(void)
     // Port push collision and malformed header.
     udpard_rx_port_t port_normal = { 0 };
     TEST_ASSERT_TRUE(udpard_rx_port_new(&port_normal, 1, 8, 10, mem, port.vtable));
-    udpard_bytes_mut_t bad_payload = { .data = mem.fragment.alloc(mem.fragment.user, 4), .size = 4 };
+    udpard_bytes_mut_t bad_payload = { .data = mem_res_alloc(mem.fragment, 4), .size = 4 };
     TEST_ASSERT(udpard_rx_port_push(
       &rx, &port_normal, 0, make_ep(2), bad_payload, instrumented_allocator_make_deleter(&alloc_frag), 0));
     byte_t good_dgram[HEADER_SIZE_BYTES + 1] = { 0 };
@@ -3047,7 +3047,7 @@ static void test_rx_additional_coverage(void)
                                                  .topic_hash            = 99 };
     good_dgram[HEADER_SIZE_BYTES]            = 0xAA;
     header_serialize(good_dgram, meta, 0, 0, crc_full(1, &good_dgram[HEADER_SIZE_BYTES]));
-    udpard_bytes_mut_t good_payload = { .data = mem.fragment.alloc(mem.fragment.user, sizeof(good_dgram)),
+    udpard_bytes_mut_t good_payload = { .data = mem_res_alloc(mem.fragment, sizeof(good_dgram)),
                                         .size = sizeof(good_dgram) };
     memcpy(good_payload.data, good_dgram, sizeof(good_dgram));
     TEST_ASSERT(udpard_rx_port_push(

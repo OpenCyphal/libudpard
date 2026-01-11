@@ -42,6 +42,9 @@ void tx_refcount_free(void* const user, const size_t size, void* const payload)
     udpard_tx_refcount_dec(udpard_bytes_t{ .size = size, .data = payload });
 }
 
+// Shared deleter for captured TX frames.
+constexpr udpard_deleter_vtable_t tx_refcount_deleter_vt{ .free = &tx_refcount_free };
+
 bool capture_tx_frame(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejection)
 {
     auto* frames = static_cast<std::vector<CapturedFrame>*>(tx->user);
@@ -222,9 +225,9 @@ void test_reliable_delivery_under_losses()
     pub_tx.mtu[0]                                                        = 600;
     pub_tx.mtu[1]                                                        = 900;
     pub_tx.mtu[2]                                                        = 500;
-    const udpard_us_t          start                                     = 0;
-    const udpard_us_t          deadline                                  = start + 200000;
-    const udpard_mem_deleter_t tx_payload_deleter{ .user = nullptr, .free = &tx_refcount_free };
+    const udpard_us_t      start                                         = 0;
+    const udpard_us_t      deadline                                      = start + 200000;
+    const udpard_deleter_t tx_payload_deleter{ .vtable = &tx_refcount_deleter_vt, .context = nullptr };
     TEST_ASSERT_GREATER_THAN_UINT32(0U,
                                     udpard_tx_push(&pub_tx,
                                                    start,
@@ -414,7 +417,7 @@ void test_reliable_stats_and_failures()
                                                    &record_feedback,
                                                    make_user_context(&fb_ignore)));
     udpard_tx_poll(&src_tx, 0, UDPARD_IFACE_MASK_ALL);
-    const udpard_mem_deleter_t tx_payload_deleter{ .user = nullptr, .free = &tx_refcount_free };
+    const udpard_deleter_t tx_payload_deleter{ .vtable = &tx_refcount_deleter_vt, .context = nullptr };
     for (const auto& f : src_frames) {
         TEST_ASSERT_TRUE(udpard_rx_port_push(
           &rx, &port, 0, ctx.sources[f.iface_index], f.datagram, tx_payload_deleter, f.iface_index));

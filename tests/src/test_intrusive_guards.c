@@ -26,9 +26,14 @@ static void* alloc_alt(void* const user, const size_t size)
     return (byte_t*)user + 1;
 }
 
-static udpard_mem_resource_t make_mem(void* const tag)
+// Minimal vtables for guard-path allocators.
+static const udpard_mem_vtable_t     mem_vtable_stub = { .base = { .free = free_noop }, .alloc = alloc_stub };
+static const udpard_mem_vtable_t     mem_vtable_alt  = { .base = { .free = free_noop }, .alloc = alloc_alt };
+static const udpard_deleter_vtable_t deleter_vtable  = { .free = free_noop };
+
+static udpard_mem_t make_mem(void* const tag)
 {
-    const udpard_mem_resource_t out = { .user = tag, .free = free_noop, .alloc = alloc_stub };
+    const udpard_mem_t out = { .vtable = &mem_vtable_stub, .context = tag };
     return out;
 }
 
@@ -56,11 +61,11 @@ static void on_collision_stub(udpard_rx_t* const rx, udpard_rx_port_t* const por
 static void test_mem_endpoint_list_guards(void)
 {
     // mem_same covers identical and divergent resources.
-    static char                 tag_a;
-    static char                 tag_b;
-    const udpard_mem_resource_t mem_a = make_mem(&tag_a);
-    const udpard_mem_resource_t mem_b = make_mem(&tag_b);
-    const udpard_mem_resource_t mem_c = { .user = &tag_a, .free = free_noop, .alloc = alloc_alt };
+    static char        tag_a;
+    static char        tag_b;
+    const udpard_mem_t mem_a = make_mem(&tag_a);
+    const udpard_mem_t mem_b = make_mem(&tag_b);
+    const udpard_mem_t mem_c = { .vtable = &mem_vtable_alt, .context = &tag_a };
     TEST_ASSERT_TRUE(mem_same(mem_a, mem_a));
     TEST_ASSERT_FALSE(mem_same(mem_a, mem_b));
     TEST_ASSERT_FALSE(mem_same(mem_a, mem_c));
@@ -131,7 +136,7 @@ static void test_tx_guards(void)
     TEST_ASSERT_FALSE(udpard_tx_new(NULL, 1U, 0U, 1U, mem, &vt_ok));
     TEST_ASSERT_FALSE(udpard_tx_new(&tx, 0U, 0U, 1U, mem, &vt_ok));
     udpard_tx_mem_resources_t mem_bad = mem;
-    mem_bad.payload[0].alloc          = NULL;
+    mem_bad.payload[0].vtable         = NULL;
     TEST_ASSERT_FALSE(udpard_tx_new(&tx, 1U, 0U, 1U, mem_bad, &vt_ok));
     const udpard_tx_vtable_t vt_bad = { .eject = NULL };
     TEST_ASSERT_FALSE(udpard_tx_new(&tx, 1U, 0U, 1U, mem, &vt_bad));
@@ -164,13 +169,13 @@ static void test_tx_guards(void)
 static void test_tx_predictor_sharing(void)
 {
     // Shared spool suppresses duplicate frame counts.
-    static char                 shared_tag[2];
-    const udpard_mem_resource_t mem_shared                      = make_mem(&shared_tag[0]);
-    const udpard_mem_resource_t mem_arr[UDPARD_IFACE_COUNT_MAX] = { mem_shared, mem_shared, make_mem(&shared_tag[1]) };
-    const udpard_udpip_ep_t     ep[UDPARD_IFACE_COUNT_MAX]      = { { .ip = 1U, .port = UDP_PORT },
-                                                                    { .ip = 2U, .port = UDP_PORT },
-                                                                    { 0U, 0U } };
-    const size_t                mtu[UDPARD_IFACE_COUNT_MAX]     = { 64U, 64U, 128U };
+    static char             shared_tag[2];
+    const udpard_mem_t      mem_shared                      = make_mem(&shared_tag[0]);
+    const udpard_mem_t      mem_arr[UDPARD_IFACE_COUNT_MAX] = { mem_shared, mem_shared, make_mem(&shared_tag[1]) };
+    const udpard_udpip_ep_t ep[UDPARD_IFACE_COUNT_MAX]      = { { .ip = 1U, .port = UDP_PORT },
+                                                                { .ip = 2U, .port = UDP_PORT },
+                                                                { 0U, 0U } };
+    const size_t            mtu[UDPARD_IFACE_COUNT_MAX]     = { 64U, 64U, 128U };
     TEST_ASSERT_EQUAL_size_t(1U, tx_predict_frame_count(mtu, mem_arr, ep, 16U));
 }
 
@@ -184,7 +189,7 @@ static void test_rx_guards(void)
     udpard_rx_port_t                port;
     TEST_ASSERT_FALSE(udpard_rx_port_new(NULL, 0, 0, 0, rx_mem, &rx_vtb));
     udpard_rx_mem_resources_t bad_rx_mem = rx_mem;
-    bad_rx_mem.session.alloc             = NULL;
+    bad_rx_mem.session.vtable            = NULL;
     TEST_ASSERT_FALSE(udpard_rx_port_new(&port, 0, 0, UDPARD_RX_REORDERING_WINDOW_UNORDERED, bad_rx_mem, &rx_vtb));
     TEST_ASSERT_FALSE(udpard_rx_port_new(&port, 0, 0, (udpard_us_t)-3, rx_mem, &rx_vtb));
     TEST_ASSERT_TRUE(udpard_rx_port_new(&port, 0xAA, 8U, UDPARD_RX_REORDERING_WINDOW_STATELESS, rx_mem, &rx_vtb));
@@ -197,7 +202,7 @@ static void test_rx_guards(void)
                                           0,
                                           (udpard_udpip_ep_t){ 0U, 0U },
                                           (udpard_bytes_mut_t){ .size = 0U, .data = NULL },
-                                          (udpard_mem_deleter_t){ .user = NULL, .free = NULL },
+                                          (udpard_deleter_t){ .vtable = NULL, .context = NULL },
                                           UDPARD_IFACE_COUNT_MAX));
 
     // Guard paths for P2P port creation and port freeing.
@@ -207,15 +212,15 @@ static void test_rx_guards(void)
     udpard_rx_port_free(NULL, &port);
 
     // Fragments past extent are discarded early.
-    udpard_tree_t*              root    = NULL;
-    byte_t                      buf[1]  = { 0 };
-    size_t                      covered = 0;
-    const rx_frame_base_t       frame   = { .offset  = 1U,
-                                            .payload = { .size = sizeof(buf), .data = buf },
-                                            .origin  = { .size = sizeof(buf), .data = buf } };
-    static char                 frag_tag;
-    const udpard_mem_resource_t frag_mem = make_mem(&frag_tag);
-    const udpard_mem_deleter_t  deleter  = { .user = NULL, .free = free_noop };
+    udpard_tree_t*         root    = NULL;
+    byte_t                 buf[1]  = { 0 };
+    size_t                 covered = 0;
+    const rx_frame_base_t  frame   = { .offset  = 1U,
+                                       .payload = { .size = sizeof(buf), .data = buf },
+                                       .origin  = { .size = sizeof(buf), .data = buf } };
+    static char            frag_tag;
+    const udpard_mem_t     frag_mem = make_mem(&frag_tag);
+    const udpard_deleter_t deleter  = { .vtable = &deleter_vtable, .context = NULL };
     TEST_ASSERT_EQUAL(rx_fragment_tree_rejected,
                       rx_fragment_tree_update(&root, frag_mem, deleter, frame, 0U, 0U, &covered));
 }

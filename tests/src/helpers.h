@@ -176,16 +176,38 @@ static inline void instrumented_allocator_reset(instrumented_allocator_t* const 
     instrumented_allocator_new(self);
 }
 
-static inline udpard_mem_resource_t instrumented_allocator_make_resource(const instrumented_allocator_t* const self)
+// Shared vtable for instrumented allocators.
+static const udpard_mem_vtable_t instrumented_allocator_vtable = {
+    .base  = { .free = instrumented_allocator_free },
+    .alloc = instrumented_allocator_alloc,
+};
+
+static inline udpard_mem_t instrumented_allocator_make_resource(const instrumented_allocator_t* const self)
 {
-    const udpard_mem_resource_t result = { (void*)self, &instrumented_allocator_free, &instrumented_allocator_alloc };
+    const udpard_mem_t result = { .vtable = &instrumented_allocator_vtable, .context = (void*)self };
     return result;
 }
 
-static inline udpard_mem_deleter_t instrumented_allocator_make_deleter(const instrumented_allocator_t* const self)
+static inline udpard_deleter_t instrumented_allocator_make_deleter(const instrumented_allocator_t* const self)
 {
-    const udpard_mem_deleter_t result = { (void*)self, &instrumented_allocator_free };
+    const udpard_deleter_t result = { .vtable = &instrumented_allocator_vtable.base, .context = (void*)self };
     return result;
+}
+
+// Shortcuts for vtable-based memory access.
+static inline void* mem_res_alloc(const udpard_mem_t mem, const size_t size)
+{
+    return mem.vtable->alloc(mem.context, size);
+}
+
+static inline void mem_res_free(const udpard_mem_t mem, const size_t size, void* const ptr)
+{
+    mem.vtable->base.free(mem.context, size, ptr);
+}
+
+static inline void mem_del_free(const udpard_deleter_t del, const size_t size, void* const ptr)
+{
+    del.vtable->free(del.context, size, ptr);
 }
 
 static inline void seed_prng(void)

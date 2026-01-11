@@ -247,15 +247,15 @@ void deliver_frames(std::vector<CapturedFrame>       frames,
             continue;
         }
 
-        const auto& frame = frames[i];
-        void*       dgram = rx_mem.fragment.alloc(rx_mem.fragment.user, frame.data.size());
+        const auto&            frame = frames[i];
+        const udpard_deleter_t deleter{ .vtable = &rx_mem.fragment.vtable->base, .context = rx_mem.fragment.context };
+        void*                  dgram = mem_res_alloc(rx_mem.fragment, frame.data.size());
         TEST_ASSERT_NOT_NULL(dgram);
         std::memcpy(dgram, frame.data.data(), frame.data.size());
 
         const udpard_bytes_mut_t dgram_view{ frame.data.size(), dgram };
 
-        TEST_ASSERT_TRUE(udpard_rx_port_push(
-          rx, port, now, src_ep, dgram_view, { rx_mem.fragment.user, rx_mem.fragment.free }, frame.iface_index));
+        TEST_ASSERT_TRUE(udpard_rx_port_push(rx, port, now, src_ep, dgram_view, deleter, frame.iface_index));
         now++;
     }
     udpard_rx_poll(rx, now);
