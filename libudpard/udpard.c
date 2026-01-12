@@ -169,9 +169,11 @@ bool udpard_is_valid_endpoint(const udpard_udpip_ep_t ep)
 static uint16_t valid_ep_bitmap(const udpard_udpip_ep_t remote_ep[UDPARD_IFACE_COUNT_MAX])
 {
     uint16_t bitmap = 0U;
-    for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
-        if (udpard_is_valid_endpoint(remote_ep[i])) {
-            bitmap |= (1U << i);
+    if (remote_ep != NULL) {
+        for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
+            if (udpard_is_valid_endpoint(remote_ep[i])) {
+                bitmap |= (1U << i);
+            }
         }
     }
     return bitmap;
@@ -1323,6 +1325,46 @@ void udpard_tx_poll(udpard_tx_t* const self, const udpard_us_t now, const uint16
     }
 }
 
+size_t udpard_tx_redirect(udpard_tx_t* const      self,
+                          const uint64_t          topic_hash,
+                          const udpard_udpip_ep_t remote_ep[UDPARD_IFACE_COUNT_MAX])
+{
+    size_t out = 0;
+    if ((self != NULL) && (valid_ep_bitmap(remote_ep) != 0)) {
+        // Transfers are ordered lexicographically by (topic_hash, transfer_id), so we can find the first one
+        // with a lower_bound search and then iterate until the topic_hash changes.
+        const tx_transfer_key_t key = { .topic_hash = topic_hash, .transfer_id = 0 };
+        tx_transfer_t*          tr  = CAVL2_TO_OWNER(
+          cavl2_lower_bound(self->index_transfer, &key, &tx_cavl_compare_transfer), tx_transfer_t, index_transfer);
+        UDPARD_ASSERT((tr == NULL) || (tr->topic_hash >= topic_hash));
+        while ((tr != NULL) && (tr->topic_hash == topic_hash)) {
+            for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
+                // We don't want to enable transmission over a new interface that was not originally intended for
+                // this transfer. This matters with time synchronization messages, for example.
+                if (udpard_is_valid_endpoint(tr->destination[i]) && udpard_is_valid_endpoint(remote_ep[i])) {
+                    tr->destination[i] = remote_ep[i];
+                }
+            }
+            out++;
+            tr = CAVL2_TO_OWNER(cavl2_next_greater(&tr->index_transfer), tx_transfer_t, index_transfer);
+        }
+    }
+    return out;
+}
+
+bool udpard_tx_cancel(udpard_tx_t* const self, const uint64_t topic_hash, const uint64_t transfer_id)
+{
+    bool cancelled = false;
+    if (self != NULL) {
+        tx_transfer_t* const tr = tx_transfer_find(self, topic_hash, transfer_id);
+        if (tr != NULL) {
+            tx_transfer_retire(self, tr, false);
+            cancelled = true;
+        }
+    }
+    return cancelled;
+}
+
 uint16_t udpard_tx_pending_ifaces(const udpard_tx_t* const self)
 {
     uint16_t bitmap = 0;
@@ -1363,19 +1405,6 @@ void udpard_tx_refcount_dec(const udpard_bytes_t tx_payload_view)
             frame->deleter.vtable->free(frame->deleter.context, sizeof(tx_frame_t) + tx_payload_view.size, frame);
         }
     }
-}
-
-bool udpard_tx_cancel(udpard_tx_t* const self, const uint64_t topic_hash, const uint64_t transfer_id)
-{
-    bool cancelled = false;
-    if (self != NULL) {
-        tx_transfer_t* const tr = tx_transfer_find(self, topic_hash, transfer_id);
-        if (tr != NULL) {
-            tx_transfer_retire(self, tr, false);
-            cancelled = true;
-        }
-    }
-    return cancelled;
 }
 
 void udpard_tx_free(udpard_tx_t* const self)

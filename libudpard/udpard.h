@@ -547,15 +547,14 @@ bool udpard_tx_push_p2p(udpard_tx_t* const             self,
 /// The function may deallocate memory. The time complexity is logarithmic in the number of enqueued transfers.
 void udpard_tx_poll(udpard_tx_t* const self, const udpard_us_t now, const uint16_t iface_bitmap);
 
-/// Returns a bitmap of interfaces that have pending transmissions. This is useful for IO multiplexing loops.
-/// Zero indicates that there are no pending transmissions.
-/// Which interfaces are usable is defined by the remote endpoints provided when pushing transfers.
-uint16_t udpard_tx_pending_ifaces(const udpard_tx_t* const self);
-
-/// When a datagram is ejected and the application opts to keep it, these functions must be used to manage the
-/// datagram buffer lifetime. The datagram will be freed once the reference count reaches zero.
-void udpard_tx_refcount_inc(const udpard_bytes_t tx_payload_view);
-void udpard_tx_refcount_dec(const udpard_bytes_t tx_payload_view);
+/// If there are enqueued transfers for the given topic hash, this function modifies their remote endpoints
+/// to the provided new endpoints. This is useful when the topic allocation consensus protocol finds a new
+/// topic->subject allocation while there are outstanding transfers enqueued for transmission.
+/// Returns the number of matched transfers.
+/// The complexity is logarithmic in the number of enqueued transfers and linear in the number of modified transfers.
+size_t udpard_tx_redirect(udpard_tx_t* const      self,
+                          const uint64_t          topic_hash,
+                          const udpard_udpip_ep_t remote_ep[UDPARD_IFACE_COUNT_MAX]);
 
 /// Cancel a previously enqueued transfer.
 /// If provided, the feedback callback will be invoked with success==false.
@@ -565,6 +564,16 @@ void udpard_tx_refcount_dec(const udpard_bytes_t tx_payload_view);
 /// and f is the number of frames in the transfer.
 /// The function will free the memory associated with the transfer.
 bool udpard_tx_cancel(udpard_tx_t* const self, const uint64_t topic_hash, const uint64_t transfer_id);
+
+/// Returns a bitmap of interfaces that have pending transmissions. This is useful for IO multiplexing loops.
+/// Zero indicates that there are no pending transmissions.
+/// Which interfaces are usable is defined by the remote endpoints provided when pushing transfers.
+uint16_t udpard_tx_pending_ifaces(const udpard_tx_t* const self);
+
+/// When a datagram is ejected and the application opts to keep it, these functions must be used to manage the
+/// datagram buffer lifetime. The datagram will be freed once the reference count reaches zero.
+void udpard_tx_refcount_inc(const udpard_bytes_t tx_payload_view);
+void udpard_tx_refcount_dec(const udpard_bytes_t tx_payload_view);
 
 /// Drops all enqueued items; afterward, the instance is safe to discard. Reliable transfer callbacks are still invoked.
 void udpard_tx_free(udpard_tx_t* const self);
