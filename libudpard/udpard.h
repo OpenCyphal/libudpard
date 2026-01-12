@@ -199,7 +199,8 @@ typedef struct udpard_remote_t
 bool udpard_is_valid_endpoint(const udpard_udpip_ep_t ep);
 
 /// Returns the destination multicast UDP/IP endpoint for the given subject-ID.
-/// The application should use this function when setting up subscription sockets or sending transfers.
+/// The application should use this function when setting up subscription sockets or sending datagrams in
+/// udpard_tx_vtable_t::eject_subject().
 /// If the subject-ID exceeds UDPARD_IPv4_SUBJECT_ID_MAX, the excessive bits are masked out.
 /// For P2P use the unicast node address directly instead, as provided by the RX pipeline per received transfer.
 udpard_udpip_ep_t udpard_make_subject_endpoint(const uint32_t subject_id);
@@ -361,9 +362,8 @@ typedef struct udpard_tx_feedback_t
     uint16_t acknowledgements;
 } udpard_tx_feedback_t;
 
-/// Request to transmit a UDP datagram over the specified interface to the given destination endpoint.
-/// Which interface indexes are available is determined by the user when pushing a transfer: the endpoints for
-/// unavailable interfaces should be zeroed, then no ejection will be requested for those interfaces.
+/// Request to transmit a UDP datagram over the specified interface.
+/// Which interface indexes are available is determined by the user when pushing the transfer.
 /// If Berkeley sockets or similar API is used, the application should use a dedicated socket per redundant interface.
 typedef struct udpard_tx_ejection_t
 {
@@ -375,9 +375,8 @@ typedef struct udpard_tx_ejection_t
     /// The library guarantees that now >= deadline at the time of ejection -- expired frames are purged beforehand.
     udpard_us_t deadline;
 
-    uint_fast8_t      iface_index; ///< The interface index on which the datagram is to be transmitted.
-    uint_fast8_t      dscp;        ///< Set the DSCP field of the outgoing UDP packet to this.
-    udpard_udpip_ep_t destination; ///< Unicast (for P2P transfers) or multicast UDP/IP endpoint.
+    uint_fast8_t iface_index; ///< The interface index on which the datagram is to be transmitted.
+    uint_fast8_t dscp;        ///< Set the DSCP field of the outgoing UDP packet to this.
 
     /// If the datagram pointer is retained by the application, udpard_tx_refcount_inc() must be invoked on it
     /// to prevent it from being garbage collected. When no longer needed (e.g, upon transmission),
@@ -393,7 +392,12 @@ typedef struct udpard_tx_vtable_t
 {
     /// Invoked from udpard_tx_poll() et al to push outgoing UDP datagrams into the socket/NIC driver.
     /// The callback must not mutate the TX pipeline (no udpard_tx_push/cancel/free).
-    bool (*eject)(udpard_tx_t*, udpard_tx_ejection_t*);
+    /// The destination endpoint is provided only for P2P transfers; for multicast transfers, the application
+    /// must compute the endpoint using udpard_make_subject_endpoint() based on the subject-ID. This is because
+    /// the subject-ID may be changed by the consensus algorithm at any time if a collision/divergence is detected.
+    /// The application is expected to rely on the user context to access the topic context for subject-ID derivation.
+    bool (*eject_subject)(udpard_tx_t*, udpard_tx_ejection_t*);
+    bool (*eject_p2p)(udpard_tx_t*, udpard_tx_ejection_t*, udpard_udpip_ep_t destination);
 } udpard_tx_vtable_t;
 
 /// The application must create a single instance of this struct to manage the TX pipeline.
@@ -489,12 +493,16 @@ bool udpard_tx_new(udpard_tx_t* const              self,
 /// hash uninitialized SRAM, use timers or ADC noise, etc).
 /// Related thread on random transfer-ID init: https://forum.opencyphal.org/t/improve-the-transfer-id-timeout/2375
 ///
-/// The user context value is carried through to the callbacks; use UDPARD_USER_CONTEXT_NULL if not needed.
+/// The user context value is carried through to the callbacks. It must contain enough context to allow subject-ID
+/// derivation inside udpard_tx_vtable_t::eject_subject(). For example, it may contain a pointer to the topic struct.
 ///
 /// Returns true on success. Runtime failures increment the corresponding error counters,
 /// while invocations with invalid arguments just return zero without modifying the queue state.
 ///
-/// The enqueued transfer will be emitted over all interfaces for which udpard_is_valid_endpoint(remote_ep[i]) is true.
+/// The enqueued transfer will be emitted over all interfaces specified in the iface_bitmap.
+/// The subject-ID is computed inside the udpard_tx_vtable::eject_subject() callback at the time of transmission.
+/// The subject-ID cannot be computed beforehand at the time of enqueuing because the topic->subject consensus protocol
+/// may find a different subject-ID allocation between the time of enqueuing and the time of (re)transmission.
 ///
 /// An attempt to push a transfer with a (topic hash, transfer-ID) pair that is already enqueued will fail,
 /// as that violates the transfer-ID uniqueness requirement stated above.
@@ -513,9 +521,9 @@ bool udpard_tx_new(udpard_tx_t* const              self,
 bool udpard_tx_push(udpard_tx_t* const             self,
                     const udpard_us_t              now,
                     const udpard_us_t              deadline,
+                    const uint16_t                 iface_bitmap,
                     const udpard_prio_t            priority,
                     const uint64_t                 topic_hash,
-                    const udpard_udpip_ep_t        remote_ep[UDPARD_IFACE_COUNT_MAX],
                     const uint64_t                 transfer_id,
                     const udpard_bytes_scattered_t payload,
                     void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t), // NULL if best-effort.
@@ -546,15 +554,6 @@ bool udpard_tx_push_p2p(udpard_tx_t* const             self,
 /// The iface bitmap indicates which interfaces are currently ready to accept new datagrams.
 /// The function may deallocate memory. The time complexity is logarithmic in the number of enqueued transfers.
 void udpard_tx_poll(udpard_tx_t* const self, const udpard_us_t now, const uint16_t iface_bitmap);
-
-/// If there are enqueued transfers for the given topic hash, this function modifies their remote endpoints
-/// to the provided new endpoints. This is useful when the topic allocation consensus protocol finds a new
-/// topic->subject allocation while there are outstanding transfers enqueued for transmission.
-/// Returns the number of matched transfers.
-/// The complexity is logarithmic in the number of enqueued transfers and linear in the number of modified transfers.
-size_t udpard_tx_redirect(udpard_tx_t* const      self,
-                          const uint64_t          topic_hash,
-                          const udpard_udpip_ep_t remote_ep[UDPARD_IFACE_COUNT_MAX]);
 
 /// Cancel a previously enqueued transfer.
 /// If provided, the feedback callback will be invoked with success==false.

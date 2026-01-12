@@ -625,7 +625,8 @@ typedef struct tx_transfer_t
     udpard_us_t           deadline;
     bool                  reliable;
     udpard_prio_t         priority;
-    udpard_udpip_ep_t     destination[UDPARD_IFACE_COUNT_MAX];
+    uint16_t              iface_bitmap; ///< Guaranteed to have at least one bit set within UDPARD_IFACE_COUNT_MAX.
+    udpard_udpip_ep_t     p2p_destination[UDPARD_IFACE_COUNT_MAX]; ///< Only for P2P transfers.
     udpard_user_context_t user;
 
     void (*feedback)(udpard_tx_t*, udpard_tx_feedback_t);
@@ -877,19 +878,19 @@ static bool tx_spool_shareable(const size_t       mtu_a,
 }
 
 /// The prediction takes into account that some interfaces may share the same frame spool.
-static size_t tx_predict_frame_count(const size_t            mtu[UDPARD_IFACE_COUNT_MAX],
-                                     const udpard_mem_t      memory[UDPARD_IFACE_COUNT_MAX],
-                                     const udpard_udpip_ep_t endpoint[UDPARD_IFACE_COUNT_MAX],
-                                     const size_t            payload_size)
+static size_t tx_predict_frame_count(const size_t       mtu[UDPARD_IFACE_COUNT_MAX],
+                                     const udpard_mem_t memory[UDPARD_IFACE_COUNT_MAX],
+                                     const uint16_t     iface_bitmap,
+                                     const size_t       payload_size)
 {
-    UDPARD_ASSERT(valid_ep_bitmap(endpoint) != 0); // The caller ensures that at least one endpoint is valid.
+    UDPARD_ASSERT((iface_bitmap & UDPARD_IFACE_BITMAP_ALL) != 0); // The caller ensures this
     size_t n_frames_total = 0;
     for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
         UDPARD_ASSERT(mtu[i] > 0);
-        if (udpard_is_valid_endpoint(endpoint[i])) {
+        if ((iface_bitmap & (1U << i)) != 0) {
             bool shared = false;
             for (size_t j = 0; j < i; j++) {
-                shared = shared || (udpard_is_valid_endpoint(endpoint[j]) &&
+                shared = shared || (((iface_bitmap & (1U << j)) != 0) &&
                                     tx_spool_shareable(mtu[i], memory[i], mtu[j], memory[j], payload_size));
             }
             if (!shared) {
@@ -905,7 +906,8 @@ static bool tx_push(udpard_tx_t* const             tx,
                     const udpard_us_t              now,
                     const udpard_us_t              deadline,
                     const meta_t                   meta,
-                    const udpard_udpip_ep_t        endpoint[UDPARD_IFACE_COUNT_MAX],
+                    const uint16_t                 iface_bitmap,
+                    const udpard_udpip_ep_t        p2p_destination[UDPARD_IFACE_COUNT_MAX],
                     const udpard_bytes_scattered_t payload,
                     void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t),
                     const udpard_user_context_t user,
@@ -913,13 +915,15 @@ static bool tx_push(udpard_tx_t* const             tx,
 {
     UDPARD_ASSERT(now <= deadline);
     UDPARD_ASSERT(tx != NULL);
-    UDPARD_ASSERT(valid_ep_bitmap(endpoint) != 0);
+    UDPARD_ASSERT((iface_bitmap & UDPARD_IFACE_BITMAP_ALL) != 0);
+    UDPARD_ASSERT((iface_bitmap & UDPARD_IFACE_BITMAP_ALL) == iface_bitmap);
 
     // Ensure the queue has enough space.
     for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
         tx->mtu[i] = larger(tx->mtu[i], UDPARD_MTU_MIN); // enforce minimum MTU
     }
-    const size_t n_frames = tx_predict_frame_count(tx->mtu, tx->memory.payload, endpoint, meta.transfer_payload_size);
+    const size_t n_frames =
+      tx_predict_frame_count(tx->mtu, tx->memory.payload, iface_bitmap, meta.transfer_payload_size);
     UDPARD_ASSERT(n_frames > 0);
     if (!tx_ensure_queue_space(tx, n_frames)) {
         tx->errors_capacity++;
@@ -942,10 +946,11 @@ static bool tx_push(udpard_tx_t* const             tx,
     tr->deadline           = deadline;
     tr->reliable           = meta.flag_ack;
     tr->priority           = meta.priority;
+    tr->iface_bitmap       = iface_bitmap;
     tr->user               = user;
     tr->feedback           = feedback;
     for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
-        tr->destination[i] = endpoint[i];
+        tr->p2p_destination[i] = p2p_destination[i];
         tr->head[i] = tr->cursor[i] = NULL;
     }
 
@@ -953,7 +958,7 @@ static bool tx_push(udpard_tx_t* const             tx,
     const size_t enqueued_frames_before = tx->enqueued_frames_count;
     bool         oom                    = false;
     for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
-        if (udpard_is_valid_endpoint(tr->destination[i])) {
+        if ((tr->iface_bitmap & (1U << i)) != 0) {
             if (tr->head[i] == NULL) {
                 tr->head[i]   = tx_spool(tx, tx->memory.payload[i], tx->mtu[i], meta, payload);
                 tr->cursor[i] = tr->head[i];
@@ -963,12 +968,11 @@ static bool tx_push(udpard_tx_t* const             tx,
                 }
                 // Detect which interfaces can use the same spool to conserve memory.
                 for (size_t j = i + 1; j < UDPARD_IFACE_COUNT_MAX; j++) {
-                    if (udpard_is_valid_endpoint(tr->destination[j]) &&
-                        tx_spool_shareable(tx->mtu[i],
-                                           tx->memory.payload[i],
-                                           tx->mtu[j],
-                                           tx->memory.payload[j],
-                                           meta.transfer_payload_size)) {
+                    if (((tr->iface_bitmap & (1U << j)) != 0) && tx_spool_shareable(tx->mtu[i],
+                                                                                    tx->memory.payload[i],
+                                                                                    tx->mtu[j],
+                                                                                    tx->memory.payload[j],
+                                                                                    meta.transfer_payload_size)) {
                         tr->head[j]       = tr->head[i];
                         tr->cursor[j]     = tr->cursor[i];
                         tx_frame_t* frame = tr->head[j];
@@ -993,7 +997,7 @@ static bool tx_push(udpard_tx_t* const             tx,
 
     // Enqueue for transmission immediately.
     for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
-        if (udpard_is_valid_endpoint(tr->destination[i])) {
+        if ((tr->iface_bitmap & (1U << i)) != 0) {
             enlist_head(&tx->queue[i][tr->priority], &tr->queue[i]);
         }
     }
@@ -1048,9 +1052,10 @@ static void tx_send_ack(udpard_rx_t* const    rx,
           CAVL2_TO_OWNER(cavl2_find(tx->index_transfer_ack, &key, &tx_cavl_compare_transfer_remote),
                          tx_transfer_t,
                          index_transfer_ack);
-        const uint16_t prior_ep_bitmap = (prior != NULL) ? valid_ep_bitmap(prior->destination) : 0U;
-        const uint16_t new_ep_bitmap   = valid_ep_bitmap(remote.endpoints);
-        const bool     new_better      = (new_ep_bitmap & (uint16_t)(~prior_ep_bitmap)) != 0U;
+        const uint16_t prior_ep_bitmap = (prior != NULL) ? valid_ep_bitmap(prior->p2p_destination) : 0U;
+        UDPARD_ASSERT((prior == NULL) || (prior_ep_bitmap == prior->iface_bitmap));
+        const uint16_t new_ep_bitmap = valid_ep_bitmap(remote.endpoints);
+        const bool     new_better    = (new_ep_bitmap & (uint16_t)(~prior_ep_bitmap)) != 0U;
         if (!new_better) {
             return; // Can we get an ack? We have ack at home!
         }
@@ -1086,6 +1091,7 @@ static void tx_send_ack(udpard_rx_t* const    rx,
                                        now,
                                        now + ACK_TX_DEADLINE,
                                        meta,
+                                       new_ep_bitmap,
                                        remote.endpoints,
                                        (udpard_bytes_scattered_t){ .bytes = payload, .next = NULL },
                                        NULL,
@@ -1117,7 +1123,7 @@ bool udpard_tx_new(udpard_tx_t* const              self,
                    const udpard_tx_vtable_t* const vtable)
 {
     const bool ok = (NULL != self) && (local_uid != 0) && tx_validate_mem_resources(memory) && (vtable != NULL) &&
-                    (vtable->eject != NULL);
+                    (vtable->eject_subject != NULL) && (vtable->eject_p2p != NULL);
     if (ok) {
         mem_zero(sizeof(*self), self);
         self->vtable                = vtable;
@@ -1145,16 +1151,16 @@ bool udpard_tx_new(udpard_tx_t* const              self,
 bool udpard_tx_push(udpard_tx_t* const             self,
                     const udpard_us_t              now,
                     const udpard_us_t              deadline,
+                    const uint16_t                 iface_bitmap,
                     const udpard_prio_t            priority,
                     const uint64_t                 topic_hash,
-                    const udpard_udpip_ep_t        remote_ep[UDPARD_IFACE_COUNT_MAX],
                     const uint64_t                 transfer_id,
                     const udpard_bytes_scattered_t payload,
-                    void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t),
+                    void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t), // NULL if best-effort.
                     const udpard_user_context_t user)
 {
     bool ok = (self != NULL) && (deadline >= now) && (now >= 0) && (self->local_uid != 0) &&
-              (valid_ep_bitmap(remote_ep) != 0) && (priority < UDPARD_PRIORITY_COUNT) &&
+              ((iface_bitmap & UDPARD_IFACE_BITMAP_ALL) != 0) && (priority < UDPARD_PRIORITY_COUNT) &&
               ((payload.bytes.data != NULL) || (payload.bytes.size == 0U)) &&
               (tx_transfer_find(self, topic_hash, transfer_id) == NULL);
     if (ok) {
@@ -1167,7 +1173,17 @@ bool udpard_tx_push(udpard_tx_t* const             self,
             .sender_uid            = self->local_uid,
             .topic_hash            = topic_hash,
         };
-        ok = tx_push(self, now, deadline, meta, remote_ep, payload, feedback, user, NULL);
+        const udpard_udpip_ep_t blank_ep[UDPARD_IFACE_COUNT_MAX] = { 0 };
+        ok = tx_push(self, // --------------------------------------
+                     now,
+                     deadline,
+                     meta,
+                     iface_bitmap & UDPARD_IFACE_BITMAP_ALL,
+                     blank_ep,
+                     payload,
+                     feedback,
+                     user,
+                     NULL);
     }
     return ok;
 }
@@ -1183,9 +1199,9 @@ bool udpard_tx_push_p2p(udpard_tx_t* const             self,
                         void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t),
                         const udpard_user_context_t user)
 {
-    bool ok = (self != NULL) && (deadline >= now) && (now >= 0) && (self->local_uid != 0) &&
-              (valid_ep_bitmap(remote.endpoints) != 0) && (priority < UDPARD_PRIORITY_COUNT) &&
-              ((payload.bytes.data != NULL) || (payload.bytes.size == 0U));
+    const uint16_t iface_bitmap = valid_ep_bitmap(remote.endpoints);
+    bool ok = (self != NULL) && (deadline >= now) && (now >= 0) && (self->local_uid != 0) && (iface_bitmap != 0) &&
+              (priority < UDPARD_PRIORITY_COUNT) && ((payload.bytes.data != NULL) || (payload.bytes.size == 0U));
     if (ok) {
         udpard_tx_poll(self, now, UDPARD_IFACE_BITMAP_ALL);
         // Serialize the P2P header and prepend it to the payload.
@@ -1209,7 +1225,16 @@ bool udpard_tx_push_p2p(udpard_tx_t* const             self,
             .topic_hash            = remote.uid,
         };
         tx_transfer_t* tr = NULL;
-        ok                = tx_push(self, now, deadline, meta, remote.endpoints, full_payload, feedback, user, &tr);
+        ok                = tx_push(self, //
+                     now,
+                     deadline,
+                     meta,
+                     iface_bitmap,
+                     remote.endpoints,
+                     full_payload,
+                     feedback,
+                     user,
+                     &tr);
         if (ok) {
             UDPARD_ASSERT(tr != NULL);
             tr->remote_topic_hash  = request_topic_hash;
@@ -1244,8 +1269,7 @@ static void tx_promote_staged_transfers(udpard_tx_t* const self, const udpard_us
             // Enqueue for transmission unless it's been there since the last attempt (stalled interface?)
             for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
                 UDPARD_ASSERT(tr->cursor[i] == tr->head[i]);
-                if (udpard_is_valid_endpoint(tr->destination[i]) &&
-                    !is_listed(&self->queue[i][tr->priority], &tr->queue[i])) {
+                if (((tr->iface_bitmap & (1U << i)) != 0) && !is_listed(&self->queue[i][tr->priority], &tr->queue[i])) {
                     enlist_head(&self->queue[i][tr->priority], &tr->queue[i]);
                 }
             }
@@ -1280,15 +1304,20 @@ static void tx_eject_pending_frames(udpard_tx_t* const self, const udpard_us_t n
         tx_frame_t* const       frame_next   = frame->next;
         const bool              last_attempt = !cavl2_is_inserted(self->index_staged, &tr->index_staged);
         const bool              last_frame = frame_next == NULL; // if not last attempt we will have to rewind to head.
-        udpard_tx_ejection_t    ejection   = { .now         = now,
-                                               .deadline    = tr->deadline,
-                                               .iface_index = ifindex,
-                                               .dscp        = self->dscp_value_per_priority[tr->priority],
-                                               .destination = tr->destination[ifindex],
-                                               .datagram    = tx_frame_view(frame),
-                                               .user        = tr->user };
-        if (!self->vtable->eject(self, &ejection)) { // The easy case -- no progress was made at this time;
-            break;                                   // don't change anything, just try again later as-is
+        {
+            udpard_tx_ejection_t ejection = { .now         = now,
+                                              .deadline    = tr->deadline,
+                                              .iface_index = ifindex,
+                                              .dscp        = self->dscp_value_per_priority[tr->priority],
+                                              .datagram    = tx_frame_view(frame),
+                                              .user        = tr->user };
+            const bool           ep_valid = udpard_is_valid_endpoint(tr->p2p_destination[ifindex]);
+            UDPARD_ASSERT((!ep_valid) || ((tr->iface_bitmap & (1U << ifindex)) != 0U));
+            const bool ejected = ep_valid ? self->vtable->eject_p2p(self, &ejection, tr->p2p_destination[ifindex])
+                                          : self->vtable->eject_subject(self, &ejection);
+            if (!ejected) { // The easy case -- no progress was made at this time;
+                break;      // don't change anything, just try again later as-is
+            }
         }
 
         // Frame ejected successfully. Update the transfer state to get ready for the next frame.
@@ -1323,33 +1352,6 @@ void udpard_tx_poll(udpard_tx_t* const self, const udpard_us_t now, const uint16
             }
         }
     }
-}
-
-size_t udpard_tx_redirect(udpard_tx_t* const      self,
-                          const uint64_t          topic_hash,
-                          const udpard_udpip_ep_t remote_ep[UDPARD_IFACE_COUNT_MAX])
-{
-    size_t out = 0;
-    if ((self != NULL) && (valid_ep_bitmap(remote_ep) != 0)) {
-        // Transfers are ordered lexicographically by (topic_hash, transfer_id), so we can find the first one
-        // with a lower_bound search and then iterate until the topic_hash changes.
-        const tx_transfer_key_t key = { .topic_hash = topic_hash, .transfer_id = 0 };
-        tx_transfer_t*          tr  = CAVL2_TO_OWNER(
-          cavl2_lower_bound(self->index_transfer, &key, &tx_cavl_compare_transfer), tx_transfer_t, index_transfer);
-        UDPARD_ASSERT((tr == NULL) || (tr->topic_hash >= topic_hash));
-        while ((tr != NULL) && (tr->topic_hash == topic_hash)) {
-            for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
-                // We don't want to enable transmission over a new interface that was not originally intended for
-                // this transfer. This matters with time synchronization messages, for example.
-                if (udpard_is_valid_endpoint(tr->destination[i]) && udpard_is_valid_endpoint(remote_ep[i])) {
-                    tr->destination[i] = remote_ep[i];
-                }
-            }
-            out++;
-            tr = CAVL2_TO_OWNER(cavl2_next_greater(&tr->index_transfer), tx_transfer_t, index_transfer);
-        }
-    }
-    return out;
 }
 
 bool udpard_tx_cancel(udpard_tx_t* const self, const uint64_t topic_hash, const uint64_t transfer_id)
