@@ -109,7 +109,7 @@ void node_b_on_topic_message(udpard_rx_t* const rx, udpard_rx_port_t* const port
     auto* node_ctx = static_cast<NodeContext*>(rx->user);
     auto* ctx      = node_ctx->topic_ctx;
     if (ctx == nullptr) {
-        udpard_fragment_free_all(transfer.payload, port->memory.fragment);
+        udpard_fragment_free_all(transfer.payload, udpard_make_deleter(port->memory.fragment));
         return;
     }
     ctx->message_count++;
@@ -125,7 +125,7 @@ void node_b_on_topic_message(udpard_rx_t* const rx, udpard_rx_port_t* const port
     const udpard_fragment_t* cursor = transfer.payload;
     (void)udpard_fragment_gather(&cursor, 0, transfer.payload_size_stored, ctx->received_payload.data());
 
-    udpard_fragment_free_all(transfer.payload, port->memory.fragment);
+    udpard_fragment_free_all(transfer.payload, udpard_make_deleter(port->memory.fragment));
 }
 
 void on_collision(udpard_rx_t* const, udpard_rx_port_t* const, const udpard_remote_t) {}
@@ -141,7 +141,7 @@ void node_a_on_p2p_response(udpard_rx_t* const             rx,
     auto* node_ctx = static_cast<NodeContext*>(rx->user);
     auto* ctx      = node_ctx->response_ctx;
     if (ctx == nullptr) {
-        udpard_fragment_free_all(transfer.base.payload, port->base.memory.fragment);
+        udpard_fragment_free_all(transfer.base.payload, udpard_make_deleter(port->base.memory.fragment));
         return;
     }
     ctx->response_count++;
@@ -152,7 +152,7 @@ void node_a_on_p2p_response(udpard_rx_t* const             rx,
     const udpard_fragment_t* cursor = transfer.base.payload;
     (void)udpard_fragment_gather(&cursor, 0, transfer.base.payload_size_stored, ctx->received_response.data());
 
-    udpard_fragment_free_all(transfer.base.payload, port->base.memory.fragment);
+    udpard_fragment_free_all(transfer.base.payload, udpard_make_deleter(port->base.memory.fragment));
 }
 
 constexpr udpard_rx_port_p2p_vtable_t p2p_response_callbacks{ .on_message = &node_a_on_p2p_response };
@@ -160,7 +160,7 @@ constexpr udpard_rx_port_p2p_vtable_t p2p_response_callbacks{ .on_message = &nod
 // ACK-only P2P port callback (for receiving ACKs, which have no user payload)
 void on_ack_only(udpard_rx_t*, udpard_rx_port_p2p_t* port, const udpard_rx_transfer_p2p_t tr)
 {
-    udpard_fragment_free_all(tr.base.payload, port->base.memory.fragment);
+    udpard_fragment_free_all(tr.base.payload, udpard_make_deleter(port->base.memory.fragment));
 }
 
 constexpr udpard_rx_port_p2p_vtable_t ack_only_callbacks{ .on_message = &on_ack_only };

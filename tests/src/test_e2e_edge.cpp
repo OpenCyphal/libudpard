@@ -185,7 +185,7 @@ void on_message(udpard_rx_t* const rx, udpard_rx_port_t* const port, const udpar
     TEST_ASSERT_EQUAL_UINT64(ctx->expected_uid, transfer.remote.uid);
     TEST_ASSERT_EQUAL_UINT32(ctx->source.ip, transfer.remote.endpoints[0].ip);
     TEST_ASSERT_EQUAL_UINT16(ctx->source.port, transfer.remote.endpoints[0].port);
-    udpard_fragment_free_all(transfer.payload, port->memory.fragment);
+    udpard_fragment_free_all(transfer.payload, udpard_make_deleter(port->memory.fragment));
 }
 
 void on_collision(udpard_rx_t* const rx, udpard_rx_port_t* const /*port*/, const udpard_remote_t /*remote*/)
@@ -204,7 +204,7 @@ void on_message_p2p(udpard_rx_t* const rx, udpard_rx_port_p2p_t* const port, con
     TEST_ASSERT_EQUAL_UINT64(ctx->expected_uid, transfer.base.remote.uid);
     TEST_ASSERT_EQUAL_UINT32(ctx->source.ip, transfer.base.remote.endpoints[0].ip);
     TEST_ASSERT_EQUAL_UINT16(ctx->source.port, transfer.base.remote.endpoints[0].port);
-    udpard_fragment_free_all(transfer.base.payload, port->base.memory.fragment);
+    udpard_fragment_free_all(transfer.base.payload, udpard_make_deleter(port->base.memory.fragment));
 }
 
 /// UNORDERED mode should drop duplicates while keeping arrival order.
@@ -774,7 +774,7 @@ void test_udpard_rx_zero_extent()
             z->count++;
             z->payload_size_stored = transfer.payload_size_stored;
             z->payload_size_wire   = transfer.payload_size_wire;
-            udpard_fragment_free_all(transfer.payload, port_arg->memory.fragment);
+            udpard_fragment_free_all(transfer.payload, udpard_make_deleter(port_arg->memory.fragment));
         }
         static void on_collision(udpard_rx_t*, udpard_rx_port_t*, udpard_remote_t) {}
     };

@@ -264,12 +264,13 @@ typedef struct udpard_fragment_t
     udpard_deleter_t payload_deleter;
 } udpard_fragment_t;
 
-/// Frees the memory allocated for the payload and its fragment headers using the correct memory resources: the memory
-/// resource for the fragments is given explicitly, and the payload is freed using the payload_deleter per fragment.
+/// Frees the memory allocated for the payload and its fragment headers using the correct deleters: the fragment
+/// deleter is given explicitly (use udpard_make_deleter() to obtain it from a memory resource), and the payload is
+/// freed using the payload_deleter per fragment.
 /// All fragments in the tree will be freed and invalidated.
 /// The passed fragment can be any fragment inside the tree (not necessarily the root).
 /// If the fragment argument is NULL, the function has no effect. The complexity is linear in the number of fragments.
-void udpard_fragment_free_all(udpard_fragment_t* const frag, const udpard_mem_t mem_fragment);
+void udpard_fragment_free_all(udpard_fragment_t* const frag, const udpard_deleter_t fragment_deleter);
 
 /// Given any fragment in a transfer, returns the fragment that contains the given payload offset.
 /// Returns NULL if the offset points beyond the stored payload, or if frag is NULL.

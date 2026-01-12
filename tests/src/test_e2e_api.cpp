@@ -102,7 +102,7 @@ void on_message(udpard_rx_t* const rx, udpard_rx_port_t* const port, const udpar
     if (!ctx->expected.empty()) {
         TEST_ASSERT_EQUAL_MEMORY(ctx->expected.data(), assembled.data(), transfer.payload_size_stored);
     }
-    udpard_fragment_free_all(transfer.payload, port->memory.fragment);
+    udpard_fragment_free_all(transfer.payload, udpard_make_deleter(port->memory.fragment));
     ctx->received++;
 }
 
@@ -116,7 +116,7 @@ constexpr udpard_rx_port_vtable_t callbacks{ .on_message = &on_message, .on_coll
 // Ack port frees responses.
 void on_ack_response(udpard_rx_t*, udpard_rx_port_p2p_t* port, const udpard_rx_transfer_p2p_t tr)
 {
-    udpard_fragment_free_all(tr.base.payload, port->base.memory.fragment);
+    udpard_fragment_free_all(tr.base.payload, udpard_make_deleter(port->base.memory.fragment));
 }
 constexpr udpard_rx_port_p2p_vtable_t ack_callbacks{ &on_ack_response };
 

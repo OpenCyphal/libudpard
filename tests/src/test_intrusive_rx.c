@@ -190,7 +190,7 @@ static void test_rx_fragment_tree_update_a(void)
         TEST_ASSERT_EQUAL_size_t(0, alloc_payload.count_free);
         // Verify the payload and free the tree.
         TEST_ASSERT(fragment_tree_verify(root, 0, "", 0));
-        udpard_fragment_free_all((udpard_fragment_t*)root, mem_frag);
+        udpard_fragment_free_all((udpard_fragment_t*)root, udpard_make_deleter(mem_frag));
         // Check the heap.
         TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
         TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
@@ -232,7 +232,7 @@ static void test_rx_fragment_tree_update_a(void)
         TEST_ASSERT_EQUAL_size_t(0, alloc_payload.count_free);
         // Verify and free the tree (as in freedom).
         TEST_ASSERT(fragment_tree_verify(root, 4, "abc", 0x34940e4cUL));
-        udpard_fragment_free_all((udpard_fragment_t*)root, mem_frag);
+        udpard_fragment_free_all((udpard_fragment_t*)root, udpard_make_deleter(mem_frag));
         // Check the heap.
         TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
         TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
@@ -287,7 +287,7 @@ static void test_rx_fragment_tree_update_a(void)
         TEST_ASSERT_EQUAL_size_t(1, alloc_payload.count_free);
         // Free the tree (as in freedom).
         TEST_ASSERT(fragment_tree_verify(root, 7, "abcdef", 0x532b03c8UL));
-        udpard_fragment_free_all((udpard_fragment_t*)root, mem_frag);
+        udpard_fragment_free_all((udpard_fragment_t*)root, udpard_make_deleter(mem_frag));
         // Check the heap.
         TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
         TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
@@ -360,7 +360,7 @@ static void test_rx_fragment_tree_update_a(void)
         TEST_ASSERT_EQUAL_size_t(0, alloc_payload.count_free);
         // Free the tree (as in freedom).
         TEST_ASSERT(fragment_tree_verify(root, 12, "abc\0def\0xyz", 0x2758cbe6UL));
-        udpard_fragment_free_all(udpard_fragment_seek((udpard_fragment_t*)root, 0), mem_frag);
+        udpard_fragment_free_all(udpard_fragment_seek((udpard_fragment_t*)root, 0), udpard_make_deleter(mem_frag));
         // Check the heap.
         TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
         TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
@@ -540,7 +540,7 @@ static void test_rx_fragment_tree_update_a(void)
         TEST_ASSERT_EQUAL_size_t(4, alloc_payload.count_free);
         // Free the tree (as in freedom). The free tree is free to manifest its own destiny.
         TEST_ASSERT(fragment_tree_verify(root, 12, "0123456789--", 0xc73f3ad8UL));
-        udpard_fragment_free_all((udpard_fragment_t*)root, mem_frag);
+        udpard_fragment_free_all((udpard_fragment_t*)root, udpard_make_deleter(mem_frag));
         // Check the heap.
         TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
         TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
@@ -844,7 +844,7 @@ static void test_rx_fragment_tree_update_a(void)
         TEST_ASSERT(fragment_tree_verify(root, 21, "abcdefghijklmnopqrst-", 0xe7a60f1eUL));
 
         // Cleanup.
-        udpard_fragment_free_all((udpard_fragment_t*)root, mem_frag);
+        udpard_fragment_free_all((udpard_fragment_t*)root, udpard_make_deleter(mem_frag));
         TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
         TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
     }
@@ -961,7 +961,7 @@ static void test_rx_fragment_tree_update_exhaustive(void)
 
         // Verify the final state.
         TEST_ASSERT(fragment_tree_verify(root, 10, "0123456789", 0x280c069eUL));
-        udpard_fragment_free_all((udpard_fragment_t*)root, mem_frag);
+        udpard_fragment_free_all((udpard_fragment_t*)root, udpard_make_deleter(mem_frag));
         TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
         TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
     }
@@ -1022,7 +1022,7 @@ static void test_rx_fragment_tree_update_exhaustive(void)
 
         // Verify the final state.
         TEST_ASSERT(fragment_tree_verify(root, 10, "0123456789", 0x280c069eUL));
-        udpard_fragment_free_all((udpard_fragment_t*)root, mem_frag);
+        udpard_fragment_free_all((udpard_fragment_t*)root, udpard_make_deleter(mem_frag));
         TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
         TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
     }
@@ -1124,7 +1124,7 @@ static void test_rx_fragment_tree_oom(void)
         TEST_ASSERT_EQUAL_size_t(2, alloc_payload.allocated_fragments);
 
         // Cleanup
-        udpard_fragment_free_all((udpard_fragment_t*)root, mem_frag);
+        udpard_fragment_free_all((udpard_fragment_t*)root, udpard_make_deleter(mem_frag));
         TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
         TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
     }
@@ -1167,7 +1167,7 @@ static void test_rx_fragment_tree_oom(void)
         TEST_ASSERT_EQUAL_size_t(1, alloc_payload.allocated_fragments);
 
         // Cleanup
-        udpard_fragment_free_all((udpard_fragment_t*)root, mem_frag);
+        udpard_fragment_free_all((udpard_fragment_t*)root, udpard_make_deleter(mem_frag));
         TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
         TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
     }
@@ -1789,7 +1789,7 @@ static void test_rx_ack_enqueued(void)
     TEST_ASSERT_EQUAL_UINT32(ep0.ip, cb_result.ack.last.destination.ip);
     TEST_ASSERT_EQUAL_UINT16(ep0.port, cb_result.ack.last.destination.port);
 
-    udpard_fragment_free_all(cb_result.message.history[0].payload, mem_frag);
+    udpard_fragment_free_all(cb_result.message.history[0].payload, udpard_make_deleter(mem_frag));
     cb_result.message.history[0].payload = NULL;
     cb_result.message.history[0].payload = NULL;
     cb_result.message.history[0].payload = NULL;
@@ -1882,7 +1882,7 @@ static void test_rx_session_ordered(void)
     TEST_ASSERT_EQUAL(42, cb_result.message.history[0].transfer_id);
     TEST_ASSERT_EQUAL(remote_uid, cb_result.message.history[0].remote.uid);
     TEST_ASSERT(transfer_payload_verify(&cb_result.message.history[0], 10, "0123456789", 10));
-    udpard_fragment_free_all(cb_result.message.history[0].payload, mem_frag);
+    udpard_fragment_free_all(cb_result.message.history[0].payload, udpard_make_deleter(mem_frag));
     cb_result.message.history[0].payload = NULL;
     cb_result.message.history[0].payload = NULL;
     cb_result.message.history[0].payload = NULL;
@@ -1930,9 +1930,9 @@ static void test_rx_session_ordered(void)
     TEST_ASSERT(transfer_payload_verify(&cb_result.message.history[0], 3, "444", 3));
     TEST_ASSERT_EQUAL(43, cb_result.message.history[1].transfer_id);
     TEST_ASSERT(transfer_payload_verify(&cb_result.message.history[1], 3, "433", 3));
-    udpard_fragment_free_all(cb_result.message.history[0].payload, mem_frag);
+    udpard_fragment_free_all(cb_result.message.history[0].payload, udpard_make_deleter(mem_frag));
     cb_result.message.history[0].payload = NULL;
-    udpard_fragment_free_all(cb_result.message.history[1].payload, mem_frag);
+    udpard_fragment_free_all(cb_result.message.history[1].payload, udpard_make_deleter(mem_frag));
     TEST_ASSERT_EQUAL(0, alloc_frag.allocated_fragments);
     TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments);
 
@@ -2016,7 +2016,7 @@ static void test_rx_session_unordered(void)
     TEST_ASSERT_EQUAL(1, cb_result.message.count);
     TEST_ASSERT_EQUAL(100, cb_result.message.history[0].transfer_id);
     TEST_ASSERT(transfer_payload_verify(&cb_result.message.history[0], 5, "hello", 5));
-    udpard_fragment_free_all(cb_result.message.history[0].payload, mem_frag);
+    udpard_fragment_free_all(cb_result.message.history[0].payload, udpard_make_deleter(mem_frag));
     cb_result.message.history[0].payload = NULL;
 
     // Out-of-order arrivals are accepted.
@@ -2031,7 +2031,7 @@ static void test_rx_session_unordered(void)
                       1);
     TEST_ASSERT_EQUAL(2, cb_result.message.count);
     TEST_ASSERT_EQUAL(103, cb_result.message.history[0].transfer_id);
-    udpard_fragment_free_all(cb_result.message.history[0].payload, mem_frag);
+    udpard_fragment_free_all(cb_result.message.history[0].payload, udpard_make_deleter(mem_frag));
     cb_result.message.history[0].payload = NULL;
 
     meta.transfer_id = 102;
@@ -2045,7 +2045,7 @@ static void test_rx_session_unordered(void)
                       0);
     TEST_ASSERT_EQUAL(3, cb_result.message.count);
     TEST_ASSERT_EQUAL(102, cb_result.message.history[0].transfer_id);
-    udpard_fragment_free_all(cb_result.message.history[0].payload, mem_frag);
+    udpard_fragment_free_all(cb_result.message.history[0].payload, udpard_make_deleter(mem_frag));
     cb_result.message.history[0].payload = NULL;
 
     // Duplicate is ignored.
@@ -2089,7 +2089,7 @@ static void test_rx_session_unordered(void)
     TEST_ASSERT(transfer_payload_verify(&cb_result.message.history[0], 10, "0123456789", 10));
     TEST_ASSERT_EQUAL(0x0A000001, cb_result.message.history[0].remote.endpoints[0].ip);
     TEST_ASSERT_EQUAL(0x0A000002, cb_result.message.history[0].remote.endpoints[1].ip);
-    udpard_fragment_free_all(cb_result.message.history[0].payload, mem_frag);
+    udpard_fragment_free_all(cb_result.message.history[0].payload, udpard_make_deleter(mem_frag));
     cb_result.message.history[0].payload = NULL;
     TEST_ASSERT_EQUAL(0, alloc_frag.allocated_fragments);
     TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments);
@@ -2159,7 +2159,7 @@ static void test_rx_session_unordered_reject_old(void)
                       0);
     TEST_ASSERT_EQUAL(1, cb_result.message.count);
     TEST_ASSERT_EQUAL(10, cb_result.message.history[0].transfer_id);
-    udpard_fragment_free_all(cb_result.message.history[0].payload, mem_frag);
+    udpard_fragment_free_all(cb_result.message.history[0].payload, udpard_make_deleter(mem_frag));
 
     // Jump far ahead then report the old transfer again.
     meta.transfer_id           = 2050;
@@ -2174,7 +2174,7 @@ static void test_rx_session_unordered_reject_old(void)
                       1);
     TEST_ASSERT_EQUAL(2, cb_result.message.count);
     TEST_ASSERT_EQUAL(2050, cb_result.message.history[0].transfer_id);
-    udpard_fragment_free_all(cb_result.message.history[0].payload, mem_frag);
+    udpard_fragment_free_all(cb_result.message.history[0].payload, udpard_make_deleter(mem_frag));
 
     meta.transfer_id           = 10;
     meta.transfer_payload_size = 3;
@@ -2262,7 +2262,7 @@ static void test_rx_session_unordered_duplicates(void)
                       0);
     TEST_ASSERT_EQUAL(1, cb_result.message.count);
     TEST_ASSERT_EQUAL(5, cb_result.message.history[0].transfer_id);
-    udpard_fragment_free_all(cb_result.message.history[0].payload, mem_frag);
+    udpard_fragment_free_all(cb_result.message.history[0].payload, udpard_make_deleter(mem_frag));
     cb_result.message.history[0].payload = NULL;
 
     // Duplicate dropped.
@@ -2336,7 +2336,7 @@ static void test_rx_session_ordered_reject_stale_after_jump(void)
                       del_payload,
                       0);
     TEST_ASSERT_EQUAL(1, cb_result.message.count);
-    udpard_fragment_free_all(cb_result.message.history[0].payload, mem_frag);
+    udpard_fragment_free_all(cb_result.message.history[0].payload, udpard_make_deleter(mem_frag));
     cb_result.message.history[0].payload = NULL;
 
     // Intern two transfers out of order.
@@ -2363,9 +2363,9 @@ static void test_rx_session_ordered_reject_stale_after_jump(void)
     TEST_ASSERT_EQUAL(3, cb_result.message.count);
     TEST_ASSERT_EQUAL(12, cb_result.message.history[0].transfer_id);
     TEST_ASSERT_EQUAL(11, cb_result.message.history[1].transfer_id);
-    udpard_fragment_free_all(cb_result.message.history[0].payload, mem_frag);
+    udpard_fragment_free_all(cb_result.message.history[0].payload, udpard_make_deleter(mem_frag));
     cb_result.message.history[0].payload = NULL;
-    udpard_fragment_free_all(cb_result.message.history[1].payload, mem_frag);
+    udpard_fragment_free_all(cb_result.message.history[1].payload, udpard_make_deleter(mem_frag));
     cb_result.message.history[1].payload = NULL;
 
     // Very old transfer is still accepted once the head has advanced.
@@ -2379,7 +2379,7 @@ static void test_rx_session_ordered_reject_stale_after_jump(void)
                       del_payload,
                       2);
     if ((cb_result.message.count > 0) && (cb_result.message.history[0].payload != NULL)) {
-        udpard_fragment_free_all(cb_result.message.history[0].payload, mem_frag);
+        udpard_fragment_free_all(cb_result.message.history[0].payload, udpard_make_deleter(mem_frag));
         cb_result.message.history[0].payload = NULL;
     }
     TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments);
@@ -2443,7 +2443,7 @@ static void test_rx_session_ordered_zero_reordering_window(void)
                       del_payload,
                       0);
     TEST_ASSERT(cb_result.message.count >= 1);
-    udpard_fragment_free_all(cb_result.message.history[0].payload, mem_frag);
+    udpard_fragment_free_all(cb_result.message.history[0].payload, udpard_make_deleter(mem_frag));
     cb_result.message.history[0].payload = NULL;
 
     // Jump is dropped with zero window.
@@ -2470,11 +2470,11 @@ static void test_rx_session_ordered_zero_reordering_window(void)
                       0);
     TEST_ASSERT(cb_result.message.count >= 1);
     if (cb_result.message.history[0].payload != NULL) {
-        udpard_fragment_free_all(cb_result.message.history[0].payload, mem_frag);
+        udpard_fragment_free_all(cb_result.message.history[0].payload, udpard_make_deleter(mem_frag));
         cb_result.message.history[0].payload = NULL;
     }
     if ((cb_result.message.count > 1) && (cb_result.message.history[1].payload != NULL)) {
-        udpard_fragment_free_all(cb_result.message.history[1].payload, mem_frag);
+        udpard_fragment_free_all(cb_result.message.history[1].payload, udpard_make_deleter(mem_frag));
         cb_result.message.history[1].payload = NULL;
     }
 
@@ -2548,7 +2548,7 @@ static void test_rx_port(void)
     TEST_ASSERT_NOT_NULL(frag);
     TEST_ASSERT_EQUAL_size_t(3, frag->view.size);
     TEST_ASSERT_EQUAL_MEMORY("abc", frag->view.data, 3);
-    udpard_fragment_free_all(cb_result.message.history[0].payload, mem_frag);
+    udpard_fragment_free_all(cb_result.message.history[0].payload, udpard_make_deleter(mem_frag));
     cb_result.message.history[0].payload = NULL;
 
     udpard_rx_port_free(&rx, &port.base);
@@ -2634,7 +2634,7 @@ static void test_rx_p2p_fragment_offsets(void)
     TEST_ASSERT_EQUAL_MEMORY(body, frag0->view.data, frag0->view.size);
     TEST_ASSERT_EQUAL_MEMORY(body + frag0->view.size, frag1->view.data, frag1->view.size);
 
-    udpard_fragment_free_all(cb_result.message.history[0].payload, mem_frag);
+    udpard_fragment_free_all(cb_result.message.history[0].payload, udpard_make_deleter(mem_frag));
     cb_result.message.history[0].payload = NULL;
     TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
     TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
@@ -2690,7 +2690,7 @@ static void test_rx_port_timeouts(void)
                                     0));
     TEST_ASSERT_GREATER_THAN_UINT32(0, alloc_session.allocated_fragments);
     TEST_ASSERT_EQUAL(1, cb_result.message.count);
-    udpard_fragment_free_all(cb_result.message.history[0].payload, mem_frag);
+    udpard_fragment_free_all(cb_result.message.history[0].payload, udpard_make_deleter(mem_frag));
     cb_result.message.history[0].payload = NULL;
 
     now += SESSION_LIFETIME + 1;
@@ -2861,7 +2861,7 @@ static size_t g_collision_count = 0; // NOLINT(*-avoid-non-const-global-variable
 static void stub_on_message(udpard_rx_t* const rx, udpard_rx_port_t* const port, const udpard_rx_transfer_t transfer)
 {
     (void)rx;
-    udpard_fragment_free_all(transfer.payload, port->memory.fragment);
+    udpard_fragment_free_all(transfer.payload, udpard_make_deleter(port->memory.fragment));
 }
 
 static void stub_on_collision(udpard_rx_t* const rx, udpard_rx_port_t* const port, const udpard_remote_t remote)
@@ -2877,7 +2877,7 @@ static void stub_on_message_p2p(udpard_rx_t* const             rx,
                                 const udpard_rx_transfer_p2p_t transfer)
 {
     (void)rx;
-    udpard_fragment_free_all(transfer.base.payload, port->base.memory.fragment);
+    udpard_fragment_free_all(transfer.base.payload, udpard_make_deleter(port->base.memory.fragment));
 }
 
 static udpard_udpip_ep_t make_ep(const uint32_t ip) { return (udpard_udpip_ep_t){ .ip = ip, .port = 1U }; }

@@ -134,7 +134,7 @@ void on_message(udpard_rx_t* const rx, udpard_rx_port_t* const port, const udpar
         ctx->received_transfers.push_back(std::move(rt));
     }
 
-    udpard_fragment_free_all(transfer.payload, port->memory.fragment);
+    udpard_fragment_free_all(transfer.payload, udpard_make_deleter(port->memory.fragment));
 }
 
 void on_collision(udpard_rx_t* const rx, udpard_rx_port_t* const, const udpard_remote_t)

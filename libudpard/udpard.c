@@ -246,25 +246,25 @@ static int32_t cavl_compare_fragment_end(const void* const user, const udpard_tr
 }
 
 // NOLINTNEXTLINE(misc-no-recursion)
-void udpard_fragment_free_all(udpard_fragment_t* const frag, const udpard_mem_t mem_fragment)
+void udpard_fragment_free_all(udpard_fragment_t* const frag, const udpard_deleter_t fragment_deleter)
 {
     if (frag != NULL) {
         // Descend the tree
         for (size_t i = 0; i < 2; i++) {
             if (frag->index_offset.lr[i] != NULL) {
                 frag->index_offset.lr[i]->up = NULL; // Prevent backtrack ascension from this branch
-                udpard_fragment_free_all((udpard_fragment_t*)frag->index_offset.lr[i], mem_fragment);
+                udpard_fragment_free_all((udpard_fragment_t*)frag->index_offset.lr[i], fragment_deleter);
                 frag->index_offset.lr[i] = NULL; // Avoid dangly pointers even if we're headed for imminent destruction
             }
         }
         // Delete this fragment
         udpard_fragment_t* const parent = (udpard_fragment_t*)frag->index_offset.up;
         mem_free_payload(frag->payload_deleter, frag->origin);
-        mem_free(mem_fragment, sizeof(udpard_fragment_t), frag);
+        fragment_deleter.vtable->free(fragment_deleter.context, sizeof(udpard_fragment_t), frag);
         // Ascend the tree.
         if (parent != NULL) {
             parent->index_offset.lr[parent->index_offset.lr[1] == (udpard_tree_t*)frag] = NULL;
-            udpard_fragment_free_all(parent, mem_fragment); // tail call
+            udpard_fragment_free_all(parent, fragment_deleter); // tail call
         }
     }
 }
@@ -1048,7 +1048,7 @@ static void tx_send_ack(udpard_rx_t* const    rx,
                          index_transfer_ack);
         const uint16_t prior_ep_bitmap = (prior != NULL) ? valid_ep_bitmap(prior->destination) : 0U;
         const uint16_t new_ep_bitmap   = valid_ep_bitmap(remote.endpoints);
-        const bool     new_better      = (new_ep_bitmap & (~prior_ep_bitmap)) != 0U;
+        const bool     new_better      = (new_ep_bitmap & (uint16_t)(~prior_ep_bitmap)) != 0U;
         if (!new_better) {
             return; // Can we get an ack? We have ack at home!
         }
@@ -1686,7 +1686,7 @@ typedef struct
 
 static void rx_slot_reset(rx_slot_t* const slot, const udpard_mem_t fragment_memory)
 {
-    udpard_fragment_free_all((udpard_fragment_t*)slot->fragments, fragment_memory);
+    udpard_fragment_free_all((udpard_fragment_t*)slot->fragments, udpard_make_deleter(fragment_memory));
     slot->fragments      = NULL;
     slot->state          = rx_slot_idle;
     slot->covered_prefix = 0U;
@@ -2324,7 +2324,7 @@ static void rx_p2p_on_message(udpard_rx_t* const rx, udpard_rx_port_t* const por
     udpard_fragment_t* const frag0 = udpard_fragment_seek(transfer.payload, 0);
     if (frag0->view.size < UDPARD_P2P_HEADER_BYTES) {
         ++rx->errors_transfer_malformed;
-        udpard_fragment_free_all(transfer.payload, port->memory.fragment);
+        udpard_fragment_free_all(transfer.payload, udpard_make_deleter(port->memory.fragment));
         return; // Bad transfer -- fragmented header. We can still handle it but it's a protocol violation.
     }
 
@@ -2353,12 +2353,12 @@ static void rx_p2p_on_message(udpard_rx_t* const rx, udpard_rx_port_t* const por
     // Process the data depending on the kind.
     if (kind == P2P_KIND_ACK) {
         tx_receive_ack(rx, topic_hash, transfer_id);
-        udpard_fragment_free_all(transfer.payload, port->memory.fragment);
+        udpard_fragment_free_all(transfer.payload, udpard_make_deleter(port->memory.fragment));
     } else if (kind == P2P_KIND_RESPONSE) {
         self->vtable->on_message(rx, self, (udpard_rx_transfer_p2p_t){ .base = transfer, .topic_hash = topic_hash });
     } else { // malformed
         ++rx->errors_transfer_malformed;
-        udpard_fragment_free_all(transfer.payload, port->memory.fragment);
+        udpard_fragment_free_all(transfer.payload, udpard_make_deleter(port->memory.fragment));
     }
 }
 
