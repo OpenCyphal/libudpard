@@ -233,6 +233,9 @@ struct udpard_mem_t
     void*                      context;
 };
 
+/// A helper that upcasts a memory resource into a deleter.
+udpard_deleter_t udpard_make_deleter(const udpard_mem_t memory);
+
 /// This type represents payload as a binary tree of its fragments ordered by offset to eliminate data copying.
 /// The fragments are guaranteed to be non-redundant and non-overlapping; therefore, they are also ordered by their
 /// end offsets. See the helper functions below for managing the fragment tree.

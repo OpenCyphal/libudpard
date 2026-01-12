@@ -115,11 +115,6 @@ static void mem_free_payload(const udpard_deleter_t memory, const udpard_bytes_m
     }
 }
 
-static udpard_deleter_t mem_make_deleter(const udpard_mem_t memory)
-{
-    return (udpard_deleter_t){ .vtable = &memory.vtable->base, .context = memory.context };
-}
-
 static byte_t* serialize_u32(byte_t* ptr, const uint32_t value)
 {
     for (size_t i = 0; i < sizeof(value); i++) {
@@ -160,6 +155,11 @@ static const byte_t* deserialize_u64(const byte_t* ptr, uint64_t* const out_valu
 
 // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
 static void mem_zero(const size_t size, void* const data) { (void)memset(data, 0, size); }
+
+udpard_deleter_t udpard_make_deleter(const udpard_mem_t memory)
+{
+    return (udpard_deleter_t){ .vtable = &memory.vtable->base, .context = memory.context };
+}
 
 bool udpard_is_valid_endpoint(const udpard_udpip_ep_t ep)
 {
@@ -566,7 +566,7 @@ static tx_frame_t* tx_frame_new(udpard_tx_t* const tx, const udpard_mem_t mem, c
     tx_frame_t* const frame = (tx_frame_t*)mem_alloc(mem, sizeof(tx_frame_t) + data_size);
     if (frame != NULL) {
         frame->refcount = 1U;
-        frame->deleter  = mem_make_deleter(mem);
+        frame->deleter  = udpard_make_deleter(mem);
         frame->objcount = &tx->enqueued_frames_count;
         frame->next     = NULL;
         frame->size     = data_size;
