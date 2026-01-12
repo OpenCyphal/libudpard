@@ -296,19 +296,18 @@ void test_topic_with_p2p_response()
     udpard_us_t                                           now = 0;
     std::array<udpard_udpip_ep_t, UDPARD_IFACE_COUNT_MAX> topic_dest{};
     topic_dest[0] = topic_multicast;
-    TEST_ASSERT_GREATER_THAN_UINT32(0U,
-                                    udpard_tx_push(&a_tx,
-                                                   now,
-                                                   now + 1000000,
-                                                   udpard_prio_nominal,
-                                                   topic_hash,
-                                                   topic_dest.data(),
-                                                   transfer_id,
-                                                   topic_payload_scat,
-                                                   &record_feedback,
-                                                   make_user_context(&a_topic_fb)));
+    TEST_ASSERT_TRUE(udpard_tx_push(&a_tx,
+                                    now,
+                                    now + 1000000,
+                                    udpard_prio_nominal,
+                                    topic_hash,
+                                    topic_dest.data(),
+                                    transfer_id,
+                                    topic_payload_scat,
+                                    &record_feedback,
+                                    make_user_context(&a_topic_fb)));
     a_frames.clear();
-    udpard_tx_poll(&a_tx, now, UDPARD_IFACE_MASK_ALL);
+    udpard_tx_poll(&a_tx, now, UDPARD_IFACE_BITMAP_ALL);
     TEST_ASSERT_FALSE(a_frames.empty());
 
     // ================================================================================================================
@@ -336,7 +335,7 @@ void test_topic_with_p2p_response()
     // STEP 3: Node B sends ACK back to A (for the topic message) - via b_tx since b_rx is linked to it
     // ================================================================================================================
     b_frames.clear();
-    udpard_tx_poll(&b_tx, now, UDPARD_IFACE_MASK_ALL);
+    udpard_tx_poll(&b_tx, now, UDPARD_IFACE_BITMAP_ALL);
 
     // Deliver ACK frames to A
     for (const auto& frame : b_frames) {
@@ -353,7 +352,7 @@ void test_topic_with_p2p_response()
 
     // Now A should have received the ACK - poll to process feedback
     now += 100;
-    udpard_tx_poll(&a_tx, now, UDPARD_IFACE_MASK_ALL);
+    udpard_tx_poll(&a_tx, now, UDPARD_IFACE_BITMAP_ALL);
     TEST_ASSERT_EQUAL_size_t(1, a_topic_fb.count);
     TEST_ASSERT_EQUAL_UINT32(1, a_topic_fb.acknowledgements);
     TEST_ASSERT_EQUAL_UINT64(topic_hash, a_topic_fb.topic_hash);
@@ -369,20 +368,19 @@ void test_topic_with_p2p_response()
     }
 
     const udpard_bytes_scattered_t response_scat = make_scattered(response_payload.data(), response_payload.size());
-    TEST_ASSERT_GREATER_THAN_UINT32(0U,
-                                    udpard_tx_push_p2p(&b_tx,
-                                                       now,
-                                                       now + 1000000,
-                                                       udpard_prio_nominal,
-                                                       b_topic_ctx.received_topic,
-                                                       b_topic_ctx.received_tid,
-                                                       remote_a,
-                                                       response_scat,
-                                                       &record_feedback,
-                                                       make_user_context(&b_response_fb)));
+    TEST_ASSERT_TRUE(udpard_tx_push_p2p(&b_tx,
+                                        now,
+                                        now + 1000000,
+                                        udpard_prio_nominal,
+                                        b_topic_ctx.received_topic,
+                                        b_topic_ctx.received_tid,
+                                        remote_a,
+                                        response_scat,
+                                        &record_feedback,
+                                        make_user_context(&b_response_fb)));
 
     b_frames.clear();
-    udpard_tx_poll(&b_tx, now, UDPARD_IFACE_MASK_ALL);
+    udpard_tx_poll(&b_tx, now, UDPARD_IFACE_BITMAP_ALL);
     TEST_ASSERT_FALSE(b_frames.empty());
 
     // Deliver response frames to A
@@ -409,7 +407,7 @@ void test_topic_with_p2p_response()
     // STEP 5: A sends ACK for the response back to B - via a_tx since a_rx is linked to it
     // ================================================================================================================
     a_frames.clear();
-    udpard_tx_poll(&a_tx, now, UDPARD_IFACE_MASK_ALL);
+    udpard_tx_poll(&a_tx, now, UDPARD_IFACE_BITMAP_ALL);
 
     // Deliver ACK frames to B
     for (const auto& frame : a_frames) {
@@ -426,7 +424,7 @@ void test_topic_with_p2p_response()
 
     // Now B should have received the ACK for the response
     now += 100;
-    udpard_tx_poll(&b_tx, now, UDPARD_IFACE_MASK_ALL);
+    udpard_tx_poll(&b_tx, now, UDPARD_IFACE_BITMAP_ALL);
     TEST_ASSERT_EQUAL_size_t(1, b_response_fb.count);
     TEST_ASSERT_EQUAL_UINT32(1, b_response_fb.acknowledgements);
     TEST_ASSERT_EQUAL_UINT64(topic_hash, b_response_fb.topic_hash);
@@ -586,17 +584,16 @@ void test_topic_with_p2p_response_under_loss()
     udpard_us_t                                           now = 0;
     std::array<udpard_udpip_ep_t, UDPARD_IFACE_COUNT_MAX> topic_dest{};
     topic_dest[0] = topic_multicast;
-    TEST_ASSERT_GREATER_THAN_UINT32(0U,
-                                    udpard_tx_push(&a_tx,
-                                                   now,
-                                                   now + 500000,
-                                                   udpard_prio_fast,
-                                                   topic_hash,
-                                                   topic_dest.data(),
-                                                   transfer_id,
-                                                   topic_payload_scat,
-                                                   &record_feedback,
-                                                   make_user_context(&a_topic_fb)));
+    TEST_ASSERT_TRUE(udpard_tx_push(&a_tx,
+                                    now,
+                                    now + 500000,
+                                    udpard_prio_fast,
+                                    topic_hash,
+                                    topic_dest.data(),
+                                    transfer_id,
+                                    topic_payload_scat,
+                                    &record_feedback,
+                                    make_user_context(&a_topic_fb)));
 
     // ================================================================================================================
     // SIMULATION LOOP WITH LOSSES
@@ -612,7 +609,7 @@ void test_topic_with_p2p_response_under_loss()
 
         // --- Node A transmits (topic message, topic ACKs, or response ACKs) ---
         a_frames.clear();
-        udpard_tx_poll(&a_tx, now, UDPARD_IFACE_MASK_ALL);
+        udpard_tx_poll(&a_tx, now, UDPARD_IFACE_BITMAP_ALL);
 
         for (const auto& frame : a_frames) {
             if (b_topic_ctx.message_count == 0) {
@@ -646,7 +643,7 @@ void test_topic_with_p2p_response_under_loss()
 
         // --- Node B transmits (topic ACKs first, before pushing response) ---
         b_frames.clear();
-        udpard_tx_poll(&b_tx, now, UDPARD_IFACE_MASK_ALL);
+        udpard_tx_poll(&b_tx, now, UDPARD_IFACE_BITMAP_ALL);
 
         // Deliver B's frames (topic ACKs) to A before pushing response
         for (const auto& frame : b_frames) {
@@ -671,22 +668,21 @@ void test_topic_with_p2p_response_under_loss()
 
             const udpard_bytes_scattered_t response_scat =
               make_scattered(response_payload.data(), response_payload.size());
-            TEST_ASSERT_GREATER_THAN_UINT32(0U,
-                                            udpard_tx_push_p2p(&b_tx,
-                                                               now,
-                                                               now + 500000,
-                                                               udpard_prio_fast,
-                                                               b_topic_ctx.received_topic,
-                                                               b_topic_ctx.received_tid,
-                                                               remote_a,
-                                                               response_scat,
-                                                               &record_feedback,
-                                                               make_user_context(&b_response_fb)));
+            TEST_ASSERT_TRUE(udpard_tx_push_p2p(&b_tx,
+                                                now,
+                                                now + 500000,
+                                                udpard_prio_fast,
+                                                b_topic_ctx.received_topic,
+                                                b_topic_ctx.received_tid,
+                                                remote_a,
+                                                response_scat,
+                                                &record_feedback,
+                                                make_user_context(&b_response_fb)));
         }
 
         // --- Node B transmits (responses) ---
         b_frames.clear();
-        udpard_tx_poll(&b_tx, now, UDPARD_IFACE_MASK_ALL);
+        udpard_tx_poll(&b_tx, now, UDPARD_IFACE_BITMAP_ALL);
 
         for (const auto& frame : b_frames) {
             // Check if this frame has a payload (response) vs just an ACK

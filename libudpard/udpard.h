@@ -78,7 +78,7 @@ extern "C"
 /// The library supports at most this many local redundant network interfaces.
 #define UDPARD_IFACE_COUNT_MAX 3U
 
-#define UDPARD_IFACE_MASK_ALL ((1U << UDPARD_IFACE_COUNT_MAX) - 1U)
+#define UDPARD_IFACE_BITMAP_ALL ((1U << UDPARD_IFACE_COUNT_MAX) - 1U)
 
 /// All P2P transfers have a fixed prefix in the payload, handled by the library transparently for the application,
 /// defined as follows in DSDL notation:
@@ -487,8 +487,7 @@ bool udpard_tx_new(udpard_tx_t* const              self,
 ///
 /// The user context value is carried through to the callbacks; use UDPARD_USER_CONTEXT_NULL if not needed.
 ///
-/// The function returns the number of datagrams enqueued, which is always a positive number, on success.
-/// In case of failure, the function returns zero. Runtime failures increment the corresponding error counters,
+/// Returns true on success. Runtime failures increment the corresponding error counters,
 /// while invocations with invalid arguments just return zero without modifying the queue state.
 ///
 /// The enqueued transfer will be emitted over all interfaces for which udpard_is_valid_endpoint(remote_ep[i]) is true.
@@ -507,16 +506,16 @@ bool udpard_tx_new(udpard_tx_t* const              self,
 /// On success, the function allocates a single transfer state instance and a number of payload fragments.
 /// The time complexity is O(p + log e), where p is the transfer payload size, and e is the number of
 /// transfers already enqueued in the transmission queue.
-uint32_t udpard_tx_push(udpard_tx_t* const             self,
-                        const udpard_us_t              now,
-                        const udpard_us_t              deadline,
-                        const udpard_prio_t            priority,
-                        const uint64_t                 topic_hash,
-                        const udpard_udpip_ep_t        remote_ep[UDPARD_IFACE_COUNT_MAX],
-                        const uint64_t                 transfer_id,
-                        const udpard_bytes_scattered_t payload,
-                        void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t), // NULL if best-effort.
-                        const udpard_user_context_t user);
+bool udpard_tx_push(udpard_tx_t* const             self,
+                    const udpard_us_t              now,
+                    const udpard_us_t              deadline,
+                    const udpard_prio_t            priority,
+                    const uint64_t                 topic_hash,
+                    const udpard_udpip_ep_t        remote_ep[UDPARD_IFACE_COUNT_MAX],
+                    const uint64_t                 transfer_id,
+                    const udpard_bytes_scattered_t payload,
+                    void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t), // NULL if best-effort.
+                    const udpard_user_context_t user);
 
 /// This is a specialization of the general push function for P2P transfers.
 /// It is used to send P2P responses to messages received from topics; the request_* values shall be taken from
@@ -525,29 +524,29 @@ uint32_t udpard_tx_push(udpard_tx_t* const             self,
 /// P2P transfers are a bit more complex because they carry some additional metadata that is automatically
 /// composed/parsed by the library transparently for the application.
 /// The size of the serialized payload will include UDPARD_P2P_HEADER_BYTES additional bytes for the P2P header.
-uint32_t udpard_tx_push_p2p(udpard_tx_t* const             self,
-                            const udpard_us_t              now,
-                            const udpard_us_t              deadline,
-                            const udpard_prio_t            priority,
-                            const uint64_t                 request_topic_hash,
-                            const uint64_t                 request_transfer_id,
-                            const udpard_remote_t          remote, // Endpoints may be invalid for some ifaces.
-                            const udpard_bytes_scattered_t payload,
-                            void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t), // NULL if best-effort.
-                            const udpard_user_context_t user);
+bool udpard_tx_push_p2p(udpard_tx_t* const             self,
+                        const udpard_us_t              now,
+                        const udpard_us_t              deadline,
+                        const udpard_prio_t            priority,
+                        const uint64_t                 request_topic_hash,
+                        const uint64_t                 request_transfer_id,
+                        const udpard_remote_t          remote, // Endpoints may be invalid for some ifaces.
+                        const udpard_bytes_scattered_t payload,
+                        void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t), // NULL if best-effort.
+                        const udpard_user_context_t user);
 
 /// This should be invoked whenever the socket/NIC of this queue becomes ready to accept new datagrams for transmission.
 /// It is fine to also invoke it periodically unconditionally to drive the transmission process.
 /// Internally, the function will query the scheduler for the next frame to be transmitted and will attempt
 /// to submit it via the eject() callback provided in the vtable.
-/// The iface mask indicates which interfaces are currently ready to accept new datagrams.
+/// The iface bitmap indicates which interfaces are currently ready to accept new datagrams.
 /// The function may deallocate memory. The time complexity is logarithmic in the number of enqueued transfers.
-void udpard_tx_poll(udpard_tx_t* const self, const udpard_us_t now, const uint32_t iface_mask);
+void udpard_tx_poll(udpard_tx_t* const self, const udpard_us_t now, const uint16_t iface_bitmap);
 
-/// Returns a bitmask of interfaces that have pending transmissions. This is useful for IO multiplexing loops.
+/// Returns a bitmap of interfaces that have pending transmissions. This is useful for IO multiplexing loops.
 /// Zero indicates that there are no pending transmissions.
 /// Which interfaces are usable is defined by the remote endpoints provided when pushing transfers.
-uint32_t udpard_tx_pending_iface_mask(const udpard_tx_t* const self);
+uint16_t udpard_tx_pending_ifaces(const udpard_tx_t* const self);
 
 /// When a datagram is ejected and the application opts to keep it, these functions must be used to manage the
 /// datagram buffer lifetime. The datagram will be freed once the reference count reaches zero.

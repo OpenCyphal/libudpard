@@ -228,17 +228,16 @@ void test_reliable_delivery_under_losses()
     const udpard_us_t      start                                         = 0;
     const udpard_us_t      deadline                                      = start + 200000;
     const udpard_deleter_t tx_payload_deleter{ .vtable = &tx_refcount_deleter_vt, .context = nullptr };
-    TEST_ASSERT_GREATER_THAN_UINT32(0U,
-                                    udpard_tx_push(&pub_tx,
-                                                   start,
-                                                   deadline,
-                                                   udpard_prio_fast,
-                                                   topic_hash,
-                                                   dest_per_iface.data(),
-                                                   1U,
-                                                   payload_view,
-                                                   &record_feedback,
-                                                   make_user_context(&fb)));
+    TEST_ASSERT_TRUE(udpard_tx_push(&pub_tx,
+                                    start,
+                                    deadline,
+                                    udpard_prio_fast,
+                                    topic_hash,
+                                    dest_per_iface.data(),
+                                    1U,
+                                    payload_view,
+                                    &record_feedback,
+                                    make_user_context(&fb)));
 
     // Send until acked; drop first data frame and first ack.
     bool         first_round = true;
@@ -248,7 +247,7 @@ void test_reliable_delivery_under_losses()
     while ((fb.count == 0) && (attempts < attempt_cap)) {
         // Publisher transmits topic message.
         pub_frames.clear();
-        udpard_tx_poll(&pub_tx, now, UDPARD_IFACE_MASK_ALL);
+        udpard_tx_poll(&pub_tx, now, UDPARD_IFACE_BITMAP_ALL);
         bool data_loss_done = false;
         for (const auto& frame : pub_frames) {
             const bool drop = first_round && !data_loss_done && (frame.iface_index == 1U);
@@ -269,7 +268,7 @@ void test_reliable_delivery_under_losses()
 
         // Subscriber transmits ACKs (via sub_tx since sub_rx is linked to it).
         sub_frames.clear();
-        udpard_tx_poll(&sub_tx, now, UDPARD_IFACE_MASK_ALL);
+        udpard_tx_poll(&sub_tx, now, UDPARD_IFACE_BITMAP_ALL);
         bool ack_sent = false;
         for (const auto& ack : sub_frames) {
             const bool drop_ack = first_round && !ack_sent;
@@ -344,23 +343,22 @@ void test_reliable_stats_and_failures()
     FeedbackState                  fb_fail{};
     const udpard_udpip_ep_t        exp_dest[UDPARD_IFACE_COUNT_MAX] = { udpard_make_subject_endpoint(99U), {}, {} };
     const udpard_bytes_scattered_t exp_payload                      = make_scattered("ping", 4);
-    TEST_ASSERT_GREATER_THAN_UINT32(0U,
-                                    udpard_tx_push(&exp_tx,
-                                                   0,
-                                                   10,
-                                                   udpard_prio_fast,
-                                                   0xABCULL,
-                                                   exp_dest,
-                                                   5U,
-                                                   exp_payload,
-                                                   &record_feedback,
-                                                   make_user_context(&fb_fail)));
-    udpard_tx_poll(&exp_tx, 0, UDPARD_IFACE_MASK_ALL);
+    TEST_ASSERT_TRUE(udpard_tx_push(&exp_tx,
+                                    0,
+                                    10,
+                                    udpard_prio_fast,
+                                    0xABCULL,
+                                    exp_dest,
+                                    5U,
+                                    exp_payload,
+                                    &record_feedback,
+                                    make_user_context(&fb_fail)));
+    udpard_tx_poll(&exp_tx, 0, UDPARD_IFACE_BITMAP_ALL);
     for (const auto& f : exp_frames) {
         drop_frame(f);
     }
     exp_frames.clear();
-    udpard_tx_poll(&exp_tx, 20, UDPARD_IFACE_MASK_ALL);
+    udpard_tx_poll(&exp_tx, 20, UDPARD_IFACE_BITMAP_ALL);
     TEST_ASSERT_EQUAL_size_t(1, fb_fail.count);
     TEST_ASSERT_EQUAL_UINT32(0, fb_fail.acknowledgements);
     TEST_ASSERT_GREATER_THAN_UINT64(0, exp_tx.errors_expiration);
@@ -405,18 +403,17 @@ void test_reliable_stats_and_failures()
     const udpard_udpip_ep_t        src_dest[UDPARD_IFACE_COUNT_MAX] = { udpard_make_subject_endpoint(12U), {}, {} };
     const udpard_bytes_scattered_t src_payload = make_scattered(ctx.expected.data(), ctx.expected.size());
     FeedbackState                  fb_ignore{};
-    TEST_ASSERT_GREATER_THAN_UINT32(0U,
-                                    udpard_tx_push(&src_tx,
-                                                   0,
-                                                   1000,
-                                                   udpard_prio_fast,
-                                                   port.topic_hash,
-                                                   src_dest,
-                                                   7U,
-                                                   src_payload,
-                                                   &record_feedback,
-                                                   make_user_context(&fb_ignore)));
-    udpard_tx_poll(&src_tx, 0, UDPARD_IFACE_MASK_ALL);
+    TEST_ASSERT_TRUE(udpard_tx_push(&src_tx,
+                                    0,
+                                    1000,
+                                    udpard_prio_fast,
+                                    port.topic_hash,
+                                    src_dest,
+                                    7U,
+                                    src_payload,
+                                    &record_feedback,
+                                    make_user_context(&fb_ignore)));
+    udpard_tx_poll(&src_tx, 0, UDPARD_IFACE_BITMAP_ALL);
     const udpard_deleter_t tx_payload_deleter{ .vtable = &tx_refcount_deleter_vt, .context = nullptr };
     for (const auto& f : src_frames) {
         TEST_ASSERT_TRUE(udpard_rx_port_push(

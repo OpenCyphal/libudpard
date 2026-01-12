@@ -53,10 +53,10 @@ typedef unsigned char byte_t; ///< For compatibility with platforms where byte s
 /// The number of most recent transfers to keep in the history for ACK retransmission and duplicate detection.
 /// Should be a power of two to allow replacement of modulo operation with a bitwise AND.
 ///
-/// Implementation node: we used to store bitmask windows instead of a full list of recent transfer-IDs, but they
+/// Implementation node: we used to store bitmap windows instead of a full list of recent transfer-IDs, but they
 /// were found to offer no advantage except in the perfect scenario of non-restarting senders, and an increased
 /// implementation complexity (more branches, more lines of code), so they were replaced with a simple list.
-/// The list works equally well given a non-contiguous transfer-ID stream, unlike the bitmask, thus more robust.
+/// The list works equally well given a non-contiguous transfer-ID stream, unlike the bitmap, thus more robust.
 #define RX_TRANSFER_HISTORY_COUNT 32U
 
 /// In the ORDERED reassembly mode, with the most recently received transfer-ID N, the library will reject
@@ -166,15 +166,15 @@ bool udpard_is_valid_endpoint(const udpard_udpip_ep_t ep)
     return (ep.port != 0) && (ep.ip != 0) && (ep.ip != UINT32_MAX);
 }
 
-static uint32_t valid_ep_mask(const udpard_udpip_ep_t remote_ep[UDPARD_IFACE_COUNT_MAX])
+static uint16_t valid_ep_bitmap(const udpard_udpip_ep_t remote_ep[UDPARD_IFACE_COUNT_MAX])
 {
-    uint32_t mask = 0U;
+    uint16_t bitmap = 0U;
     for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
         if (udpard_is_valid_endpoint(remote_ep[i])) {
-            mask |= (1U << i);
+            bitmap |= (1U << i);
         }
     }
-    return mask;
+    return bitmap;
 }
 
 udpard_udpip_ep_t udpard_make_subject_endpoint(const uint32_t subject_id)
@@ -577,6 +577,8 @@ static tx_frame_t* tx_frame_new(udpard_tx_t* const tx, const udpard_mem_t mem, c
     return frame;
 }
 
+/// The ordering is by topic hash first, then by transfer-ID.
+/// Therefore, it orders all transfers by topic hash, allowing quick lookup by topic with an arbitrary transfer-ID.
 typedef struct
 {
     uint64_t topic_hash;
@@ -878,7 +880,7 @@ static size_t tx_predict_frame_count(const size_t            mtu[UDPARD_IFACE_CO
                                      const udpard_udpip_ep_t endpoint[UDPARD_IFACE_COUNT_MAX],
                                      const size_t            payload_size)
 {
-    UDPARD_ASSERT(valid_ep_mask(endpoint) != 0); // The caller ensures that at least one endpoint is valid.
+    UDPARD_ASSERT(valid_ep_bitmap(endpoint) != 0); // The caller ensures that at least one endpoint is valid.
     size_t n_frames_total = 0;
     for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
         UDPARD_ASSERT(mtu[i] > 0);
@@ -897,35 +899,36 @@ static size_t tx_predict_frame_count(const size_t            mtu[UDPARD_IFACE_CO
     return n_frames_total;
 }
 
-static uint32_t tx_push(udpard_tx_t* const             tx,
-                        const udpard_us_t              now,
-                        const udpard_us_t              deadline,
-                        const meta_t                   meta,
-                        const udpard_udpip_ep_t        endpoint[UDPARD_IFACE_COUNT_MAX],
-                        const udpard_bytes_scattered_t payload,
-                        void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t),
-                        const udpard_user_context_t user,
-                        tx_transfer_t** const       out_transfer)
+static bool tx_push(udpard_tx_t* const             tx,
+                    const udpard_us_t              now,
+                    const udpard_us_t              deadline,
+                    const meta_t                   meta,
+                    const udpard_udpip_ep_t        endpoint[UDPARD_IFACE_COUNT_MAX],
+                    const udpard_bytes_scattered_t payload,
+                    void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t),
+                    const udpard_user_context_t user,
+                    tx_transfer_t** const       out_transfer)
 {
     UDPARD_ASSERT(now <= deadline);
     UDPARD_ASSERT(tx != NULL);
-    UDPARD_ASSERT(valid_ep_mask(endpoint) != 0);
+    UDPARD_ASSERT(valid_ep_bitmap(endpoint) != 0);
 
     // Ensure the queue has enough space.
     for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
         tx->mtu[i] = larger(tx->mtu[i], UDPARD_MTU_MIN); // enforce minimum MTU
     }
     const size_t n_frames = tx_predict_frame_count(tx->mtu, tx->memory.payload, endpoint, meta.transfer_payload_size);
+    UDPARD_ASSERT(n_frames > 0);
     if (!tx_ensure_queue_space(tx, n_frames)) {
         tx->errors_capacity++;
-        return 0;
+        return false;
     }
 
     // Construct the empty transfer object, without the frames for now. The frame spools will be constructed next.
     tx_transfer_t* const tr = mem_alloc(tx->memory.transfer, sizeof(tx_transfer_t));
     if (tr == NULL) {
         tx->errors_oom++;
-        return 0;
+        return false;
     }
     mem_zero(sizeof(*tr), tr);
     tr->epoch              = 0;
@@ -980,7 +983,7 @@ static uint32_t tx_push(udpard_tx_t* const             tx,
         tx_transfer_free_payload(tr);
         mem_free(tx->memory.transfer, sizeof(tx_transfer_t), tr);
         tx->errors_oom++;
-        return 0;
+        return false;
     }
     UDPARD_ASSERT((tx->enqueued_frames_count - enqueued_frames_before) == n_frames);
     UDPARD_ASSERT(tx->enqueued_frames_count <= tx->enqueued_frames_limit);
@@ -1012,8 +1015,7 @@ static uint32_t tx_push(udpard_tx_t* const             tx,
     if (out_transfer != NULL) {
         *out_transfer = tr;
     }
-    UDPARD_ASSERT(n_frames <= UINT32_MAX);
-    return (uint32_t)n_frames;
+    return true;
 }
 
 /// Handle an ACK received from a remote node.
@@ -1044,9 +1046,9 @@ static void tx_send_ack(udpard_rx_t* const    rx,
           CAVL2_TO_OWNER(cavl2_find(tx->index_transfer_ack, &key, &tx_cavl_compare_transfer_remote),
                          tx_transfer_t,
                          index_transfer_ack);
-        const uint32_t prior_ep_mask = (prior != NULL) ? valid_ep_mask(prior->destination) : 0U;
-        const uint32_t new_ep_mask   = valid_ep_mask(remote.endpoints);
-        const bool     new_better    = (new_ep_mask & (~prior_ep_mask)) != 0U;
+        const uint16_t prior_ep_bitmap = (prior != NULL) ? valid_ep_bitmap(prior->destination) : 0U;
+        const uint16_t new_ep_bitmap   = valid_ep_bitmap(remote.endpoints);
+        const bool     new_better      = (new_ep_bitmap & (~prior_ep_bitmap)) != 0U;
         if (!new_better) {
             return; // Can we get an ack? We have ack at home!
         }
@@ -1138,24 +1140,23 @@ bool udpard_tx_new(udpard_tx_t* const              self,
     return ok;
 }
 
-uint32_t udpard_tx_push(udpard_tx_t* const             self,
-                        const udpard_us_t              now,
-                        const udpard_us_t              deadline,
-                        const udpard_prio_t            priority,
-                        const uint64_t                 topic_hash,
-                        const udpard_udpip_ep_t        remote_ep[UDPARD_IFACE_COUNT_MAX],
-                        const uint64_t                 transfer_id,
-                        const udpard_bytes_scattered_t payload,
-                        void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t),
-                        const udpard_user_context_t user)
+bool udpard_tx_push(udpard_tx_t* const             self,
+                    const udpard_us_t              now,
+                    const udpard_us_t              deadline,
+                    const udpard_prio_t            priority,
+                    const uint64_t                 topic_hash,
+                    const udpard_udpip_ep_t        remote_ep[UDPARD_IFACE_COUNT_MAX],
+                    const uint64_t                 transfer_id,
+                    const udpard_bytes_scattered_t payload,
+                    void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t),
+                    const udpard_user_context_t user)
 {
-    uint32_t   out = 0;
-    const bool ok  = (self != NULL) && (deadline >= now) && (now >= 0) && (self->local_uid != 0) &&
-                    (valid_ep_mask(remote_ep) != 0) && (priority < UDPARD_PRIORITY_COUNT) &&
-                    ((payload.bytes.data != NULL) || (payload.bytes.size == 0U)) &&
-                    (tx_transfer_find(self, topic_hash, transfer_id) == NULL);
+    bool ok = (self != NULL) && (deadline >= now) && (now >= 0) && (self->local_uid != 0) &&
+              (valid_ep_bitmap(remote_ep) != 0) && (priority < UDPARD_PRIORITY_COUNT) &&
+              ((payload.bytes.data != NULL) || (payload.bytes.size == 0U)) &&
+              (tx_transfer_find(self, topic_hash, transfer_id) == NULL);
     if (ok) {
-        udpard_tx_poll(self, now, UDPARD_IFACE_MASK_ALL);
+        udpard_tx_poll(self, now, UDPARD_IFACE_BITMAP_ALL);
         const meta_t meta = {
             .priority              = priority,
             .flag_ack              = feedback != NULL,
@@ -1164,28 +1165,27 @@ uint32_t udpard_tx_push(udpard_tx_t* const             self,
             .sender_uid            = self->local_uid,
             .topic_hash            = topic_hash,
         };
-        out = tx_push(self, now, deadline, meta, remote_ep, payload, feedback, user, NULL);
+        ok = tx_push(self, now, deadline, meta, remote_ep, payload, feedback, user, NULL);
     }
-    return out;
+    return ok;
 }
 
-uint32_t udpard_tx_push_p2p(udpard_tx_t* const             self,
-                            const udpard_us_t              now,
-                            const udpard_us_t              deadline,
-                            const udpard_prio_t            priority,
-                            const uint64_t                 request_topic_hash,
-                            const uint64_t                 request_transfer_id,
-                            const udpard_remote_t          remote,
-                            const udpard_bytes_scattered_t payload,
-                            void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t),
-                            const udpard_user_context_t user)
+bool udpard_tx_push_p2p(udpard_tx_t* const             self,
+                        const udpard_us_t              now,
+                        const udpard_us_t              deadline,
+                        const udpard_prio_t            priority,
+                        const uint64_t                 request_topic_hash,
+                        const uint64_t                 request_transfer_id,
+                        const udpard_remote_t          remote,
+                        const udpard_bytes_scattered_t payload,
+                        void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t),
+                        const udpard_user_context_t user)
 {
-    uint32_t   out = 0;
-    const bool ok  = (self != NULL) && (deadline >= now) && (now >= 0) && (self->local_uid != 0) &&
-                    (valid_ep_mask(remote.endpoints) != 0) && (priority < UDPARD_PRIORITY_COUNT) &&
-                    ((payload.bytes.data != NULL) || (payload.bytes.size == 0U));
+    bool ok = (self != NULL) && (deadline >= now) && (now >= 0) && (self->local_uid != 0) &&
+              (valid_ep_bitmap(remote.endpoints) != 0) && (priority < UDPARD_PRIORITY_COUNT) &&
+              ((payload.bytes.data != NULL) || (payload.bytes.size == 0U));
     if (ok) {
-        udpard_tx_poll(self, now, UDPARD_IFACE_MASK_ALL);
+        udpard_tx_poll(self, now, UDPARD_IFACE_BITMAP_ALL);
         // Serialize the P2P header and prepend it to the payload.
         byte_t  header[UDPARD_P2P_HEADER_BYTES];
         byte_t* ptr = header;
@@ -1207,14 +1207,14 @@ uint32_t udpard_tx_push_p2p(udpard_tx_t* const             self,
             .topic_hash            = remote.uid,
         };
         tx_transfer_t* tr = NULL;
-        out               = tx_push(self, now, deadline, meta, remote.endpoints, full_payload, feedback, user, &tr);
-        if (out > 0) {
+        ok                = tx_push(self, now, deadline, meta, remote.endpoints, full_payload, feedback, user, &tr);
+        if (ok) {
             UDPARD_ASSERT(tr != NULL);
             tr->remote_topic_hash  = request_topic_hash;
             tr->remote_transfer_id = request_transfer_id;
         }
     }
-    return out;
+    return ok;
 }
 
 static void tx_purge_expired_transfers(udpard_tx_t* const self, const udpard_us_t now)
@@ -1310,35 +1310,35 @@ static void tx_eject_pending_frames(udpard_tx_t* const self, const udpard_us_t n
     }
 }
 
-void udpard_tx_poll(udpard_tx_t* const self, const udpard_us_t now, const uint32_t iface_mask)
+void udpard_tx_poll(udpard_tx_t* const self, const udpard_us_t now, const uint16_t iface_bitmap)
 {
     if ((self != NULL) && (now >= 0)) {         // This is the main scheduler state machine update tick.
         tx_purge_expired_transfers(self, now);  // This may free up some memory and some queue slots.
         tx_promote_staged_transfers(self, now); // This may add some new transfers to the queue.
         for (uint_fast8_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
-            if ((iface_mask & (1U << i)) != 0U) {
+            if ((iface_bitmap & (1U << i)) != 0U) {
                 tx_eject_pending_frames(self, now, i);
             }
         }
     }
 }
 
-uint32_t udpard_tx_pending_iface_mask(const udpard_tx_t* const self)
+uint16_t udpard_tx_pending_ifaces(const udpard_tx_t* const self)
 {
-    uint32_t mask = 0;
+    uint16_t bitmap = 0;
     if (self != NULL) {
         // Even though it's constant-time, I still mildly dislike this loop. Shall it become a bottleneck,
-        // we could modify the TX state to keep a mask of pending interfaces updated incrementally.
+        // we could modify the TX state to keep a bitmap of pending interfaces updated incrementally.
         for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
             for (size_t p = 0; p < UDPARD_PRIORITY_COUNT; p++) {
                 if (self->queue[i][p].head != NULL) {
-                    mask |= (1U << i);
+                    bitmap |= (1U << i);
                     break;
                 }
             }
         }
     }
-    return mask;
+    return bitmap;
 }
 
 void udpard_tx_refcount_inc(const udpard_bytes_t tx_payload_view)

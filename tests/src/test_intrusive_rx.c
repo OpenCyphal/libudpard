@@ -2188,7 +2188,7 @@ static void test_rx_session_unordered_reject_old(void)
                       del_payload,
                       0);
     TEST_ASSERT_EQUAL(2, cb_result.message.count);
-    udpard_tx_poll(&tx_fix.tx, now, UDPARD_IFACE_MASK_ALL);
+    udpard_tx_poll(&tx_fix.tx, now, UDPARD_IFACE_BITMAP_ALL);
     cb_result.ack.count = tx_fix.captured_count;
     if (tx_fix.captured_count > 0) {
         cb_result.ack.last = tx_fix.captured[tx_fix.captured_count - 1U];

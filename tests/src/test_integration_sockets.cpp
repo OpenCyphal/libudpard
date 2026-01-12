@@ -295,19 +295,18 @@ void test_single_frame_transfer()
     const udpard_us_t now      = 1000000;
     const udpard_us_t deadline = now + 1000000;
 
-    TEST_ASSERT_GREATER_THAN_UINT32(0U,
-                                    udpard_tx_push(&pub.tx,
-                                                   now,
-                                                   deadline,
-                                                   udpard_prio_nominal,
-                                                   topic_hash,
-                                                   dest_eps.data(),
-                                                   transfer_id,
-                                                   payload_view,
-                                                   nullptr,
-                                                   UDPARD_USER_CONTEXT_NULL));
+    TEST_ASSERT_TRUE(udpard_tx_push(&pub.tx,
+                                    now,
+                                    deadline,
+                                    udpard_prio_nominal,
+                                    topic_hash,
+                                    dest_eps.data(),
+                                    transfer_id,
+                                    payload_view,
+                                    nullptr,
+                                    UDPARD_USER_CONTEXT_NULL));
 
-    udpard_tx_poll(&pub.tx, now, UDPARD_IFACE_MASK_ALL);
+    udpard_tx_poll(&pub.tx, now, UDPARD_IFACE_BITMAP_ALL);
     TEST_ASSERT_EQUAL_size_t(1, pub.frames.size());
 
     // Deliver frames to subscriber.
@@ -359,19 +358,18 @@ void test_multi_frame_transfer()
     const udpard_us_t now      = 1000000;
     const udpard_us_t deadline = now + 5000000;
 
-    TEST_ASSERT_GREATER_THAN_UINT32(0U,
-                                    udpard_tx_push(&pub.tx,
-                                                   now,
-                                                   deadline,
-                                                   udpard_prio_nominal,
-                                                   topic_hash,
-                                                   dest_eps.data(),
-                                                   100,
-                                                   payload_view,
-                                                   nullptr,
-                                                   UDPARD_USER_CONTEXT_NULL));
+    TEST_ASSERT_TRUE(udpard_tx_push(&pub.tx,
+                                    now,
+                                    deadline,
+                                    udpard_prio_nominal,
+                                    topic_hash,
+                                    dest_eps.data(),
+                                    100,
+                                    payload_view,
+                                    nullptr,
+                                    UDPARD_USER_CONTEXT_NULL));
 
-    udpard_tx_poll(&pub.tx, now, UDPARD_IFACE_MASK_ALL);
+    udpard_tx_poll(&pub.tx, now, UDPARD_IFACE_BITMAP_ALL);
     TEST_ASSERT_TRUE(pub.frames.size() > 1U);
 
     // Deliver frames to subscriber.
@@ -420,19 +418,18 @@ void test_multi_frame_with_reordering()
     dest_eps[0] = mcast_ep;
 
     const udpard_us_t now = 1000000;
-    TEST_ASSERT_GREATER_THAN_UINT32(0U,
-                                    udpard_tx_push(&pub.tx,
-                                                   now,
-                                                   now + 5000000,
-                                                   udpard_prio_nominal,
-                                                   topic_hash,
-                                                   dest_eps.data(),
-                                                   50,
-                                                   payload_view,
-                                                   nullptr,
-                                                   UDPARD_USER_CONTEXT_NULL));
+    TEST_ASSERT_TRUE(udpard_tx_push(&pub.tx,
+                                    now,
+                                    now + 5000000,
+                                    udpard_prio_nominal,
+                                    topic_hash,
+                                    dest_eps.data(),
+                                    50,
+                                    payload_view,
+                                    nullptr,
+                                    UDPARD_USER_CONTEXT_NULL));
 
-    udpard_tx_poll(&pub.tx, now, UDPARD_IFACE_MASK_ALL);
+    udpard_tx_poll(&pub.tx, now, UDPARD_IFACE_BITMAP_ALL);
 
     // Deliver reordered frames.
     const udpard_udpip_ep_t src_ep{ .ip = 0x7F000001, .port = 12345 };
@@ -491,19 +488,18 @@ void test_multiple_publishers()
               1000000LL + (static_cast<udpard_us_t>(i) * 10000LL) + (static_cast<udpard_us_t>(tid) * 100LL);
             const uint64_t transfer_id = (static_cast<uint64_t>(i) * 1000ULL) + static_cast<uint64_t>(tid);
 
-            TEST_ASSERT_GREATER_THAN_UINT32(0U,
-                                            udpard_tx_push(&publishers[i].tx,
-                                                           now,
-                                                           now + 1000000,
-                                                           udpard_prio_nominal,
-                                                           topic_hash,
-                                                           dest_eps.data(),
-                                                           transfer_id,
-                                                           payload_view,
-                                                           nullptr,
-                                                           UDPARD_USER_CONTEXT_NULL));
+            TEST_ASSERT_TRUE(udpard_tx_push(&publishers[i].tx,
+                                            now,
+                                            now + 1000000,
+                                            udpard_prio_nominal,
+                                            topic_hash,
+                                            dest_eps.data(),
+                                            transfer_id,
+                                            payload_view,
+                                            nullptr,
+                                            UDPARD_USER_CONTEXT_NULL));
 
-            udpard_tx_poll(&publishers[i].tx, now, UDPARD_IFACE_MASK_ALL);
+            udpard_tx_poll(&publishers[i].tx, now, UDPARD_IFACE_BITMAP_ALL);
         }
     }
 
@@ -571,19 +567,18 @@ void test_partial_frame_loss()
     dest_eps[0] = mcast_ep;
 
     const udpard_us_t now = 1000000;
-    TEST_ASSERT_GREATER_THAN_UINT32(0U,
-                                    udpard_tx_push(&pub.tx,
-                                                   now,
-                                                   now + 5000000,
-                                                   udpard_prio_nominal,
-                                                   topic_hash,
-                                                   dest_eps.data(),
-                                                   50,
-                                                   payload_view,
-                                                   nullptr,
-                                                   UDPARD_USER_CONTEXT_NULL));
+    TEST_ASSERT_TRUE(udpard_tx_push(&pub.tx,
+                                    now,
+                                    now + 5000000,
+                                    udpard_prio_nominal,
+                                    topic_hash,
+                                    dest_eps.data(),
+                                    50,
+                                    payload_view,
+                                    nullptr,
+                                    UDPARD_USER_CONTEXT_NULL));
 
-    udpard_tx_poll(&pub.tx, now, UDPARD_IFACE_MASK_ALL);
+    udpard_tx_poll(&pub.tx, now, UDPARD_IFACE_BITMAP_ALL);
     TEST_ASSERT_TRUE(pub.frames.size() > 1U);
 
     // Deliver with packet loss.
@@ -629,19 +624,18 @@ void test_no_loss_baseline()
     dest_eps[0] = mcast_ep;
 
     const udpard_us_t now = 1000000;
-    TEST_ASSERT_GREATER_THAN_UINT32(0U,
-                                    udpard_tx_push(&pub.tx,
-                                                   now,
-                                                   now + 5000000,
-                                                   udpard_prio_nominal,
-                                                   topic_hash,
-                                                   dest_eps.data(),
-                                                   75,
-                                                   payload_view,
-                                                   nullptr,
-                                                   UDPARD_USER_CONTEXT_NULL));
+    TEST_ASSERT_TRUE(udpard_tx_push(&pub.tx,
+                                    now,
+                                    now + 5000000,
+                                    udpard_prio_nominal,
+                                    topic_hash,
+                                    dest_eps.data(),
+                                    75,
+                                    payload_view,
+                                    nullptr,
+                                    UDPARD_USER_CONTEXT_NULL));
 
-    udpard_tx_poll(&pub.tx, now, UDPARD_IFACE_MASK_ALL);
+    udpard_tx_poll(&pub.tx, now, UDPARD_IFACE_BITMAP_ALL);
 
     // Deliver all frames.
     const udpard_udpip_ep_t src_ep{ .ip = 0x7F000001, .port = 12345 };
@@ -688,19 +682,18 @@ void test_extent_truncation()
     dest_eps[0] = mcast_ep;
 
     const udpard_us_t now = 1000000;
-    TEST_ASSERT_GREATER_THAN_UINT32(0U,
-                                    udpard_tx_push(&pub.tx,
-                                                   now,
-                                                   now + 5000000,
-                                                   udpard_prio_nominal,
-                                                   topic_hash,
-                                                   dest_eps.data(),
-                                                   100,
-                                                   payload_view,
-                                                   nullptr,
-                                                   UDPARD_USER_CONTEXT_NULL));
+    TEST_ASSERT_TRUE(udpard_tx_push(&pub.tx,
+                                    now,
+                                    now + 5000000,
+                                    udpard_prio_nominal,
+                                    topic_hash,
+                                    dest_eps.data(),
+                                    100,
+                                    payload_view,
+                                    nullptr,
+                                    UDPARD_USER_CONTEXT_NULL));
 
-    udpard_tx_poll(&pub.tx, now, UDPARD_IFACE_MASK_ALL);
+    udpard_tx_poll(&pub.tx, now, UDPARD_IFACE_BITMAP_ALL);
 
     // Deliver all frames.
     const udpard_udpip_ep_t src_ep{ .ip = 0x7F000001, .port = 12345 };

@@ -303,18 +303,17 @@ void test_udpard_tx_rx_end_to_end()
 
         // Enqueue one transfer spanning all interfaces.
         const udpard_us_t deadline = now + 1000000;
-        TEST_ASSERT_GREATER_THAN_UINT32(0U,
-                                        udpard_tx_push(&tx,
-                                                       now,
-                                                       deadline,
-                                                       priority,
-                                                       topic_hashes[port_index],
-                                                       dest_per_iface.data(),
-                                                       transfer_id,
-                                                       payload_view,
-                                                       reliable ? &record_feedback : nullptr,
-                                                       reliable ? make_user_context(&ctx) : UDPARD_USER_CONTEXT_NULL));
-        udpard_tx_poll(&tx, now, UDPARD_IFACE_MASK_ALL);
+        TEST_ASSERT_TRUE(udpard_tx_push(&tx,
+                                        now,
+                                        deadline,
+                                        priority,
+                                        topic_hashes[port_index],
+                                        dest_per_iface.data(),
+                                        transfer_id,
+                                        payload_view,
+                                        reliable ? &record_feedback : nullptr,
+                                        reliable ? make_user_context(&ctx) : UDPARD_USER_CONTEXT_NULL));
+        udpard_tx_poll(&tx, now, UDPARD_IFACE_BITMAP_ALL);
 
         // Shuffle and push frames into the RX pipeline, simulating out-of-order redundant arrival.
         std::vector<Arrival> arrivals;
@@ -345,7 +344,7 @@ void test_udpard_tx_rx_end_to_end()
         // Let the RX pipeline purge timeouts and deliver ready transfers.
         udpard_rx_poll(&rx, now);
         ack_frames.clear();
-        udpard_tx_poll(&ack_tx, now, UDPARD_IFACE_MASK_ALL);
+        udpard_tx_poll(&ack_tx, now, UDPARD_IFACE_BITMAP_ALL);
         bool ack_delivered = false;
         for (const auto& [datagram, iface_index] : ack_frames) {
             const bool drop_ack = reliable && (iface_index == ack_loss_iface);
