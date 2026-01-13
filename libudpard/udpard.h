@@ -572,6 +572,11 @@ void udpard_tx_poll(udpard_tx_t* const self, const udpard_us_t now, const uint16
 /// The function will free the memory associated with the transfer.
 bool udpard_tx_cancel(udpard_tx_t* const self, const uint64_t topic_hash, const uint64_t transfer_id);
 
+/// Like udpard_tx_cancel(), but cancels all transfers matching the given topic hash.
+/// Returns the number of matched transfers.
+/// This is important to invoke when destroying a topic to ensure no dangling callbacks remain.
+size_t udpard_tx_cancel_all(udpard_tx_t* const self, const uint64_t topic_hash);
+
 /// Returns a bitmap of interfaces that have pending transmissions. This is useful for IO multiplexing loops.
 /// Zero indicates that there are no pending transmissions.
 /// Which interfaces are usable is defined by the remote endpoints provided when pushing transfers.

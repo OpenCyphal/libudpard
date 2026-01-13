@@ -755,6 +755,140 @@ static void test_tx_cancel(void)
     instrumented_allocator_reset(&alloc);
 }
 
+// Cancels all transfers matching a topic hash.
+static void test_tx_cancel_all(void)
+{
+    // NULL self returns zero.
+    TEST_ASSERT_EQUAL_size_t(0, udpard_tx_cancel_all(NULL, 0));
+
+    instrumented_allocator_t alloc = { 0 };
+    instrumented_allocator_new(&alloc);
+    udpard_tx_mem_resources_t mem = { .transfer = instrumented_allocator_make_resource(&alloc) };
+    for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
+        mem.payload[i] = instrumented_allocator_make_resource(&alloc);
+    }
+
+    udpard_tx_t        tx             = { 0 };
+    feedback_state_t   fstate         = { 0 };
+    eject_state_t      eject          = { .count = 0, .allow = false }; // Block ejection to retain frames.
+    const uint16_t     iface_bitmap_1 = (1U << 0U);
+    udpard_tx_vtable_t vt             = { .eject_subject = eject_subject_with_flag, .eject_p2p = eject_p2p_with_flag };
+    TEST_ASSERT_TRUE(udpard_tx_new(&tx, 40U, 1U, 16U, mem, &vt));
+    tx.user = &eject;
+
+    // Cancel with no matching transfers returns zero.
+    TEST_ASSERT_EQUAL_size_t(0, udpard_tx_cancel_all(&tx, 999));
+
+    // Push multiple transfers with different topic hashes.
+    // Topic 100: transfers 1, 2, 3 (reliable)
+    TEST_ASSERT_TRUE(udpard_tx_push(&tx,
+                                    0,
+                                    1000,
+                                    iface_bitmap_1,
+                                    udpard_prio_fast,
+                                    100,
+                                    1,
+                                    make_scattered(NULL, 0),
+                                    record_feedback,
+                                    make_user_context(&fstate)));
+    TEST_ASSERT_TRUE(udpard_tx_push(&tx,
+                                    0,
+                                    1000,
+                                    iface_bitmap_1,
+                                    udpard_prio_fast,
+                                    100,
+                                    2,
+                                    make_scattered(NULL, 0),
+                                    record_feedback,
+                                    make_user_context(&fstate)));
+    TEST_ASSERT_TRUE(udpard_tx_push(&tx,
+                                    0,
+                                    1000,
+                                    iface_bitmap_1,
+                                    udpard_prio_fast,
+                                    100,
+                                    3,
+                                    make_scattered(NULL, 0),
+                                    record_feedback,
+                                    make_user_context(&fstate)));
+    // Topic 200: transfers 1, 2 (best-effort)
+    TEST_ASSERT_TRUE(udpard_tx_push(&tx,
+                                    0,
+                                    1000,
+                                    iface_bitmap_1,
+                                    udpard_prio_nominal,
+                                    200,
+                                    1,
+                                    make_scattered(NULL, 0),
+                                    NULL,
+                                    UDPARD_USER_CONTEXT_NULL));
+    TEST_ASSERT_TRUE(udpard_tx_push(&tx,
+                                    0,
+                                    1000,
+                                    iface_bitmap_1,
+                                    udpard_prio_nominal,
+                                    200,
+                                    2,
+                                    make_scattered(NULL, 0),
+                                    NULL,
+                                    UDPARD_USER_CONTEXT_NULL));
+    // Topic 300: transfer 1 (reliable)
+    TEST_ASSERT_TRUE(udpard_tx_push(&tx,
+                                    0,
+                                    1000,
+                                    iface_bitmap_1,
+                                    udpard_prio_low,
+                                    300,
+                                    1,
+                                    make_scattered(NULL, 0),
+                                    record_feedback,
+                                    make_user_context(&fstate)));
+
+    TEST_ASSERT_EQUAL_size_t(6, tx.enqueued_frames_count);
+    TEST_ASSERT_NOT_NULL(tx_transfer_find(&tx, 100, 1));
+    TEST_ASSERT_NOT_NULL(tx_transfer_find(&tx, 100, 2));
+    TEST_ASSERT_NOT_NULL(tx_transfer_find(&tx, 100, 3));
+    TEST_ASSERT_NOT_NULL(tx_transfer_find(&tx, 200, 1));
+    TEST_ASSERT_NOT_NULL(tx_transfer_find(&tx, 200, 2));
+    TEST_ASSERT_NOT_NULL(tx_transfer_find(&tx, 300, 1));
+
+    // Cancel all topic 100 transfers; feedback invoked for each reliable transfer.
+    fstate.count = 0;
+    TEST_ASSERT_EQUAL_size_t(3, udpard_tx_cancel_all(&tx, 100));
+    TEST_ASSERT_EQUAL_size_t(3, fstate.count);
+    TEST_ASSERT_EQUAL_UINT32(0, fstate.last.acknowledgements);
+    TEST_ASSERT_NULL(tx_transfer_find(&tx, 100, 1));
+    TEST_ASSERT_NULL(tx_transfer_find(&tx, 100, 2));
+    TEST_ASSERT_NULL(tx_transfer_find(&tx, 100, 3));
+    // Other topics remain.
+    TEST_ASSERT_NOT_NULL(tx_transfer_find(&tx, 200, 1));
+    TEST_ASSERT_NOT_NULL(tx_transfer_find(&tx, 200, 2));
+    TEST_ASSERT_NOT_NULL(tx_transfer_find(&tx, 300, 1));
+    TEST_ASSERT_EQUAL_size_t(3, tx.enqueued_frames_count);
+
+    // Cancel topic 200 (best-effort, no feedback).
+    fstate.count = 0;
+    TEST_ASSERT_EQUAL_size_t(2, udpard_tx_cancel_all(&tx, 200));
+    TEST_ASSERT_EQUAL_size_t(0, fstate.count);
+    TEST_ASSERT_NULL(tx_transfer_find(&tx, 200, 1));
+    TEST_ASSERT_NULL(tx_transfer_find(&tx, 200, 2));
+    TEST_ASSERT_NOT_NULL(tx_transfer_find(&tx, 300, 1));
+    TEST_ASSERT_EQUAL_size_t(1, tx.enqueued_frames_count);
+
+    // Cancel already-cancelled topic returns zero.
+    TEST_ASSERT_EQUAL_size_t(0, udpard_tx_cancel_all(&tx, 100));
+
+    // Cancel last remaining topic.
+    fstate.count = 0;
+    TEST_ASSERT_EQUAL_size_t(1, udpard_tx_cancel_all(&tx, 300));
+    TEST_ASSERT_EQUAL_size_t(1, fstate.count);
+    TEST_ASSERT_NULL(tx_transfer_find(&tx, 300, 1));
+    TEST_ASSERT_EQUAL_size_t(0, tx.enqueued_frames_count);
+
+    udpard_tx_free(&tx);
+    instrumented_allocator_reset(&alloc);
+}
+
 static void test_tx_spool_deduplication(void)
 {
     instrumented_allocator_t alloc_a = { 0 };
@@ -904,6 +1038,7 @@ int main(void)
     RUN_TEST(test_tx_stage_if_via_tx_push);
     RUN_TEST(test_tx_stage_if_short_deadline);
     RUN_TEST(test_tx_cancel);
+    RUN_TEST(test_tx_cancel_all);
     RUN_TEST(test_tx_spool_deduplication);
     RUN_TEST(test_tx_ack_and_scheduler);
     return UNITY_END();

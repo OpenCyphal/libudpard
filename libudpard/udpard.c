@@ -1367,6 +1367,26 @@ bool udpard_tx_cancel(udpard_tx_t* const self, const uint64_t topic_hash, const 
     return cancelled;
 }
 
+size_t udpard_tx_cancel_all(udpard_tx_t* const self, const uint64_t topic_hash)
+{
+    size_t count = 0;
+    if (self != NULL) {
+        // Find the first transfer with matching topic_hash using transfer_id=0 as lower bound.
+        const tx_transfer_key_t key = { .topic_hash = topic_hash, .transfer_id = 0 };
+        tx_transfer_t*          tr  = CAVL2_TO_OWNER(
+          cavl2_lower_bound(self->index_transfer, &key, &tx_cavl_compare_transfer), tx_transfer_t, index_transfer);
+        // Iterate through all transfers with the same topic_hash.
+        while ((tr != NULL) && (tr->topic_hash == topic_hash)) {
+            tx_transfer_t* const next =
+              CAVL2_TO_OWNER(cavl2_next_greater(&tr->index_transfer), tx_transfer_t, index_transfer);
+            tx_transfer_retire(self, tr, false);
+            count++;
+            tr = next;
+        }
+    }
+    return count;
+}
+
 uint16_t udpard_tx_pending_ifaces(const udpard_tx_t* const self)
 {
     uint16_t bitmap = 0;
