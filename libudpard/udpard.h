@@ -99,6 +99,8 @@ typedef int64_t udpard_us_t;
 
 /// See udpard_tx_t::ack_baseline_timeout.
 /// This default value might be a good starting point for many applications running over a local network.
+/// The baseline timeout should be greater than the expected round-trip time (RTT) between the most distant
+/// nodes in the network for a message at the highest priority level.
 #define UDPARD_TX_ACK_BASELINE_TIMEOUT_DEFAULT_us 16000LL
 
 /// The subject-ID only affects the formation of the multicast UDP/IP endpoint address.
@@ -157,7 +159,7 @@ typedef struct udpard_bytes_mut_t
 } udpard_bytes_mut_t;
 
 /// The size can be changed arbitrarily. This value is compromise between copy size and footprint and utility.
-#define UDPARD_USER_CONTEXT_PTR_COUNT 6
+#define UDPARD_USER_CONTEXT_PTR_COUNT 5
 
 /// The library carries the user-provided context from inputs to outputs without interpreting it,
 /// allowing the application to associate its own data with various entities inside the library.
@@ -423,7 +425,12 @@ struct udpard_tx_t
     size_t mtu[UDPARD_IFACE_COUNT_MAX];
 
     /// This duration is used to derive the acknowledgment timeout for reliable transfers in tx_ack_timeout().
-    /// It must be a positive number of microseconds. A sensible default is provided at initialization.
+    /// It must be a positive number of microseconds.
+    ///
+    /// The baseline timeout should be greater than the expected round-trip time (RTT) between the most distant
+    /// nodes in the network for a message at the highest priority level.
+    ///
+    /// A sensible default is provided at initialization, which can be overridden by the application.
     udpard_us_t ack_baseline_timeout;
 
     /// Optional user-managed mapping from the Cyphal priority level in [0,7] (highest priority at index 0)
