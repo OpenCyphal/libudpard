@@ -158,8 +158,8 @@ typedef struct udpard_bytes_mut_t
     void*  data;
 } udpard_bytes_mut_t;
 
-/// The size can be changed arbitrarily. This value is compromise between copy size and footprint and utility.
-#define UDPARD_USER_CONTEXT_PTR_COUNT 5
+/// The size can be changed arbitrarily. This value is a compromise between copy size and footprint and utility.
+#define UDPARD_USER_CONTEXT_PTR_COUNT 3
 
 /// The library carries the user-provided context from inputs to outputs without interpreting it,
 /// allowing the application to associate its own data with various entities inside the library.
