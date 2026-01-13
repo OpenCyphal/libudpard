@@ -45,7 +45,7 @@ void tx_refcount_free(void* const user, const size_t size, void* const payload)
 // Shared deleter for captured TX frames.
 constexpr udpard_deleter_vtable_t tx_refcount_deleter_vt{ .free = &tx_refcount_free };
 
-bool capture_tx_frame(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejection)
+bool capture_tx_frame_impl(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejection)
 {
     auto* frames = static_cast<std::vector<CapturedFrame>*>(tx->user);
     if (frames == nullptr) {
@@ -56,6 +56,16 @@ bool capture_tx_frame(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejectio
     frames->push_back(CapturedFrame{ .datagram    = { .size = ejection->datagram.size, .data = data },
                                      .iface_index = ejection->iface_index });
     return true;
+}
+
+bool capture_tx_frame_subject(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejection)
+{
+    return capture_tx_frame_impl(tx, ejection);
+}
+
+bool capture_tx_frame_p2p(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejection, udpard_udpip_ep_t /*dest*/)
+{
+    return capture_tx_frame_impl(tx, ejection);
 }
 
 void drop_frame(const CapturedFrame& frame)
@@ -70,7 +80,8 @@ void fill_random(std::vector<uint8_t>& data)
     }
 }
 
-constexpr udpard_tx_vtable_t tx_vtable{ .eject = &capture_tx_frame };
+constexpr udpard_tx_vtable_t tx_vtable{ .eject_subject = &capture_tx_frame_subject,
+                                        .eject_p2p     = &capture_tx_frame_p2p };
 
 // Feedback callback records completion.
 void record_feedback(udpard_tx_t*, const udpard_tx_feedback_t fb)
@@ -203,12 +214,6 @@ void test_reliable_delivery_under_losses()
         udpard_udpip_ep_t{ .ip = 0x0A000011U, .port = 7601U },
         udpard_udpip_ep_t{ .ip = 0x0A000012U, .port = 7602U },
     };
-    const std::array<udpard_udpip_ep_t, UDPARD_IFACE_COUNT_MAX> topic_multicast{
-        udpard_make_subject_endpoint(111U),
-        udpard_udpip_ep_t{ .ip = 0x0A00000BU, .port = 7501U },
-        udpard_udpip_ep_t{ .ip = 0x0A00000CU, .port = 7502U },
-    };
-
     // Payload and context.
     std::vector<uint8_t> payload(4096);
     fill_random(payload);
@@ -219,21 +224,21 @@ void test_reliable_delivery_under_losses()
     sub_rx.user    = &ctx;
 
     // Reliable transfer with staged losses.
-    FeedbackState                                         fb{};
-    const udpard_bytes_scattered_t                        payload_view = make_scattered(payload.data(), payload.size());
-    std::array<udpard_udpip_ep_t, UDPARD_IFACE_COUNT_MAX> dest_per_iface = topic_multicast;
-    pub_tx.mtu[0]                                                        = 600;
-    pub_tx.mtu[1]                                                        = 900;
-    pub_tx.mtu[2]                                                        = 500;
-    const udpard_us_t      start                                         = 0;
-    const udpard_us_t      deadline                                      = start + 200000;
+    FeedbackState                  fb{};
+    const udpard_bytes_scattered_t payload_view = make_scattered(payload.data(), payload.size());
+    pub_tx.mtu[0]                               = 600;
+    pub_tx.mtu[1]                               = 900;
+    pub_tx.mtu[2]                               = 500;
+    const udpard_us_t      start                = 0;
+    const udpard_us_t      deadline             = start + 200000;
+    const uint16_t         iface_bitmap_all     = UDPARD_IFACE_BITMAP_ALL;
     const udpard_deleter_t tx_payload_deleter{ .vtable = &tx_refcount_deleter_vt, .context = nullptr };
     TEST_ASSERT_TRUE(udpard_tx_push(&pub_tx,
                                     start,
                                     deadline,
+                                    iface_bitmap_all,
                                     udpard_prio_fast,
                                     topic_hash,
-                                    dest_per_iface.data(),
                                     1U,
                                     payload_view,
                                     &record_feedback,
@@ -341,14 +346,14 @@ void test_reliable_stats_and_failures()
     TEST_ASSERT_TRUE(udpard_tx_new(&exp_tx, 0x9999000011112222ULL, 2U, 4, exp_mem, &tx_vtable));
     exp_tx.user = &exp_frames;
     FeedbackState                  fb_fail{};
-    const udpard_udpip_ep_t        exp_dest[UDPARD_IFACE_COUNT_MAX] = { udpard_make_subject_endpoint(99U), {}, {} };
-    const udpard_bytes_scattered_t exp_payload                      = make_scattered("ping", 4);
+    const uint16_t                 iface_bitmap_1 = (1U << 0U);
+    const udpard_bytes_scattered_t exp_payload    = make_scattered("ping", 4);
     TEST_ASSERT_TRUE(udpard_tx_push(&exp_tx,
                                     0,
                                     10,
+                                    iface_bitmap_1,
                                     udpard_prio_fast,
                                     0xABCULL,
-                                    exp_dest,
                                     5U,
                                     exp_payload,
                                     &record_feedback,
@@ -400,15 +405,14 @@ void test_reliable_stats_and_failures()
     TEST_ASSERT_TRUE(
       udpard_rx_port_new(&port, 0x12340000ULL, 64, UDPARD_RX_REORDERING_WINDOW_UNORDERED, rx_mem, &callbacks));
 
-    const udpard_udpip_ep_t        src_dest[UDPARD_IFACE_COUNT_MAX] = { udpard_make_subject_endpoint(12U), {}, {} };
     const udpard_bytes_scattered_t src_payload = make_scattered(ctx.expected.data(), ctx.expected.size());
     FeedbackState                  fb_ignore{};
     TEST_ASSERT_TRUE(udpard_tx_push(&src_tx,
                                     0,
                                     1000,
+                                    iface_bitmap_1,
                                     udpard_prio_fast,
                                     port.topic_hash,
-                                    src_dest,
                                     7U,
                                     src_payload,
                                     &record_feedback,

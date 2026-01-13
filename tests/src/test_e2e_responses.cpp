@@ -28,7 +28,7 @@ void tx_refcount_free(void* const user, const size_t size, void* const payload)
     udpard_tx_refcount_dec(udpard_bytes_t{ .size = size, .data = payload });
 }
 
-bool capture_tx_frame(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejection)
+bool capture_tx_frame_impl(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejection)
 {
     auto* frames = static_cast<std::vector<CapturedFrame>*>(tx->user);
     if (frames == nullptr) {
@@ -41,12 +41,23 @@ bool capture_tx_frame(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejectio
     return true;
 }
 
+bool capture_tx_frame_subject(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejection)
+{
+    return capture_tx_frame_impl(tx, ejection);
+}
+
+bool capture_tx_frame_p2p(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejection, udpard_udpip_ep_t /*dest*/)
+{
+    return capture_tx_frame_impl(tx, ejection);
+}
+
 void drop_frame(const CapturedFrame& frame)
 {
     udpard_tx_refcount_dec(udpard_bytes_t{ .size = frame.datagram.size, .data = frame.datagram.data });
 }
 
-constexpr udpard_tx_vtable_t tx_vtable{ .eject = &capture_tx_frame };
+constexpr udpard_tx_vtable_t tx_vtable{ .eject_subject = &capture_tx_frame_subject,
+                                        .eject_p2p     = &capture_tx_frame_p2p };
 // Shared deleter for captured TX frames.
 constexpr udpard_deleter_vtable_t tx_refcount_deleter_vt{ .free = &tx_refcount_free };
 constexpr udpard_deleter_t        tx_payload_deleter{ .vtable = &tx_refcount_deleter_vt, .context = nullptr };
@@ -233,9 +244,8 @@ void test_topic_with_p2p_response()
         udpard_udpip_ep_t{ .ip = 0x0A000013U, .port = 7502U },
     };
 
-    constexpr uint64_t      topic_hash      = 0x0123456789ABCDEFULL;
-    constexpr uint64_t      transfer_id     = 42;
-    const udpard_udpip_ep_t topic_multicast = udpard_make_subject_endpoint(111);
+    constexpr uint64_t topic_hash  = 0x0123456789ABCDEFULL;
+    constexpr uint64_t transfer_id = 42;
 
     // ================================================================================================================
     // TX/RX PIPELINES - One TX and one RX per node
@@ -293,15 +303,14 @@ void test_topic_with_p2p_response()
     // ================================================================================================================
     // STEP 1: Node A publishes a reliable topic message
     // ================================================================================================================
-    udpard_us_t                                           now = 0;
-    std::array<udpard_udpip_ep_t, UDPARD_IFACE_COUNT_MAX> topic_dest{};
-    topic_dest[0] = topic_multicast;
+    udpard_us_t        now            = 0;
+    constexpr uint16_t iface_bitmap_1 = (1U << 0U);
     TEST_ASSERT_TRUE(udpard_tx_push(&a_tx,
                                     now,
                                     now + 1000000,
+                                    iface_bitmap_1,
                                     udpard_prio_nominal,
                                     topic_hash,
-                                    topic_dest.data(),
                                     transfer_id,
                                     topic_payload_scat,
                                     &record_feedback,
@@ -526,9 +535,8 @@ void test_topic_with_p2p_response_under_loss()
         udpard_udpip_ep_t{},
     };
 
-    constexpr uint64_t      topic_hash      = 0xFEDCBA9876543210ULL;
-    constexpr uint64_t      transfer_id     = 99;
-    const udpard_udpip_ep_t topic_multicast = udpard_make_subject_endpoint(222);
+    constexpr uint64_t topic_hash  = 0xFEDCBA9876543210ULL;
+    constexpr uint64_t transfer_id = 99;
 
     // ================================================================================================================
     // TX/RX PIPELINES - One TX and one RX per node
@@ -581,15 +589,14 @@ void test_topic_with_p2p_response_under_loss()
     // ================================================================================================================
     // STEP 1: Node A publishes a reliable topic message
     // ================================================================================================================
-    udpard_us_t                                           now = 0;
-    std::array<udpard_udpip_ep_t, UDPARD_IFACE_COUNT_MAX> topic_dest{};
-    topic_dest[0] = topic_multicast;
+    udpard_us_t        now            = 0;
+    constexpr uint16_t iface_bitmap_1 = (1U << 0U);
     TEST_ASSERT_TRUE(udpard_tx_push(&a_tx,
                                     now,
                                     now + 500000,
+                                    iface_bitmap_1,
                                     udpard_prio_fast,
                                     topic_hash,
-                                    topic_dest.data(),
                                     transfer_id,
                                     topic_payload_scat,
                                     &record_feedback,

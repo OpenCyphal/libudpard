@@ -35,8 +35,8 @@ static void noop_free(void* const user, const size_t size, void* const pointer)
 // No-op memory vtable for guard checks.
 static const udpard_mem_vtable_t mem_vtable_noop_alloc = { .base = { .free = noop_free }, .alloc = dummy_alloc };
 
-// Ejects with a configurable outcome.
-static bool eject_with_flag(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejection)
+// Ejects with a configurable outcome (subject variant).
+static bool eject_subject_with_flag(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejection)
 {
     (void)ejection;
     eject_state_t* const st = (eject_state_t*)tx->user;
@@ -47,9 +47,33 @@ static bool eject_with_flag(udpard_tx_t* const tx, udpard_tx_ejection_t* const e
     return true;
 }
 
-// Records ejection timestamps for later inspection.
-static bool eject_with_log(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejection)
+// Ejects with a configurable outcome (P2P variant).
+static bool eject_p2p_with_flag(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejection, udpard_udpip_ep_t dest)
 {
+    (void)ejection;
+    (void)dest;
+    eject_state_t* const st = (eject_state_t*)tx->user;
+    if (st != NULL) {
+        st->count++;
+        return st->allow;
+    }
+    return true;
+}
+
+// Records ejection timestamps for later inspection (subject variant).
+static bool eject_subject_with_log(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejection)
+{
+    eject_log_t* const st = (eject_log_t*)tx->user;
+    if ((st != NULL) && (st->count < (sizeof(st->when) / sizeof(st->when[0])))) {
+        st->when[st->count++] = ejection->now;
+    }
+    return true;
+}
+
+// Records ejection timestamps for later inspection (P2P variant).
+static bool eject_p2p_with_log(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejection, udpard_udpip_ep_t dest)
+{
+    (void)dest;
     eject_log_t* const st = (eject_log_t*)tx->user;
     if ((st != NULL) && (st->count < (sizeof(st->when) / sizeof(st->when[0])))) {
         st->when[st->count++] = ejection->now;
@@ -169,7 +193,13 @@ static void test_tx_validation_and_free(void)
 
     // Populate indexes then free to hit all removal paths.
     udpard_tx_t tx = { 0 };
-    TEST_ASSERT_TRUE(udpard_tx_new(&tx, 1U, 1U, 4U, mem, &(udpard_tx_vtable_t){ .eject = eject_with_flag }));
+    TEST_ASSERT_TRUE(udpard_tx_new(
+      &tx,
+      1U,
+      1U,
+      4U,
+      mem,
+      &(udpard_tx_vtable_t){ .eject_subject = eject_subject_with_flag, .eject_p2p = eject_p2p_with_flag }));
     tx_transfer_t* const tr = mem_alloc(mem.transfer, sizeof(tx_transfer_t));
     mem_zero(sizeof(*tr), tr);
     tr->priority           = udpard_prio_fast;
@@ -269,12 +299,18 @@ static void test_tx_spool_and_queue_errors(void)
     for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
         mem.payload[i] = instrumented_allocator_make_resource(&alloc_payload);
     }
-    TEST_ASSERT_TRUE(udpard_tx_new(&tx, 2U, 2U, 1U, mem, &(udpard_tx_vtable_t){ .eject = eject_with_flag }));
-    udpard_udpip_ep_t              ep[UDPARD_IFACE_COUNT_MAX] = { make_ep(1), { 0 } };
-    byte_t                         big_buf[2000]              = { 0 };
-    const udpard_bytes_scattered_t big_payload                = make_scattered(big_buf, sizeof(big_buf));
-    TEST_ASSERT_FALSE(
-      udpard_tx_push(&tx, 0, 1000, udpard_prio_fast, 11, ep, 1, big_payload, NULL, UDPARD_USER_CONTEXT_NULL));
+    TEST_ASSERT_TRUE(udpard_tx_new(
+      &tx,
+      2U,
+      2U,
+      1U,
+      mem,
+      &(udpard_tx_vtable_t){ .eject_subject = eject_subject_with_flag, .eject_p2p = eject_p2p_with_flag }));
+    byte_t                         big_buf[2000]   = { 0 };
+    const udpard_bytes_scattered_t big_payload     = make_scattered(big_buf, sizeof(big_buf));
+    const uint16_t                 iface_bitmap_01 = (1U << 0U);
+    TEST_ASSERT_FALSE(udpard_tx_push(
+      &tx, 0, 1000, iface_bitmap_01, udpard_prio_fast, 11, 1, big_payload, NULL, UDPARD_USER_CONTEXT_NULL));
     TEST_ASSERT_EQUAL_size_t(1, tx.errors_capacity);
 
     // Immediate rejection when the request exceeds limits.
@@ -316,29 +352,47 @@ static void test_tx_spool_and_queue_errors(void)
     // Transfer allocation OOM.
     alloc_payload.limit_fragments = 0;
     tx.errors_capacity            = 0;
-    TEST_ASSERT_TRUE(udpard_tx_new(&tx, 3U, 3U, 2U, mem, &(udpard_tx_vtable_t){ .eject = eject_with_flag }));
+    TEST_ASSERT_TRUE(udpard_tx_new(
+      &tx,
+      3U,
+      3U,
+      2U,
+      mem,
+      &(udpard_tx_vtable_t){ .eject_subject = eject_subject_with_flag, .eject_p2p = eject_p2p_with_flag }));
     TEST_ASSERT_FALSE(udpard_tx_push(
-      &tx, 0, 1000, udpard_prio_fast, 12, ep, 2, make_scattered(NULL, 0), NULL, UDPARD_USER_CONTEXT_NULL));
+      &tx, 0, 1000, iface_bitmap_01, udpard_prio_fast, 12, 2, make_scattered(NULL, 0), NULL, UDPARD_USER_CONTEXT_NULL));
     TEST_ASSERT_EQUAL_size_t(1, tx.errors_oom);
 
     // Spool OOM inside tx_push.
     alloc_payload.limit_fragments = 1;
-    TEST_ASSERT_TRUE(udpard_tx_new(&tx, 4U, 4U, 4U, mem, &(udpard_tx_vtable_t){ .eject = eject_with_flag }));
-    TEST_ASSERT_FALSE(
-      udpard_tx_push(&tx, 0, 1000, udpard_prio_fast, 13, ep, 3, big_payload, NULL, UDPARD_USER_CONTEXT_NULL));
+    TEST_ASSERT_TRUE(udpard_tx_new(
+      &tx,
+      4U,
+      4U,
+      4U,
+      mem,
+      &(udpard_tx_vtable_t){ .eject_subject = eject_subject_with_flag, .eject_p2p = eject_p2p_with_flag }));
+    TEST_ASSERT_FALSE(udpard_tx_push(
+      &tx, 0, 1000, iface_bitmap_01, udpard_prio_fast, 13, 3, big_payload, NULL, UDPARD_USER_CONTEXT_NULL));
     TEST_ASSERT_EQUAL_size_t(1, tx.errors_oom);
 
     // Reliable transfer gets staged.
     alloc_payload.limit_fragments = SIZE_MAX;
     feedback_state_t fstate       = { 0 };
-    TEST_ASSERT_TRUE(udpard_tx_new(&tx, 5U, 5U, 4U, mem, &(udpard_tx_vtable_t){ .eject = eject_with_flag }));
+    TEST_ASSERT_TRUE(udpard_tx_new(
+      &tx,
+      5U,
+      5U,
+      4U,
+      mem,
+      &(udpard_tx_vtable_t){ .eject_subject = eject_subject_with_flag, .eject_p2p = eject_p2p_with_flag }));
     tx.ack_baseline_timeout = 1;
     TEST_ASSERT_TRUE(udpard_tx_push(&tx,
                                     0,
                                     100000,
+                                    iface_bitmap_01,
                                     udpard_prio_nominal,
                                     14,
-                                    ep,
                                     4,
                                     make_scattered(NULL, 0),
                                     record_feedback,
@@ -356,18 +410,24 @@ static void test_tx_ack_and_scheduler(void)
     for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
         mem.payload[i] = instrumented_allocator_make_resource(&alloc);
     }
+    const uint16_t iface_bitmap_01 = (1U << 0U);
 
     // Ack reception triggers feedback.
     feedback_state_t fstate = { 0 };
     udpard_tx_t      tx1    = { 0 };
-    TEST_ASSERT_TRUE(udpard_tx_new(&tx1, 10U, 1U, 8U, mem, &(udpard_tx_vtable_t){ .eject = eject_with_flag }));
-    udpard_udpip_ep_t ep[UDPARD_IFACE_COUNT_MAX] = { make_ep(2), { 0 } };
+    TEST_ASSERT_TRUE(udpard_tx_new(
+      &tx1,
+      10U,
+      1U,
+      8U,
+      mem,
+      &(udpard_tx_vtable_t){ .eject_subject = eject_subject_with_flag, .eject_p2p = eject_p2p_with_flag }));
     TEST_ASSERT_TRUE(udpard_tx_push(&tx1,
                                     0,
                                     1000,
+                                    iface_bitmap_01,
                                     udpard_prio_fast,
                                     21,
-                                    ep,
                                     42,
                                     make_scattered(NULL, 0),
                                     record_feedback,
@@ -381,10 +441,17 @@ static void test_tx_ack_and_scheduler(void)
 
     // Ack suppressed when coverage not improved.
     udpard_tx_t tx2 = { 0 };
-    TEST_ASSERT_TRUE(udpard_tx_new(&tx2, 11U, 2U, 4U, mem, &(udpard_tx_vtable_t){ .eject = eject_with_flag }));
+    TEST_ASSERT_TRUE(udpard_tx_new(
+      &tx2,
+      11U,
+      2U,
+      4U,
+      mem,
+      &(udpard_tx_vtable_t){ .eject_subject = eject_subject_with_flag, .eject_p2p = eject_p2p_with_flag }));
     tx_transfer_t prior;
     mem_zero(sizeof(prior), &prior);
-    prior.destination[0]     = make_ep(3);
+    prior.p2p_destination[0] = make_ep(3);
+    prior.iface_bitmap       = 1U; // matches p2p_destination[0] being valid
     prior.remote_topic_hash  = 7;
     prior.remote_transfer_id = 8;
     cavl2_find_or_insert(&tx2.index_transfer_ack,
@@ -401,7 +468,13 @@ static void test_tx_ack_and_scheduler(void)
 
     // Ack replaced with broader coverage.
     udpard_tx_t tx3 = { 0 };
-    TEST_ASSERT_TRUE(udpard_tx_new(&tx3, 12U, 3U, 4U, mem, &(udpard_tx_vtable_t){ .eject = eject_with_flag }));
+    TEST_ASSERT_TRUE(udpard_tx_new(
+      &tx3,
+      12U,
+      3U,
+      4U,
+      mem,
+      &(udpard_tx_vtable_t){ .eject_subject = eject_subject_with_flag, .eject_p2p = eject_p2p_with_flag }));
     rx.tx = &tx3;
     tx_send_ack(&rx, 0, udpard_prio_fast, 9, 9, (udpard_remote_t){ .uid = 11, .endpoints = { make_ep(4) } });
     tx_send_ack(
@@ -415,7 +488,13 @@ static void test_tx_ack_and_scheduler(void)
         fail_mem.payload[i] = fail_mem.transfer;
     }
     udpard_tx_t tx6 = { 0 };
-    TEST_ASSERT_TRUE(udpard_tx_new(&tx6, 15U, 6U, 1U, fail_mem, &(udpard_tx_vtable_t){ .eject = eject_with_flag }));
+    TEST_ASSERT_TRUE(udpard_tx_new(
+      &tx6,
+      15U,
+      6U,
+      1U,
+      fail_mem,
+      &(udpard_tx_vtable_t){ .eject_subject = eject_subject_with_flag, .eject_p2p = eject_p2p_with_flag }));
     rx.errors_ack_tx = 0;
     rx.tx            = &tx6;
     tx_send_ack(&rx, 0, udpard_prio_fast, 2, 2, (udpard_remote_t){ .uid = 1, .endpoints = { make_ep(6) } });
@@ -429,7 +508,13 @@ static void test_tx_ack_and_scheduler(void)
 
     // Expired transfer purge with feedback.
     udpard_tx_t tx4 = { 0 };
-    TEST_ASSERT_TRUE(udpard_tx_new(&tx4, 13U, 4U, 4U, mem, &(udpard_tx_vtable_t){ .eject = eject_with_flag }));
+    TEST_ASSERT_TRUE(udpard_tx_new(
+      &tx4,
+      13U,
+      4U,
+      4U,
+      mem,
+      &(udpard_tx_vtable_t){ .eject_subject = eject_subject_with_flag, .eject_p2p = eject_p2p_with_flag }));
     tx4.errors_expiration = 0;
     tx_transfer_t* exp    = mem_alloc(mem.transfer, sizeof(tx_transfer_t));
     mem_zero(sizeof(*exp), exp);
@@ -453,14 +538,21 @@ static void test_tx_ack_and_scheduler(void)
 
     // Staged promotion re-enqueues transfer.
     udpard_tx_t tx5 = { 0 };
-    TEST_ASSERT_TRUE(udpard_tx_new(&tx5, 14U, 5U, 4U, mem, &(udpard_tx_vtable_t){ .eject = eject_with_flag }));
+    TEST_ASSERT_TRUE(udpard_tx_new(
+      &tx5,
+      14U,
+      5U,
+      4U,
+      mem,
+      &(udpard_tx_vtable_t){ .eject_subject = eject_subject_with_flag, .eject_p2p = eject_p2p_with_flag }));
     tx_transfer_t staged;
     mem_zero(sizeof(staged), &staged);
-    staged.staged_until    = 0;
-    staged.deadline        = 100;
-    staged.priority        = udpard_prio_fast;
-    staged.destination[0]  = make_ep(7);
-    tx_frame_t dummy_frame = { 0 };
+    staged.staged_until       = 0;
+    staged.deadline           = 100;
+    staged.priority           = udpard_prio_fast;
+    staged.iface_bitmap       = (1U << 0U);
+    staged.p2p_destination[0] = make_ep(7);
+    tx_frame_t dummy_frame    = { 0 };
     staged.head[0] = staged.cursor[0] = &dummy_frame;
     cavl2_find_or_insert(
       &tx5.index_staged, &staged.staged_until, tx_cavl_compare_staged, &staged.index_staged, cavl2_trivial_factory);
@@ -476,8 +568,8 @@ static void test_tx_ack_and_scheduler(void)
     tx5.queue[0][staged.priority].head = &staged.queue[0];
     tx5.queue[0][staged.priority].tail = &staged.queue[0];
     eject_state_t eject_flag           = { .count = 0, .allow = false };
-    tx5.vtable                         = &(udpard_tx_vtable_t){ .eject = eject_with_flag };
-    tx5.user                           = &eject_flag;
+    tx5.vtable = &(udpard_tx_vtable_t){ .eject_subject = eject_subject_with_flag, .eject_p2p = eject_p2p_with_flag };
+    tx5.user   = &eject_flag;
     tx_eject_pending_frames(&tx5, 5, 0);
     TEST_ASSERT_EQUAL_size_t(1, eject_flag.count);
     udpard_tx_free(&tx5);
@@ -533,15 +625,23 @@ static void test_tx_stage_if_via_tx_push(void)
     udpard_tx_t        tx  = { 0 };
     eject_log_t        log = { 0 };
     feedback_state_t   fb  = { 0 };
-    udpard_tx_vtable_t vt  = { .eject = eject_with_log };
+    udpard_tx_vtable_t vt  = { .eject_subject = eject_subject_with_log, .eject_p2p = eject_p2p_with_log };
     TEST_ASSERT_TRUE(udpard_tx_new(&tx, 30U, 1U, 4U, mem, &vt));
-    tx.user                                        = &log;
-    tx.ack_baseline_timeout                        = 10;
-    udpard_udpip_ep_t dest[UDPARD_IFACE_COUNT_MAX] = { make_ep(1), make_ep(2), { 0 } };
+    tx.user                        = &log;
+    tx.ack_baseline_timeout        = 10;
+    const uint16_t iface_bitmap_12 = (1U << 0U) | (1U << 1U);
 
-    TEST_ASSERT_TRUE(udpard_tx_push(
-      &tx, 0, 500, udpard_prio_nominal, 77, dest, 1, make_scattered(NULL, 0), record_feedback, make_user_context(&fb)));
-    TEST_ASSERT_EQUAL_UINT32((1U << 0U) | (1U << 1U), udpard_tx_pending_ifaces(&tx));
+    TEST_ASSERT_TRUE(udpard_tx_push(&tx,
+                                    0,
+                                    500,
+                                    iface_bitmap_12,
+                                    udpard_prio_nominal,
+                                    77,
+                                    1,
+                                    make_scattered(NULL, 0),
+                                    record_feedback,
+                                    make_user_context(&fb)));
+    TEST_ASSERT_EQUAL_UINT32(iface_bitmap_12, udpard_tx_pending_ifaces(&tx));
 
     udpard_tx_poll(&tx, 0, UDPARD_IFACE_BITMAP_ALL);
     udpard_tx_poll(&tx, 160, UDPARD_IFACE_BITMAP_ALL);
@@ -571,14 +671,22 @@ static void test_tx_stage_if_short_deadline(void)
     udpard_tx_t        tx  = { 0 };
     eject_log_t        log = { 0 };
     feedback_state_t   fb  = { 0 };
-    udpard_tx_vtable_t vt  = { .eject = eject_with_log };
+    udpard_tx_vtable_t vt  = { .eject_subject = eject_subject_with_log, .eject_p2p = eject_p2p_with_log };
     TEST_ASSERT_TRUE(udpard_tx_new(&tx, 31U, 1U, 4U, mem, &vt));
-    tx.user                                        = &log;
-    tx.ack_baseline_timeout                        = 10;
-    udpard_udpip_ep_t dest[UDPARD_IFACE_COUNT_MAX] = { make_ep(1), { 0 } };
+    tx.user                       = &log;
+    tx.ack_baseline_timeout       = 10;
+    const uint16_t iface_bitmap_1 = (1U << 0U);
 
-    TEST_ASSERT_TRUE(udpard_tx_push(
-      &tx, 0, 50, udpard_prio_nominal, 78, dest, 1, make_scattered(NULL, 0), record_feedback, make_user_context(&fb)));
+    TEST_ASSERT_TRUE(udpard_tx_push(&tx,
+                                    0,
+                                    50,
+                                    iface_bitmap_1,
+                                    udpard_prio_nominal,
+                                    78,
+                                    1,
+                                    make_scattered(NULL, 0),
+                                    record_feedback,
+                                    make_user_context(&fb)));
 
     udpard_tx_poll(&tx, 0, UDPARD_IFACE_BITMAP_ALL);
     udpard_tx_poll(&tx, 30, UDPARD_IFACE_BITMAP_ALL);
@@ -602,10 +710,10 @@ static void test_tx_cancel(void)
         mem.payload[i] = instrumented_allocator_make_resource(&alloc);
     }
 
-    udpard_tx_t        tx                         = { 0 };
-    feedback_state_t   fstate                     = { 0 };
-    udpard_udpip_ep_t  ep[UDPARD_IFACE_COUNT_MAX] = { make_ep(1), { 0 } };
-    udpard_tx_vtable_t vt                         = { .eject = eject_with_flag };
+    udpard_tx_t        tx             = { 0 };
+    feedback_state_t   fstate         = { 0 };
+    const uint16_t     iface_bitmap_1 = (1U << 0U);
+    udpard_tx_vtable_t vt             = { .eject_subject = eject_subject_with_flag, .eject_p2p = eject_p2p_with_flag };
     TEST_ASSERT_TRUE(udpard_tx_new(&tx, 20U, 1U, 8U, mem, &vt));
 
     // Reliable transfer cancels with failure feedback.
@@ -613,9 +721,9 @@ static void test_tx_cancel(void)
                                     udpard_tx_push(&tx,
                                                    0,
                                                    100,
+                                                   iface_bitmap_1,
                                                    udpard_prio_fast,
                                                    200,
-                                                   ep,
                                                    1,
                                                    make_scattered(NULL, 0),
                                                    record_feedback,
@@ -629,10 +737,17 @@ static void test_tx_cancel(void)
     TEST_ASSERT_FALSE(udpard_tx_cancel(&tx, 200, 1));
 
     // Best-effort transfer cancels quietly.
-    TEST_ASSERT_GREATER_THAN_UINT32(
-      0,
-      udpard_tx_push(
-        &tx, 0, 100, udpard_prio_fast, 201, ep, 2, make_scattered(NULL, 0), NULL, UDPARD_USER_CONTEXT_NULL));
+    TEST_ASSERT_GREATER_THAN_UINT32(0,
+                                    udpard_tx_push(&tx,
+                                                   0,
+                                                   100,
+                                                   iface_bitmap_1,
+                                                   udpard_prio_fast,
+                                                   201,
+                                                   2,
+                                                   make_scattered(NULL, 0),
+                                                   NULL,
+                                                   UDPARD_USER_CONTEXT_NULL));
     TEST_ASSERT_TRUE(udpard_tx_cancel(&tx, 201, 2));
     TEST_ASSERT_EQUAL_size_t(0, tx.enqueued_frames_count);
 
@@ -653,17 +768,23 @@ static void test_tx_spool_deduplication(void)
 
     // Dedup when MTU and allocator match (multi-frame).
     udpard_tx_t tx = { 0 };
-    TEST_ASSERT_TRUE(udpard_tx_new(&tx, 99U, 1U, 16U, mem, &(udpard_tx_vtable_t){ .eject = eject_with_flag }));
-    tx.mtu[0]                                 = 600;
-    tx.mtu[1]                                 = 600;
-    const udpard_udpip_ep_t dest_same[]       = { make_ep(1), make_ep(2), { 0 } };
-    byte_t                  payload_big[1300] = { 0 };
+    TEST_ASSERT_TRUE(udpard_tx_new(
+      &tx,
+      99U,
+      1U,
+      16U,
+      mem,
+      &(udpard_tx_vtable_t){ .eject_subject = eject_subject_with_flag, .eject_p2p = eject_p2p_with_flag }));
+    tx.mtu[0]                        = 600;
+    tx.mtu[1]                        = 600;
+    const uint16_t iface_bitmap_12   = (1U << 0U) | (1U << 1U);
+    byte_t         payload_big[1300] = { 0 };
     TEST_ASSERT_TRUE(udpard_tx_push(&tx,
                                     0,
                                     1000,
+                                    iface_bitmap_12,
                                     udpard_prio_nominal,
                                     1,
-                                    dest_same,
                                     1,
                                     make_scattered(payload_big, sizeof(payload_big)),
                                     NULL,
@@ -677,17 +798,22 @@ static void test_tx_spool_deduplication(void)
     udpard_tx_free(&tx);
 
     // Dedup when payload fits both MTU despite mismatch.
-    TEST_ASSERT_TRUE(udpard_tx_new(&tx, 99U, 1U, 8U, mem, &(udpard_tx_vtable_t){ .eject = eject_with_flag }));
-    tx.mtu[0]                                  = 500;
-    tx.mtu[1]                                  = 900;
-    const udpard_udpip_ep_t dest_fit[]         = { make_ep(3), make_ep(4), { 0 } };
-    byte_t                  payload_small[300] = { 0 };
+    TEST_ASSERT_TRUE(udpard_tx_new(
+      &tx,
+      99U,
+      1U,
+      8U,
+      mem,
+      &(udpard_tx_vtable_t){ .eject_subject = eject_subject_with_flag, .eject_p2p = eject_p2p_with_flag }));
+    tx.mtu[0]                 = 500;
+    tx.mtu[1]                 = 900;
+    byte_t payload_small[300] = { 0 };
     TEST_ASSERT_TRUE(udpard_tx_push(&tx,
                                     0,
                                     1000,
+                                    iface_bitmap_12,
                                     udpard_prio_nominal,
                                     2,
-                                    dest_fit,
                                     2,
                                     make_scattered(payload_small, sizeof(payload_small)),
                                     NULL,
@@ -699,17 +825,22 @@ static void test_tx_spool_deduplication(void)
     udpard_tx_free(&tx);
 
     // No dedup when MTU differs and payload exceeds the smaller MTU.
-    TEST_ASSERT_TRUE(udpard_tx_new(&tx, 99U, 1U, 8U, mem, &(udpard_tx_vtable_t){ .eject = eject_with_flag }));
-    tx.mtu[0]                                  = 500;
-    tx.mtu[1]                                  = 900;
-    const udpard_udpip_ep_t dest_split[]       = { make_ep(5), make_ep(6), { 0 } };
-    byte_t                  payload_split[800] = { 0 };
+    TEST_ASSERT_TRUE(udpard_tx_new(
+      &tx,
+      99U,
+      1U,
+      8U,
+      mem,
+      &(udpard_tx_vtable_t){ .eject_subject = eject_subject_with_flag, .eject_p2p = eject_p2p_with_flag }));
+    tx.mtu[0]                 = 500;
+    tx.mtu[1]                 = 900;
+    byte_t payload_split[800] = { 0 };
     TEST_ASSERT_TRUE(udpard_tx_push(&tx,
                                     0,
                                     1000,
+                                    iface_bitmap_12,
                                     udpard_prio_nominal,
                                     3,
-                                    dest_split,
                                     3,
                                     make_scattered(payload_split, sizeof(payload_split)),
                                     NULL,
@@ -728,17 +859,22 @@ static void test_tx_spool_deduplication(void)
     mem_split.payload[0]                = instrumented_allocator_make_resource(&alloc_a);
     mem_split.payload[1]                = instrumented_allocator_make_resource(&alloc_b);
     mem_split.payload[2]                = mem_split.payload[0];
-    TEST_ASSERT_TRUE(udpard_tx_new(&tx, 99U, 1U, 8U, mem_split, &(udpard_tx_vtable_t){ .eject = eject_with_flag }));
-    tx.mtu[0]                                = 600;
-    tx.mtu[1]                                = 600;
-    const udpard_udpip_ep_t dest_alloc[]     = { make_ep(7), make_ep(8), { 0 } };
-    byte_t                  payload_one[400] = { 0 };
+    TEST_ASSERT_TRUE(udpard_tx_new(
+      &tx,
+      99U,
+      1U,
+      8U,
+      mem_split,
+      &(udpard_tx_vtable_t){ .eject_subject = eject_subject_with_flag, .eject_p2p = eject_p2p_with_flag }));
+    tx.mtu[0]               = 600;
+    tx.mtu[1]               = 600;
+    byte_t payload_one[400] = { 0 };
     TEST_ASSERT_TRUE(udpard_tx_push(&tx,
                                     0,
                                     1000,
+                                    iface_bitmap_12,
                                     udpard_prio_nominal,
                                     4,
-                                    dest_alloc,
                                     4,
                                     make_scattered(payload_one, sizeof(payload_one)),
                                     NULL,

@@ -37,10 +37,18 @@ static udpard_mem_t make_mem(void* const tag)
     return out;
 }
 
-static bool eject_stub(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejection)
+static bool eject_subject_stub(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejection)
 {
     (void)tx;
     (void)ejection;
+    return true;
+}
+
+static bool eject_p2p_stub(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejection, udpard_udpip_ep_t dest)
+{
+    (void)tx;
+    (void)ejection;
+    (void)dest;
     return true;
 }
 
@@ -129,7 +137,7 @@ static void test_tx_guards(void)
     for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
         mem.payload[i] = make_mem(&payload_tags[i]);
     }
-    const udpard_tx_vtable_t vt_ok = { .eject = eject_stub };
+    const udpard_tx_vtable_t vt_ok = { .eject_subject = eject_subject_stub, .eject_p2p = eject_p2p_stub };
 
     // Reject bad initialization inputs.
     udpard_tx_t tx = { 0 };
@@ -138,19 +146,19 @@ static void test_tx_guards(void)
     udpard_tx_mem_resources_t mem_bad = mem;
     mem_bad.payload[0].vtable         = NULL;
     TEST_ASSERT_FALSE(udpard_tx_new(&tx, 1U, 0U, 1U, mem_bad, &vt_ok));
-    const udpard_tx_vtable_t vt_bad = { .eject = NULL };
-    TEST_ASSERT_FALSE(udpard_tx_new(&tx, 1U, 0U, 1U, mem, &vt_bad));
+    const udpard_tx_vtable_t vt_bad_subject = { .eject_subject = NULL, .eject_p2p = eject_p2p_stub };
+    TEST_ASSERT_FALSE(udpard_tx_new(&tx, 1U, 0U, 1U, mem, &vt_bad_subject));
+    const udpard_tx_vtable_t vt_bad_p2p = { .eject_subject = eject_subject_stub, .eject_p2p = NULL };
+    TEST_ASSERT_FALSE(udpard_tx_new(&tx, 1U, 0U, 1U, mem, &vt_bad_p2p));
     TEST_ASSERT_TRUE(udpard_tx_new(&tx, 1U, 0U, 2U, mem, &vt_ok));
 
     // Push helpers reject invalid timing and null handles.
-    const udpard_udpip_ep_t        endpoints[UDPARD_IFACE_COUNT_MAX] = { { .ip = 1U, .port = UDP_PORT },
-                                                                         { 0U, 0U },
-                                                                         { 0U, 0U } };
-    const udpard_bytes_scattered_t empty_payload = { .bytes = { .size = 0U, .data = NULL }, .next = NULL };
-    TEST_ASSERT_FALSE(
-      udpard_tx_push(&tx, 10, 5, udpard_prio_fast, 1U, endpoints, 1U, empty_payload, NULL, UDPARD_USER_CONTEXT_NULL));
-    TEST_ASSERT_FALSE(
-      udpard_tx_push(NULL, 0, 0, udpard_prio_fast, 1U, endpoints, 1U, empty_payload, NULL, UDPARD_USER_CONTEXT_NULL));
+    const uint16_t                 iface_bitmap_1 = (1U << 0U);
+    const udpard_bytes_scattered_t empty_payload  = { .bytes = { .size = 0U, .data = NULL }, .next = NULL };
+    TEST_ASSERT_FALSE(udpard_tx_push(
+      &tx, 10, 5, iface_bitmap_1, udpard_prio_fast, 1U, 1U, empty_payload, NULL, UDPARD_USER_CONTEXT_NULL));
+    TEST_ASSERT_FALSE(udpard_tx_push(
+      NULL, 0, 0, iface_bitmap_1, udpard_prio_fast, 1U, 1U, empty_payload, NULL, UDPARD_USER_CONTEXT_NULL));
     TEST_ASSERT_FALSE(udpard_tx_push_p2p(
       NULL, 0, 0, udpard_prio_fast, 1U, 1U, (udpard_remote_t){ 0 }, empty_payload, NULL, UDPARD_USER_CONTEXT_NULL));
 
@@ -165,14 +173,12 @@ static void test_tx_guards(void)
 static void test_tx_predictor_sharing(void)
 {
     // Shared spool suppresses duplicate frame counts.
-    static char             shared_tag[2];
-    const udpard_mem_t      mem_shared                      = make_mem(&shared_tag[0]);
-    const udpard_mem_t      mem_arr[UDPARD_IFACE_COUNT_MAX] = { mem_shared, mem_shared, make_mem(&shared_tag[1]) };
-    const udpard_udpip_ep_t ep[UDPARD_IFACE_COUNT_MAX]      = { { .ip = 1U, .port = UDP_PORT },
-                                                                { .ip = 2U, .port = UDP_PORT },
-                                                                { 0U, 0U } };
-    const size_t            mtu[UDPARD_IFACE_COUNT_MAX]     = { 64U, 64U, 128U };
-    TEST_ASSERT_EQUAL_size_t(1U, tx_predict_frame_count(mtu, mem_arr, ep, 16U));
+    static char        shared_tag[2];
+    const udpard_mem_t mem_shared                      = make_mem(&shared_tag[0]);
+    const udpard_mem_t mem_arr[UDPARD_IFACE_COUNT_MAX] = { mem_shared, mem_shared, make_mem(&shared_tag[1]) };
+    const size_t       mtu[UDPARD_IFACE_COUNT_MAX]     = { 64U, 64U, 128U };
+    const uint16_t     iface_bitmap_12                 = (1U << 0U) | (1U << 1U);
+    TEST_ASSERT_EQUAL_size_t(1U, tx_predict_frame_count(mtu, mem_arr, iface_bitmap_12, 16U));
 }
 
 static void test_rx_guards(void)

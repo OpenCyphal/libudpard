@@ -93,7 +93,7 @@ void tx_refcount_free(void* const user, const size_t size, void* const payload)
 // Shared deleter for captured TX frames.
 constexpr udpard_deleter_vtable_t tx_refcount_deleter_vt{ .free = &tx_refcount_free };
 
-bool capture_tx_frame(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejection)
+bool capture_tx_frame_impl(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejection)
 {
     auto* frames = static_cast<std::vector<CapturedFrame>*>(tx->user);
     if (frames == nullptr) {
@@ -106,7 +106,18 @@ bool capture_tx_frame(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejectio
     return true;
 }
 
-constexpr udpard_tx_vtable_t tx_vtable{ .eject = &capture_tx_frame };
+bool capture_tx_frame_subject(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejection)
+{
+    return capture_tx_frame_impl(tx, ejection);
+}
+
+bool capture_tx_frame_p2p(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejection, udpard_udpip_ep_t /*dest*/)
+{
+    return capture_tx_frame_impl(tx, ejection);
+}
+
+constexpr udpard_tx_vtable_t tx_vtable{ .eject_subject = &capture_tx_frame_subject,
+                                        .eject_p2p     = &capture_tx_frame_p2p };
 
 void record_feedback(udpard_tx_t*, const udpard_tx_feedback_t fb)
 {
@@ -228,7 +239,6 @@ void test_udpard_tx_rx_end_to_end()
     constexpr std::array<uint64_t, 3>    topic_hashes{ 0x123456789ABCDEF0ULL,
                                                     0x0FEDCBA987654321ULL,
                                                     0x00ACE00ACE00ACEULL };
-    constexpr std::array<uint32_t, 3>    subject_ids{ 10U, 20U, 30U };
     constexpr std::array<udpard_us_t, 3> reorder_windows{ 2000, UDPARD_RX_REORDERING_WINDOW_UNORDERED, 5000 };
     constexpr std::array<size_t, 3>      extents{ 1000, 5000, SIZE_MAX };
 
@@ -283,10 +293,9 @@ void test_udpard_tx_rx_end_to_end()
 
         // Each transfer is sent on all redundant interfaces with different MTUs to exercise fragmentation variety.
         const udpard_bytes_scattered_t payload_view = make_scattered(payload.data(), payload.size());
-        const auto              priority = static_cast<udpard_prio_t>(random_range(0, UDPARD_PRIORITY_COUNT - 1U));
-        const udpard_udpip_ep_t dest     = udpard_make_subject_endpoint(subject_ids[port_index]);
-        const TransferKey       key{ .transfer_id = transfer_id, .topic_hash = topic_hashes[port_index] };
-        const bool              inserted =
+        const auto        priority = static_cast<udpard_prio_t>(random_range(0, UDPARD_PRIORITY_COUNT - 1U));
+        const TransferKey key{ .transfer_id = transfer_id, .topic_hash = topic_hashes[port_index] };
+        const bool        inserted =
           ctx.expected.emplace(key, ExpectedPayload{ .payload = payload, .payload_size_wire = payload.size() }).second;
         TEST_ASSERT_TRUE(inserted);
 
@@ -298,17 +307,14 @@ void test_udpard_tx_rx_end_to_end()
         for (size_t iface = 0; iface < UDPARD_IFACE_COUNT_MAX; iface++) {
             tx.mtu[iface] = mtu_values[iface];
         }
-        std::array<udpard_udpip_ep_t, UDPARD_IFACE_COUNT_MAX> dest_per_iface{};
-        dest_per_iface.fill(dest);
-
         // Enqueue one transfer spanning all interfaces.
         const udpard_us_t deadline = now + 1000000;
         TEST_ASSERT_TRUE(udpard_tx_push(&tx,
                                         now,
                                         deadline,
+                                        UDPARD_IFACE_BITMAP_ALL,
                                         priority,
                                         topic_hashes[port_index],
-                                        dest_per_iface.data(),
                                         transfer_id,
                                         payload_view,
                                         reliable ? &record_feedback : nullptr,

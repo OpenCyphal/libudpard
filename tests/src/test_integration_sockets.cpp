@@ -99,7 +99,7 @@ struct CapturedFrame
 // Callbacks
 // =====================================================================================================================
 
-bool capture_frame(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejection)
+bool capture_frame_impl(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejection)
 {
     auto* frames = static_cast<std::vector<CapturedFrame>*>(tx->user);
     if (frames == nullptr) {
@@ -114,8 +114,16 @@ bool capture_frame(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejection)
 
     return true;
 }
+bool capture_frame_subject(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejection)
+{
+    return capture_frame_impl(tx, ejection);
+}
+bool capture_frame_p2p(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejection, udpard_udpip_ep_t /*dest*/)
+{
+    return capture_frame_impl(tx, ejection);
+}
 
-constexpr udpard_tx_vtable_t tx_vtable{ .eject = &capture_frame };
+constexpr udpard_tx_vtable_t tx_vtable{ .eject_subject = &capture_frame_subject, .eject_p2p = &capture_frame_p2p };
 
 void on_message(udpard_rx_t* const rx, udpard_rx_port_t* const port, const udpard_rx_transfer_t transfer)
 {
@@ -272,7 +280,6 @@ void test_single_frame_transfer()
 
     constexpr uint64_t publisher_uid = 0x1111222233334444ULL;
     constexpr uint64_t topic_hash    = 0x0123456789ABCDEFULL;
-    constexpr uint32_t subject_id    = 7777U;
     constexpr uint64_t transfer_id   = 42U;
 
     // Set up publisher.
@@ -288,19 +295,15 @@ void test_single_frame_transfer()
     const std::vector<uint8_t>     payload      = { 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08 };
     const udpard_bytes_scattered_t payload_view = make_scattered(payload.data(), payload.size());
 
-    const udpard_udpip_ep_t                               mcast_ep = udpard_make_subject_endpoint(subject_id);
-    std::array<udpard_udpip_ep_t, UDPARD_IFACE_COUNT_MAX> dest_eps{};
-    dest_eps[0] = mcast_ep;
-
     const udpard_us_t now      = 1000000;
     const udpard_us_t deadline = now + 1000000;
 
     TEST_ASSERT_TRUE(udpard_tx_push(&pub.tx,
                                     now,
                                     deadline,
+                                    1U, // iface_bitmap: interface 0 only
                                     udpard_prio_nominal,
                                     topic_hash,
-                                    dest_eps.data(),
                                     transfer_id,
                                     payload_view,
                                     nullptr,
@@ -335,7 +338,6 @@ void test_multi_frame_transfer()
 
     constexpr uint64_t publisher_uid = 0x5555666677778888ULL;
     constexpr uint64_t topic_hash    = 0xFEDCBA9876543210ULL;
-    constexpr uint32_t subject_id    = 8888U;
     constexpr size_t   payload_size  = 50000; // Large enough to require many frames
 
     // Set up publisher.
@@ -351,19 +353,15 @@ void test_multi_frame_transfer()
     const std::vector<uint8_t>     payload      = make_payload(payload_size);
     const udpard_bytes_scattered_t payload_view = make_scattered(payload.data(), payload.size());
 
-    const udpard_udpip_ep_t                               mcast_ep = udpard_make_subject_endpoint(subject_id);
-    std::array<udpard_udpip_ep_t, UDPARD_IFACE_COUNT_MAX> dest_eps{};
-    dest_eps[0] = mcast_ep;
-
     const udpard_us_t now      = 1000000;
     const udpard_us_t deadline = now + 5000000;
 
     TEST_ASSERT_TRUE(udpard_tx_push(&pub.tx,
                                     now,
                                     deadline,
+                                    1U, // iface_bitmap
                                     udpard_prio_nominal,
                                     topic_hash,
-                                    dest_eps.data(),
                                     100,
                                     payload_view,
                                     nullptr,
@@ -395,7 +393,6 @@ void test_multi_frame_with_reordering()
 
     constexpr uint64_t publisher_uid = 0xABCDEF0123456789ULL;
     constexpr uint64_t topic_hash    = 0x1234ABCD5678EF00ULL;
-    constexpr uint32_t subject_id    = 5555U;
     constexpr size_t   payload_size  = 20000;
 
     NetworkSimulator sim(0.0, true, static_cast<uint32_t>(rand())); // No loss, deterministic shuffle
@@ -412,18 +409,14 @@ void test_multi_frame_with_reordering()
     // Generate random payload and send.
     const std::vector<uint8_t>     payload      = make_payload(payload_size);
     const udpard_bytes_scattered_t payload_view = make_scattered(payload.data(), payload.size());
-    const udpard_udpip_ep_t        mcast_ep     = udpard_make_subject_endpoint(subject_id);
-
-    std::array<udpard_udpip_ep_t, UDPARD_IFACE_COUNT_MAX> dest_eps{};
-    dest_eps[0] = mcast_ep;
 
     const udpard_us_t now = 1000000;
     TEST_ASSERT_TRUE(udpard_tx_push(&pub.tx,
                                     now,
                                     now + 5000000,
+                                    1U, // iface_bitmap
                                     udpard_prio_nominal,
                                     topic_hash,
-                                    dest_eps.data(),
                                     50,
                                     payload_view,
                                     nullptr,
@@ -454,7 +447,6 @@ void test_multiple_publishers()
     seed_prng();
 
     constexpr uint64_t topic_hash            = 0x1234567890ABCDEFULL;
-    constexpr uint32_t subject_id            = 9999U;
     constexpr size_t   num_publishers        = 3;
     constexpr size_t   num_transfers_per_pub = 5;
     constexpr size_t   payload_size          = 100;
@@ -464,8 +456,6 @@ void test_multiple_publishers()
     sub.init();
     udpard_rx_port_t sub_port = make_subject_port(topic_hash, 1024, sub);
 
-    const udpard_udpip_ep_t mcast_ep = udpard_make_subject_endpoint(subject_id);
-
     // Set up publishers and send.
     std::array<TxFixture, num_publishers>                         publishers{};
     std::array<std::vector<std::vector<uint8_t>>, num_publishers> expected_payloads{};
@@ -473,9 +463,6 @@ void test_multiple_publishers()
     for (size_t i = 0; i < num_publishers; i++) {
         const uint64_t uid = 0x1000000000000000ULL + i;
         publishers[i].init(uid, static_cast<uint64_t>(rand()), 256);
-
-        std::array<udpard_udpip_ep_t, UDPARD_IFACE_COUNT_MAX> dest_eps{};
-        dest_eps[0] = mcast_ep;
 
         for (size_t tid = 0; tid < num_transfers_per_pub; tid++) {
             std::vector<uint8_t> payload = make_payload(payload_size);
@@ -491,9 +478,9 @@ void test_multiple_publishers()
             TEST_ASSERT_TRUE(udpard_tx_push(&publishers[i].tx,
                                             now,
                                             now + 1000000,
+                                            1U, // iface_bitmap
                                             udpard_prio_nominal,
                                             topic_hash,
-                                            dest_eps.data(),
                                             transfer_id,
                                             payload_view,
                                             nullptr,
@@ -544,7 +531,6 @@ void test_partial_frame_loss()
 
     constexpr uint64_t publisher_uid = 0xDEADBEEFCAFEBABEULL;
     constexpr uint64_t topic_hash    = 0xABCDEF0123456789ULL;
-    constexpr uint32_t subject_id    = 6666U;
     constexpr size_t   payload_size  = 5000; // Multi-frame transfer
 
     NetworkSimulator sim(0.35, false, static_cast<uint32_t>(rand())); // Ensure some loss
@@ -561,18 +547,14 @@ void test_partial_frame_loss()
     // Generate payload and send.
     const std::vector<uint8_t>     payload      = make_payload(payload_size);
     const udpard_bytes_scattered_t payload_view = make_scattered(payload.data(), payload.size());
-    const udpard_udpip_ep_t        mcast_ep     = udpard_make_subject_endpoint(subject_id);
-
-    std::array<udpard_udpip_ep_t, UDPARD_IFACE_COUNT_MAX> dest_eps{};
-    dest_eps[0] = mcast_ep;
 
     const udpard_us_t now = 1000000;
     TEST_ASSERT_TRUE(udpard_tx_push(&pub.tx,
                                     now,
                                     now + 5000000,
+                                    1U, // iface_bitmap
                                     udpard_prio_nominal,
                                     topic_hash,
-                                    dest_eps.data(),
                                     50,
                                     payload_view,
                                     nullptr,
@@ -603,7 +585,6 @@ void test_no_loss_baseline()
 
     constexpr uint64_t publisher_uid = 0xAAAABBBBCCCCDDDDULL;
     constexpr uint64_t topic_hash    = 0x9999888877776666ULL;
-    constexpr uint32_t subject_id    = 4444U;
     constexpr size_t   payload_size  = 10000;
 
     // Set up publisher.
@@ -618,18 +599,14 @@ void test_no_loss_baseline()
     // Generate payload and send.
     const std::vector<uint8_t>     payload      = make_payload(payload_size);
     const udpard_bytes_scattered_t payload_view = make_scattered(payload.data(), payload.size());
-    const udpard_udpip_ep_t        mcast_ep     = udpard_make_subject_endpoint(subject_id);
-
-    std::array<udpard_udpip_ep_t, UDPARD_IFACE_COUNT_MAX> dest_eps{};
-    dest_eps[0] = mcast_ep;
 
     const udpard_us_t now = 1000000;
     TEST_ASSERT_TRUE(udpard_tx_push(&pub.tx,
                                     now,
                                     now + 5000000,
+                                    1U, // iface_bitmap
                                     udpard_prio_nominal,
                                     topic_hash,
-                                    dest_eps.data(),
                                     75,
                                     payload_view,
                                     nullptr,
@@ -660,7 +637,6 @@ void test_extent_truncation()
 
     constexpr uint64_t publisher_uid = 0x1234567890ABCDEFULL;
     constexpr uint64_t topic_hash    = 0xFEDCBA0987654321ULL;
-    constexpr uint32_t subject_id    = 3333U;
     constexpr size_t   payload_size  = 5000;
     constexpr size_t   extent        = 1000; // Less than payload_size
 
@@ -676,18 +652,14 @@ void test_extent_truncation()
     // Generate payload and send.
     const std::vector<uint8_t>     payload      = make_payload(payload_size);
     const udpard_bytes_scattered_t payload_view = make_scattered(payload.data(), payload.size());
-    const udpard_udpip_ep_t        mcast_ep     = udpard_make_subject_endpoint(subject_id);
-
-    std::array<udpard_udpip_ep_t, UDPARD_IFACE_COUNT_MAX> dest_eps{};
-    dest_eps[0] = mcast_ep;
 
     const udpard_us_t now = 1000000;
     TEST_ASSERT_TRUE(udpard_tx_push(&pub.tx,
                                     now,
                                     now + 5000000,
+                                    1U, // iface_bitmap
                                     udpard_prio_nominal,
                                     topic_hash,
-                                    dest_eps.data(),
                                     100,
                                     payload_view,
                                     nullptr,

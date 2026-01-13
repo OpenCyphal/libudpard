@@ -341,7 +341,7 @@ typedef struct udpard_tx_mem_resources_t
     /// These may be distinct per interface to allow each interface to draw buffers from a specific memory region
     /// or a specific DMA-compatible memory pool.
     ///
-    /// IMPORTANT: DISTINCT MEMORY RESOURCES INCREASE TX MEMORY USAGE AND DATA COPYING.
+    /// IMPORTANT: distinct memory resources increase tx memory usage and data copying.
     /// If possible, it is recommended to use the same memory resource for all interfaces, because the library will be
     /// able to avoid frame duplication and instead reuse each frame across all interfaces when the MTUs are identical.
     udpard_mem_t payload[UDPARD_IFACE_COUNT_MAX];
@@ -392,6 +392,7 @@ typedef struct udpard_tx_vtable_t
 {
     /// Invoked from udpard_tx_poll() et al to push outgoing UDP datagrams into the socket/NIC driver.
     /// The callback must not mutate the TX pipeline (no udpard_tx_push/cancel/free).
+    ///
     /// The destination endpoint is provided only for P2P transfers; for multicast transfers, the application
     /// must compute the endpoint using udpard_make_subject_endpoint() based on the subject-ID. This is because
     /// the subject-ID may be changed by the consensus algorithm at any time if a collision/divergence is detected.
@@ -416,7 +417,7 @@ struct udpard_tx_t
     /// The Cyphal/UDP header is added to this value to obtain the total UDP datagram payload size.
     /// The value can be changed arbitrarily between enqueue operations as long as it is at least UDPARD_MTU_MIN.
     ///
-    /// IMPORTANT: DISTINCT MTU VALUES INCREASE TX MEMORY USAGE AND DATA COPYING.
+    /// IMPORTANT: distinct MTU values increase tx memory usage and data copying.
     /// If possible, it is recommended to use the same MTU for all interfaces, because the library will be
     /// able to avoid frame duplication and instead reuse each frame across all interfaces.
     size_t mtu[UDPARD_IFACE_COUNT_MAX];

@@ -1603,7 +1603,16 @@ typedef struct
     size_t                   captured_count;
 } tx_fixture_t;
 
-static bool tx_capture_ack(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejection)
+static bool tx_capture_ack_subject(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejection)
+{
+    (void)tx;
+    (void)ejection;
+    return true; // ACKs are P2P, subject eject should not be called for them
+}
+
+static bool tx_capture_ack_p2p(udpard_tx_t* const          tx,
+                               udpard_tx_ejection_t* const ejection,
+                               const udpard_udpip_ep_t     destination)
 {
     tx_fixture_t* const self = (tx_fixture_t*)tx->user;
     if ((self == NULL) || (self->captured_count >= (sizeof(self->captured) / sizeof(self->captured[0])))) {
@@ -1629,7 +1638,7 @@ static bool tx_capture_ack(udpard_tx_t* const tx, udpard_tx_ejection_t* const ej
             info->priority            = meta.priority;
             info->transfer_id         = meta.transfer_id;
             info->topic_hash          = meta.topic_hash;
-            info->destination         = ejection->destination;
+            info->destination         = destination;
             (void)deserialize_u64(pl + 8U, &info->acked_topic_hash);
             (void)deserialize_u64(pl + 16U, &info->acked_transfer_id);
         }
@@ -1648,7 +1657,8 @@ static void tx_fixture_init(tx_fixture_t* const self, const uint64_t uid, const 
     for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
         mem.payload[i] = instrumented_allocator_make_resource(&self->alloc_payload);
     }
-    static const udpard_tx_vtable_t vtb = { .eject = &tx_capture_ack };
+    static const udpard_tx_vtable_t vtb = { .eject_subject = &tx_capture_ack_subject,
+                                            .eject_p2p     = &tx_capture_ack_p2p };
     TEST_ASSERT(udpard_tx_new(&self->tx, uid, 1U, capacity, mem, &vtb));
     self->tx.user = self;
 }

@@ -41,7 +41,7 @@ void tx_refcount_free(void* const user, const size_t size, void* const payload)
 // Shared deleter for captured TX frames.
 constexpr udpard_deleter_vtable_t tx_refcount_deleter_vt{ .free = &tx_refcount_free };
 
-bool capture_tx_frame(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejection)
+bool capture_tx_frame_impl(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejection)
 {
     auto* frames = static_cast<std::vector<CapturedFrame>*>(tx->user);
     if (frames == nullptr) {
@@ -54,7 +54,18 @@ bool capture_tx_frame(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejectio
     return true;
 }
 
-constexpr udpard_tx_vtable_t tx_vtable{ .eject = &capture_tx_frame };
+bool capture_tx_frame_subject(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejection)
+{
+    return capture_tx_frame_impl(tx, ejection);
+}
+
+bool capture_tx_frame_p2p(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejection, udpard_udpip_ep_t /*dest*/)
+{
+    return capture_tx_frame_impl(tx, ejection);
+}
+
+constexpr udpard_tx_vtable_t tx_vtable{ .eject_subject = &capture_tx_frame_subject,
+                                        .eject_p2p     = &capture_tx_frame_p2p };
 
 void fb_record(udpard_tx_t*, const udpard_tx_feedback_t fb)
 {
@@ -156,15 +167,13 @@ struct Fixture
         for (auto& mtu_value : tx.mtu) {
             mtu_value = UDPARD_MTU_DEFAULT;
         }
-        std::array<udpard_udpip_ep_t, UDPARD_IFACE_COUNT_MAX> dest_per_iface{};
-        dest_per_iface.fill(udpard_udpip_ep_t{});
-        dest_per_iface[0] = dest;
+        constexpr uint16_t iface_bitmap_1 = (1U << 0U);
         TEST_ASSERT_TRUE(udpard_tx_push(&tx,
                                         ts,
                                         deadline,
+                                        iface_bitmap_1,
                                         udpard_prio_slow,
                                         topic_hash,
-                                        dest_per_iface.data(),
                                         transfer_id,
                                         payload,
                                         nullptr,
@@ -352,7 +361,7 @@ void test_udpard_tx_feedback_always_called()
     for (auto& res : tx_mem.payload) {
         res = instrumented_allocator_make_resource(&tx_alloc_payload);
     }
-    const udpard_udpip_ep_t endpoint = udpard_make_subject_endpoint(1);
+    constexpr uint16_t iface_bitmap_1 = (1U << 0U);
 
     // Expiration path triggers feedback=false.
     {
@@ -360,10 +369,17 @@ void test_udpard_tx_feedback_always_called()
         udpard_tx_t                tx{};
         TEST_ASSERT_TRUE(udpard_tx_new(&tx, 1U, 1U, 4, tx_mem, &tx_vtable));
         tx.user = &frames;
-        FbState           fb{};
-        udpard_udpip_ep_t dests[UDPARD_IFACE_COUNT_MAX] = { endpoint, {} };
-        TEST_ASSERT_TRUE(udpard_tx_push(
-          &tx, 10, 10, udpard_prio_fast, 1, dests, 11, make_scattered(nullptr, 0), fb_record, make_user_context(&fb)));
+        FbState fb{};
+        TEST_ASSERT_TRUE(udpard_tx_push(&tx,
+                                        10,
+                                        10,
+                                        iface_bitmap_1,
+                                        udpard_prio_fast,
+                                        1,
+                                        11,
+                                        make_scattered(nullptr, 0),
+                                        fb_record,
+                                        make_user_context(&fb)));
         udpard_tx_poll(&tx, 11, UDPARD_IFACE_BITMAP_ALL);
         TEST_ASSERT_EQUAL_size_t(1, fb.count);
         TEST_ASSERT_EQUAL_UINT32(0, fb.acknowledgements);
@@ -377,15 +393,14 @@ void test_udpard_tx_feedback_always_called()
         udpard_tx_t                tx{};
         TEST_ASSERT_TRUE(udpard_tx_new(&tx, 2U, 1U, 1, tx_mem, &tx_vtable));
         tx.user = &frames;
-        FbState           fb_old{};
-        FbState           fb_new{};
-        udpard_udpip_ep_t dests[UDPARD_IFACE_COUNT_MAX] = { endpoint, {} };
+        FbState fb_old{};
+        FbState fb_new{};
         TEST_ASSERT_TRUE(udpard_tx_push(&tx,
                                         0,
                                         1000,
+                                        iface_bitmap_1,
                                         udpard_prio_fast,
                                         2,
-                                        dests,
                                         21,
                                         make_scattered(nullptr, 0),
                                         fb_record,
@@ -393,9 +408,9 @@ void test_udpard_tx_feedback_always_called()
         (void)udpard_tx_push(&tx,
                              0,
                              1000,
+                             iface_bitmap_1,
                              udpard_prio_fast,
                              3,
-                             dests,
                              22,
                              make_scattered(nullptr, 0),
                              fb_record,
@@ -414,10 +429,17 @@ void test_udpard_tx_feedback_always_called()
         udpard_tx_t                tx{};
         TEST_ASSERT_TRUE(udpard_tx_new(&tx, 3U, 1U, 4, tx_mem, &tx_vtable));
         tx.user = &frames;
-        FbState           fb{};
-        udpard_udpip_ep_t dests[UDPARD_IFACE_COUNT_MAX] = { endpoint, {} };
-        TEST_ASSERT_TRUE(udpard_tx_push(
-          &tx, 0, 1000, udpard_prio_fast, 4, dests, 33, make_scattered(nullptr, 0), fb_record, make_user_context(&fb)));
+        FbState fb{};
+        TEST_ASSERT_TRUE(udpard_tx_push(&tx,
+                                        0,
+                                        1000,
+                                        iface_bitmap_1,
+                                        udpard_prio_fast,
+                                        4,
+                                        33,
+                                        make_scattered(nullptr, 0),
+                                        fb_record,
+                                        make_user_context(&fb)));
         udpard_tx_free(&tx);
         TEST_ASSERT_EQUAL_size_t(1, fb.count);
         TEST_ASSERT_EQUAL_UINT32(0, fb.acknowledgements);
@@ -556,16 +578,15 @@ void test_udpard_rx_p2p_malformed_kind()
     p2p_payload[UDPARD_P2P_HEADER_BYTES + 3] = 0x44U;
 
     // Send using regular udpard_tx_push - the library handles all CRC calculations.
-    const udpard_us_t              now     = 0;
-    const udpard_bytes_scattered_t payload = make_scattered(p2p_payload.data(), p2p_payload.size());
-    std::array<udpard_udpip_ep_t, UDPARD_IFACE_COUNT_MAX> dest{};
-    dest[0] = { .ip = 0x0A000010U, .port = 7400U };
+    const udpard_us_t              now            = 0;
+    const udpard_bytes_scattered_t payload        = make_scattered(p2p_payload.data(), p2p_payload.size());
+    constexpr uint16_t             iface_bitmap_1 = (1U << 0U);
     TEST_ASSERT_TRUE(udpard_tx_push(&tx,
                                     now,
                                     now + 1000000,
+                                    iface_bitmap_1,
                                     udpard_prio_nominal,
                                     local_uid, // topic_hash = local_uid for P2P port matching
-                                    dest.data(),
                                     42U,
                                     payload,
                                     nullptr,
@@ -647,19 +668,17 @@ void test_udpard_tx_minimum_mtu()
         payload[i] = static_cast<uint8_t>(i & 0xFFU);
     }
 
-    const udpard_bytes_scattered_t                        payload_view = make_scattered(payload.data(), payload.size());
-    const udpard_udpip_ep_t                               dest         = udpard_make_subject_endpoint(100U);
-    std::array<udpard_udpip_ep_t, UDPARD_IFACE_COUNT_MAX> dest_per_iface{};
-    dest_per_iface[0] = dest;
+    const udpard_bytes_scattered_t payload_view   = make_scattered(payload.data(), payload.size());
+    constexpr uint16_t             iface_bitmap_1 = (1U << 0U);
 
     const udpard_us_t now = 0;
     frames.clear();
     TEST_ASSERT_TRUE(udpard_tx_push(&tx,
                                     now,
                                     now + 1000000,
+                                    iface_bitmap_1,
                                     udpard_prio_nominal,
                                     topic_hash,
-                                    dest_per_iface.data(),
                                     1U,
                                     payload_view,
                                     nullptr,
@@ -789,20 +808,18 @@ void test_udpard_rx_zero_extent()
         payload[i] = static_cast<uint8_t>(i);
     }
 
-    const udpard_bytes_scattered_t                        payload_view = make_scattered(payload.data(), payload.size());
-    const udpard_udpip_ep_t                               dest         = udpard_make_subject_endpoint(200U);
-    std::array<udpard_udpip_ep_t, UDPARD_IFACE_COUNT_MAX> dest_per_iface{};
-    dest_per_iface[0] = dest;
-    const udpard_udpip_ep_t source{ .ip = 0x0A000002U, .port = 7502U };
+    const udpard_bytes_scattered_t payload_view   = make_scattered(payload.data(), payload.size());
+    constexpr uint16_t             iface_bitmap_1 = (1U << 0U);
+    const udpard_udpip_ep_t        source{ .ip = 0x0A000002U, .port = 7502U };
 
     const udpard_us_t now = 0;
     frames.clear();
     TEST_ASSERT_TRUE(udpard_tx_push(&tx,
                                     now,
                                     now + 1000000,
+                                    iface_bitmap_1,
                                     udpard_prio_nominal,
                                     topic_hash,
-                                    dest_per_iface.data(),
                                     5U,
                                     payload_view,
                                     nullptr,
@@ -843,17 +860,16 @@ void test_udpard_empty_payload()
 
     // Send an empty payload
     fix.frames.clear();
-    const udpard_bytes_scattered_t                        empty_payload = make_scattered(nullptr, 0);
-    const udpard_us_t                                     deadline      = 1000000;
-    std::array<udpard_udpip_ep_t, UDPARD_IFACE_COUNT_MAX> dest_per_iface{};
-    dest_per_iface[0] = fix.dest;
+    const udpard_bytes_scattered_t empty_payload  = make_scattered(nullptr, 0);
+    const udpard_us_t              deadline       = 1000000;
+    constexpr uint16_t             iface_bitmap_1 = (1U << 0U);
 
     TEST_ASSERT_TRUE(udpard_tx_push(&fix.tx,
                                     0,
                                     deadline,
+                                    iface_bitmap_1,
                                     udpard_prio_nominal,
                                     fix.topic_hash,
-                                    dest_per_iface.data(),
                                     10U,
                                     empty_payload,
                                     nullptr,
@@ -879,21 +895,21 @@ void test_udpard_all_priority_levels()
     Fixture     fix{ UDPARD_RX_REORDERING_WINDOW_UNORDERED };
     udpard_us_t now = 0;
 
+    constexpr uint16_t iface_bitmap_1 = (1U << 0U);
+
     // Test all 8 priority levels
     for (uint8_t prio = 0; prio < UDPARD_PRIORITY_COUNT; prio++) {
         fix.frames.clear();
         std::array<uint8_t, 8> payload{};
         payload[0]                                  = prio;
         const udpard_bytes_scattered_t payload_view = make_scattered(payload.data(), payload.size());
-        std::array<udpard_udpip_ep_t, UDPARD_IFACE_COUNT_MAX> dest_per_iface{};
-        dest_per_iface[0] = fix.dest;
 
         TEST_ASSERT_TRUE(udpard_tx_push(&fix.tx,
                                         now,
                                         now + 1000000,
+                                        iface_bitmap_1,
                                         static_cast<udpard_prio_t>(prio),
                                         fix.topic_hash,
-                                        dest_per_iface.data(),
                                         100U + prio,
                                         payload_view,
                                         nullptr,
@@ -954,20 +970,18 @@ void test_udpard_topic_hash_collision()
       udpard_rx_port_new(&port, rx_topic_hash, 1024, UDPARD_RX_REORDERING_WINDOW_UNORDERED, rx_mem, &callbacks));
 
     // Send with mismatched topic hash
-    std::array<uint8_t, 8>                                payload{};
-    const udpard_bytes_scattered_t                        payload_view = make_scattered(payload.data(), payload.size());
-    const udpard_udpip_ep_t                               dest         = udpard_make_subject_endpoint(300U);
-    std::array<udpard_udpip_ep_t, UDPARD_IFACE_COUNT_MAX> dest_per_iface{};
-    dest_per_iface[0] = dest;
+    std::array<uint8_t, 8>         payload{};
+    const udpard_bytes_scattered_t payload_view   = make_scattered(payload.data(), payload.size());
+    constexpr uint16_t             iface_bitmap_1 = (1U << 0U);
 
     const udpard_us_t now = 0;
     frames.clear();
     TEST_ASSERT_TRUE(udpard_tx_push(&tx,
                                     now,
                                     now + 1000000,
+                                    iface_bitmap_1,
                                     udpard_prio_nominal,
                                     tx_topic_hash, // Different from port's topic_hash
-                                    dest_per_iface.data(),
                                     1U,
                                     payload_view,
                                     nullptr,
