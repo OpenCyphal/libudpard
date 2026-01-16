@@ -918,18 +918,6 @@ static bool tx_push(udpard_tx_t* const             tx,
     UDPARD_ASSERT((iface_bitmap & UDPARD_IFACE_BITMAP_ALL) != 0);
     UDPARD_ASSERT((iface_bitmap & UDPARD_IFACE_BITMAP_ALL) == iface_bitmap);
 
-    // Ensure the queue has enough space.
-    for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
-        tx->mtu[i] = larger(tx->mtu[i], UDPARD_MTU_MIN); // enforce minimum MTU
-    }
-    const size_t n_frames =
-      tx_predict_frame_count(tx->mtu, tx->memory.payload, iface_bitmap, meta.transfer_payload_size);
-    UDPARD_ASSERT(n_frames > 0);
-    if (!tx_ensure_queue_space(tx, n_frames)) {
-        tx->errors_capacity++;
-        return false;
-    }
-
     // Construct the empty transfer object, without the frames for now. The frame spools will be constructed next.
     tx_transfer_t* const tr = mem_alloc(tx->memory.transfer, sizeof(tx_transfer_t));
     if (tr == NULL) {
@@ -952,6 +940,19 @@ static bool tx_push(udpard_tx_t* const             tx,
     for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
         tr->p2p_destination[i] = p2p_destination[i];
         tr->head[i] = tr->cursor[i] = NULL;
+    }
+
+    // Ensure the queue has enough space.
+    for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
+        tx->mtu[i] = larger(tx->mtu[i], UDPARD_MTU_MIN); // enforce minimum MTU
+    }
+    const size_t n_frames =
+      tx_predict_frame_count(tx->mtu, tx->memory.payload, iface_bitmap, meta.transfer_payload_size);
+    UDPARD_ASSERT(n_frames > 0);
+    if (!tx_ensure_queue_space(tx, n_frames)) {
+        mem_free(tx->memory.transfer, sizeof(tx_transfer_t), tr);
+        tx->errors_capacity++;
+        return false;
     }
 
     // Spool the frames for each interface, with deduplication where possible to conserve memory and queue space.
