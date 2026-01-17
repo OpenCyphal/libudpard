@@ -863,6 +863,41 @@ static void tx_stage_if(udpard_tx_t* const tx, tx_transfer_t* const tr)
     }
 }
 
+static void tx_purge_expired_transfers(udpard_tx_t* const self, const udpard_us_t now)
+{
+    while (true) { // we can use next_greater instead of doing min search every time
+        tx_transfer_t* const tr = CAVL2_TO_OWNER(cavl2_min(self->index_deadline), tx_transfer_t, index_deadline);
+        if ((tr != NULL) && (now > tr->deadline)) {
+            tx_transfer_retire(self, tr, false);
+            self->errors_expiration++;
+        } else {
+            break;
+        }
+    }
+}
+
+static void tx_promote_staged_transfers(udpard_tx_t* const self, const udpard_us_t now)
+{
+    while (true) { // we can use next_greater instead of doing min search every time
+        tx_transfer_t* const tr = CAVL2_TO_OWNER(cavl2_min(self->index_staged), tx_transfer_t, index_staged);
+        if ((tr != NULL) && (now >= tr->staged_until)) {
+            // Reinsert into the staged index at the new position, when the next attempt is due (if any).
+            cavl2_remove(&self->index_staged, &tr->index_staged);
+            tx_stage_if(self, tr);
+            // Enqueue for transmission unless it's been there since the last attempt (stalled interface?)
+            for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
+                if (((tr->iface_bitmap & (1U << i)) != 0) && !is_listed(&self->queue[i][tr->priority], &tr->queue[i])) {
+                    UDPARD_ASSERT(tr->head[i] != NULL);          // cannot stage without payload, doesn't make sense
+                    UDPARD_ASSERT(tr->cursor[i] == tr->head[i]); // must have been rewound after last attempt
+                    enlist_head(&self->queue[i][tr->priority], &tr->queue[i]);
+                }
+            }
+        } else {
+            break;
+        }
+    }
+}
+
 /// A transfer can use the same fragments between two interfaces if
 /// (both have the same MTU OR the transfer fits in both MTU) AND both use the same allocator.
 /// Either they will share the same spool, or there is only a single frame so the MTU difference does not matter.
@@ -917,6 +952,13 @@ static bool tx_push(udpard_tx_t* const             tx,
     UDPARD_ASSERT(tx != NULL);
     UDPARD_ASSERT((iface_bitmap & UDPARD_IFACE_BITMAP_ALL) != 0);
     UDPARD_ASSERT((iface_bitmap & UDPARD_IFACE_BITMAP_ALL) == iface_bitmap);
+
+    // Purge expired transfers before accepting a new one to make room in the queue.
+    tx_purge_expired_transfers(tx, now);
+
+    // Promote staged transfers that are now eligible for retransmission to ensure fairness:
+    // if they have the same priority as the new transfer, they should get a chance to go first.
+    tx_promote_staged_transfers(tx, now);
 
     // Construct the empty transfer object, without the frames for now. The frame spools will be constructed next.
     tx_transfer_t* const tr = mem_alloc(tx->memory.transfer, sizeof(tx_transfer_t));
@@ -1165,7 +1207,6 @@ bool udpard_tx_push(udpard_tx_t* const             self,
               ((payload.bytes.data != NULL) || (payload.bytes.size == 0U)) &&
               (tx_transfer_find(self, topic_hash, transfer_id) == NULL);
     if (ok) {
-        udpard_tx_poll(self, now, UDPARD_IFACE_BITMAP_ALL);
         const meta_t meta = {
             .priority              = priority,
             .flag_ack              = feedback != NULL,
@@ -1205,7 +1246,6 @@ bool udpard_tx_push_p2p(udpard_tx_t* const             self,
     bool ok = (self != NULL) && (deadline >= now) && (now >= 0) && (self->local_uid != 0) && (iface_bitmap != 0) &&
               (priority < UDPARD_PRIORITY_COUNT) && ((payload.bytes.data != NULL) || (payload.bytes.size == 0U));
     if (ok) {
-        udpard_tx_poll(self, now, UDPARD_IFACE_BITMAP_ALL);
         // Serialize the P2P header and prepend it to the payload.
         byte_t  header[UDPARD_P2P_HEADER_BYTES];
         byte_t* ptr = header;
@@ -1248,41 +1288,6 @@ bool udpard_tx_push_p2p(udpard_tx_t* const             self,
         }
     }
     return ok;
-}
-
-static void tx_purge_expired_transfers(udpard_tx_t* const self, const udpard_us_t now)
-{
-    while (true) { // we can use next_greater instead of doing min search every time
-        tx_transfer_t* const tr = CAVL2_TO_OWNER(cavl2_min(self->index_deadline), tx_transfer_t, index_deadline);
-        if ((tr != NULL) && (now > tr->deadline)) {
-            tx_transfer_retire(self, tr, false);
-            self->errors_expiration++;
-        } else {
-            break;
-        }
-    }
-}
-
-static void tx_promote_staged_transfers(udpard_tx_t* const self, const udpard_us_t now)
-{
-    while (true) { // we can use next_greater instead of doing min search every time
-        tx_transfer_t* const tr = CAVL2_TO_OWNER(cavl2_min(self->index_staged), tx_transfer_t, index_staged);
-        if ((tr != NULL) && (now >= tr->staged_until)) {
-            // Reinsert into the staged index at the new position, when the next attempt is due (if any).
-            cavl2_remove(&self->index_staged, &tr->index_staged);
-            tx_stage_if(self, tr);
-            // Enqueue for transmission unless it's been there since the last attempt (stalled interface?)
-            for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
-                if (((tr->iface_bitmap & (1U << i)) != 0) && !is_listed(&self->queue[i][tr->priority], &tr->queue[i])) {
-                    UDPARD_ASSERT(tr->head[i] != NULL);          // cannot stage without payload, doesn't make sense
-                    UDPARD_ASSERT(tr->cursor[i] == tr->head[i]); // must have been rewound after last attempt
-                    enlist_head(&self->queue[i][tr->priority], &tr->queue[i]);
-                }
-            }
-        } else {
-            break;
-        }
-    }
 }
 
 static void tx_eject_pending_frames(udpard_tx_t* const self, const udpard_us_t now, const uint_fast8_t ifindex)

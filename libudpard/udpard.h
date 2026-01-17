@@ -392,7 +392,9 @@ typedef struct udpard_tx_ejection_t
 /// Virtual function table for the TX pipeline, to be provided by the application.
 typedef struct udpard_tx_vtable_t
 {
-    /// Invoked from udpard_tx_poll() et al to push outgoing UDP datagrams into the socket/NIC driver.
+    /// Invoked from udpard_tx_poll() to push outgoing UDP datagrams into the socket/NIC driver.
+    /// It is GUARANTEED that ONLY udpard_tx_poll() can invoke this function; in particular, pushing new transfers
+    /// will not trigger ejection callbacks.
     /// The callback must not mutate the TX pipeline (no udpard_tx_push/cancel/free).
     ///
     /// The destination endpoint is provided only for P2P transfers; for multicast transfers, the application
