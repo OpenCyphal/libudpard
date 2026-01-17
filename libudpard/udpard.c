@@ -1198,7 +1198,8 @@ bool udpard_tx_push_p2p(udpard_tx_t* const             self,
                         const udpard_remote_t          remote,
                         const udpard_bytes_scattered_t payload,
                         void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t),
-                        const udpard_user_context_t user)
+                        const udpard_user_context_t user,
+                        uint64_t* const             out_transfer_id)
 {
     const uint16_t iface_bitmap = valid_ep_bitmap(remote.endpoints);
     bool ok = (self != NULL) && (deadline >= now) && (now >= 0) && (self->local_uid != 0) && (iface_bitmap != 0) &&
@@ -1240,6 +1241,10 @@ bool udpard_tx_push_p2p(udpard_tx_t* const             self,
             UDPARD_ASSERT(tr != NULL);
             tr->remote_topic_hash  = request_topic_hash;
             tr->remote_transfer_id = request_transfer_id;
+            UDPARD_ASSERT(tr->transfer_id == meta.transfer_id);
+            if (out_transfer_id != NULL) {
+                *out_transfer_id = tr->transfer_id;
+            }
         }
     }
     return ok;

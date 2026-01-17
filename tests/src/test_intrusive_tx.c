@@ -909,11 +909,9 @@ static void test_tx_cancel_p2p(void)
     TEST_ASSERT_TRUE(udpard_tx_new(&tx, 50U, 100U, 8U, mem, &vt));
     tx.user = &eject;
 
-    // Save the initial P2P transfer-ID counter.
-    const uint64_t p2p_tid_initial = tx.p2p_transfer_id;
-
-    // Push a P2P transfer with feedback (reliable).
-    const udpard_remote_t remote = { .uid = 999, .endpoints = { make_ep(10), make_ep(20) } };
+    // Push a P2P transfer with feedback (reliable), using out_transfer_id.
+    const udpard_remote_t remote  = { .uid = 999, .endpoints = { make_ep(10), make_ep(20) } };
+    uint64_t              out_tid = 0;
     TEST_ASSERT_TRUE(udpard_tx_push_p2p(&tx,
                                         0,
                                         1000,
@@ -923,14 +921,16 @@ static void test_tx_cancel_p2p(void)
                                         remote,
                                         make_scattered(NULL, 0),
                                         record_feedback,
-                                        make_user_context(&fstate)));
-    TEST_ASSERT_EQUAL_UINT64(p2p_tid_initial + 1, tx.p2p_transfer_id);
+                                        make_user_context(&fstate),
+                                        &out_tid));
+    // Verify out_transfer_id matches internal counter.
+    TEST_ASSERT_EQUAL_UINT64(100, out_tid); // initial p2p_transfer_id was 100
     // P2P transfers are indexed by (remote.uid, internal_transfer_id).
-    TEST_ASSERT_NOT_NULL(tx_transfer_find(&tx, remote.uid, p2p_tid_initial));
+    TEST_ASSERT_NOT_NULL(tx_transfer_find(&tx, remote.uid, out_tid));
 
-    // Cancel using the correct destination_uid and internal transfer_id.
-    TEST_ASSERT_TRUE(udpard_tx_cancel_p2p(&tx, remote.uid, p2p_tid_initial));
-    TEST_ASSERT_NULL(tx_transfer_find(&tx, remote.uid, p2p_tid_initial));
+    // Cancel using the returned transfer_id from out_transfer_id.
+    TEST_ASSERT_TRUE(udpard_tx_cancel_p2p(&tx, remote.uid, out_tid));
+    TEST_ASSERT_NULL(tx_transfer_find(&tx, remote.uid, out_tid));
     TEST_ASSERT_EQUAL_size_t(1, fstate.count);
     TEST_ASSERT_EQUAL_UINT32(0, fstate.last.acknowledgements);
     // Feedback returns request metadata, not internal P2P metadata.
@@ -938,10 +938,11 @@ static void test_tx_cancel_p2p(void)
     TEST_ASSERT_EQUAL_UINT64(42, fstate.last.transfer_id);
 
     // Cancelling again returns false (already cancelled).
-    TEST_ASSERT_FALSE(udpard_tx_cancel_p2p(&tx, remote.uid, p2p_tid_initial));
+    TEST_ASSERT_FALSE(udpard_tx_cancel_p2p(&tx, remote.uid, out_tid));
 
     // Cancelling with wrong destination_uid returns false.
-    fstate.count = 0;
+    fstate.count      = 0;
+    uint64_t out_tid2 = 0;
     TEST_ASSERT_TRUE(udpard_tx_push_p2p(&tx,
                                         0,
                                         1000,
@@ -951,37 +952,56 @@ static void test_tx_cancel_p2p(void)
                                         remote,
                                         make_scattered(NULL, 0),
                                         record_feedback,
-                                        make_user_context(&fstate)));
-    const uint64_t p2p_tid_second = tx.p2p_transfer_id - 1;
-    TEST_ASSERT_FALSE(udpard_tx_cancel_p2p(&tx, 888, p2p_tid_second)); // wrong destination
-    TEST_ASSERT_NOT_NULL(tx_transfer_find(&tx, remote.uid, p2p_tid_second));
+                                        make_user_context(&fstate),
+                                        &out_tid2));
+    TEST_ASSERT_FALSE(udpard_tx_cancel_p2p(&tx, 888, out_tid2)); // wrong destination
+    TEST_ASSERT_NOT_NULL(tx_transfer_find(&tx, remote.uid, out_tid2));
     TEST_ASSERT_EQUAL_size_t(0, fstate.count); // feedback not invoked
 
     // Cancelling with wrong transfer_id returns false.
     TEST_ASSERT_FALSE(udpard_tx_cancel_p2p(&tx, remote.uid, 12345)); // wrong transfer_id
-    TEST_ASSERT_NOT_NULL(tx_transfer_find(&tx, remote.uid, p2p_tid_second));
+    TEST_ASSERT_NOT_NULL(tx_transfer_find(&tx, remote.uid, out_tid2));
 
     // Cancel with correct parameters works.
-    TEST_ASSERT_TRUE(udpard_tx_cancel_p2p(&tx, remote.uid, p2p_tid_second));
-    TEST_ASSERT_NULL(tx_transfer_find(&tx, remote.uid, p2p_tid_second));
+    TEST_ASSERT_TRUE(udpard_tx_cancel_p2p(&tx, remote.uid, out_tid2));
+    TEST_ASSERT_NULL(tx_transfer_find(&tx, remote.uid, out_tid2));
     TEST_ASSERT_EQUAL_size_t(1, fstate.count);
 
-    // Best-effort P2P transfer cancels quietly (no feedback).
-    fstate.count = 0;
-    TEST_ASSERT_TRUE(udpard_tx_push_p2p(
-      &tx, 0, 1000, udpard_prio_nominal, 0x1234, 77, remote, make_scattered(NULL, 0), NULL, UDPARD_USER_CONTEXT_NULL));
-    const uint64_t p2p_tid_third = tx.p2p_transfer_id - 1;
-    TEST_ASSERT_TRUE(udpard_tx_cancel_p2p(&tx, remote.uid, p2p_tid_third));
+    // Best-effort P2P transfer cancels quietly (no feedback); using NULL for out_transfer_id.
+    fstate.count      = 0;
+    uint64_t out_tid3 = 0;
+    TEST_ASSERT_TRUE(udpard_tx_push_p2p(&tx,
+                                        0,
+                                        1000,
+                                        udpard_prio_nominal,
+                                        0x1234,
+                                        77,
+                                        remote,
+                                        make_scattered(NULL, 0),
+                                        NULL,
+                                        UDPARD_USER_CONTEXT_NULL,
+                                        &out_tid3));
+    TEST_ASSERT_TRUE(udpard_tx_cancel_p2p(&tx, remote.uid, out_tid3));
     TEST_ASSERT_EQUAL_size_t(0, fstate.count); // no feedback for best-effort
 
     // Test cancel_all with P2P transfers (using destination_uid as topic_hash).
+    // Pass NULL for out_transfer_id to verify optional behavior.
     TEST_ASSERT_TRUE(udpard_tx_push_p2p(
-      &tx, 0, 1000, udpard_prio_fast, 0xA, 1, remote, make_scattered(NULL, 0), NULL, UDPARD_USER_CONTEXT_NULL));
+      &tx, 0, 1000, udpard_prio_fast, 0xA, 1, remote, make_scattered(NULL, 0), NULL, UDPARD_USER_CONTEXT_NULL, NULL));
     TEST_ASSERT_TRUE(udpard_tx_push_p2p(
-      &tx, 0, 1000, udpard_prio_fast, 0xB, 2, remote, make_scattered(NULL, 0), NULL, UDPARD_USER_CONTEXT_NULL));
+      &tx, 0, 1000, udpard_prio_fast, 0xB, 2, remote, make_scattered(NULL, 0), NULL, UDPARD_USER_CONTEXT_NULL, NULL));
     const udpard_remote_t other_remote = { .uid = 777, .endpoints = { make_ep(30) } };
-    TEST_ASSERT_TRUE(udpard_tx_push_p2p(
-      &tx, 0, 1000, udpard_prio_fast, 0xC, 3, other_remote, make_scattered(NULL, 0), NULL, UDPARD_USER_CONTEXT_NULL));
+    TEST_ASSERT_TRUE(udpard_tx_push_p2p(&tx,
+                                        0,
+                                        1000,
+                                        udpard_prio_fast,
+                                        0xC,
+                                        3,
+                                        other_remote,
+                                        make_scattered(NULL, 0),
+                                        NULL,
+                                        UDPARD_USER_CONTEXT_NULL,
+                                        NULL));
     TEST_ASSERT_EQUAL_size_t(2, udpard_tx_cancel_all(&tx, remote.uid));
     TEST_ASSERT_EQUAL_size_t(1, udpard_tx_cancel_all(&tx, other_remote.uid));
 

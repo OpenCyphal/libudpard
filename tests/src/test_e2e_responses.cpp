@@ -386,7 +386,8 @@ void test_topic_with_p2p_response()
                                         remote_a,
                                         response_scat,
                                         &record_feedback,
-                                        make_user_context(&b_response_fb)));
+                                        make_user_context(&b_response_fb),
+                                        nullptr));
 
     b_frames.clear();
     udpard_tx_poll(&b_tx, now, UDPARD_IFACE_BITMAP_ALL);
@@ -684,7 +685,8 @@ void test_topic_with_p2p_response_under_loss()
                                                 remote_a,
                                                 response_scat,
                                                 &record_feedback,
-                                                make_user_context(&b_response_fb)));
+                                                make_user_context(&b_response_fb),
+                                                nullptr));
         }
 
         // --- Node B transmits (responses) ---

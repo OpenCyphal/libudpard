@@ -547,6 +547,7 @@ bool udpard_tx_push(udpard_tx_t* const             self,
 /// It is used to send P2P responses to messages received from topics; the request_* values shall be taken from
 /// the message transfer that is being responded to. The topic_hash and the transfer_id fields of the feedback struct
 /// will be set to the request_topic_hash and request_transfer_id values, respectively.
+/// If out_transfer_id is not NULL, the assigned internal transfer-ID is stored there for use with udpard_tx_cancel_p2p.
 /// P2P transfers are a bit more complex because they carry some additional metadata that is automatically
 /// composed/parsed by the library transparently for the application.
 /// The size of the serialized payload will include UDPARD_P2P_HEADER_BYTES additional bytes for the P2P header.
@@ -559,7 +560,8 @@ bool udpard_tx_push_p2p(udpard_tx_t* const             self,
                         const udpard_remote_t          remote, // Endpoints may be invalid for some ifaces.
                         const udpard_bytes_scattered_t payload,
                         void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t), // NULL if best-effort.
-                        const udpard_user_context_t user);
+                        const udpard_user_context_t user,
+                        uint64_t* const             out_transfer_id);
 
 /// This should be invoked whenever the socket/NIC of this queue becomes ready to accept new datagrams for transmission.
 /// It is fine to also invoke it periodically unconditionally to drive the transmission process.
