@@ -523,6 +523,12 @@ bool udpard_tx_new(udpard_tx_t* const              self,
 /// The retransmission delay is increased exponentially with each retransmission attempt as a means of congestion
 /// control and latency adaptation; please refer to udpard_tx_t::ack_baseline_timeout for details.
 ///
+/// Beware that reliable delivery may cause message reordering. For example, when sending messages A and B,
+/// and A is lost on the first attempt, the next attempt may be scheduled after B is published,
+/// so that the remote sees B followed by A. Most applications tolerate it without issues; if this is not the case,
+/// the subscriber should use the ORDERED subscription mode (refer to the RX pipeline for details),
+/// which will reconstruct the original message ordering.
+///
 /// On success, the function allocates a single transfer state instance and a number of payload fragments.
 /// The time complexity is O(p + log e), where p is the transfer payload size, and e is the number of
 /// transfers already enqueued in the transmission queue.
@@ -571,6 +577,7 @@ void udpard_tx_poll(udpard_tx_t* const self, const udpard_us_t now, const uint16
 /// and f is the number of frames in the transfer.
 /// The function will free the memory associated with the transfer.
 bool udpard_tx_cancel(udpard_tx_t* const self, const uint64_t topic_hash, const uint64_t transfer_id);
+bool udpard_tx_cancel_p2p(udpard_tx_t* const self, const uint64_t destination_uid, const uint64_t transfer_id);
 
 /// Like udpard_tx_cancel(), but cancels all transfers matching the given topic hash.
 /// Returns the number of matched transfers.
