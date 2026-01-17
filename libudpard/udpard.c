@@ -1263,14 +1263,14 @@ static void tx_promote_staged_transfers(udpard_tx_t* const self, const udpard_us
     while (true) { // we can use next_greater instead of doing min search every time
         tx_transfer_t* const tr = CAVL2_TO_OWNER(cavl2_min(self->index_staged), tx_transfer_t, index_staged);
         if ((tr != NULL) && (now >= tr->staged_until)) {
-            UDPARD_ASSERT(tr->cursor != NULL); // cannot stage without payload, doesn't make sense
             // Reinsert into the staged index at the new position, when the next attempt is due (if any).
             cavl2_remove(&self->index_staged, &tr->index_staged);
             tx_stage_if(self, tr);
             // Enqueue for transmission unless it's been there since the last attempt (stalled interface?)
             for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
-                UDPARD_ASSERT(tr->cursor[i] == tr->head[i]);
                 if (((tr->iface_bitmap & (1U << i)) != 0) && !is_listed(&self->queue[i][tr->priority], &tr->queue[i])) {
+                    UDPARD_ASSERT(tr->head[i] != NULL);          // cannot stage without payload, doesn't make sense
+                    UDPARD_ASSERT(tr->cursor[i] == tr->head[i]); // must have been rewound after last attempt
                     enlist_head(&self->queue[i][tr->priority], &tr->queue[i]);
                 }
             }
