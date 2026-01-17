@@ -1142,6 +1142,85 @@ static void test_tx_spool_deduplication(void)
     TEST_ASSERT_EQUAL_size_t(0, alloc_b.allocated_fragments);
 }
 
+// Verifies that eject callbacks are ONLY invoked from udpard_tx_poll(), never from push functions.
+static void test_tx_eject_only_from_poll(void)
+{
+    instrumented_allocator_t alloc = { 0 };
+    instrumented_allocator_new(&alloc);
+    udpard_tx_mem_resources_t mem = { .transfer = instrumented_allocator_make_resource(&alloc) };
+    for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
+        mem.payload[i] = instrumented_allocator_make_resource(&alloc);
+    }
+
+    udpard_tx_t        tx    = { 0 };
+    eject_state_t      eject = { .count = 0, .allow = true };
+    udpard_tx_vtable_t vt    = { .eject_subject = eject_subject_with_flag, .eject_p2p = eject_p2p_with_flag };
+    TEST_ASSERT_TRUE(udpard_tx_new(&tx, 60U, 1U, 16U, mem, &vt));
+    tx.user = &eject;
+
+    const uint16_t iface_bitmap_1 = (1U << 0U);
+
+    // Push a subject transfer; eject must NOT be called.
+    eject.count = 0;
+    TEST_ASSERT_TRUE(udpard_tx_push(
+      &tx, 0, 1000, iface_bitmap_1, udpard_prio_fast, 100, 1, make_scattered(NULL, 0), NULL, UDPARD_USER_CONTEXT_NULL));
+    TEST_ASSERT_EQUAL_size_t(0, eject.count); // eject NOT called from push
+
+    // Push a P2P transfer; eject must NOT be called.
+    const udpard_remote_t remote = { .uid = 999, .endpoints = { make_ep(10) } };
+    TEST_ASSERT_TRUE(udpard_tx_push_p2p(&tx,
+                                        0,
+                                        1000,
+                                        udpard_prio_fast,
+                                        0xABCD,
+                                        42,
+                                        remote,
+                                        make_scattered(NULL, 0),
+                                        NULL,
+                                        UDPARD_USER_CONTEXT_NULL,
+                                        NULL));
+    TEST_ASSERT_EQUAL_size_t(0, eject.count); // eject NOT called from push_p2p
+
+    // Now poll; eject MUST be called.
+    udpard_tx_poll(&tx, 0, UDPARD_IFACE_BITMAP_ALL);
+    TEST_ASSERT_GREATER_THAN_size_t(0, eject.count); // eject called from poll
+
+    // Push more transfers while frames are pending; eject still must NOT be called.
+    const size_t eject_count_before = eject.count;
+    eject.allow                     = false; // block ejection to keep frames pending
+    TEST_ASSERT_TRUE(udpard_tx_push(&tx,
+                                    0,
+                                    1000,
+                                    iface_bitmap_1,
+                                    udpard_prio_nominal,
+                                    200,
+                                    2,
+                                    make_scattered(NULL, 0),
+                                    NULL,
+                                    UDPARD_USER_CONTEXT_NULL));
+    TEST_ASSERT_EQUAL_size_t(eject_count_before, eject.count); // eject NOT called from push
+
+    TEST_ASSERT_TRUE(udpard_tx_push_p2p(&tx,
+                                        0,
+                                        1000,
+                                        udpard_prio_nominal,
+                                        0xBEEF,
+                                        99,
+                                        remote,
+                                        make_scattered(NULL, 0),
+                                        NULL,
+                                        UDPARD_USER_CONTEXT_NULL,
+                                        NULL));
+    TEST_ASSERT_EQUAL_size_t(eject_count_before, eject.count); // eject NOT called from push_p2p
+
+    // Poll again; eject called again (but rejected by callback).
+    udpard_tx_poll(&tx, 0, UDPARD_IFACE_BITMAP_ALL);
+    TEST_ASSERT_GREATER_THAN_size_t(eject_count_before, eject.count); // eject called from poll
+
+    udpard_tx_free(&tx);
+    instrumented_allocator_reset(&alloc);
+}
+
 void setUp(void) {}
 
 void tearDown(void) {}
@@ -1161,6 +1240,7 @@ int main(void)
     RUN_TEST(test_tx_cancel_p2p);
     RUN_TEST(test_tx_cancel_all);
     RUN_TEST(test_tx_spool_deduplication);
+    RUN_TEST(test_tx_eject_only_from_poll);
     RUN_TEST(test_tx_ack_and_scheduler);
     return UNITY_END();
 }
