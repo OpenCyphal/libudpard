@@ -21,8 +21,8 @@ static void test_list(void)
 {
     typedef struct test_node_t
     {
-        int                  value;
-        udpard_list_member_t link;
+        int             value;
+        udpard_listed_t link;
     } test_node_t;
 
     udpard_list_t list = { .head = NULL, .tail = NULL };

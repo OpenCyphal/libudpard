@@ -85,8 +85,8 @@ static void test_mem_endpoint_list_guards(void)
     TEST_ASSERT_FALSE(udpard_is_valid_endpoint((udpard_udpip_ep_t){ .ip = 1U, .port = 0U }));
 
     // is_listed covers empty and populated state.
-    udpard_list_t        list   = { 0 };
-    udpard_list_member_t member = { 0 };
+    udpard_list_t   list   = { 0 };
+    udpard_listed_t member = { 0 };
     TEST_ASSERT_FALSE(is_listed(&list, &member));
     enlist_head(&list, &member);
     TEST_ASSERT_TRUE(is_listed(&list, &member));

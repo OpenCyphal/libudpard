@@ -399,13 +399,13 @@ static uint32_t crc_full(const size_t n_bytes, const void* const data)
 
 // ---------------------------------------------  LIST CONTAINER  ---------------------------------------------
 
-static bool is_listed(const udpard_list_t* const list, const udpard_list_member_t* const member)
+static bool is_listed(const udpard_list_t* const list, const udpard_listed_t* const member)
 {
     return (member->next != NULL) || (member->prev != NULL) || (list->head == member);
 }
 
 /// No effect if not in the list.
-static void delist(udpard_list_t* const list, udpard_list_member_t* const member)
+static void delist(udpard_list_t* const list, udpard_listed_t* const member)
 {
     if (member->next != NULL) {
         member->next->prev = member->prev;
@@ -425,7 +425,7 @@ static void delist(udpard_list_t* const list, udpard_list_member_t* const member
 }
 
 /// If the item is already in the list, it will be delisted first. Can be used for moving to the front.
-static void enlist_head(udpard_list_t* const list, udpard_list_member_t* const member)
+static void enlist_head(udpard_list_t* const list, udpard_listed_t* const member)
 {
     delist(list, member);
     assert((member->next == NULL) && (member->prev == NULL));
@@ -595,12 +595,12 @@ typedef struct
 /// The transfer index contains ALL transfers, used for lookup by (topic_hash, transfer_id).
 typedef struct tx_transfer_t
 {
-    udpard_tree_t        index_staged;   ///< Soonest to be ready on the left. Key: staged_until
-    udpard_tree_t        index_deadline; ///< Soonest to expire on the left. Key: deadline
-    udpard_tree_t        index_transfer; ///< Specific transfer lookup for ack management. Key: tx_transfer_key_t
-    udpard_list_member_t queue[UDPARD_IFACE_COUNT_MAX]; ///< Listed when ready for transmission.
-    udpard_list_member_t agewise;                       ///< Listed when created; oldest at the tail.
-    udpard_tree_t        index_transfer_ack; ///< Only for acks. Key: tx_transfer_key_t but referencing remote_*.
+    udpard_tree_t   index_staged;   ///< Soonest to be ready on the left. Key: staged_until
+    udpard_tree_t   index_deadline; ///< Soonest to expire on the left. Key: deadline
+    udpard_tree_t   index_transfer; ///< Specific transfer lookup for ack management. Key: tx_transfer_key_t
+    udpard_listed_t queue[UDPARD_IFACE_COUNT_MAX]; ///< Listed when ready for transmission.
+    udpard_listed_t agewise;                       ///< Listed when created; oldest at the tail.
+    udpard_tree_t   index_transfer_ack;            ///< Only for acks. Key: tx_transfer_key_t but referencing remote_*.
 
     /// We always keep a pointer to the head, plus a cursor that scans the frames during transmission.
     /// Both are NULL if the payload is destroyed.
@@ -1298,7 +1298,7 @@ static void tx_eject_pending_frames(udpard_tx_t* const self, const udpard_us_t n
         for (size_t prio = 0; prio < UDPARD_PRIORITY_COUNT; prio++) {
             tx_transfer_t* const candidate = // This pointer arithmetic is ugly and perhaps should be improved
               ptr_unbias(self->queue[ifindex][prio].tail,
-                         offsetof(tx_transfer_t, queue) + (sizeof(udpard_list_member_t) * ifindex));
+                         offsetof(tx_transfer_t, queue) + (sizeof(udpard_listed_t) * ifindex));
             if (candidate != NULL) {
                 tr = candidate;
                 break;
@@ -1836,8 +1836,8 @@ typedef struct rx_session_t
     udpard_us_t   reordering_window_deadline;
 
     /// LRU last animated list for automatic retirement of stale sessions.
-    udpard_list_member_t list_by_animation;
-    udpard_us_t          last_animated_ts;
+    udpard_listed_t list_by_animation;
+    udpard_us_t     last_animated_ts;
 
     /// Most recently received transfer-IDs, used for duplicate detection and ACK retransmission.
     /// The index is always in [0,RX_TRANSFER_HISTORY_COUNT), pointing to the last added (newest) entry.
@@ -1931,7 +1931,7 @@ static udpard_tree_t* cavl_factory_rx_session_by_remote_uid(void* const user)
         out->index_remote_uid           = (udpard_tree_t){ NULL, { NULL, NULL }, 0 };
         out->index_reordering_window    = (udpard_tree_t){ NULL, { NULL, NULL }, 0 };
         out->reordering_window_deadline = BIG_BANG;
-        out->list_by_animation          = (udpard_list_member_t){ NULL, NULL };
+        out->list_by_animation          = (udpard_listed_t){ NULL, NULL };
         for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
             out->slots[i].fragments = NULL;
             rx_slot_reset(&out->slots[i], args->owner->memory.fragment);

@@ -128,16 +128,16 @@ typedef struct udpard_tree_t
     int_fast8_t           bf;
 } udpard_tree_t;
 
-typedef struct udpard_list_member_t
+typedef struct udpard_listed_t
 {
-    struct udpard_list_member_t* next;
-    struct udpard_list_member_t* prev;
-} udpard_list_member_t;
+    struct udpard_listed_t* next;
+    struct udpard_listed_t* prev;
+} udpard_listed_t;
 
 typedef struct udpard_list_t
 {
-    udpard_list_member_t* head; ///< NULL if list empty
-    udpard_list_member_t* tail; ///< NULL if list empty
+    udpard_listed_t* head; ///< NULL if list empty
+    udpard_listed_t* tail; ///< NULL if list empty
 } udpard_list_t;
 
 typedef struct udpard_bytes_t
