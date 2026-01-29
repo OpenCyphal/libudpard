@@ -2199,7 +2199,8 @@ static void rx_session_update_unordered(rx_session_t* const    self,
                                         rx_frame_t* const      frame,
                                         const udpard_deleter_t payload_deleter)
 {
-    UDPARD_ASSERT(self->port->reordering_window < 0);
+    UDPARD_ASSERT(self->port->mode == udpard_rx_unordered);
+    UDPARD_ASSERT(self->port->reordering_window == 0);
     // We do not check interned transfers because in the UNORDERED mode they are never interned, always ejected ASAP.
     // We don't care about the ordering, either; we just accept anything that looks new.
     if (!rx_session_is_transfer_ejected(self, frame->meta.transfer_id)) {
@@ -2353,30 +2354,38 @@ void udpard_rx_poll(udpard_rx_t* const self, const udpard_us_t now)
 bool udpard_rx_port_new(udpard_rx_port_t* const              self,
                         const uint64_t                       topic_hash,
                         const size_t                         extent,
+                        const udpard_rx_mode_t               mode,
                         const udpard_us_t                    reordering_window,
                         const udpard_rx_mem_resources_t      memory,
                         const udpard_rx_port_vtable_t* const vtable)
 {
-    const bool win_ok = (reordering_window >= 0) || //
-                        (reordering_window == UDPARD_RX_REORDERING_WINDOW_UNORDERED) ||
-                        (reordering_window == UDPARD_RX_REORDERING_WINDOW_STATELESS);
-    const bool ok = (self != NULL) && rx_validate_mem_resources(memory) && win_ok && (vtable != NULL) &&
-                    (vtable->on_message != NULL) && (vtable->on_collision != NULL);
+    bool ok = (self != NULL) && rx_validate_mem_resources(memory) && (reordering_window >= 0) && (vtable != NULL) &&
+              (vtable->on_message != NULL) && (vtable->on_collision != NULL);
     if (ok) {
         mem_zero(sizeof(*self), self);
         self->topic_hash                  = topic_hash;
         self->extent                      = extent;
-        self->reordering_window           = reordering_window;
+        self->mode                        = mode;
         self->memory                      = memory;
         self->index_session_by_remote_uid = NULL;
         self->vtable                      = vtable;
         self->user                        = NULL;
-        if (reordering_window == UDPARD_RX_REORDERING_WINDOW_STATELESS) {
-            self->vtable_private = &rx_port_vtb_stateless;
-        } else if (reordering_window == UDPARD_RX_REORDERING_WINDOW_UNORDERED) {
-            self->vtable_private = &rx_port_vtb_unordered;
-        } else {
-            self->vtable_private = &rx_port_vtb_ordered;
+        switch (mode) {
+            case udpard_rx_stateless:
+                self->vtable_private    = &rx_port_vtb_stateless;
+                self->reordering_window = 0;
+                break;
+            case udpard_rx_unordered:
+                self->vtable_private    = &rx_port_vtb_unordered;
+                self->reordering_window = 0;
+                break;
+            case udpard_rx_ordered:
+                self->vtable_private    = &rx_port_vtb_ordered;
+                self->reordering_window = reordering_window;
+                UDPARD_ASSERT(self->reordering_window >= 0);
+                break;
+            default:
+                ok = false;
         }
     }
     return ok;
@@ -2452,7 +2461,8 @@ bool udpard_rx_port_new_p2p(udpard_rx_port_p2p_t* const              self,
         return udpard_rx_port_new((udpard_rx_port_t*)self, //
                                   local_uid,
                                   extent + UDPARD_P2P_HEADER_BYTES,
-                                  UDPARD_RX_REORDERING_WINDOW_UNORDERED,
+                                  udpard_rx_unordered,
+                                  0,
                                   memory,
                                   &proxy);
     }

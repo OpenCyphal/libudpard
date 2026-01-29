@@ -115,7 +115,7 @@ struct Fixture
     Fixture(Fixture&&)                 = delete;
     Fixture& operator=(Fixture&&)      = delete;
 
-    explicit Fixture(const udpard_us_t reordering_window)
+    explicit Fixture(const udpard_rx_mode_t mode, const udpard_us_t reordering_window)
     {
         instrumented_allocator_new(&tx_alloc_transfer);
         instrumented_allocator_new(&tx_alloc_payload);
@@ -138,7 +138,7 @@ struct Fixture
         ctx.expected_uid = tx.local_uid;
         ctx.source       = source;
         rx.user          = &ctx;
-        TEST_ASSERT_TRUE(udpard_rx_port_new(&port, topic_hash, 1024, reordering_window, rx_mem, &callbacks));
+        TEST_ASSERT_TRUE(udpard_rx_port_new(&port, topic_hash, 1024, mode, reordering_window, rx_mem, &callbacks));
     }
 
     ~Fixture()
@@ -219,7 +219,7 @@ void on_message_p2p(udpard_rx_t* const rx, udpard_rx_port_p2p_t* const port, con
 /// UNORDERED mode should drop duplicates while keeping arrival order.
 void test_udpard_rx_unordered_duplicates()
 {
-    Fixture     fix{ UDPARD_RX_REORDERING_WINDOW_UNORDERED };
+    Fixture     fix{ udpard_rx_unordered, 0 };
     udpard_us_t now = 0;
 
     constexpr std::array<uint64_t, 6> ids{ 100, 20000, 10100, 5000, 20000, 100 };
@@ -241,7 +241,7 @@ void test_udpard_rx_unordered_duplicates()
 /// ORDERED mode waits for the window, then rejects late arrivals.
 void test_udpard_rx_ordered_out_of_order()
 {
-    Fixture     fix{ 50 };
+    Fixture     fix{ udpard_rx_ordered, 50 };
     udpard_us_t now = 0;
 
     // First batch builds the ordered baseline.
@@ -282,7 +282,7 @@ void test_udpard_rx_ordered_out_of_order()
 /// ORDERED mode after head advance should reject late IDs arriving after window expiry.
 void test_udpard_rx_ordered_head_advanced_late()
 {
-    Fixture     fix{ 50 };
+    Fixture     fix{ udpard_rx_ordered, 50 };
     udpard_us_t now = 0;
 
     fix.push_single(now, 100);
@@ -317,7 +317,7 @@ void test_udpard_rx_ordered_head_advanced_late()
 /// ORDERED mode rejects transfer-IDs far behind the recent history window.
 void test_udpard_rx_ordered_reject_far_past()
 {
-    Fixture     fix{ 50 };
+    Fixture     fix{ udpard_rx_ordered, 50 };
     udpard_us_t now = 0;
 
     fix.push_single(now, 200000);
@@ -660,8 +660,7 @@ void test_udpard_tx_minimum_mtu()
     ctx.source                  = { .ip = 0x0A000001U, .port = 7501U };
     udpard_rx_new(&rx, nullptr);
     rx.user = &ctx;
-    TEST_ASSERT_TRUE(
-      udpard_rx_port_new(&port, topic_hash, 4096, UDPARD_RX_REORDERING_WINDOW_UNORDERED, rx_mem, &callbacks));
+    TEST_ASSERT_TRUE(udpard_rx_port_new(&port, topic_hash, 4096, udpard_rx_unordered, 0, rx_mem, &callbacks));
 
     // Send a payload that will require fragmentation at minimum MTU
     std::array<uint8_t, 1000> payload{};
@@ -717,7 +716,7 @@ void test_udpard_tx_minimum_mtu()
 /// Test with transfer-ID at uint64 boundary values (0, large values)
 void test_udpard_transfer_id_boundaries()
 {
-    Fixture fix{ UDPARD_RX_REORDERING_WINDOW_UNORDERED };
+    Fixture fix{ udpard_rx_unordered, 0 };
 
     // Test transfer-ID = 0 (first valid value)
     fix.push_single(0, 0);
@@ -771,8 +770,7 @@ void test_udpard_rx_zero_extent()
     udpard_rx_new(&rx, nullptr);
 
     // Create port with zero extent
-    TEST_ASSERT_TRUE(
-      udpard_rx_port_new(&port, topic_hash, 0, UDPARD_RX_REORDERING_WINDOW_UNORDERED, rx_mem, &callbacks));
+    TEST_ASSERT_TRUE(udpard_rx_port_new(&port, topic_hash, 0, udpard_rx_unordered, 0, rx_mem, &callbacks));
 
     // Track received transfers
     struct ZeroExtentContext
@@ -857,7 +855,7 @@ void test_udpard_rx_zero_extent()
 /// Test empty payload transfer (zero-size payload)
 void test_udpard_empty_payload()
 {
-    Fixture fix{ UDPARD_RX_REORDERING_WINDOW_UNORDERED };
+    Fixture fix{ udpard_rx_unordered, 0 };
 
     // Send an empty payload
     fix.frames.clear();
@@ -893,7 +891,7 @@ void test_udpard_empty_payload()
 /// Test priority levels from exceptional (0) to optional (7)
 void test_udpard_all_priority_levels()
 {
-    Fixture     fix{ UDPARD_RX_REORDERING_WINDOW_UNORDERED };
+    Fixture     fix{ udpard_rx_unordered, 0 };
     udpard_us_t now = 0;
 
     constexpr uint16_t iface_bitmap_1 = (1U << 0U);
@@ -967,8 +965,7 @@ void test_udpard_topic_hash_collision()
     ctx.source                     = { .ip = 0x0A000003U, .port = 7503U };
     udpard_rx_new(&rx, nullptr);
     rx.user = &ctx;
-    TEST_ASSERT_TRUE(
-      udpard_rx_port_new(&port, rx_topic_hash, 1024, UDPARD_RX_REORDERING_WINDOW_UNORDERED, rx_mem, &callbacks));
+    TEST_ASSERT_TRUE(udpard_rx_port_new(&port, rx_topic_hash, 1024, udpard_rx_unordered, 0, rx_mem, &callbacks));
 
     // Send with mismatched topic hash
     std::array<uint8_t, 8>         payload{};

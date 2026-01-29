@@ -633,14 +633,15 @@ void udpard_tx_free(udpard_tx_t* const self);
 ///
 /// The transfer reassembly state machine can operate in several modes described below. First, a brief summary:
 ///
-/// Mode       Guarantees                       Limitations                        Reordering window setting
-/// -----------------------------------------−--------------------------------------------------------------------------
-/// ORDERED    Strictly increasing transfer-ID  May delay transfers, CPU heavier   Non-negative number of microseconds
-/// UNORDERED  Unique transfer-ID               Ordering not guaranteed            UDPARD_RX_REORDERING_WINDOW_UNORDERED
-/// STATELESS  Constant time, constant memory   1-frame only, dups, no responses   UDPARD_RX_REORDERING_WINDOW_STATELESS
+/// Mode       Guarantees                       Limitations                        Reordering window
+/// -----------------------------------------−------------------------------------------------------------------
+/// ORDERED    Strictly increasing transfer-ID  May delay transfers, CPU heavier   Non-negative microseconds
+/// UNORDERED  Unique transfer-ID               Ordering not guaranteed            Ignored
+/// STATELESS  Constant time, constant memory   1-frame only, dups, no responses   Ignored
 ///
-/// If not sure, choose UNORDERED. The ORDERED mode is a good fit for ordering-sensitive use cases like state estimators
-/// and control loops, but it is not suitable for P2P. The STATELESS mode is chiefly intended for the heartbeat topic.
+/// If not sure, choose unordered. The ordered mode is a good fit for ordering-sensitive use cases like state
+/// estimators and control loops, but it is not suitable for P2P.
+/// The stateless mode is chiefly intended for the heartbeat topic.
 ///
 ///     ORDERED
 ///
@@ -656,9 +657,9 @@ void udpard_tx_free(udpard_tx_t* const self);
 ///
 /// This mode requires much more bookkeeping which results in a greater processing load per received fragment/transfer.
 ///
-/// The ORDERED mode is used if the reordering window is non-negative. Zero is not really a special case, it
-/// simply means that out-of-order transfers are not waited for at all (declared permanently lost immediately),
-/// and no received transfer is delayed before ejection to the application.
+/// Zero is not really a special case for the reordering window; it simply means that out-of-order transfers
+/// are not waited for at all (declared permanently lost immediately), and no received transfer is delayed
+/// before ejection to the application.
 ///
 /// The ORDERED mode is mostly intended for applications like state estimators, control systems, and data streaming
 /// where ordering is critical.
@@ -676,8 +677,7 @@ void udpard_tx_free(udpard_tx_t* const self);
 /// respect to Y. This would cause the ORDERED mode to delay or drop the response to X, which is undesirable;
 /// therefore, the UNORDERED mode is preferred for request-response topics.
 ///
-/// The UNORDERED mode is used if the reordering window duration is set to UDPARD_RX_REORDERING_WINDOW_UNORDERED.
-/// This should be the default mode for most use cases.
+/// The unordered mode should be the default mode for most use cases.
 ///
 ///     STATELESS
 ///
@@ -689,11 +689,6 @@ void udpard_tx_free(udpard_tx_t* const self);
 /// The stateless mode allocates only a fragment header per accepted frame and does not contain any
 /// variable-complexity processing logic, enabling great scalability for topics with a very large number of
 /// publishers where unordered and duplicated messages are acceptable, such as the heartbeat topic.
-///
-/// The STATELESS mode is used if the reordering window duration is set to UDPARD_RX_REORDERING_WINDOW_STATELESS.
-
-#define UDPARD_RX_REORDERING_WINDOW_UNORDERED ((udpard_us_t)(-1))
-#define UDPARD_RX_REORDERING_WINDOW_STATELESS ((udpard_us_t)(-2))
 
 /// The application will have a single RX instance to manage all subscriptions and P2P ports.
 typedef struct udpard_rx_t
@@ -736,6 +731,14 @@ typedef struct udpard_rx_port_p2p_t     udpard_rx_port_p2p_t;
 typedef struct udpard_rx_transfer_t     udpard_rx_transfer_t;
 typedef struct udpard_rx_transfer_p2p_t udpard_rx_transfer_p2p_t;
 
+/// RX port mode for transfer reassembly behavior.
+typedef enum udpard_rx_mode_t
+{
+    udpard_rx_unordered = 0,
+    udpard_rx_ordered   = 1,
+    udpard_rx_stateless = 2,
+} udpard_rx_mode_t;
+
 /// Provided by the application per port instance to specify the callbacks to be invoked on certain events.
 /// This design allows distinct callbacks per port, which is especially useful for the P2P port.
 typedef struct udpard_rx_port_vtable_t
@@ -758,9 +761,9 @@ struct udpard_rx_port_t
     /// For P2P ports, UDPARD_P2P_HEADER_BYTES must be included in this value (the library takes care of this).
     size_t extent;
 
-    /// See UDPARD_RX_REORDERING_WINDOW_... above.
-    /// Behavior undefined if the reassembly mode is switched on a live port with ongoing transfers.
-    udpard_us_t reordering_window;
+    /// Behavior undefined if the reassembly mode or the reordering window are switched on a live port.
+    udpard_rx_mode_t mode;
+    udpard_us_t      reordering_window;
 
     udpard_rx_mem_resources_t memory;
 
@@ -894,8 +897,9 @@ void udpard_rx_poll(udpard_rx_t* const self, const udpard_us_t now);
 /// The topic hash is needed to detect and ignore transfers that use different topics on the same subject-ID.
 /// The collision callback is invoked if a topic hash collision is detected.
 ///
-/// If not sure which reassembly mode to choose, consider UDPARD_RX_REORDERING_WINDOW_UNORDERED as the default choice.
-/// For ordering-sensitive use cases, such as state estimators and control loops, use ORDERED with a short window.
+/// If not sure which reassembly mode to choose, consider `udpard_rx_unordered` as the default choice.
+/// For ordering-sensitive use cases, such as state estimators and control loops, use `udpard_rx_ordered` with a short
+/// window.
 ///
 /// The pointed-to vtable instance must outlive the port instance.
 ///
@@ -904,6 +908,7 @@ void udpard_rx_poll(udpard_rx_t* const self, const udpard_us_t now);
 bool udpard_rx_port_new(udpard_rx_port_t* const              self,
                         const uint64_t                       topic_hash, // For P2P ports, this is the local node's UID.
                         const size_t                         extent,
+                        const udpard_rx_mode_t               mode,
                         const udpard_us_t                    reordering_window,
                         const udpard_rx_mem_resources_t      memory,
                         const udpard_rx_port_vtable_t* const vtable);

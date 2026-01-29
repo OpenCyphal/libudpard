@@ -200,8 +200,7 @@ void test_reliable_delivery_under_losses()
     udpard_rx_new(&sub_rx, &sub_tx);
     udpard_rx_port_t sub_port{};
     const uint64_t   topic_hash = 0x0123456789ABCDEFULL;
-    TEST_ASSERT_TRUE(
-      udpard_rx_port_new(&sub_port, topic_hash, 6000, UDPARD_RX_REORDERING_WINDOW_UNORDERED, sub_rx_mem, &callbacks));
+    TEST_ASSERT_TRUE(udpard_rx_port_new(&sub_port, topic_hash, 6000, udpard_rx_unordered, 0, sub_rx_mem, &callbacks));
 
     // Endpoints.
     const std::array<udpard_udpip_ep_t, UDPARD_IFACE_COUNT_MAX> publisher_sources{
@@ -402,8 +401,7 @@ void test_reliable_stats_and_failures()
     ctx.expected.assign({ 1U, 2U, 3U, 4U });
     udpard_rx_new(&rx, nullptr);
     rx.user = &ctx;
-    TEST_ASSERT_TRUE(
-      udpard_rx_port_new(&port, 0x12340000ULL, 64, UDPARD_RX_REORDERING_WINDOW_UNORDERED, rx_mem, &callbacks));
+    TEST_ASSERT_TRUE(udpard_rx_port_new(&port, 0x12340000ULL, 64, udpard_rx_unordered, 0, rx_mem, &callbacks));
 
     const udpard_bytes_scattered_t src_payload = make_scattered(ctx.expected.data(), ctx.expected.size());
     FeedbackState                  fb_ignore{};
