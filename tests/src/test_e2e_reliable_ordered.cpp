@@ -237,8 +237,8 @@ void test_reliable_ordered_with_loss_and_reordering()
     receiver_rx.user = &receiver_ctx;
 
     udpard_rx_port_t receiver_topic_port{};
-    TEST_ASSERT_TRUE(
-      udpard_rx_port_new(&receiver_topic_port, topic_hash, 4096, reordering_window, receiver_rx_mem, &topic_callbacks));
+    TEST_ASSERT_TRUE(udpard_rx_port_new(
+      &receiver_topic_port, topic_hash, 4096, udpard_rx_ordered, reordering_window, receiver_rx_mem, &topic_callbacks));
 
     // Payloads
     const std::array<uint8_t, 4> payload_a{ 0xAA, 0xAA, 0xAA, 0xAA };

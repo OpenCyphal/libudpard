@@ -230,8 +230,7 @@ struct RxFixture
 udpard_rx_port_t make_subject_port(const uint64_t topic_hash, const size_t extent, RxFixture& rx)
 {
     udpard_rx_port_t port{};
-    TEST_ASSERT_TRUE(
-      udpard_rx_port_new(&port, topic_hash, extent, UDPARD_RX_REORDERING_WINDOW_UNORDERED, rx.mem, &rx_port_vtable));
+    TEST_ASSERT_TRUE(udpard_rx_port_new(&port, topic_hash, extent, udpard_rx_unordered, 0, rx.mem, &rx_port_vtable));
     return port;
 }
 

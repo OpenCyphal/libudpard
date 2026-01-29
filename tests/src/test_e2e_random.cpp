@@ -236,17 +236,18 @@ void test_udpard_tx_rx_end_to_end()
     udpard_rx_new(&ack_rx, &tx);
 
     // Test parameters.
-    constexpr std::array<uint64_t, 3>    topic_hashes{ 0x123456789ABCDEF0ULL,
+    constexpr std::array<uint64_t, 3>         topic_hashes{ 0x123456789ABCDEF0ULL,
                                                     0x0FEDCBA987654321ULL,
                                                     0x00ACE00ACE00ACEULL };
-    constexpr std::array<udpard_us_t, 3> reorder_windows{ 2000, UDPARD_RX_REORDERING_WINDOW_UNORDERED, 5000 };
-    constexpr std::array<size_t, 3>      extents{ 1000, 5000, SIZE_MAX };
+    constexpr std::array<udpard_rx_mode_t, 3> modes{ udpard_rx_ordered, udpard_rx_unordered, udpard_rx_ordered };
+    constexpr std::array<udpard_us_t, 3>      windows{ 2000, 0, 5000 };
+    constexpr std::array<size_t, 3>           extents{ 1000, 5000, SIZE_MAX };
 
     // Configure ports with varied extents and reordering windows to cover truncation and different RX modes.
     std::array<udpard_rx_port_t, 3> ports{};
     for (size_t i = 0; i < ports.size(); i++) {
         TEST_ASSERT_TRUE(
-          udpard_rx_port_new(&ports[i], topic_hashes[i], extents[i], reorder_windows[i], rx_mem, &callbacks));
+          udpard_rx_port_new(&ports[i], topic_hashes[i], extents[i], modes[i], windows[i], rx_mem, &callbacks));
     }
 
     // Setup the context.

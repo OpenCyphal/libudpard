@@ -198,12 +198,14 @@ static void test_rx_guards(void)
     const udpard_rx_mem_resources_t rx_mem = { .session = make_mem(&rx_tag_a), .fragment = make_mem(&rx_tag_b) };
     const udpard_rx_port_vtable_t   rx_vtb = { .on_message = on_message_stub, .on_collision = on_collision_stub };
     udpard_rx_port_t                port;
-    TEST_ASSERT_FALSE(udpard_rx_port_new(NULL, 0, 0, 0, rx_mem, &rx_vtb));
+    TEST_ASSERT_FALSE(udpard_rx_port_new(NULL, 0, 0, udpard_rx_ordered, 0, rx_mem, &rx_vtb));
     udpard_rx_mem_resources_t bad_rx_mem = rx_mem;
     bad_rx_mem.session.vtable            = NULL;
-    TEST_ASSERT_FALSE(udpard_rx_port_new(&port, 0, 0, UDPARD_RX_REORDERING_WINDOW_UNORDERED, bad_rx_mem, &rx_vtb));
-    TEST_ASSERT_FALSE(udpard_rx_port_new(&port, 0, 0, (udpard_us_t)-3, rx_mem, &rx_vtb));
-    TEST_ASSERT_TRUE(udpard_rx_port_new(&port, 0xAA, 8U, UDPARD_RX_REORDERING_WINDOW_STATELESS, rx_mem, &rx_vtb));
+    TEST_ASSERT_FALSE(udpard_rx_port_new(&port, 0, 0, udpard_rx_unordered, 0, bad_rx_mem, &rx_vtb));
+    // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange)
+    TEST_ASSERT_FALSE(udpard_rx_port_new(&port, 0, 0, (udpard_rx_mode_t)99, 0, rx_mem, &rx_vtb));
+    TEST_ASSERT_FALSE(udpard_rx_port_new(&port, 0, 0, udpard_rx_ordered, (udpard_us_t)-1, rx_mem, &rx_vtb));
+    TEST_ASSERT_TRUE(udpard_rx_port_new(&port, 0xAA, 8U, udpard_rx_stateless, 0, rx_mem, &rx_vtb));
 
     // Invalid datagram inputs are rejected without processing.
     udpard_rx_t rx;

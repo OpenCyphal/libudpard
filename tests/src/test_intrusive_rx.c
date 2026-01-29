@@ -1758,12 +1758,13 @@ static void test_rx_ack_enqueued(void)
     callback_result_t cb_result = { 0 };
     rx.user                     = &cb_result;
 
-    const uint64_t    topic_hash = 0x4E81E200CB479D4CULL;
-    udpard_rx_port_t  port;
-    const udpard_us_t window     = UDPARD_RX_REORDERING_WINDOW_UNORDERED;
-    const uint64_t    remote_uid = 0xA1B2C3D4E5F60718ULL;
-    const size_t      extent     = 1000;
-    TEST_ASSERT(udpard_rx_port_new(&port, topic_hash, extent, window, rx_mem, &callbacks));
+    const uint64_t         topic_hash = 0x4E81E200CB479D4CULL;
+    udpard_rx_port_t       port;
+    const udpard_rx_mode_t mode       = udpard_rx_unordered;
+    const udpard_us_t      window     = 0;
+    const uint64_t         remote_uid = 0xA1B2C3D4E5F60718ULL;
+    const size_t           extent     = 1000;
+    TEST_ASSERT(udpard_rx_port_new(&port, topic_hash, extent, mode, window, rx_mem, &callbacks));
     rx_session_factory_args_t fac_args = {
         .owner                 = &port,
         .sessions_by_animation = &rx.list_session_by_animation,
@@ -1851,7 +1852,8 @@ static void test_rx_session_ordered(void)
     udpard_us_t      now        = 0;
     const uint64_t   remote_uid = 0xA1B2C3D4E5F60718ULL;
     udpard_rx_port_t port;
-    TEST_ASSERT(udpard_rx_port_new(&port, 0x4E81E200CB479D4CULL, 1000, 20 * KILO, rx_mem, &callbacks));
+    TEST_ASSERT(
+      udpard_rx_port_new(&port, 0x4E81E200CB479D4CULL, 1000, udpard_rx_ordered, 20 * KILO, rx_mem, &callbacks));
     rx_session_factory_args_t fac_args = {
         .owner                 = &port,
         .sessions_by_animation = &rx.list_session_by_animation,
@@ -1990,8 +1992,7 @@ static void test_rx_session_unordered(void)
 
     const uint64_t   topic_hash = 0xC3C8E4974254E1F5ULL;
     udpard_rx_port_t port       = { 0 };
-    TEST_ASSERT(
-      udpard_rx_port_new(&port, topic_hash, SIZE_MAX, UDPARD_RX_REORDERING_WINDOW_UNORDERED, rx_mem, &callbacks));
+    TEST_ASSERT(udpard_rx_port_new(&port, topic_hash, SIZE_MAX, udpard_rx_unordered, 0, rx_mem, &callbacks));
 
     udpard_us_t               now        = 0;
     const uint64_t            remote_uid = 0xA1B2C3D4E5F60718ULL;
@@ -2135,8 +2136,7 @@ static void test_rx_session_unordered_reject_old(void)
 
     const uint64_t   local_uid = 0xFACEB00CFACEB00CULL;
     udpard_rx_port_t port      = { 0 };
-    TEST_ASSERT(
-      udpard_rx_port_new(&port, local_uid, SIZE_MAX, UDPARD_RX_REORDERING_WINDOW_UNORDERED, rx_mem, &callbacks));
+    TEST_ASSERT(udpard_rx_port_new(&port, local_uid, SIZE_MAX, udpard_rx_unordered, 0, rx_mem, &callbacks));
 
     udpard_us_t               now        = 0;
     const uint64_t            remote_uid = 0x0123456789ABCDEFULL;
@@ -2238,8 +2238,7 @@ static void test_rx_session_unordered_duplicates(void)
     rx.user                     = &cb_result;
 
     udpard_rx_port_t port = { 0 };
-    TEST_ASSERT(udpard_rx_port_new(
-      &port, 0xFEE1DEADBEEFF00DULL, SIZE_MAX, UDPARD_RX_REORDERING_WINDOW_UNORDERED, rx_mem, &callbacks));
+    TEST_ASSERT(udpard_rx_port_new(&port, 0xFEE1DEADBEEFF00DULL, SIZE_MAX, udpard_rx_unordered, 0, rx_mem, &callbacks));
 
     udpard_us_t               now        = 0;
     const uint64_t            remote_uid = 0xAABBCCDDEEFF0011ULL;
@@ -2314,7 +2313,8 @@ static void test_rx_session_ordered_reject_stale_after_jump(void)
     rx.user                     = &cb_result;
 
     udpard_rx_port_t port = { 0 };
-    TEST_ASSERT(udpard_rx_port_new(&port, 0x123456789ABCDEF0ULL, 1000, 20 * KILO, rx_mem, &callbacks));
+    TEST_ASSERT(
+      udpard_rx_port_new(&port, 0x123456789ABCDEF0ULL, 1000, udpard_rx_ordered, 20 * KILO, rx_mem, &callbacks));
 
     udpard_us_t               now        = 0;
     const uint64_t            remote_uid = 0xCAFEBEEFFACEFEEDULL;
@@ -2421,7 +2421,7 @@ static void test_rx_session_ordered_zero_reordering_window(void)
     rx.user                     = &cb_result;
 
     udpard_rx_port_t port = { 0 };
-    TEST_ASSERT(udpard_rx_port_new(&port, 0x0F0E0D0C0B0A0908ULL, 256, 0, rx_mem, &callbacks));
+    TEST_ASSERT(udpard_rx_port_new(&port, 0x0F0E0D0C0B0A0908ULL, 256, udpard_rx_ordered, 0, rx_mem, &callbacks));
 
     udpard_us_t               now        = 0;
     const uint64_t            remote_uid = 0x0102030405060708ULL;
@@ -2673,7 +2673,8 @@ static void test_rx_port_timeouts(void)
     rx.user                     = &cb_result;
 
     udpard_rx_port_t port = { 0 };
-    TEST_ASSERT(udpard_rx_port_new(&port, 0xBADC0FFEE0DDF00DULL, 128, 20 * KILO, rx_mem, &callbacks));
+    TEST_ASSERT(
+      udpard_rx_port_new(&port, 0xBADC0FFEE0DDF00DULL, 128, udpard_rx_ordered, 20 * KILO, rx_mem, &callbacks));
 
     meta_t       meta            = { .priority              = udpard_prio_nominal,
                                      .flag_ack              = false,
@@ -2736,8 +2737,7 @@ static void test_rx_port_oom(void)
     rx.user                     = &cb_result;
 
     udpard_rx_port_t port = { 0 };
-    TEST_ASSERT(
-      udpard_rx_port_new(&port, 0xCAFEBABECAFEBABEULL, 64, UDPARD_RX_REORDERING_WINDOW_UNORDERED, rx_mem, &callbacks));
+    TEST_ASSERT(udpard_rx_port_new(&port, 0xCAFEBABECAFEBABEULL, 64, udpard_rx_unordered, 0, rx_mem, &callbacks));
 
     meta_t       meta            = { .priority              = udpard_prio_nominal,
                                      .flag_ack              = false,
@@ -2797,7 +2797,7 @@ static void test_rx_port_free_loop(void)
     TEST_ASSERT(udpard_rx_port_new_p2p(&port_p2p, 0xCAFED00DCAFED00DULL, SIZE_MAX, rx_mem, &callbacks_p2p));
     udpard_rx_port_t port_extra       = { 0 };
     const uint64_t   topic_hash_extra = 0xDEADBEEFF00D1234ULL;
-    TEST_ASSERT(udpard_rx_port_new(&port_extra, topic_hash_extra, 1000, 5000, rx_mem, &callbacks));
+    TEST_ASSERT(udpard_rx_port_new(&port_extra, topic_hash_extra, 1000, udpard_rx_ordered, 5000, rx_mem, &callbacks));
 
     udpard_us_t now = 0;
 
@@ -2905,6 +2905,7 @@ static void test_rx_additional_coverage(void)
     udpard_rx_port_t port = { .memory            = mem,
                               .vtable            = &(udpard_rx_port_vtable_t){ .on_message   = stub_on_message,
                                                                                .on_collision = stub_on_collision },
+                              .mode              = udpard_rx_ordered,
                               .reordering_window = 10,
                               .topic_hash        = 1 };
     rx_session_t*    ses  = mem_res_alloc(mem.session, sizeof(rx_session_t));
@@ -2978,7 +2979,8 @@ static void test_rx_additional_coverage(void)
     g_collision_count = 0;
     port.vtable       = &(udpard_rx_port_vtable_t){ .on_message = stub_on_message, .on_collision = stub_on_collision };
     port.extent       = 8;
-    port.reordering_window = UDPARD_RX_REORDERING_WINDOW_STATELESS;
+    port.mode         = udpard_rx_stateless;
+    port.reordering_window = 0;
     rx_frame_t frame;
     byte_t     payload[4] = { 1, 2, 3, 4 };
     mem_zero(sizeof(frame), &frame);
@@ -3001,8 +3003,7 @@ static void test_rx_additional_coverage(void)
     frame.meta.transfer_payload_size = 8;
     rx_port_accept_stateless(&rx, &port, 0, make_ep(1), &frame, instrumented_allocator_make_deleter(&alloc_frag), 0);
     udpard_rx_port_t port_stateless_new = { 0 };
-    TEST_ASSERT_TRUE(
-      udpard_rx_port_new(&port_stateless_new, 22, 8, UDPARD_RX_REORDERING_WINDOW_STATELESS, mem, port.vtable));
+    TEST_ASSERT_TRUE(udpard_rx_port_new(&port_stateless_new, 22, 8, udpard_rx_stateless, 0, mem, port.vtable));
     TEST_ASSERT_NOT_NULL(port_stateless_new.vtable_private);
     udpard_rx_port_free(&rx, &port_stateless_new);
     instrumented_allocator_reset(&alloc_frag);
@@ -3044,7 +3045,7 @@ static void test_rx_additional_coverage(void)
 
     // Port push collision and malformed header.
     udpard_rx_port_t port_normal = { 0 };
-    TEST_ASSERT_TRUE(udpard_rx_port_new(&port_normal, 1, 8, 10, mem, port.vtable));
+    TEST_ASSERT_TRUE(udpard_rx_port_new(&port_normal, 1, 8, udpard_rx_ordered, 10, mem, port.vtable));
     udpard_bytes_mut_t bad_payload = { .data = mem_res_alloc(mem.fragment, 4), .size = 4 };
     TEST_ASSERT(udpard_rx_port_push(
       &rx, &port_normal, 0, make_ep(2), bad_payload, instrumented_allocator_make_deleter(&alloc_frag), 0));

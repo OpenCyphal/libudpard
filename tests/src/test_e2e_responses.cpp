@@ -282,8 +282,8 @@ void test_topic_with_p2p_response()
 
     // B's topic subscription port
     udpard_rx_port_t b_topic_port{};
-    TEST_ASSERT_TRUE(udpard_rx_port_new(
-      &b_topic_port, topic_hash, 4096, UDPARD_RX_REORDERING_WINDOW_UNORDERED, b_rx_mem, &topic_callbacks));
+    TEST_ASSERT_TRUE(
+      udpard_rx_port_new(&b_topic_port, topic_hash, 4096, udpard_rx_unordered, 0, b_rx_mem, &topic_callbacks));
 
     // B's P2P port for receiving response ACKs
     udpard_rx_port_p2p_t b_p2p_port{};
@@ -570,8 +570,8 @@ void test_topic_with_p2p_response_under_loss()
     b_rx.user = &b_node_ctx;
 
     udpard_rx_port_t b_topic_port{};
-    TEST_ASSERT_TRUE(udpard_rx_port_new(
-      &b_topic_port, topic_hash, 4096, UDPARD_RX_REORDERING_WINDOW_UNORDERED, b_rx_mem, &topic_callbacks));
+    TEST_ASSERT_TRUE(
+      udpard_rx_port_new(&b_topic_port, topic_hash, 4096, udpard_rx_unordered, 0, b_rx_mem, &topic_callbacks));
 
     udpard_rx_port_p2p_t b_p2p_port{};
     TEST_ASSERT_TRUE(
