@@ -2200,6 +2200,7 @@ static void rx_session_update_unordered(rx_session_t* const    self,
                                         const udpard_deleter_t payload_deleter)
 {
     UDPARD_ASSERT(self->port->mode == udpard_rx_unordered);
+    UDPARD_ASSERT(self->port->reordering_window == 0);
     // We do not check interned transfers because in the UNORDERED mode they are never interned, always ejected ASAP.
     // We don't care about the ordering, either; we just accept anything that looks new.
     if (!rx_session_is_transfer_ejected(self, frame->meta.transfer_id)) {

@@ -761,7 +761,7 @@ struct udpard_rx_port_t
     /// For P2P ports, UDPARD_P2P_HEADER_BYTES must be included in this value (the library takes care of this).
     size_t extent;
 
-    /// Behavior undefined if the reassembly mode is switched on a live port.
+    /// Behavior undefined if the reassembly mode or the reordering window are switched on a live port.
     udpard_rx_mode_t mode;
     udpard_us_t      reordering_window;
 
