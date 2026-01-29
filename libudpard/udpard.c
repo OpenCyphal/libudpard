@@ -2358,26 +2358,33 @@ bool udpard_rx_port_new(udpard_rx_port_t* const              self,
                         const udpard_rx_mem_resources_t      memory,
                         const udpard_rx_port_vtable_t* const vtable)
 {
-    const bool mode_ok = (mode == udpard_rx_ordered) || (mode == udpard_rx_unordered) || (mode == udpard_rx_stateless);
-    const bool win_ok  = (mode != udpard_rx_ordered) || (reordering_window >= 0);
-    const bool ok      = (self != NULL) && rx_validate_mem_resources(memory) && mode_ok && win_ok && (vtable != NULL) &&
-                    (vtable->on_message != NULL) && (vtable->on_collision != NULL);
+    bool ok = (self != NULL) && rx_validate_mem_resources(memory) && (reordering_window >= 0) && (vtable != NULL) &&
+              (vtable->on_message != NULL) && (vtable->on_collision != NULL);
     if (ok) {
         mem_zero(sizeof(*self), self);
         self->topic_hash                  = topic_hash;
         self->extent                      = extent;
         self->mode                        = mode;
-        self->reordering_window           = reordering_window;
         self->memory                      = memory;
         self->index_session_by_remote_uid = NULL;
         self->vtable                      = vtable;
         self->user                        = NULL;
-        if (mode == udpard_rx_stateless) {
-            self->vtable_private = &rx_port_vtb_stateless;
-        } else if (mode == udpard_rx_unordered) {
-            self->vtable_private = &rx_port_vtb_unordered;
-        } else {
-            self->vtable_private = &rx_port_vtb_ordered;
+        switch (mode) {
+            case udpard_rx_stateless:
+                self->vtable_private    = &rx_port_vtb_stateless;
+                self->reordering_window = 0;
+                break;
+            case udpard_rx_unordered:
+                self->vtable_private    = &rx_port_vtb_unordered;
+                self->reordering_window = 0;
+                break;
+            case udpard_rx_ordered:
+                self->vtable_private    = &rx_port_vtb_ordered;
+                self->reordering_window = reordering_window;
+                UDPARD_ASSERT(self->reordering_window >= 0);
+                break;
+            default:
+                ok = false;
         }
     }
     return ok;

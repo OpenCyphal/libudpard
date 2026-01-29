@@ -121,14 +121,6 @@ typedef enum udpard_prio_t
 } udpard_prio_t;
 #define UDPARD_PRIORITY_COUNT 8U
 
-/// RX port mode for transfer reassembly behavior.
-typedef enum udpard_rx_mode_t
-{
-    udpard_rx_ordered   = 0, ///< Ordered mode with configurable reordering window.
-    udpard_rx_unordered = 1, ///< Unordered mode, ejects immediately.
-    udpard_rx_stateless = 2, ///< Stateless mode, single-frame only.
-} udpard_rx_mode_t;
-
 typedef struct udpard_tree_t
 {
     struct udpard_tree_t* up;
@@ -647,9 +639,9 @@ void udpard_tx_free(udpard_tx_t* const self);
 /// UNORDERED  Unique transfer-ID               Ordering not guaranteed            Ignored
 /// STATELESS  Constant time, constant memory   1-frame only, dups, no responses   Ignored
 ///
-/// If not sure, choose `udpard_rx_unordered`. The `udpard_rx_ordered` mode is a good fit for ordering-sensitive
-/// use cases like state estimators and control loops, but it is not suitable for P2P.
-/// The `udpard_rx_stateless` mode is chiefly intended for the heartbeat topic.
+/// If not sure, choose unordered. The ordered mode is a good fit for ordering-sensitive use cases like state
+/// estimators and control loops, but it is not suitable for P2P.
+/// The stateless mode is chiefly intended for the heartbeat topic.
 ///
 ///     ORDERED
 ///
@@ -665,7 +657,6 @@ void udpard_tx_free(udpard_tx_t* const self);
 ///
 /// This mode requires much more bookkeeping which results in a greater processing load per received fragment/transfer.
 ///
-/// The `udpard_rx_ordered` mode is used by passing `udpard_rx_ordered` as the mode parameter.
 /// Zero is not really a special case for the reordering window; it simply means that out-of-order transfers
 /// are not waited for at all (declared permanently lost immediately), and no received transfer is delayed
 /// before ejection to the application.
@@ -686,8 +677,7 @@ void udpard_tx_free(udpard_tx_t* const self);
 /// respect to Y. This would cause the ORDERED mode to delay or drop the response to X, which is undesirable;
 /// therefore, the UNORDERED mode is preferred for request-response topics.
 ///
-/// The UNORDERED mode is used by passing `udpard_rx_unordered` as the mode parameter.
-/// This should be the default mode for most use cases.
+/// The unordered mode should be the default mode for most use cases.
 ///
 ///     STATELESS
 ///
@@ -699,8 +689,6 @@ void udpard_tx_free(udpard_tx_t* const self);
 /// The stateless mode allocates only a fragment header per accepted frame and does not contain any
 /// variable-complexity processing logic, enabling great scalability for topics with a very large number of
 /// publishers where unordered and duplicated messages are acceptable, such as the heartbeat topic.
-///
-/// The STATELESS mode is used by passing `udpard_rx_stateless` as the mode parameter.
 
 /// The application will have a single RX instance to manage all subscriptions and P2P ports.
 typedef struct udpard_rx_t
@@ -743,6 +731,14 @@ typedef struct udpard_rx_port_p2p_t     udpard_rx_port_p2p_t;
 typedef struct udpard_rx_transfer_t     udpard_rx_transfer_t;
 typedef struct udpard_rx_transfer_p2p_t udpard_rx_transfer_p2p_t;
 
+/// RX port mode for transfer reassembly behavior.
+typedef enum udpard_rx_mode_t
+{
+    udpard_rx_unordered = 0,
+    udpard_rx_ordered   = 1,
+    udpard_rx_stateless = 2,
+} udpard_rx_mode_t;
+
 /// Provided by the application per port instance to specify the callbacks to be invoked on certain events.
 /// This design allows distinct callbacks per port, which is especially useful for the P2P port.
 typedef struct udpard_rx_port_vtable_t
@@ -765,8 +761,7 @@ struct udpard_rx_port_t
     /// For P2P ports, UDPARD_P2P_HEADER_BYTES must be included in this value (the library takes care of this).
     size_t extent;
 
-    /// See UDPARD_RX_REORDERING_WINDOW_... above.
-    /// Behavior undefined if the reassembly mode is switched on a live port with ongoing transfers.
+    /// Behavior undefined if the reassembly mode is switched on a live port.
     udpard_rx_mode_t mode;
     udpard_us_t      reordering_window;
 
