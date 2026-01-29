@@ -30,6 +30,7 @@ cmake-build-*/
 .pydevproject
 .scannerwork/
 .vscode/
+.sisyphus/
 **/.idea/*
 !**/.idea/dictionaries
 !**/.idea/dictionaries/*
