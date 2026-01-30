@@ -595,8 +595,8 @@ typedef struct
 /// The transfer index contains ALL transfers, used for lookup by (topic_hash, transfer_id).
 typedef struct tx_transfer_t
 {
-    udpard_tree_t   index_staged;   ///< Soonest to be ready on the left. Key: staged_until
-    udpard_tree_t   index_deadline; ///< Soonest to expire on the left. Key: deadline
+    udpard_tree_t   index_staged;   ///< Soonest to be ready on the left. Key: staged_until + transfer identity
+    udpard_tree_t   index_deadline; ///< Soonest to expire on the left. Key: deadline + transfer identity
     udpard_tree_t   index_transfer; ///< Specific transfer lookup for ack management. Key: tx_transfer_key_t
     udpard_listed_t queue[UDPARD_IFACE_COUNT_MAX]; ///< Listed when ready for transmission.
     udpard_listed_t agewise;                       ///< Listed when created; oldest at the tail.
@@ -734,13 +734,40 @@ static bool tx_ensure_queue_space(udpard_tx_t* const tx, const size_t total_fram
     return total_frames_needed <= (tx->enqueued_frames_limit - tx->enqueued_frames_count);
 }
 
+// Key for time-ordered TX indices with stable tiebreaking.
+typedef struct
+{
+    udpard_us_t time;
+    uint64_t    topic_hash;
+    uint64_t    transfer_id;
+} tx_time_key_t;
+
+// Compare staged transfers by time then by transfer identity.
 static int32_t tx_cavl_compare_staged(const void* const user, const udpard_tree_t* const node)
 {
-    return ((*(const udpard_us_t*)user) >= CAVL2_TO_OWNER(node, tx_transfer_t, index_staged)->staged_until) ? +1 : -1;
+    const tx_time_key_t* const key = (const tx_time_key_t*)user;
+    const tx_transfer_t* const tr = CAVL2_TO_OWNER(node, tx_transfer_t, index_staged); // clang-format off
+    if (key->time        < tr->staged_until) { return -1; }
+    if (key->time        > tr->staged_until) { return +1; }
+    if (key->topic_hash  < tr->topic_hash)   { return -1; }
+    if (key->topic_hash  > tr->topic_hash)   { return +1; }
+    if (key->transfer_id < tr->transfer_id)  { return -1; }
+    if (key->transfer_id > tr->transfer_id)  { return +1; }
+    return 0; // clang-format on
 }
+
+// Compare deadlines by time then by transfer identity.
 static int32_t tx_cavl_compare_deadline(const void* const user, const udpard_tree_t* const node)
 {
-    return ((*(const udpard_us_t*)user) >= CAVL2_TO_OWNER(node, tx_transfer_t, index_deadline)->deadline) ? +1 : -1;
+    const tx_time_key_t* const key = (const tx_time_key_t*)user;
+    const tx_transfer_t* const tr = CAVL2_TO_OWNER(node, tx_transfer_t, index_deadline); // clang-format off
+    if (key->time        < tr->deadline)    { return -1; }
+    if (key->time        > tr->deadline)    { return +1; }
+    if (key->topic_hash  < tr->topic_hash)  { return -1; }
+    if (key->topic_hash  > tr->topic_hash)  { return +1; }
+    if (key->transfer_id < tr->transfer_id) { return -1; }
+    if (key->transfer_id > tr->transfer_id) { return +1; }
+    return 0; // clang-format on
 }
 static int32_t tx_cavl_compare_transfer(const void* const user, const udpard_tree_t* const node)
 {
@@ -855,11 +882,18 @@ static void tx_stage_if(udpard_tx_t* const tx, tx_transfer_t* const tr)
     const udpard_us_t  timeout = tx_ack_timeout(tx->ack_baseline_timeout, tr->priority, epoch);
     tr->staged_until += timeout;
     if ((tr->deadline - timeout) >= tr->staged_until) {
-        (void)cavl2_find_or_insert(&tx->index_staged, //
-                                   &tr->staged_until,
-                                   tx_cavl_compare_staged,
-                                   &tr->index_staged,
-                                   cavl2_trivial_factory);
+        // Insert into staged index with deterministic tie-breaking.
+        const tx_time_key_t key = { .time        = tr->staged_until,
+                                    .topic_hash  = tr->topic_hash,
+                                    .transfer_id = tr->transfer_id };
+        // Ensure we didn't collide with another entry that should be unique.
+        const udpard_tree_t* const tree_staged = cavl2_find_or_insert(&tx->index_staged, //
+                                                                      &key,
+                                                                      tx_cavl_compare_staged,
+                                                                      &tr->index_staged,
+                                                                      cavl2_trivial_factory);
+        UDPARD_ASSERT(tree_staged == &tr->index_staged);
+        (void)tree_staged;
     }
 }
 
@@ -1049,12 +1083,19 @@ static bool tx_push(udpard_tx_t* const             tx,
         tx_stage_if(tx, tr);
     }
     // Add to the deadline index for expiration management.
-    (void)cavl2_find_or_insert(
-      &tx->index_deadline, &tr->deadline, tx_cavl_compare_deadline, &tr->index_deadline, cavl2_trivial_factory);
+    // Insert into deadline index with deterministic tie-breaking.
+    const tx_time_key_t deadline_key = { .time        = tr->deadline,
+                                         .topic_hash  = tr->topic_hash,
+                                         .transfer_id = tr->transfer_id };
+    // Ensure we didn't collide with another entry that should be unique.
+    const udpard_tree_t* const tree_deadline = cavl2_find_or_insert(
+      &tx->index_deadline, &deadline_key, tx_cavl_compare_deadline, &tr->index_deadline, cavl2_trivial_factory);
+    UDPARD_ASSERT(tree_deadline == &tr->index_deadline);
+    (void)tree_deadline;
     // Add to the transfer index for incoming ack management.
-    const tx_transfer_key_t    key           = { .topic_hash = tr->topic_hash, .transfer_id = tr->transfer_id };
+    const tx_transfer_key_t    transfer_key  = { .topic_hash = tr->topic_hash, .transfer_id = tr->transfer_id };
     const udpard_tree_t* const tree_transfer = cavl2_find_or_insert(
-      &tx->index_transfer, &key, tx_cavl_compare_transfer, &tr->index_transfer, cavl2_trivial_factory);
+      &tx->index_transfer, &transfer_key, tx_cavl_compare_transfer, &tr->index_transfer, cavl2_trivial_factory);
     UDPARD_ASSERT(tree_transfer == &tr->index_transfer); // ensure no duplicates; checked at the API level
     (void)tree_transfer;
     // Add to the agewise list for sacrifice management on queue exhaustion.
@@ -1907,11 +1948,23 @@ static int32_t cavl_compare_rx_session_by_remote_uid(const void* const user, con
     return 0; // clang-format on
 }
 
+// Key for reordering deadline ordering with stable tiebreaking.
+typedef struct
+{
+    udpard_us_t deadline;
+    uint64_t    remote_uid;
+} rx_reordering_key_t;
+
+// Compare sessions by reordering deadline then by remote UID.
 static int32_t cavl_compare_rx_session_by_reordering_deadline(const void* const user, const udpard_tree_t* const node)
 {
-    const udpard_us_t dl_a = *(const udpard_us_t*)user;
-    const udpard_us_t dl_b = CAVL2_TO_OWNER(node, rx_session_t, index_reordering_window)->reordering_window_deadline;
-    return (dl_a >= dl_b) ? +1 : -1;
+    const rx_reordering_key_t* const key = (const rx_reordering_key_t*)user;
+    const rx_session_t* const ses = CAVL2_TO_OWNER(node, rx_session_t, index_reordering_window); // clang-format off
+    if (key->deadline  < ses->reordering_window_deadline) { return -1; }
+    if (key->deadline  > ses->reordering_window_deadline) { return +1; }
+    if (key->remote_uid < ses->remote.uid)                { return -1; }
+    if (key->remote_uid > ses->remote.uid)                { return +1; }
+    return 0; // clang-format on
 }
 
 typedef struct
@@ -2028,8 +2081,11 @@ static void rx_session_ordered_scan_slots(rx_session_t* const self,
             // closure deadline, but we ignore them because the nearest transfer overrides the more distant ones.
             if (slot != NULL) {
                 self->reordering_window_deadline = slot->ts_min + self->port->reordering_window;
-                const udpard_tree_t* res = cavl2_find_or_insert(&rx->index_session_by_reordering, //-------------
-                                                                &self->reordering_window_deadline,
+                // Insert into reordering index with deterministic tie-breaking.
+                const rx_reordering_key_t key = { .deadline   = self->reordering_window_deadline,
+                                                  .remote_uid = self->remote.uid };
+                const udpard_tree_t* res = cavl2_find_or_insert(&rx->index_session_by_reordering, //----------------
+                                                                &key,
                                                                 &cavl_compare_rx_session_by_reordering_deadline,
                                                                 &self->index_reordering_window,
                                                                 &cavl2_trivial_factory);

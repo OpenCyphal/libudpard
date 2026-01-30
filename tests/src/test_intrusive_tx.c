@@ -208,10 +208,17 @@ static void test_tx_validation_and_free(void)
     tr->remote_topic_hash  = 99;
     tr->remote_transfer_id = 100;
     tx_transfer_key_t key  = { .topic_hash = 5, .transfer_id = 7 };
+    // Insert with stable ordering keys.
+    const tx_time_key_t staged_key   = { .time        = tr->staged_until,
+                                         .topic_hash  = tr->topic_hash,
+                                         .transfer_id = tr->transfer_id };
+    const tx_time_key_t deadline_key = { .time        = tr->deadline,
+                                         .topic_hash  = tr->topic_hash,
+                                         .transfer_id = tr->transfer_id };
     (void)cavl2_find_or_insert(
-      &tx.index_staged, &tr->staged_until, tx_cavl_compare_staged, &tr->index_staged, cavl2_trivial_factory);
+      &tx.index_staged, &staged_key, tx_cavl_compare_staged, &tr->index_staged, cavl2_trivial_factory);
     (void)cavl2_find_or_insert(
-      &tx.index_deadline, &tr->deadline, tx_cavl_compare_deadline, &tr->index_deadline, cavl2_trivial_factory);
+      &tx.index_deadline, &deadline_key, tx_cavl_compare_deadline, &tr->index_deadline, cavl2_trivial_factory);
     (void)cavl2_find_or_insert(
       &tx.index_transfer, &key, tx_cavl_compare_transfer, &tr->index_transfer, cavl2_trivial_factory);
     (void)cavl2_find_or_insert(
@@ -236,14 +243,14 @@ static void test_tx_comparators_and_feedback(void)
     tr.remote_transfer_id = 4;
 
     // Staged/deadline comparisons both ways.
-    udpard_us_t us = 6;
-    TEST_ASSERT_EQUAL(1, tx_cavl_compare_staged(&us, &tr.index_staged));
-    us = 4;
-    TEST_ASSERT_EQUAL(-1, tx_cavl_compare_staged(&us, &tr.index_staged));
-    us = 8;
-    TEST_ASSERT_EQUAL(1, tx_cavl_compare_deadline(&us, &tr.index_deadline));
-    us = 6;
-    TEST_ASSERT_EQUAL(-1, tx_cavl_compare_deadline(&us, &tr.index_deadline));
+    tx_time_key_t tkey = { .time = 6, .topic_hash = tr.topic_hash, .transfer_id = tr.transfer_id };
+    TEST_ASSERT_EQUAL(1, tx_cavl_compare_staged(&tkey, &tr.index_staged));
+    tkey.time = 4;
+    TEST_ASSERT_EQUAL(-1, tx_cavl_compare_staged(&tkey, &tr.index_staged));
+    tkey.time = 8;
+    TEST_ASSERT_EQUAL(1, tx_cavl_compare_deadline(&tkey, &tr.index_deadline));
+    tkey.time = 6;
+    TEST_ASSERT_EQUAL(-1, tx_cavl_compare_deadline(&tkey, &tr.index_deadline));
 
     // Transfer comparator covers all branches.
     tx_transfer_key_t key = { .topic_hash = 5, .transfer_id = 1 };
@@ -334,11 +341,12 @@ static void test_tx_spool_and_queue_errors(void)
     victim.deadline    = 1;
     victim.topic_hash  = 7;
     victim.transfer_id = 9;
-    (void)cavl2_find_or_insert(&tx_sac.index_deadline,
-                               &victim.deadline,
-                               tx_cavl_compare_deadline,
-                               &victim.index_deadline,
-                               cavl2_trivial_factory);
+    // Insert into deadline index with stable key.
+    const tx_time_key_t deadline_key = { .time        = victim.deadline,
+                                         .topic_hash  = victim.topic_hash,
+                                         .transfer_id = victim.transfer_id };
+    (void)cavl2_find_or_insert(
+      &tx_sac.index_deadline, &deadline_key, tx_cavl_compare_deadline, &victim.index_deadline, cavl2_trivial_factory);
     (void)cavl2_find_or_insert(
       &tx_sac.index_transfer,
       &(tx_transfer_key_t){ .topic_hash = victim.topic_hash, .transfer_id = victim.transfer_id },
@@ -525,8 +533,12 @@ static void test_tx_ack_and_scheduler(void)
     exp->user        = make_user_context(&fstate);
     exp->reliable    = true;
     exp->feedback    = record_feedback;
+    // Insert into deadline index with stable key.
+    const tx_time_key_t tx4_deadline_key = { .time        = exp->deadline,
+                                             .topic_hash  = exp->topic_hash,
+                                             .transfer_id = exp->transfer_id };
     (void)cavl2_find_or_insert(
-      &tx4.index_deadline, &exp->deadline, tx_cavl_compare_deadline, &exp->index_deadline, cavl2_trivial_factory);
+      &tx4.index_deadline, &tx4_deadline_key, tx_cavl_compare_deadline, &exp->index_deadline, cavl2_trivial_factory);
     (void)cavl2_find_or_insert(&tx4.index_transfer,
                                &(tx_transfer_key_t){ .topic_hash = 55, .transfer_id = 66 },
                                tx_cavl_compare_transfer,
@@ -554,8 +566,12 @@ static void test_tx_ack_and_scheduler(void)
     staged.p2p_destination[0] = make_ep(7);
     tx_frame_t dummy_frame    = { 0 };
     staged.head[0] = staged.cursor[0] = &dummy_frame;
+    // Insert into staged index with stable key.
+    const tx_time_key_t tx5_staged_key = { .time        = staged.staged_until,
+                                           .topic_hash  = staged.topic_hash,
+                                           .transfer_id = staged.transfer_id };
     cavl2_find_or_insert(
-      &tx5.index_staged, &staged.staged_until, tx_cavl_compare_staged, &staged.index_staged, cavl2_trivial_factory);
+      &tx5.index_staged, &tx5_staged_key, tx_cavl_compare_staged, &staged.index_staged, cavl2_trivial_factory);
     tx5.ack_baseline_timeout = 1;
     tx_promote_staged_transfers(&tx5, 1);
     TEST_ASSERT_NOT_NULL(tx5.queue[0][staged.priority].head);

@@ -2916,7 +2916,8 @@ static void test_rx_additional_coverage(void)
     ses->slots[0].state       = rx_slot_done;
     ses->slots[0].transfer_id = 5;
     TEST_ASSERT_TRUE(rx_session_is_transfer_interned(ses, 5));
-    udpard_us_t dl_key = 5;
+    // Comparator smoke-test with stable key.
+    const rx_reordering_key_t dl_key = { .deadline = 5, .remote_uid = ses->remote.uid };
     (void)cavl_compare_rx_session_by_reordering_deadline(&dl_key, &ses->index_reordering_window);
     udpard_list_t  anim_list  = { 0 };
     udpard_tree_t* by_reorder = NULL;
@@ -2925,12 +2926,15 @@ static void test_rx_additional_coverage(void)
                          cavl_compare_rx_session_by_remote_uid,
                          &ses->index_remote_uid,
                          cavl2_trivial_factory);
-    ses->reordering_window_deadline = 3;
-    cavl2_find_or_insert(&by_reorder,
-                         &ses->reordering_window_deadline,
-                         cavl_compare_rx_session_by_reordering_deadline,
-                         &ses->index_reordering_window,
-                         cavl2_trivial_factory);
+    ses->reordering_window_deadline         = 3;
+    const rx_reordering_key_t  reorder_key  = { .deadline   = ses->reordering_window_deadline,
+                                                .remote_uid = ses->remote.uid };
+    const udpard_tree_t* const tree_reorder = cavl2_find_or_insert(&by_reorder,
+                                                                   &reorder_key,
+                                                                   cavl_compare_rx_session_by_reordering_deadline,
+                                                                   &ses->index_reordering_window,
+                                                                   cavl2_trivial_factory);
+    TEST_ASSERT_EQUAL_PTR(&ses->index_reordering_window, tree_reorder);
     enlist_head(&anim_list, &ses->list_by_animation);
     rx_session_free(ses, &anim_list, &by_reorder);
 
