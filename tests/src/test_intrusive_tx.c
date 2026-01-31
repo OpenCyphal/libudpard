@@ -134,6 +134,15 @@ static void test_bytes_scattered_read(void)
         TEST_ASSERT_EQUAL_PTR(&frag, reader.cursor);
         TEST_ASSERT_EQUAL_size_t(frag.bytes.size, reader.position);
     }
+
+    // Size accounts for chained fragments.
+    {
+        const byte_t                   frag_a[] = { 1U, 2U };
+        const byte_t                   frag_b[] = { 3U, 4U, 5U };
+        const udpard_bytes_scattered_t tail     = { .bytes = { .size = sizeof(frag_b), .data = frag_b }, .next = NULL };
+        const udpard_bytes_scattered_t head = { .bytes = { .size = sizeof(frag_a), .data = frag_a }, .next = &tail };
+        TEST_ASSERT_EQUAL_size_t(sizeof(frag_a) + sizeof(frag_b), bytes_scattered_size(head));
+    }
 }
 
 static void test_tx_serialize_header(void)
@@ -199,6 +208,28 @@ static void test_tx_validation_and_free(void)
     // Invalid memory config fails fast.
     udpard_tx_mem_resources_t bad = { 0 };
     TEST_ASSERT_FALSE(tx_validate_mem_resources(bad));
+    // Reject payload vtables with missing hooks.
+    const udpard_mem_vtable_t vtable_no_free  = { .base = { .free = NULL }, .alloc = dummy_alloc };
+    const udpard_mem_vtable_t vtable_no_alloc = { .base = { .free = noop_free }, .alloc = NULL };
+    const udpard_mem_vtable_t vtable_ok       = { .base = { .free = noop_free }, .alloc = dummy_alloc };
+    udpard_tx_mem_resources_t bad_payload     = { .transfer = { .vtable = &vtable_ok, .context = NULL } };
+    for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
+        bad_payload.payload[i] = (udpard_mem_t){ .vtable = &vtable_no_free, .context = NULL };
+    }
+    TEST_ASSERT_FALSE(tx_validate_mem_resources(bad_payload));
+    for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
+        bad_payload.payload[i] = (udpard_mem_t){ .vtable = &vtable_no_alloc, .context = NULL };
+    }
+    TEST_ASSERT_FALSE(tx_validate_mem_resources(bad_payload));
+    // Reject transfer vtables with missing hooks.
+    udpard_tx_mem_resources_t bad_transfer = bad_payload;
+    for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
+        bad_transfer.payload[i] = (udpard_mem_t){ .vtable = &vtable_ok, .context = NULL };
+    }
+    bad_transfer.transfer = (udpard_mem_t){ .vtable = &vtable_no_free, .context = NULL };
+    TEST_ASSERT_FALSE(tx_validate_mem_resources(bad_transfer));
+    bad_transfer.transfer = (udpard_mem_t){ .vtable = &vtable_no_alloc, .context = NULL };
+    TEST_ASSERT_FALSE(tx_validate_mem_resources(bad_transfer));
 
     instrumented_allocator_t alloc_transfer = { 0 };
     instrumented_allocator_t alloc_payload  = { 0 };
@@ -269,6 +300,26 @@ static void test_tx_comparators_and_feedback(void)
     TEST_ASSERT_EQUAL(1, tx_cavl_compare_deadline(&tkey, &tr.index_deadline));
     tkey.time = 6;
     TEST_ASSERT_EQUAL(-1, tx_cavl_compare_deadline(&tkey, &tr.index_deadline));
+    // Staged comparator covers topic_hash/transfer_id branches.
+    tkey = (tx_time_key_t){ .time = tr.staged_until, .topic_hash = tr.topic_hash - 1, .transfer_id = tr.transfer_id };
+    TEST_ASSERT_EQUAL(-1, tx_cavl_compare_staged(&tkey, &tr.index_staged));
+    tkey.topic_hash = tr.topic_hash + 1;
+    TEST_ASSERT_EQUAL(1, tx_cavl_compare_staged(&tkey, &tr.index_staged));
+    tkey.topic_hash  = tr.topic_hash;
+    tkey.transfer_id = tr.transfer_id - 1;
+    TEST_ASSERT_EQUAL(-1, tx_cavl_compare_staged(&tkey, &tr.index_staged));
+    tkey.transfer_id = tr.transfer_id + 1;
+    TEST_ASSERT_EQUAL(1, tx_cavl_compare_staged(&tkey, &tr.index_staged));
+    // Deadline comparator covers topic_hash/transfer_id branches.
+    tkey = (tx_time_key_t){ .time = tr.deadline, .topic_hash = tr.topic_hash - 1, .transfer_id = tr.transfer_id };
+    TEST_ASSERT_EQUAL(-1, tx_cavl_compare_deadline(&tkey, &tr.index_deadline));
+    tkey.topic_hash = tr.topic_hash + 1;
+    TEST_ASSERT_EQUAL(1, tx_cavl_compare_deadline(&tkey, &tr.index_deadline));
+    tkey.topic_hash  = tr.topic_hash;
+    tkey.transfer_id = tr.transfer_id - 1;
+    TEST_ASSERT_EQUAL(-1, tx_cavl_compare_deadline(&tkey, &tr.index_deadline));
+    tkey.transfer_id = tr.transfer_id + 1;
+    TEST_ASSERT_EQUAL(1, tx_cavl_compare_deadline(&tkey, &tr.index_deadline));
 
     // Transfer comparator covers all branches.
     tx_transfer_key_t key = { .topic_hash = 5, .transfer_id = 1 };
@@ -466,7 +517,34 @@ static void test_tx_ack_and_scheduler(void)
     tx_receive_ack(&rx, 21, 42);
     TEST_ASSERT_EQUAL_size_t(1, fstate.count);
     TEST_ASSERT_EQUAL_UINT32(0U, udpard_tx_pending_ifaces(&tx1));
+    // Ignore ACKs when RX has no TX.
+    rx.tx = NULL;
+    tx_receive_ack(&rx, 21, 42);
     udpard_tx_free(&tx1);
+
+    // Best-effort transfers ignore ACKs.
+    udpard_tx_t tx_be = { 0 };
+    TEST_ASSERT_TRUE(udpard_tx_new(
+      &tx_be,
+      10U,
+      1U,
+      8U,
+      mem,
+      &(udpard_tx_vtable_t){ .eject_subject = eject_subject_with_flag, .eject_p2p = eject_p2p_with_flag }));
+    TEST_ASSERT_TRUE(udpard_tx_push(&tx_be,
+                                    0,
+                                    1000,
+                                    iface_bitmap_01,
+                                    udpard_prio_fast,
+                                    22,
+                                    43,
+                                    make_scattered(NULL, 0),
+                                    NULL,
+                                    UDPARD_USER_CONTEXT_NULL));
+    udpard_rx_t rx_be = { .tx = &tx_be };
+    tx_receive_ack(&rx_be, 22, 43);
+    TEST_ASSERT_NOT_NULL(tx_transfer_find(&tx_be, 22, 43));
+    udpard_tx_free(&tx_be);
 
     // Ack suppressed when coverage not improved.
     udpard_tx_t tx2 = { 0 };
@@ -597,6 +675,9 @@ static void test_tx_ack_and_scheduler(void)
     tx_promote_staged_transfers(&tx5, 1);
     TEST_ASSERT_NOT_NULL(tx5.queue[0][staged.priority].head);
     TEST_ASSERT_EQUAL_UINT32(1U << 0U, udpard_tx_pending_ifaces(&tx5));
+    // Already-listed transfers stay in the queue.
+    tx_promote_staged_transfers(&tx5, 1000);
+    TEST_ASSERT_EQUAL_PTR(&staged.queue[0], tx5.queue[0][staged.priority].head);
 
     // Ejection stops when NIC refuses.
     staged.cursor[0]                   = staged.head[0];

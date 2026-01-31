@@ -2793,6 +2793,19 @@ static void test_rx_additional_coverage(void)
     instrumented_allocator_new(&alloc_ses);
     const udpard_rx_mem_resources_t mem = { .session  = instrumented_allocator_make_resource(&alloc_ses),
                                             .fragment = instrumented_allocator_make_resource(&alloc_frag) };
+    // Memory validation rejects missing hooks.
+    const udpard_mem_vtable_t vtable_no_free  = { .base = { .free = NULL }, .alloc = dummy_alloc };
+    const udpard_mem_vtable_t vtable_no_alloc = { .base = { .free = dummy_free }, .alloc = NULL };
+    udpard_rx_mem_resources_t bad_mem         = mem;
+    bad_mem.session.vtable                    = &vtable_no_free;
+    TEST_ASSERT_FALSE(rx_validate_mem_resources(bad_mem));
+    bad_mem.session.vtable = &vtable_no_alloc;
+    TEST_ASSERT_FALSE(rx_validate_mem_resources(bad_mem));
+    bad_mem                 = mem;
+    bad_mem.fragment.vtable = &vtable_no_free;
+    TEST_ASSERT_FALSE(rx_validate_mem_resources(bad_mem));
+    bad_mem.fragment.vtable = &vtable_no_alloc;
+    TEST_ASSERT_FALSE(rx_validate_mem_resources(bad_mem));
 
     // Session helpers and free paths.
     udpard_rx_port_t port = { .memory            = mem,
@@ -2809,9 +2822,22 @@ static void test_rx_additional_coverage(void)
     ses->slots[0].state       = rx_slot_done;
     ses->slots[0].transfer_id = 5;
     TEST_ASSERT_TRUE(rx_session_is_transfer_interned(ses, 5));
+    ses->reordering_window_deadline = 5;
     // Comparator smoke-test with stable key.
     const rx_reordering_key_t dl_key = { .deadline = 5, .remote_uid = ses->remote.uid };
     (void)cavl_compare_rx_session_by_reordering_deadline(&dl_key, &ses->index_reordering_window);
+    // Comparator branches for UID and deadline ordering.
+    TEST_ASSERT_EQUAL(-1, cavl_compare_rx_session_by_remote_uid(&(uint64_t){ 10 }, &ses->index_remote_uid));
+    TEST_ASSERT_EQUAL(1, cavl_compare_rx_session_by_remote_uid(&(uint64_t){ 100 }, &ses->index_remote_uid));
+    rx_reordering_key_t dl_key_hi = { .deadline = 10, .remote_uid = ses->remote.uid + 1U };
+    TEST_ASSERT_EQUAL(1, cavl_compare_rx_session_by_reordering_deadline(&dl_key_hi, &ses->index_reordering_window));
+    rx_reordering_key_t dl_key_lo = { .deadline = 1, .remote_uid = ses->remote.uid - 1U };
+    TEST_ASSERT_EQUAL(-1, cavl_compare_rx_session_by_reordering_deadline(&dl_key_lo, &ses->index_reordering_window));
+    rx_reordering_key_t dl_key_uid_lo = { .deadline = 5, .remote_uid = ses->remote.uid - 1U };
+    TEST_ASSERT_EQUAL(-1,
+                      cavl_compare_rx_session_by_reordering_deadline(&dl_key_uid_lo, &ses->index_reordering_window));
+    rx_reordering_key_t dl_key_uid_hi = { .deadline = 5, .remote_uid = ses->remote.uid + 1U };
+    TEST_ASSERT_EQUAL(1, cavl_compare_rx_session_by_reordering_deadline(&dl_key_uid_hi, &ses->index_reordering_window));
     udpard_list_t  anim_list  = { 0 };
     udpard_tree_t* by_reorder = NULL;
     cavl2_find_or_insert(&port.index_session_by_remote_uid,
@@ -2843,6 +2869,26 @@ static void test_rx_additional_coverage(void)
     udpard_rx_t rx                = { 0 };
     rx_session_ordered_scan_slots(&ses_busy, &rx, 10, false);
 
+    // Ordered scan resets late busy slots.
+    rx_session_t ses_late;
+    mem_zero(sizeof(ses_late), &ses_late);
+    ses_late.port                 = &port;
+    ses_late.history[0]           = 42;
+    ses_late.slots[0].state       = rx_slot_busy;
+    ses_late.slots[0].transfer_id = 42;
+    rx_session_ordered_scan_slots(&ses_late, &rx, 10, false);
+    TEST_ASSERT_EQUAL(rx_slot_idle, ses_late.slots[0].state);
+
+    // Forced scan ejects a done slot.
+    rx_session_t ses_force;
+    mem_zero(sizeof(ses_force), &ses_force);
+    ses_force.port                 = &port;
+    ses_force.history[0]           = 1;
+    ses_force.slots[0].state       = rx_slot_done;
+    ses_force.slots[0].transfer_id = 100;
+    rx_session_ordered_scan_slots(&ses_force, &rx, 0, true);
+    TEST_ASSERT_EQUAL(rx_slot_idle, ses_force.slots[0].state);
+
     // Slot acquisition covers stale busy, busy eviction, and done eviction.
     rx_session_t ses_slots;
     mem_zero(sizeof(ses_slots), &ses_slots);
@@ -2872,6 +2918,32 @@ static void test_rx_additional_coverage(void)
     slot        = rx_session_get_slot(&ses_slots, &rx, 60, 3);
     TEST_ASSERT_NOT_NULL(slot);
 
+    // Ordered update retransmits ACK for ejected transfers.
+    rx_session_t ses_ack;
+    mem_zero(sizeof(ses_ack), &ses_ack);
+    ses_ack.port        = &port;
+    ses_ack.remote.uid  = 55;
+    ses_ack.history[0]  = 7;
+    ses_ack.initialized = true;
+    rx_frame_t ack_frame;
+    mem_zero(sizeof(ack_frame), &ack_frame);
+    void* ack_buf = mem_res_alloc(mem.fragment, ACK_SIZE_BYTES);
+    TEST_ASSERT_NOT_NULL(ack_buf);
+    memset(ack_buf, 0, ACK_SIZE_BYTES);
+    ack_frame.base.payload               = (udpard_bytes_t){ .data = ack_buf, .size = ACK_SIZE_BYTES };
+    ack_frame.base.origin                = (udpard_bytes_mut_t){ .data = ack_buf, .size = ACK_SIZE_BYTES };
+    ack_frame.base.offset                = 0;
+    ack_frame.meta.priority              = udpard_prio_nominal;
+    ack_frame.meta.flag_reliable         = true;
+    ack_frame.meta.transfer_payload_size = ACK_SIZE_BYTES;
+    ack_frame.meta.transfer_id           = 7;
+    ack_frame.meta.sender_uid            = ses_ack.remote.uid;
+    ack_frame.meta.topic_hash            = port.topic_hash;
+    rx.errors_ack_tx                     = 0;
+    rx.tx                                = NULL;
+    rx_session_update_ordered(&ses_ack, &rx, 0, &ack_frame, instrumented_allocator_make_deleter(&alloc_frag));
+    TEST_ASSERT_EQUAL_UINT64(1U, rx.errors_ack_tx);
+
     // Stateless accept success, OOM, malformed.
     g_collision_count = 0;
     port.vtable       = &(udpard_rx_port_vtable_t){ .on_message = stub_on_message, .on_collision = stub_on_collision };
@@ -2899,6 +2971,17 @@ static void test_rx_additional_coverage(void)
     frame.base.payload.size          = 0;
     frame.meta.transfer_payload_size = 8;
     rx_port_accept_stateless(&rx, &port, 0, make_ep(1), &frame, instrumented_allocator_make_deleter(&alloc_frag), 0);
+    // Stateless accept rejects nonzero offsets.
+    alloc_frag.limit_fragments = SIZE_MAX;
+    void* payload_buf2         = mem_res_alloc(mem.fragment, sizeof(payload));
+    TEST_ASSERT_NOT_NULL(payload_buf2);
+    memcpy(payload_buf2, payload, sizeof(payload));
+    frame.base.payload               = (udpard_bytes_t){ .data = payload_buf2, .size = sizeof(payload) };
+    frame.base.origin                = (udpard_bytes_mut_t){ .data = payload_buf2, .size = sizeof(payload) };
+    frame.base.offset                = 1U;
+    frame.meta.transfer_payload_size = (uint32_t)sizeof(payload);
+    rx_port_accept_stateless(&rx, &port, 0, make_ep(1), &frame, instrumented_allocator_make_deleter(&alloc_frag), 0);
+    frame.base.offset                   = 0;
     udpard_rx_port_t port_stateless_new = { 0 };
     TEST_ASSERT_TRUE(udpard_rx_port_new(&port_stateless_new, 22, 8, udpard_rx_stateless, 0, mem, port.vtable));
     TEST_ASSERT_NOT_NULL(port_stateless_new.vtable_private);
@@ -2927,6 +3010,10 @@ static void test_rx_additional_coverage(void)
       &rx, &port_normal, 0, make_ep(3), good_payload, instrumented_allocator_make_deleter(&alloc_frag), 1));
     TEST_ASSERT_GREATER_THAN_UINT64(0, g_collision_count);
     udpard_rx_port_free(&rx, &port_normal);
+    // Short ACK messages are ignored.
+    rx.errors_ack_tx = 0;
+    rx_accept_ack(&rx, (udpard_bytes_t){ .data = payload, .size = 1U });
+    TEST_ASSERT_EQUAL_UINT64(0, rx.errors_ack_tx);
     instrumented_allocator_reset(&alloc_frag);
     instrumented_allocator_reset(&alloc_ses);
 }
