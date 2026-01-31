@@ -839,7 +839,8 @@ void udpard_rx_poll(udpard_rx_t* const self, const udpard_us_t now);
 ///     3. Read data from the sockets continuously and forward each datagram to udpard_rx_port_push(),
 ///        along with the index of the redundant interface the datagram was received on.
 ///
-/// For P2P ports, the procedure is identical. There must be exactly one P2P port per node.
+/// For P2P ports, the procedure is identical, except that the topic hash is set to the local node's UID.
+/// There must be exactly one P2P port per node. The P2P port is also used for acks.
 ///
 /// The extent defines the maximum possible size of received objects, considering also possible future data type
 /// versions with new fields. It is safe to pick larger values. Note well that the extent is not the same thing as
