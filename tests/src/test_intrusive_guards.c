@@ -159,17 +159,8 @@ static void test_tx_guards(void)
       &tx, 10, 5, iface_bitmap_1, udpard_prio_fast, 1U, 1U, empty_payload, NULL, UDPARD_USER_CONTEXT_NULL));
     TEST_ASSERT_FALSE(udpard_tx_push(
       NULL, 0, 0, iface_bitmap_1, udpard_prio_fast, 1U, 1U, empty_payload, NULL, UDPARD_USER_CONTEXT_NULL));
-    TEST_ASSERT_FALSE(udpard_tx_push_p2p(NULL,
-                                         0,
-                                         0,
-                                         udpard_prio_fast,
-                                         1U,
-                                         1U,
-                                         (udpard_remote_t){ 0 },
-                                         empty_payload,
-                                         NULL,
-                                         UDPARD_USER_CONTEXT_NULL,
-                                         NULL));
+    TEST_ASSERT_FALSE(udpard_tx_push_p2p(
+      NULL, 0, 0, udpard_prio_fast, (udpard_remote_t){ 0 }, empty_payload, NULL, UDPARD_USER_CONTEXT_NULL, NULL));
 
     // Poll and refcount no-ops on null data.
     udpard_tx_poll(NULL, 0, 0);
@@ -218,10 +209,7 @@ static void test_rx_guards(void)
                                           (udpard_deleter_t){ .vtable = NULL, .context = NULL },
                                           UDPARD_IFACE_COUNT_MAX));
 
-    // Guard paths for P2P port creation and port freeing.
-    udpard_rx_port_p2p_t        p2p;
-    udpard_rx_port_p2p_vtable_t p2p_vt = { .on_message = NULL };
-    TEST_ASSERT_FALSE(udpard_rx_port_new_p2p(&p2p, 1U, 0, rx_mem, &p2p_vt));
+    // Port freeing should tolerate null rx.
     udpard_rx_port_free(NULL, &port);
 
     // Fragments past extent are discarded early.
