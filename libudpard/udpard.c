@@ -84,6 +84,13 @@ static_assert((UDPARD_IPv4_SUBJECT_ID_MAX & (UDPARD_IPv4_SUBJECT_ID_MAX + 1)) ==
 /// Pending ack transfers expire after this long if not transmitted.
 #define ACK_TX_DEADLINE MEGA
 
+/// The ACK message payload is structured as follows, in DSDL notation:
+///
+///     uint64 topic_hash       # Topic hash of the original message being acknowledged.
+///     uint64 transfer_id      # Transfer-ID of the original message being acknowledged.
+///     # If there is any additional data not defined by the format, it must be ignored.
+#define ACK_SIZE_BYTES 16U
+
 static size_t      smaller(const size_t a, const size_t b) { return (a < b) ? a : b; }
 static size_t      larger(const size_t a, const size_t b) { return (a > b) ? a : b; }
 static int64_t     min_i64(const int64_t a, const int64_t b) { return (a < b) ? a : b; }
@@ -421,15 +428,15 @@ static void delist(udpard_list_t* const list, udpard_listed_t* const member)
     }
     member->next = NULL;
     member->prev = NULL;
-    assert((list->head != NULL) == (list->tail != NULL));
+    UDPARD_ASSERT((list->head != NULL) == (list->tail != NULL));
 }
 
 /// If the item is already in the list, it will be delisted first. Can be used for moving to the front.
 static void enlist_head(udpard_list_t* const list, udpard_listed_t* const member)
 {
     delist(list, member);
-    assert((member->next == NULL) && (member->prev == NULL));
-    assert((list->head != NULL) == (list->tail != NULL));
+    UDPARD_ASSERT((member->next == NULL) && (member->prev == NULL));
+    UDPARD_ASSERT((list->head != NULL) == (list->tail != NULL));
     member->next = list->head;
     if (list->head != NULL) {
         list->head->prev = member;
@@ -438,7 +445,7 @@ static void enlist_head(udpard_list_t* const list, udpard_listed_t* const member
     if (list->tail == NULL) {
         list->tail = member;
     }
-    assert((list->head != NULL) && (list->tail != NULL));
+    UDPARD_ASSERT((list->head != NULL) && (list->tail != NULL));
 }
 
 #define LIST_MEMBER(ptr, owner_type, owner_field) ((owner_type*)ptr_unbias((ptr), offsetof(owner_type, owner_field)))
@@ -452,19 +459,23 @@ static void* ptr_unbias(const void* const ptr, const size_t offset)
 // ---------------------------------------------          HEADER           ---------------------------------------------
 // ---------------------------------------------------------------------------------------------------------------------
 
-#define HEADER_SIZE_BYTES      48U
-#define HEADER_VERSION         2U
-#define HEADER_FLAG_ACK        0x01U
-#define HEADER_FRAME_INDEX_MAX 0xFFFFFFU /// 4 GiB with 256-byte MTU; 21.6 GiB with 1384-byte MTU
+#define HEADER_SIZE_BYTES           48U
+#define HEADER_VERSION              2U
+#define HEADER_FLAG_RELIABLE        0x01U
+#define HEADER_FLAG_ACKNOWLEDGEMENT 0x02U
+#define HEADER_FRAME_INDEX_MAX      0xFFFFFFU /// 4 GiB with 256-byte MTU; 21.6 GiB with 1384-byte MTU
 
 typedef struct
 {
     udpard_prio_t priority;
-    bool          flag_ack;
-    uint32_t      transfer_payload_size;
-    uint64_t      transfer_id;
-    uint64_t      sender_uid;
-    uint64_t      topic_hash;
+
+    bool flag_reliable;
+    bool flag_acknowledgement;
+
+    uint32_t transfer_payload_size;
+    uint64_t transfer_id;
+    uint64_t sender_uid;
+    uint64_t topic_hash;
 } meta_t;
 
 static byte_t* header_serialize(byte_t* const  buffer,
@@ -475,8 +486,11 @@ static byte_t* header_serialize(byte_t* const  buffer,
 {
     byte_t* ptr   = buffer;
     byte_t  flags = 0;
-    if (meta.flag_ack) {
-        flags |= HEADER_FLAG_ACK;
+    if (meta.flag_reliable) {
+        flags |= HEADER_FLAG_RELIABLE;
+    }
+    if (meta.flag_acknowledgement) {
+        flags |= HEADER_FLAG_ACKNOWLEDGEMENT;
     }
     *ptr++ = (byte_t)(HEADER_VERSION | (meta.priority << 5U));
     *ptr++ = flags;
@@ -509,9 +523,10 @@ static bool header_deserialize(const udpard_bytes_mut_t dgram_payload,
         const byte_t  head    = *ptr++;
         const byte_t  version = head & 0x1FU;
         if (version == HEADER_VERSION) {
-            out_meta->priority = (udpard_prio_t)((byte_t)(head >> 5U) & 0x07U);
-            const byte_t flags = *ptr++;
-            out_meta->flag_ack = (flags & HEADER_FLAG_ACK) != 0U;
+            out_meta->priority             = (udpard_prio_t)((byte_t)(head >> 5U) & 0x07U);
+            const byte_t flags             = *ptr++;
+            out_meta->flag_reliable        = (flags & HEADER_FLAG_RELIABLE) != 0U;
+            out_meta->flag_acknowledgement = (flags & HEADER_FLAG_ACKNOWLEDGEMENT) != 0U;
             ptr += 2U;
             ptr = deserialize_u32(ptr, frame_index);
             ptr = deserialize_u32(ptr, frame_payload_offset);
@@ -532,6 +547,8 @@ static bool header_deserialize(const udpard_bytes_mut_t dgram_payload,
             ok = ok && ((0 == *frame_index) == (0 == *frame_payload_offset));
             // The prefix-CRC of the first frame of a transfer equals the CRC of its payload.
             ok = ok && ((0 < *frame_payload_offset) || (crc_full(out_payload->size, out_payload->data) == *prefix_crc));
+            // ACK frame requires zero offset.
+            ok = ok && ((!out_meta->flag_acknowledgement) || (*frame_payload_offset == 0U));
         } else {
             ok = false;
         }
@@ -614,9 +631,9 @@ typedef struct tx_transfer_t
     udpard_us_t  staged_until;
 
     /// Constant transfer properties supplied by the client.
-    /// The remote_* fields are identical to the local ones except in the case of P2P transfers, where
-    /// they contain the values encoded in the P2P header. This is needed to find pending acks (to minimize duplicates),
-    /// and to report the correct values via the feedback callback for P2P transfers.
+    /// The remote_* fields are identical to the local ones except in the case of ack transfers, where they contain the
+    /// values encoded in the ack message. This is needed to find pending acks (to minimize duplicates);
+    /// in the future we may even remove them and accept potential ack duplication, since they are idempotent and cheap.
     /// By default, upon construction, the remote_* fields equal the local ones, which is valid for ordinary messages.
     uint64_t              topic_hash;
     uint64_t              transfer_id;
@@ -680,12 +697,7 @@ static void tx_transfer_free_payload(tx_transfer_t* const tr)
 static void tx_transfer_retire(udpard_tx_t* const tx, tx_transfer_t* const tr, const bool success)
 {
     // Construct the feedback object first before the transfer is destroyed.
-    const udpard_tx_feedback_t fb = {
-        .topic_hash       = tr->remote_topic_hash,
-        .transfer_id      = tr->remote_transfer_id,
-        .user             = tr->user,
-        .acknowledgements = success ? 1 : 0,
-    };
+    const udpard_tx_feedback_t fb = { .user = tr->user, .acknowledgements = success ? 1 : 0 };
     UDPARD_ASSERT(tr->reliable == (tr->feedback != NULL));
     // save the feedback pointer
     void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t) = tr->feedback;
@@ -1008,7 +1020,7 @@ static bool tx_push(udpard_tx_t* const             tx,
     tr->remote_topic_hash  = meta.topic_hash;
     tr->remote_transfer_id = meta.transfer_id;
     tr->deadline           = deadline;
-    tr->reliable           = meta.flag_ack;
+    tr->reliable           = meta.flag_reliable;
     tr->priority           = meta.priority;
     tr->iface_bitmap       = iface_bitmap;
     tr->user               = user;
@@ -1079,7 +1091,7 @@ static bool tx_push(udpard_tx_t* const             tx,
         }
     }
     // Add to the staged index so that it is repeatedly re-enqueued later until acknowledged or expired.
-    if (meta.flag_ack) {
+    if (meta.flag_reliable) {
         tx_stage_if(tx, tr);
     }
     // Add to the deadline index for expiration management.
@@ -1151,20 +1163,19 @@ static void tx_send_ack(udpard_rx_t* const    rx,
         // The only reason it might fail is an OOM but we just freed a slot so it should be fine.
 
         // Serialize the ACK payload.
-        byte_t  header[UDPARD_P2P_HEADER_BYTES];
-        byte_t* ptr = header;
-        *ptr++      = P2P_KIND_ACK;
-        ptr += 7U; // Reserved bytes.
-        ptr = serialize_u64(ptr, topic_hash);
-        ptr = serialize_u64(ptr, transfer_id);
-        UDPARD_ASSERT((ptr - header) == UDPARD_P2P_HEADER_BYTES);
+        byte_t  message[ACK_SIZE_BYTES];
+        byte_t* ptr = message;
+        ptr         = serialize_u64(ptr, topic_hash);
+        ptr         = serialize_u64(ptr, transfer_id);
+        UDPARD_ASSERT((ptr - message) == ACK_SIZE_BYTES);
         (void)ptr;
 
         // Enqueue the transfer.
-        const udpard_bytes_t payload = { .size = UDPARD_P2P_HEADER_BYTES, .data = header };
+        const udpard_bytes_t payload = { .size = ACK_SIZE_BYTES, .data = message };
         const meta_t         meta    = {
                        .priority              = priority,
-                       .flag_ack              = false,
+                       .flag_reliable         = false,
+                       .flag_acknowledgement  = true,
                        .transfer_payload_size = (uint32_t)payload.size,
                        .transfer_id           = tx->p2p_transfer_id++,
                        .sender_uid            = tx->local_uid,
@@ -1250,7 +1261,7 @@ bool udpard_tx_push(udpard_tx_t* const             self,
     if (ok) {
         const meta_t meta = {
             .priority              = priority,
-            .flag_ack              = feedback != NULL,
+            .flag_reliable         = feedback != NULL,
             .transfer_payload_size = (uint32_t)bytes_scattered_size(payload),
             .transfer_id           = transfer_id,
             .sender_uid            = self->local_uid,
@@ -1275,11 +1286,9 @@ bool udpard_tx_push_p2p(udpard_tx_t* const             self,
                         const udpard_us_t              now,
                         const udpard_us_t              deadline,
                         const udpard_prio_t            priority,
-                        const uint64_t                 request_topic_hash,
-                        const uint64_t                 request_transfer_id,
                         const udpard_remote_t          remote,
                         const udpard_bytes_scattered_t payload,
-                        void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t),
+                        void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t), // NULL if best-effort.
                         const udpard_user_context_t user,
                         uint64_t* const             out_transfer_id)
 {
@@ -1287,45 +1296,19 @@ bool udpard_tx_push_p2p(udpard_tx_t* const             self,
     bool ok = (self != NULL) && (deadline >= now) && (now >= 0) && (self->local_uid != 0) && (iface_bitmap != 0) &&
               (priority < UDPARD_PRIORITY_COUNT) && ((payload.bytes.data != NULL) || (payload.bytes.size == 0U));
     if (ok) {
-        // Serialize the P2P header and prepend it to the payload.
-        byte_t  header[UDPARD_P2P_HEADER_BYTES];
-        byte_t* ptr = header;
-        *ptr++      = P2P_KIND_RESPONSE;
-        ptr += 7U; // Reserved bytes.
-        ptr = serialize_u64(ptr, request_topic_hash);
-        ptr = serialize_u64(ptr, request_transfer_id);
-        UDPARD_ASSERT((ptr - header) == UDPARD_P2P_HEADER_BYTES);
-        (void)ptr;
-        const udpard_bytes_scattered_t full_payload = { .bytes = { .size = UDPARD_P2P_HEADER_BYTES, .data = header },
-                                                        .next  = &payload };
-        // Enqueue the transfer, having propagated the scheduler state beforehand.
         const meta_t meta = {
             .priority              = priority,
-            .flag_ack              = feedback != NULL,
-            .transfer_payload_size = (uint32_t)bytes_scattered_size(full_payload),
+            .flag_reliable         = feedback != NULL,
+            .transfer_payload_size = (uint32_t)bytes_scattered_size(payload),
             .transfer_id           = self->p2p_transfer_id++,
             .sender_uid            = self->local_uid,
             .topic_hash            = remote.uid,
         };
         tx_transfer_t* tr = NULL;
-        ok                = tx_push(self, //
-                     now,
-                     deadline,
-                     meta,
-                     iface_bitmap,
-                     remote.endpoints,
-                     full_payload,
-                     feedback,
-                     user,
-                     &tr);
-        if (ok) {
-            UDPARD_ASSERT(tr != NULL);
-            tr->remote_topic_hash  = request_topic_hash;
-            tr->remote_transfer_id = request_transfer_id;
-            UDPARD_ASSERT(tr->transfer_id == meta.transfer_id);
-            if (out_transfer_id != NULL) {
-                *out_transfer_id = tr->transfer_id;
-            }
+        ok = tx_push(self, now, deadline, meta, iface_bitmap, remote.endpoints, payload, feedback, user, &tr);
+        UDPARD_ASSERT((!ok) || (tr->transfer_id == meta.transfer_id));
+        if (ok && (out_transfer_id != NULL)) {
+            *out_transfer_id = tr->transfer_id;
         }
     }
     return ok;
@@ -2229,7 +2212,7 @@ static void rx_session_update_ordered(rx_session_t* const    self,
                        &rx->errors_transfer_malformed);
         if (slot->state == rx_slot_done) {
             UDPARD_ASSERT(rx_session_is_transfer_interned(self, slot->transfer_id));
-            if (frame->meta.flag_ack) {
+            if (frame->meta.flag_reliable) {
                 // Payload view: ((udpard_fragment_t*)cavl2_min(slot->fragments))->view
                 tx_send_ack(rx, ts, slot->priority, self->port->topic_hash, slot->transfer_id, self->remote);
             }
@@ -2239,7 +2222,7 @@ static void rx_session_update_ordered(rx_session_t* const    self,
         // Note: transfers that are no longer retained in the history will not solicit an ACK response,
         // meaning that the sender will not get a confirmation if the retransmitted transfer is too old.
         // We assume that RX_TRANSFER_HISTORY_COUNT is enough to cover all sensible use cases.
-        if ((is_interned || is_ejected) && frame->meta.flag_ack && (frame->base.offset == 0U)) {
+        if ((is_interned || is_ejected) && frame->meta.flag_reliable && (frame->base.offset == 0U)) {
             // Payload view: frame->base.payload
             tx_send_ack(rx, ts, frame->meta.priority, self->port->topic_hash, frame->meta.transfer_id, self->remote);
         }
@@ -2273,13 +2256,13 @@ static void rx_session_update_unordered(rx_session_t* const    self,
                        &rx->errors_oom,
                        &rx->errors_transfer_malformed);
         if (slot->state == rx_slot_done) {
-            if (frame->meta.flag_ack) { // Payload view: ((udpard_fragment_t*)cavl2_min(slot->fragments))->view
+            if (frame->meta.flag_reliable) { // Payload view: ((udpard_fragment_t*)cavl2_min(slot->fragments))->view
                 tx_send_ack(rx, ts, slot->priority, self->port->topic_hash, slot->transfer_id, self->remote);
             }
             rx_session_eject(self, rx, slot);
         }
-    } else {                                                      // retransmit ACK if needed
-        if (frame->meta.flag_ack && (frame->base.offset == 0U)) { // Payload view: frame->base.payload
+    } else {                                                           // retransmit ACK if needed
+        if (frame->meta.flag_reliable && (frame->base.offset == 0U)) { // Payload view: frame->base.payload
             UDPARD_ASSERT(rx_session_is_transfer_ejected(self, frame->meta.transfer_id));
             tx_send_ack(rx, ts, frame->meta.priority, self->port->topic_hash, frame->meta.transfer_id, self->remote);
         }
@@ -2416,7 +2399,7 @@ bool udpard_rx_port_new(udpard_rx_port_t* const              self,
                         const udpard_rx_port_vtable_t* const vtable)
 {
     bool ok = (self != NULL) && rx_validate_mem_resources(memory) && (reordering_window >= 0) && (vtable != NULL) &&
-              (vtable->on_message != NULL) && (vtable->on_collision != NULL);
+              (vtable->on_message != NULL);
     if (ok) {
         mem_zero(sizeof(*self), self);
         self->topic_hash                  = topic_hash;
@@ -2447,84 +2430,6 @@ bool udpard_rx_port_new(udpard_rx_port_t* const              self,
     return ok;
 }
 
-/// A thin proxy that reads the P2P header and dispatches the message to the appropriate handler.
-static void rx_p2p_on_message(udpard_rx_t* const rx, udpard_rx_port_t* const port, udpard_rx_transfer_t transfer)
-{
-    udpard_rx_port_p2p_t* const self = (udpard_rx_port_p2p_t*)port;
-
-    // Read the header.
-    udpard_fragment_t* const frag0 = udpard_fragment_seek(transfer.payload, 0);
-    if (frag0->view.size < UDPARD_P2P_HEADER_BYTES) {
-        ++rx->errors_transfer_malformed;
-        udpard_fragment_free_all(transfer.payload, udpard_make_deleter(port->memory.fragment));
-        return; // Bad transfer -- fragmented header. We can still handle it but it's a protocol violation.
-    }
-
-    // Parse the P2P header.
-    const byte_t* ptr  = (const byte_t*)frag0->view.data;
-    const byte_t  kind = *ptr++;
-    ptr += 7U; // reserved
-    uint64_t topic_hash  = 0;
-    uint64_t transfer_id = 0;
-    ptr                  = deserialize_u64(ptr, &topic_hash);
-    ptr                  = deserialize_u64(ptr, &transfer_id);
-    UDPARD_ASSERT((ptr == (UDPARD_P2P_HEADER_BYTES + (byte_t*)frag0->view.data)));
-    (void)ptr;
-
-    // Remove the header from the view and update the transfer metadata.
-    transfer.transfer_id = transfer_id;
-    transfer.payload_size_stored -= UDPARD_P2P_HEADER_BYTES;
-    frag0->view.size -= UDPARD_P2P_HEADER_BYTES;
-    frag0->view.data = UDPARD_P2P_HEADER_BYTES + (byte_t*)(frag0->view.data);
-    // We trimmed the first fragment, hence the offsets of all subsequent fragments need tweaking.
-    for (udpard_fragment_t* f = udpard_fragment_next(frag0); f != NULL; f = udpard_fragment_next(f)) {
-        UDPARD_ASSERT(f->offset >= UDPARD_P2P_HEADER_BYTES); // checked this earlier indirectly
-        f->offset -= UDPARD_P2P_HEADER_BYTES;
-    }
-
-    // Process the data depending on the kind.
-    if (kind == P2P_KIND_ACK) {
-        tx_receive_ack(rx, topic_hash, transfer_id);
-        udpard_fragment_free_all(transfer.payload, udpard_make_deleter(port->memory.fragment));
-    } else if (kind == P2P_KIND_RESPONSE) {
-        self->vtable->on_message(rx, self, (udpard_rx_transfer_p2p_t){ .base = transfer, .topic_hash = topic_hash });
-    } else { // malformed
-        ++rx->errors_transfer_malformed;
-        udpard_fragment_free_all(transfer.payload, udpard_make_deleter(port->memory.fragment));
-    }
-}
-
-static void rx_p2p_on_collision(udpard_rx_t* const rx, udpard_rx_port_t* const port, const udpard_remote_t remote)
-{
-    (void)rx;
-    (void)port;
-    (void)remote;
-    // A hash collision on a P2P port simply means that someone sent a transfer to the wrong unicast endpoint.
-    // This could happen if nodes swapped UDP/IP endpoints live, or if there are multiple nodes sharing the
-    // same UDP endpoint (same socket). Simply ignore it as there is nothing to do.
-}
-
-bool udpard_rx_port_new_p2p(udpard_rx_port_p2p_t* const              self,
-                            const uint64_t                           local_uid,
-                            const size_t                             extent,
-                            const udpard_rx_mem_resources_t          memory,
-                            const udpard_rx_port_p2p_vtable_t* const vtable)
-{
-    static const udpard_rx_port_vtable_t proxy = { .on_message   = rx_p2p_on_message,
-                                                   .on_collision = rx_p2p_on_collision };
-    if ((self != NULL) && (vtable != NULL) && (vtable->on_message != NULL)) {
-        self->vtable = vtable;
-        return udpard_rx_port_new((udpard_rx_port_t*)self, //
-                                  local_uid,
-                                  extent + UDPARD_P2P_HEADER_BYTES,
-                                  udpard_rx_unordered,
-                                  0,
-                                  memory,
-                                  &proxy);
-    }
-    return false;
-}
-
 void udpard_rx_port_free(udpard_rx_t* const rx, udpard_rx_port_t* const port)
 {
     if ((rx != NULL) && (port != NULL)) {
@@ -2533,6 +2438,17 @@ void udpard_rx_port_free(udpard_rx_t* const rx, udpard_rx_port_t* const port)
                             &rx->list_session_by_animation,
                             &rx->index_session_by_reordering);
         }
+    }
+}
+
+static void rx_accept_ack(udpard_rx_t* const rx, const udpard_bytes_t message)
+{
+    if (message.size >= ACK_SIZE_BYTES) {
+        uint64_t topic_hash  = 0;
+        uint64_t transfer_id = 0;
+        (void)deserialize_u64(((const byte_t*)message.data) + 0U, &topic_hash);
+        (void)deserialize_u64(((const byte_t*)message.data) + 8U, &transfer_id);
+        tx_receive_ack(rx, topic_hash, transfer_id);
     }
 }
 
@@ -2558,12 +2474,20 @@ bool udpard_rx_port_push(udpard_rx_t* const       rx,
         frame.base.origin = datagram_payload; // Take ownership of the payload.
         if (frame_valid) {
             if (frame.meta.topic_hash == port->topic_hash) {
-                port->vtable_private->accept(rx, port, timestamp, source_ep, &frame, payload_deleter, iface_index);
+                if (!frame.meta.flag_acknowledgement) {
+                    port->vtable_private->accept(rx, port, timestamp, source_ep, &frame, payload_deleter, iface_index);
+                } else {
+                    UDPARD_ASSERT(frame.base.offset == 0); // checked by the frame parser
+                    rx_accept_ack(rx, frame.base.payload);
+                    mem_free_payload(payload_deleter, frame.base.origin);
+                }
             } else { // Collisions are discovered early so that we don't attempt to allocate sessions for them.
                 mem_free_payload(payload_deleter, frame.base.origin);
                 udpard_remote_t remote        = { .uid = frame.meta.sender_uid };
                 remote.endpoints[iface_index] = source_ep;
-                port->vtable->on_collision(rx, port, remote);
+                if (port->vtable->on_collision != NULL) {
+                    port->vtable->on_collision(rx, port, remote);
+                }
             }
         } else {
             mem_free_payload(payload_deleter, frame.base.origin);

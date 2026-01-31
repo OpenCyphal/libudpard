@@ -80,20 +80,6 @@ extern "C"
 
 #define UDPARD_IFACE_BITMAP_ALL ((1U << UDPARD_IFACE_COUNT_MAX) - 1U)
 
-/// All P2P transfers have a fixed prefix in the payload, handled by the library transparently for the application,
-/// defined as follows in DSDL notation:
-///
-///     uint8 KIND_RESPONSE = 0  # The topic hash and transfer-ID specify which message this is a response to.
-///     uint8 KIND_ACK = 1       # The topic hash and transfer-ID specify which transfer is being acknowledged.
-///     uint8 kind
-///     void56
-///     uint64 topic_hash
-///     uint64 transfer_id
-///     # Payload follows only for KIND_RESPONSE.
-///
-/// The extent of P2P ports includes this header; udpard_rx_port_new_p2p adds it automatically.
-#define UDPARD_P2P_HEADER_BYTES 24U
-
 /// Timestamps supplied by the application must be non-negative monotonically increasing counts of microseconds.
 typedef int64_t udpard_us_t;
 
@@ -159,7 +145,9 @@ typedef struct udpard_bytes_mut_t
 } udpard_bytes_mut_t;
 
 /// The size can be changed arbitrarily. This value is a compromise between copy size and footprint and utility.
-#define UDPARD_USER_CONTEXT_PTR_COUNT 4
+#ifndef UDPARD_USER_CONTEXT_PTR_COUNT
+#define UDPARD_USER_CONTEXT_PTR_COUNT 2
+#endif
 
 /// The library carries the user-provided context from inputs to outputs without interpreting it,
 /// allowing the application to associate its own data with various entities inside the library.
@@ -350,13 +338,8 @@ typedef struct udpard_tx_mem_resources_t
 } udpard_tx_mem_resources_t;
 
 /// Outcome notification for a reliable transfer previously scheduled for transmission.
-/// For P2P transfers, the topic hash and the transfer-ID are taken from the request header this response targets,
-/// not from the locally assigned response metadata.
 typedef struct udpard_tx_feedback_t
 {
-    uint64_t topic_hash;
-    uint64_t transfer_id;
-
     udpard_user_context_t user; ///< Same value that was passed to udpard_tx_push().
 
     /// The number of remote nodes that acknowledged the reception of the transfer.
@@ -546,19 +529,11 @@ bool udpard_tx_push(udpard_tx_t* const             self,
                     const udpard_user_context_t user);
 
 /// This is a specialization of the general push function for P2P transfers.
-/// It is used to send P2P responses to messages received from topics; the request_* values shall be taken from
-/// the message transfer that is being responded to. The topic_hash and the transfer_id fields of the feedback struct
-/// will be set to the request_topic_hash and request_transfer_id values, respectively.
 /// If out_transfer_id is not NULL, the assigned internal transfer-ID is stored there for use with udpard_tx_cancel_p2p.
-/// P2P transfers are a bit more complex because they carry some additional metadata that is automatically
-/// composed/parsed by the library transparently for the application.
-/// The size of the serialized payload will include UDPARD_P2P_HEADER_BYTES additional bytes for the P2P header.
 bool udpard_tx_push_p2p(udpard_tx_t* const             self,
                         const udpard_us_t              now,
                         const udpard_us_t              deadline,
                         const udpard_prio_t            priority,
-                        const uint64_t                 request_topic_hash,
-                        const uint64_t                 request_transfer_id,
                         const udpard_remote_t          remote, // Endpoints may be invalid for some ifaces.
                         const udpard_bytes_scattered_t payload,
                         void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t), // NULL if best-effort.
@@ -745,7 +720,11 @@ typedef struct udpard_rx_port_vtable_t
 {
     /// A new message is received on a port. The handler takes ownership of the payload; it must free it after use.
     void (*on_message)(udpard_rx_t*, udpard_rx_port_t*, udpard_rx_transfer_t);
+
     /// A topic hash collision is detected on a port.
+    /// On P2P ports, this indicates that the destination UID doesn't match the local UID (misaddressed message);
+    /// safe to ignore.
+    /// May be NULL if the application is not interested.
     void (*on_collision)(udpard_rx_t*, udpard_rx_port_t*, udpard_remote_t);
 } udpard_rx_port_vtable_t;
 
@@ -758,7 +737,6 @@ struct udpard_rx_port_t
 
     /// Transfer payloads exceeding this extent may be truncated.
     /// The total size of the received payload may still exceed this extent setting by some small margin.
-    /// For P2P ports, UDPARD_P2P_HEADER_BYTES must be included in this value (the library takes care of this).
     size_t extent;
 
     /// Behavior undefined if the reassembly mode or the reordering window are switched on a live port.
@@ -840,30 +818,6 @@ struct udpard_rx_transfer_t
     udpard_fragment_t* payload;
 };
 
-/// A P2P transfer carries a response to a message published earlier.
-/// The transfer-ID in the base structure identifies the original message being responded to.
-/// The topic_hash field identifies the topic of the original message.
-struct udpard_rx_transfer_p2p_t
-{
-    udpard_rx_transfer_t base;
-    uint64_t             topic_hash;
-};
-
-/// A specialization of udpard_rx_port_vtable_t for P2P ports.
-typedef struct udpard_rx_port_p2p_vtable_t
-{
-    /// A new message is received on a port. The handler takes ownership of the payload; it must free it after use.
-    void (*on_message)(udpard_rx_t*, udpard_rx_port_p2p_t*, udpard_rx_transfer_p2p_t);
-} udpard_rx_port_p2p_vtable_t;
-
-/// A specialization of udpard_rx_port_t for the local node's P2P port.
-/// Each node must have exactly one P2P port, which is used for P2P transfers and acknowledgments.
-struct udpard_rx_port_p2p_t
-{
-    udpard_rx_port_t                   base;
-    const udpard_rx_port_p2p_vtable_t* vtable;
-};
-
 /// The RX instance holds no resources and can be destroyed at any time by simply freeing all its ports first
 /// using udpard_rx_port_free(), then discarding the instance itself. The self pointer must not be NULL.
 /// The TX instance must be initialized beforehand, unless the application wants to only listen,
@@ -885,8 +839,7 @@ void udpard_rx_poll(udpard_rx_t* const self, const udpard_us_t now);
 ///     3. Read data from the sockets continuously and forward each datagram to udpard_rx_port_push(),
 ///        along with the index of the redundant interface the datagram was received on.
 ///
-/// For P2P ports, the procedure is similar except that the appropriate function is udpard_rx_port_new_p2p().
-/// There must be exactly one P2P port per node.
+/// For P2P ports, the procedure is identical. There must be exactly one P2P port per node.
 ///
 /// The extent defines the maximum possible size of received objects, considering also possible future data type
 /// versions with new fields. It is safe to pick larger values. Note well that the extent is not the same thing as
@@ -912,14 +865,6 @@ bool udpard_rx_port_new(udpard_rx_port_t* const              self,
                         const udpard_us_t                    reordering_window,
                         const udpard_rx_mem_resources_t      memory,
                         const udpard_rx_port_vtable_t* const vtable);
-
-/// Same as udpard_rx_port_new() but explicitly indicates that this is the local node's P2P port.
-/// UDPARD_P2P_HEADER_BYTES will be added to the specified extent value.
-bool udpard_rx_port_new_p2p(udpard_rx_port_p2p_t* const              self,
-                            const uint64_t                           local_uid,
-                            const size_t                             extent,
-                            const udpard_rx_mem_resources_t          memory,
-                            const udpard_rx_port_p2p_vtable_t* const vtable);
 
 /// Returns all memory allocated for the sessions, slots, fragments, etc of the given port.
 /// This is usable with udpard_rx_port_p2p_t as well via the base member.
