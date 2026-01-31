@@ -546,6 +546,8 @@ static bool header_deserialize(const udpard_bytes_mut_t dgram_payload,
             ok = ok && ((0 < *frame_payload_offset) || (crc_full(out_payload->size, out_payload->data) == *prefix_crc));
             // ACK frame requires zero offset.
             ok = ok && ((!out_meta->flag_acknowledgement) || (*frame_payload_offset == 0U));
+            // Detect impossible flag combinations.
+            ok = ok && (!(out_meta->flag_reliable && out_meta->flag_acknowledgement));
         } else {
             ok = false;
         }
