@@ -72,9 +72,6 @@ typedef unsigned char byte_t; ///< For compatibility with platforms where byte s
 static_assert((UDPARD_IPv4_SUBJECT_ID_MAX & (UDPARD_IPv4_SUBJECT_ID_MAX + 1)) == 0,
               "UDPARD_IPv4_SUBJECT_ID_MAX must be one less than a power of 2");
 
-#define P2P_KIND_RESPONSE 0U
-#define P2P_KIND_ACK      1U
-
 #define BIG_BANG   INT64_MIN
 #define HEAT_DEATH INT64_MAX
 

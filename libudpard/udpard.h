@@ -529,6 +529,8 @@ bool udpard_tx_push(udpard_tx_t* const             self,
                     const udpard_user_context_t user);
 
 /// This is a specialization of the general push function for P2P transfers.
+/// P2P transfers treat the topic hash as the destination node's UID.
+/// The transfer-ID counter is shared for all P2P outgoing P2P transfers and is managed automatically.
 /// If out_transfer_id is not NULL, the assigned internal transfer-ID is stored there for use with udpard_tx_cancel_p2p.
 bool udpard_tx_push_p2p(udpard_tx_t* const             self,
                         const udpard_us_t              now,
@@ -701,10 +703,8 @@ typedef struct udpard_rx_mem_resources_t
     udpard_mem_t fragment;
 } udpard_rx_mem_resources_t;
 
-typedef struct udpard_rx_port_t         udpard_rx_port_t;
-typedef struct udpard_rx_port_p2p_t     udpard_rx_port_p2p_t;
-typedef struct udpard_rx_transfer_t     udpard_rx_transfer_t;
-typedef struct udpard_rx_transfer_p2p_t udpard_rx_transfer_p2p_t;
+typedef struct udpard_rx_port_t     udpard_rx_port_t;
+typedef struct udpard_rx_transfer_t udpard_rx_transfer_t;
 
 /// RX port mode for transfer reassembly behavior.
 typedef enum udpard_rx_mode_t
@@ -867,7 +867,6 @@ bool udpard_rx_port_new(udpard_rx_port_t* const              self,
                         const udpard_rx_port_vtable_t* const vtable);
 
 /// Returns all memory allocated for the sessions, slots, fragments, etc of the given port.
-/// This is usable with udpard_rx_port_p2p_t as well via the base member.
 /// Does not free the port itself since it is allocated by the application rather than the library,
 /// and does not alter the RX instance aside from unlinking the port from it.
 /// It is safe to invoke this at any time, but the port instance shall not be used again unless re-initialized.
