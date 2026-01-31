@@ -28,15 +28,16 @@ next-generation intelligent vehicles: manned and unmanned aircraft, spacecraft, 
 - Robust message ordering recovery for ordering-sensitive applications (e.g., state estimators, control loops)
   with well-defined deterministic recovery in the event of lost messages.
 - Packet loss mitigation via:
-  - redundant interfaces (packet lost on one interface may be received on another, transparent to the application);
   - reliable topics (retransmit until acknowledged; callback notifications for successful/failed deliveries).
-- Heap not required; the library can be used with fixed-size block pool allocators.
+  - redundant interfaces (packet lost on one interface may be received on another, transparent to the application);
+- Heap not required (but supported); the library can be used with fixed-size block pool allocators.
 - Detailed time complexity and memory requirement models for the benefit of real-time high-integrity applications.
+- Highly scalable: designed to handle thousands of topics and hundreds of concurrent transfers with minimal resources.
 - Runs anywhere out of the box, including extremely resource-constrained baremetal environments with ~100K ROM/RAM.
   No porting required.
 - Partial MISRA C compliance (reach out to <https://forum.opencyphal.org>).
 - Full implementation in a single C file with only 2k lines of straightforward C99!
-- Extensive test coverage.
+- Extensive verification suite.
 
 ## Usage
 
@@ -68,13 +69,9 @@ standards-compliant C99 compiler is available.
 
 **Read the API docs in [`libudpard/udpard.h`](libudpard/udpard.h).**
 
-## See also
-
-- [Nunavut transpiler](https://github.com/OpenCyphal/nunavut) for DSDL message (de)serialization.
-
 ## Revisions
 
-### v3.0
+### v3.0 -- WORK IN PROGRESS
 
 The library has been redesigned from scratch to support Cyphal v1.1, named topics, and reliable transfers.
 No porting guide is provided since the changes are too significant;
@@ -83,7 +80,7 @@ please refer to the new API docs in `libudpard/udpard.h`.
 ### v2.0
 
 - Updating from LibUDPard v1 to v2 involves several significant changes to improve memory management and payload handling.
-- Please follow [MIGRATION_v1.x_to_v2.0](MIGRATION_v1.x_to_v2.0.md) guide and carefully update your code.
+- Please follow `MIGRATION_v1.x_to_v2.0.md` guide (available in v2 tree).
 
 ### v1.0
 
