@@ -62,6 +62,17 @@ constexpr udpard_tx_vtable_t tx_vtable{ .eject_subject = &capture_tx_frame_subje
 constexpr udpard_deleter_vtable_t tx_refcount_deleter_vt{ .free = &tx_refcount_free };
 constexpr udpard_deleter_t        tx_payload_deleter{ .vtable = &tx_refcount_deleter_vt, .context = nullptr };
 
+// Check the ACK flag in the Cyphal/UDP header.
+constexpr size_t HeaderSizeBytes = 48U;
+bool             is_ack_frame(const udpard_bytes_mut_t& datagram)
+{
+    if (datagram.size < HeaderSizeBytes) {
+        return false;
+    }
+    const auto* p = static_cast<const uint8_t*>(datagram.data);
+    return (p[1] & 0x02U) != 0U;
+}
+
 // --------------------------------------------------------------------------------------------------------------------
 // FEEDBACK AND CONTEXT STRUCTURES
 // --------------------------------------------------------------------------------------------------------------------
@@ -70,8 +81,6 @@ struct FeedbackState
 {
     size_t   count            = 0;
     uint16_t acknowledgements = 0;
-    uint64_t topic_hash       = 0;
-    uint64_t transfer_id      = 0;
 };
 
 void record_feedback(udpard_tx_t*, const udpard_tx_feedback_t fb)
@@ -80,8 +89,6 @@ void record_feedback(udpard_tx_t*, const udpard_tx_feedback_t fb)
     if (st != nullptr) {
         st->count++;
         st->acknowledgements = fb.acknowledgements;
-        st->topic_hash       = fb.topic_hash;
-        st->transfer_id      = fb.transfer_id;
     }
 }
 
@@ -98,7 +105,6 @@ struct NodeBTopicContext
 struct NodeAResponseContext
 {
     std::vector<uint8_t> received_response;
-    uint64_t             topic_hash     = 0;
     uint64_t             transfer_id    = 0;
     size_t               response_count = 0;
 };
@@ -145,36 +151,34 @@ constexpr udpard_rx_port_vtable_t topic_callbacks{ .on_message   = &node_b_on_to
                                                    .on_collision = &on_collision };
 
 // Node A's P2P response reception callback - receives the response from B
-void node_a_on_p2p_response(udpard_rx_t* const             rx,
-                            udpard_rx_port_p2p_t* const    port,
-                            const udpard_rx_transfer_p2p_t transfer)
+void node_a_on_p2p_response(udpard_rx_t* const rx, udpard_rx_port_t* const port, const udpard_rx_transfer_t transfer)
 {
     auto* node_ctx = static_cast<NodeContext*>(rx->user);
     auto* ctx      = node_ctx->response_ctx;
     if (ctx == nullptr) {
-        udpard_fragment_free_all(transfer.base.payload, udpard_make_deleter(port->base.memory.fragment));
+        udpard_fragment_free_all(transfer.payload, udpard_make_deleter(port->memory.fragment));
         return;
     }
     ctx->response_count++;
-    ctx->topic_hash  = transfer.topic_hash;
-    ctx->transfer_id = transfer.base.transfer_id;
+    ctx->transfer_id = transfer.transfer_id;
 
-    ctx->received_response.resize(transfer.base.payload_size_stored);
-    const udpard_fragment_t* cursor = transfer.base.payload;
-    (void)udpard_fragment_gather(&cursor, 0, transfer.base.payload_size_stored, ctx->received_response.data());
+    ctx->received_response.resize(transfer.payload_size_stored);
+    const udpard_fragment_t* cursor = transfer.payload;
+    (void)udpard_fragment_gather(&cursor, 0, transfer.payload_size_stored, ctx->received_response.data());
 
-    udpard_fragment_free_all(transfer.base.payload, udpard_make_deleter(port->base.memory.fragment));
+    udpard_fragment_free_all(transfer.payload, udpard_make_deleter(port->memory.fragment));
 }
 
-constexpr udpard_rx_port_p2p_vtable_t p2p_response_callbacks{ .on_message = &node_a_on_p2p_response };
+constexpr udpard_rx_port_vtable_t p2p_response_callbacks{ .on_message   = &node_a_on_p2p_response,
+                                                          .on_collision = &on_collision };
 
 // ACK-only P2P port callback (for receiving ACKs, which have no user payload)
-void on_ack_only(udpard_rx_t*, udpard_rx_port_p2p_t* port, const udpard_rx_transfer_p2p_t tr)
+void on_ack_only(udpard_rx_t*, udpard_rx_port_t* port, const udpard_rx_transfer_t tr)
 {
-    udpard_fragment_free_all(tr.base.payload, udpard_make_deleter(port->base.memory.fragment));
+    udpard_fragment_free_all(tr.payload, udpard_make_deleter(port->memory.fragment));
 }
 
-constexpr udpard_rx_port_p2p_vtable_t ack_only_callbacks{ .on_message = &on_ack_only };
+constexpr udpard_rx_port_vtable_t ack_only_callbacks{ .on_message = &on_ack_only, .on_collision = &on_collision };
 
 // --------------------------------------------------------------------------------------------------------------------
 // TEST: Basic topic message with P2P response flow
@@ -264,8 +268,9 @@ void test_topic_with_p2p_response()
     a_rx.user = &a_node_ctx;
 
     // A's P2P port for receiving responses and ACKs
-    udpard_rx_port_p2p_t a_p2p_port{};
-    TEST_ASSERT_TRUE(udpard_rx_port_new_p2p(&a_p2p_port, node_a_uid, 4096, a_rx_mem, &p2p_response_callbacks));
+    udpard_rx_port_t a_p2p_port{};
+    TEST_ASSERT_TRUE(
+      udpard_rx_port_new(&a_p2p_port, node_a_uid, 4096, udpard_rx_unordered, 0, a_rx_mem, &p2p_response_callbacks));
 
     // Node B: single TX, single RX (linked to TX for ACK processing)
     udpard_tx_t                b_tx{};
@@ -286,9 +291,9 @@ void test_topic_with_p2p_response()
       udpard_rx_port_new(&b_topic_port, topic_hash, 4096, udpard_rx_unordered, 0, b_rx_mem, &topic_callbacks));
 
     // B's P2P port for receiving response ACKs
-    udpard_rx_port_p2p_t b_p2p_port{};
+    udpard_rx_port_t b_p2p_port{};
     TEST_ASSERT_TRUE(
-      udpard_rx_port_new_p2p(&b_p2p_port, node_b_uid, UDPARD_P2P_HEADER_BYTES, b_rx_mem, &ack_only_callbacks));
+      udpard_rx_port_new(&b_p2p_port, node_b_uid, 16, udpard_rx_unordered, 0, b_rx_mem, &ack_only_callbacks));
 
     // ================================================================================================================
     // PAYLOADS AND FEEDBACK STATES
@@ -349,7 +354,7 @@ void test_topic_with_p2p_response()
     // Deliver ACK frames to A
     for (const auto& frame : b_frames) {
         TEST_ASSERT_TRUE(udpard_rx_port_push(&a_rx,
-                                             reinterpret_cast<udpard_rx_port_t*>(&a_p2p_port),
+                                             &a_p2p_port,
                                              now,
                                              node_b_sources[frame.iface_index],
                                              frame.datagram,
@@ -364,8 +369,6 @@ void test_topic_with_p2p_response()
     udpard_tx_poll(&a_tx, now, UDPARD_IFACE_BITMAP_ALL);
     TEST_ASSERT_EQUAL_size_t(1, a_topic_fb.count);
     TEST_ASSERT_EQUAL_UINT32(1, a_topic_fb.acknowledgements);
-    TEST_ASSERT_EQUAL_UINT64(topic_hash, a_topic_fb.topic_hash);
-    TEST_ASSERT_EQUAL_UINT64(transfer_id, a_topic_fb.transfer_id);
 
     // ================================================================================================================
     // STEP 4: Node B sends a reliable P2P response to A
@@ -376,18 +379,17 @@ void test_topic_with_p2p_response()
         remote_a.endpoints[i] = node_a_sources[i];
     }
 
-    const udpard_bytes_scattered_t response_scat = make_scattered(response_payload.data(), response_payload.size());
+    const udpard_bytes_scattered_t response_scat  = make_scattered(response_payload.data(), response_payload.size());
+    uint64_t                       b_response_tid = 0;
     TEST_ASSERT_TRUE(udpard_tx_push_p2p(&b_tx,
                                         now,
                                         now + 1000000,
                                         udpard_prio_nominal,
-                                        b_topic_ctx.received_topic,
-                                        b_topic_ctx.received_tid,
                                         remote_a,
                                         response_scat,
                                         &record_feedback,
                                         make_user_context(&b_response_fb),
-                                        nullptr));
+                                        &b_response_tid));
 
     b_frames.clear();
     udpard_tx_poll(&b_tx, now, UDPARD_IFACE_BITMAP_ALL);
@@ -396,7 +398,7 @@ void test_topic_with_p2p_response()
     // Deliver response frames to A
     for (const auto& frame : b_frames) {
         TEST_ASSERT_TRUE(udpard_rx_port_push(&a_rx,
-                                             reinterpret_cast<udpard_rx_port_t*>(&a_p2p_port),
+                                             &a_p2p_port,
                                              now,
                                              node_b_sources[frame.iface_index],
                                              frame.datagram,
@@ -408,8 +410,7 @@ void test_topic_with_p2p_response()
 
     // Verify A received the response
     TEST_ASSERT_EQUAL_size_t(1, a_response_ctx.response_count);
-    TEST_ASSERT_EQUAL_UINT64(topic_hash, a_response_ctx.topic_hash);
-    TEST_ASSERT_EQUAL_UINT64(transfer_id, a_response_ctx.transfer_id);
+    TEST_ASSERT_EQUAL_UINT64(b_response_tid, a_response_ctx.transfer_id);
     TEST_ASSERT_EQUAL_size_t(response_payload.size(), a_response_ctx.received_response.size());
     TEST_ASSERT_EQUAL_MEMORY(response_payload.data(), a_response_ctx.received_response.data(), response_payload.size());
 
@@ -422,7 +423,7 @@ void test_topic_with_p2p_response()
     // Deliver ACK frames to B
     for (const auto& frame : a_frames) {
         TEST_ASSERT_TRUE(udpard_rx_port_push(&b_rx,
-                                             reinterpret_cast<udpard_rx_port_t*>(&b_p2p_port),
+                                             &b_p2p_port,
                                              now,
                                              node_a_sources[frame.iface_index],
                                              frame.datagram,
@@ -437,15 +438,13 @@ void test_topic_with_p2p_response()
     udpard_tx_poll(&b_tx, now, UDPARD_IFACE_BITMAP_ALL);
     TEST_ASSERT_EQUAL_size_t(1, b_response_fb.count);
     TEST_ASSERT_EQUAL_UINT32(1, b_response_fb.acknowledgements);
-    TEST_ASSERT_EQUAL_UINT64(topic_hash, b_response_fb.topic_hash);
-    TEST_ASSERT_EQUAL_UINT64(transfer_id, b_response_fb.transfer_id);
 
     // ================================================================================================================
     // CLEANUP
     // ================================================================================================================
     udpard_rx_port_free(&b_rx, &b_topic_port);
-    udpard_rx_port_free(&b_rx, reinterpret_cast<udpard_rx_port_t*>(&b_p2p_port));
-    udpard_rx_port_free(&a_rx, reinterpret_cast<udpard_rx_port_t*>(&a_p2p_port));
+    udpard_rx_port_free(&b_rx, &b_p2p_port);
+    udpard_rx_port_free(&a_rx, &a_p2p_port);
     udpard_tx_free(&a_tx);
     udpard_tx_free(&b_tx);
 
@@ -554,8 +553,9 @@ void test_topic_with_p2p_response_under_loss()
     NodeContext          a_node_ctx{ .topic_ctx = nullptr, .response_ctx = &a_response_ctx };
     a_rx.user = &a_node_ctx;
 
-    udpard_rx_port_p2p_t a_p2p_port{};
-    TEST_ASSERT_TRUE(udpard_rx_port_new_p2p(&a_p2p_port, node_a_uid, 4096, a_rx_mem, &p2p_response_callbacks));
+    udpard_rx_port_t a_p2p_port{};
+    TEST_ASSERT_TRUE(
+      udpard_rx_port_new(&a_p2p_port, node_a_uid, 4096, udpard_rx_unordered, 0, a_rx_mem, &p2p_response_callbacks));
 
     udpard_tx_t                b_tx{};
     std::vector<CapturedFrame> b_frames;
@@ -573,9 +573,9 @@ void test_topic_with_p2p_response_under_loss()
     TEST_ASSERT_TRUE(
       udpard_rx_port_new(&b_topic_port, topic_hash, 4096, udpard_rx_unordered, 0, b_rx_mem, &topic_callbacks));
 
-    udpard_rx_port_p2p_t b_p2p_port{};
+    udpard_rx_port_t b_p2p_port{};
     TEST_ASSERT_TRUE(
-      udpard_rx_port_new_p2p(&b_p2p_port, node_b_uid, UDPARD_P2P_HEADER_BYTES, b_rx_mem, &ack_only_callbacks));
+      udpard_rx_port_new(&b_p2p_port, node_b_uid, 16, udpard_rx_unordered, 0, b_rx_mem, &ack_only_callbacks));
 
     // ================================================================================================================
     // PAYLOADS AND FEEDBACK STATES
@@ -611,6 +611,7 @@ void test_topic_with_p2p_response_under_loss()
     bool             first_response_dropped = false;
     bool             first_resp_ack_dropped = false;
     bool             response_sent          = false;
+    uint64_t         b_response_tid         = 0;
 
     while (iterations < max_iterations) {
         iterations++;
@@ -638,7 +639,7 @@ void test_topic_with_p2p_response_under_loss()
                 }
 
                 (void)udpard_rx_port_push(&b_rx,
-                                          reinterpret_cast<udpard_rx_port_t*>(&b_p2p_port),
+                                          &b_p2p_port,
                                           now,
                                           node_a_sources[frame.iface_index],
                                           frame.datagram,
@@ -656,7 +657,7 @@ void test_topic_with_p2p_response_under_loss()
         // Deliver B's frames (topic ACKs) to A before pushing response
         for (const auto& frame : b_frames) {
             (void)udpard_rx_port_push(&a_rx,
-                                      reinterpret_cast<udpard_rx_port_t*>(&a_p2p_port),
+                                      &a_p2p_port,
                                       now,
                                       node_b_sources[frame.iface_index],
                                       frame.datagram,
@@ -680,13 +681,11 @@ void test_topic_with_p2p_response_under_loss()
                                                 now,
                                                 now + 500000,
                                                 udpard_prio_fast,
-                                                b_topic_ctx.received_topic,
-                                                b_topic_ctx.received_tid,
                                                 remote_a,
                                                 response_scat,
                                                 &record_feedback,
                                                 make_user_context(&b_response_fb),
-                                                nullptr));
+                                                &b_response_tid));
         }
 
         // --- Node B transmits (responses) ---
@@ -694,19 +693,18 @@ void test_topic_with_p2p_response_under_loss()
         udpard_tx_poll(&b_tx, now, UDPARD_IFACE_BITMAP_ALL);
 
         for (const auto& frame : b_frames) {
-            // Check if this frame has a payload (response) vs just an ACK
-            // Response frames have payload data beyond the P2P header
-            const bool has_payload = frame.datagram.size > UDPARD_P2P_HEADER_BYTES;
+            // Check if this frame is an ACK vs response.
+            const bool is_ack = is_ack_frame(frame.datagram);
 
-            // Drop first response (with payload) to test retransmission
-            if (!first_response_dropped && response_sent && has_payload) {
+            // Drop first response (non-ACK) to test retransmission.
+            if (!first_response_dropped && response_sent && !is_ack) {
                 first_response_dropped = true;
                 drop_frame(frame);
                 continue;
             }
 
             (void)udpard_rx_port_push(&a_rx,
-                                      reinterpret_cast<udpard_rx_port_t*>(&a_p2p_port),
+                                      &a_p2p_port,
                                       now,
                                       node_b_sources[frame.iface_index],
                                       frame.datagram,
@@ -736,11 +734,10 @@ void test_topic_with_p2p_response_under_loss()
 
     TEST_ASSERT_EQUAL_size_t(1, b_response_fb.count);
     TEST_ASSERT_EQUAL_UINT32(1, b_response_fb.acknowledgements);
-    TEST_ASSERT_EQUAL_UINT64(topic_hash, b_response_fb.topic_hash);
-    TEST_ASSERT_EQUAL_UINT64(transfer_id, b_response_fb.transfer_id);
 
     TEST_ASSERT_GREATER_OR_EQUAL_size_t(1, b_topic_ctx.message_count);
     TEST_ASSERT_EQUAL_size_t(1, a_response_ctx.response_count);
+    TEST_ASSERT_EQUAL_UINT64(b_response_tid, a_response_ctx.transfer_id);
     TEST_ASSERT_EQUAL_size_t(response_payload.size(), a_response_ctx.received_response.size());
     TEST_ASSERT_EQUAL_MEMORY(response_payload.data(), a_response_ctx.received_response.data(), response_payload.size());
 
@@ -748,8 +745,8 @@ void test_topic_with_p2p_response_under_loss()
     // CLEANUP
     // ================================================================================================================
     udpard_rx_port_free(&b_rx, &b_topic_port);
-    udpard_rx_port_free(&b_rx, reinterpret_cast<udpard_rx_port_t*>(&b_p2p_port));
-    udpard_rx_port_free(&a_rx, reinterpret_cast<udpard_rx_port_t*>(&a_p2p_port));
+    udpard_rx_port_free(&b_rx, &b_p2p_port);
+    udpard_rx_port_free(&a_rx, &a_p2p_port);
     udpard_tx_free(&a_tx);
     udpard_tx_free(&b_tx);
 

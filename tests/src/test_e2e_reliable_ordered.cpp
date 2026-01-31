@@ -48,12 +48,11 @@ uint64_t extract_transfer_id(const udpard_bytes_mut_t& datagram)
     return tid;
 }
 
-// Extract the transfer_id being ACKed from P2P header in payload.
-// P2P header format: kind(1) + reserved(7) + topic_hash(8) + transfer_id(8)
-// Starts at byte 48 (after Cyphal header), so transfer_id is at bytes 64-71.
+// Extract the transfer_id being ACKed from ACK payload.
+// ACK payload format: topic_hash(8) + transfer_id(8).
 uint64_t extract_acked_transfer_id(const udpard_bytes_mut_t& datagram)
 {
-    constexpr size_t p2p_tid_offset = CyphalHeaderSize + 16;
+    constexpr size_t p2p_tid_offset = CyphalHeaderSize + 8;
     if (datagram.size < p2p_tid_offset + 8) {
         return 0;
     }
@@ -95,8 +94,6 @@ struct FeedbackState
 {
     size_t   count            = 0;
     uint16_t acknowledgements = 0;
-    uint64_t topic_hash       = 0;
-    uint64_t transfer_id      = 0;
 };
 
 void record_feedback(udpard_tx_t*, const udpard_tx_feedback_t fb)
@@ -105,8 +102,6 @@ void record_feedback(udpard_tx_t*, const udpard_tx_feedback_t fb)
     if (st != nullptr) {
         st->count++;
         st->acknowledgements = fb.acknowledgements;
-        st->topic_hash       = fb.topic_hash;
-        st->transfer_id      = fb.transfer_id;
     }
 }
 
@@ -126,12 +121,12 @@ void on_collision(udpard_rx_t*, udpard_rx_port_t*, udpard_remote_t) {}
 
 constexpr udpard_rx_port_vtable_t topic_callbacks{ .on_message = &on_message, .on_collision = &on_collision };
 
-void on_ack_only(udpard_rx_t*, udpard_rx_port_p2p_t* port, const udpard_rx_transfer_p2p_t tr)
+void on_ack_only(udpard_rx_t*, udpard_rx_port_t* port, const udpard_rx_transfer_t tr)
 {
-    udpard_fragment_free_all(tr.base.payload, udpard_make_deleter(port->base.memory.fragment));
+    udpard_fragment_free_all(tr.payload, udpard_make_deleter(port->memory.fragment));
 }
 
-constexpr udpard_rx_port_p2p_vtable_t ack_only_callbacks{ .on_message = &on_ack_only };
+constexpr udpard_rx_port_vtable_t ack_only_callbacks{ .on_message = &on_ack_only, .on_collision = &on_collision };
 
 /// Test scenario:
 /// - Sender publishes messages A, B, C (tid=100, 101, 102) in reliable mode, in quick succession.
@@ -220,9 +215,9 @@ void test_reliable_ordered_with_loss_and_reordering()
     udpard_rx_t sender_rx{};
     udpard_rx_new(&sender_rx, &sender_tx);
 
-    udpard_rx_port_p2p_t sender_p2p_port{};
-    TEST_ASSERT_TRUE(udpard_rx_port_new_p2p(
-      &sender_p2p_port, sender_uid, UDPARD_P2P_HEADER_BYTES, sender_rx_mem, &ack_only_callbacks));
+    udpard_rx_port_t sender_p2p_port{};
+    TEST_ASSERT_TRUE(
+      udpard_rx_port_new(&sender_p2p_port, sender_uid, 16, udpard_rx_unordered, 0, sender_rx_mem, &ack_only_callbacks));
 
     // Receiver TX/RX
     udpard_tx_t                receiver_tx{};
@@ -284,13 +279,8 @@ void test_reliable_ordered_with_loss_and_reordering()
     receiver_frames.clear();
     udpard_tx_poll(&receiver_tx, now, UDPARD_IFACE_BITMAP_ALL);
     for (const auto& frame : receiver_frames) {
-        TEST_ASSERT_TRUE(udpard_rx_port_push(&sender_rx,
-                                             reinterpret_cast<udpard_rx_port_t*>(&sender_p2p_port),
-                                             now,
-                                             receiver_source,
-                                             frame.datagram,
-                                             tx_payload_deleter,
-                                             frame.iface_index));
+        TEST_ASSERT_TRUE(udpard_rx_port_push(
+          &sender_rx, &sender_p2p_port, now, receiver_source, frame.datagram, tx_payload_deleter, frame.iface_index));
     }
     receiver_frames.clear();
     udpard_rx_poll(&sender_rx, now);
@@ -390,7 +380,7 @@ void test_reliable_ordered_with_loss_and_reordering()
 
             // Deliver ACK to sender
             TEST_ASSERT_TRUE(udpard_rx_port_push(&sender_rx,
-                                                 reinterpret_cast<udpard_rx_port_t*>(&sender_p2p_port),
+                                                 &sender_p2p_port,
                                                  now,
                                                  receiver_source,
                                                  frame.datagram,
@@ -423,13 +413,9 @@ void test_reliable_ordered_with_loss_and_reordering()
     // Verify sender received ACKs for all transfers
     TEST_ASSERT_EQUAL_size_t(1, fb_b.count);
     TEST_ASSERT_EQUAL_UINT32(1, fb_b.acknowledgements);
-    TEST_ASSERT_EQUAL_UINT64(topic_hash, fb_b.topic_hash);
-    TEST_ASSERT_EQUAL_UINT64(tid_b, fb_b.transfer_id);
 
     TEST_ASSERT_EQUAL_size_t(1, fb_c.count);
     TEST_ASSERT_EQUAL_UINT32(1, fb_c.acknowledgements);
-    TEST_ASSERT_EQUAL_UINT64(topic_hash, fb_c.topic_hash);
-    TEST_ASSERT_EQUAL_UINT64(tid_c, fb_c.transfer_id);
 
     // CRITICAL: Verify receiver got exactly 3 transfers in correct order: A, B, then C
     // This validates that ORDERED mode correctly reorders out-of-order arrivals.
@@ -440,7 +426,7 @@ void test_reliable_ordered_with_loss_and_reordering()
 
     // Cleanup
     udpard_rx_port_free(&receiver_rx, &receiver_topic_port);
-    udpard_rx_port_free(&sender_rx, reinterpret_cast<udpard_rx_port_t*>(&sender_p2p_port));
+    udpard_rx_port_free(&sender_rx, &sender_p2p_port);
     udpard_tx_free(&sender_tx);
     udpard_tx_free(&receiver_tx);
 

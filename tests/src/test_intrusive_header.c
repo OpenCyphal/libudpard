@@ -11,7 +11,7 @@ static void test_header_v2(void)
     byte_t buffer[64];
     meta_t meta_in = {
         .priority              = udpard_prio_high,
-        .flag_ack              = false,
+        .flag_reliable         = false,
         .transfer_payload_size = 0xDEADBEEF,
         .transfer_id           = 0xAABBCCDDEEFF0011ULL,
         .sender_uid            = 0x1122334455667788ULL,
@@ -42,7 +42,7 @@ static void test_header_v2(void)
     TEST_ASSERT_EQUAL(&buffer[HEADER_SIZE_BYTES], payload_out.data);
 
     TEST_ASSERT_EQUAL_UINT8(meta_in.priority, meta_out.priority);
-    TEST_ASSERT_FALSE(meta_out.flag_ack);
+    TEST_ASSERT_FALSE(meta_out.flag_reliable);
     TEST_ASSERT_EQUAL_UINT32(0, frame_index);          // First frame has index 0
     TEST_ASSERT_EQUAL_UINT32(0, frame_payload_offset); // First frame has offset 0
     TEST_ASSERT_EQUAL_UINT32(payload_crc, prefix_crc); // For first frame, prefix_crc equals payload CRC
@@ -78,7 +78,7 @@ static void test_header_deserialize_edge_cases(void)
     byte_t buffer[64];
     meta_t meta_in = {
         .priority              = udpard_prio_nominal,
-        .flag_ack              = true,
+        .flag_reliable         = true,
         .transfer_payload_size = 1000,
         .transfer_id           = 0x1234567890ABCDEFULL,
         .sender_uid            = 0xFEDCBA9876543210ULL,
@@ -150,7 +150,7 @@ static void test_header_deserialize_edge_cases(void)
                                          &prefix_crc,
                                          &payload_out));
 
-    // Test valid case with ack flag (first frame, so prefix_crc must match payload)
+    // Test valid case with reliable flag (first frame, so prefix_crc must match payload)
     const uint32_t payload_crc_v4 = crc_full(sizeof(buffer) - HEADER_SIZE_BYTES, &buffer[HEADER_SIZE_BYTES]);
     header_serialize(buffer, meta_in, 0, 0, payload_crc_v4);
     TEST_ASSERT(header_deserialize((udpard_bytes_mut_t){ .size = sizeof(buffer), .data = buffer },
@@ -159,8 +159,30 @@ static void test_header_deserialize_edge_cases(void)
                                    &frame_payload_offset,
                                    &prefix_crc,
                                    &payload_out));
-    TEST_ASSERT_TRUE(meta_out.flag_ack);
+    TEST_ASSERT_TRUE(meta_out.flag_reliable);
     TEST_ASSERT_EQUAL_UINT32(payload_crc_v4, prefix_crc);
+
+    // Reject ACK frames with nonzero offset.
+    meta_in.flag_reliable        = false;
+    meta_in.flag_acknowledgement = true;
+    header_serialize(buffer, meta_in, 1, 1, 0U);
+    TEST_ASSERT_FALSE(header_deserialize((udpard_bytes_mut_t){ .size = sizeof(buffer), .data = buffer },
+                                         &meta_out,
+                                         &frame_index,
+                                         &frame_payload_offset,
+                                         &prefix_crc,
+                                         &payload_out));
+
+    // Reject ACK + reliable flag combination.
+    meta_in.flag_reliable        = true;
+    meta_in.flag_acknowledgement = true;
+    header_serialize(buffer, meta_in, 0, 0, payload_crc_v4);
+    TEST_ASSERT_FALSE(header_deserialize((udpard_bytes_mut_t){ .size = sizeof(buffer), .data = buffer },
+                                         &meta_out,
+                                         &frame_index,
+                                         &frame_payload_offset,
+                                         &prefix_crc,
+                                         &payload_out));
 }
 
 void setUp(void) {}

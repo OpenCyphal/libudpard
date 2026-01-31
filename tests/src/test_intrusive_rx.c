@@ -1631,17 +1631,16 @@ static bool tx_capture_ack_p2p(udpard_tx_t* const          tx,
       &frame_offset,
       &prefix_crc,
       &payload);
-    if (ok && (frame_index == 0U) && (frame_offset == 0U) && (payload.size == UDPARD_P2P_HEADER_BYTES)) {
-        const byte_t* const pl = (const byte_t*)payload.data;
-        if (pl[0] == P2P_KIND_ACK) {
-            ack_tx_info_t* const info = &self->captured[self->captured_count++];
-            info->priority            = meta.priority;
-            info->transfer_id         = meta.transfer_id;
-            info->topic_hash          = meta.topic_hash;
-            info->destination         = destination;
-            (void)deserialize_u64(pl + 8U, &info->acked_topic_hash);
-            (void)deserialize_u64(pl + 16U, &info->acked_transfer_id);
-        }
+    if (ok && (frame_index == 0U) && (frame_offset == 0U) && meta.flag_acknowledgement &&
+        (payload.size >= ACK_SIZE_BYTES)) {
+        const byte_t* const  pl   = (const byte_t*)payload.data;
+        ack_tx_info_t* const info = &self->captured[self->captured_count++];
+        info->priority            = meta.priority;
+        info->transfer_id         = meta.transfer_id;
+        info->topic_hash          = meta.topic_hash;
+        info->destination         = destination;
+        (void)deserialize_u64(pl + 0U, &info->acked_topic_hash);
+        (void)deserialize_u64(pl + 8U, &info->acked_transfer_id);
     }
     udpard_tx_refcount_dec(ejection->datagram);
     return true;
@@ -1690,7 +1689,6 @@ typedef struct
         udpard_remote_t remote;
         uint64_t        count;
     } collision;
-    uint64_t p2p_topic_hash;
     struct
     {
         ack_tx_info_t last;
@@ -1723,14 +1721,6 @@ static void on_collision(udpard_rx_t* const rx, udpard_rx_port_t* const port, co
     cb_result->collision.count++;
 }
 static const udpard_rx_port_vtable_t callbacks = { &on_message, &on_collision };
-static void                          on_message_p2p(udpard_rx_t* const             rx,
-                                                    udpard_rx_port_p2p_t* const    port,
-                                                    const udpard_rx_transfer_p2p_t transfer)
-{
-    ((callback_result_t*)rx->user)->p2p_topic_hash = transfer.topic_hash;
-    on_message(rx, (udpard_rx_port_t*)port, transfer.base);
-}
-static const udpard_rx_port_p2p_vtable_t callbacks_p2p = { &on_message_p2p };
 
 /// Checks that ack transfers are emitted into the TX queues.
 static void test_rx_ack_enqueued(void)
@@ -1779,7 +1769,7 @@ static void test_rx_ack_enqueued(void)
     TEST_ASSERT_NOT_NULL(ses);
 
     meta_t                  meta = { .priority              = udpard_prio_high,
-                                     .flag_ack              = true,
+                                     .flag_reliable         = true,
                                      .transfer_payload_size = 5,
                                      .transfer_id           = 77,
                                      .sender_uid            = remote_uid,
@@ -1868,7 +1858,7 @@ static void test_rx_session_ordered(void)
     TEST_ASSERT_NOT_NULL(ses);
 
     meta_t meta = { .priority              = udpard_prio_high,
-                    .flag_ack              = true,
+                    .flag_reliable         = true,
                     .transfer_payload_size = 10,
                     .transfer_id           = 42,
                     .sender_uid            = remote_uid,
@@ -1899,7 +1889,7 @@ static void test_rx_session_ordered(void)
     cb_result.message.history[0].payload = NULL;
     cb_result.message.history[0].payload = NULL;
 
-    meta.flag_ack = false;
+    meta.flag_reliable = false;
     now += 500;
     rx_session_update(ses,
                       &rx,
@@ -1912,7 +1902,7 @@ static void test_rx_session_ordered(void)
     TEST_ASSERT_EQUAL(0, alloc_frag.allocated_fragments);
     TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments);
 
-    meta.flag_ack              = true;
+    meta.flag_reliable         = true;
     meta.transfer_payload_size = 3;
     meta.transfer_id           = 44;
     now += 500;
@@ -2011,7 +2001,7 @@ static void test_rx_session_unordered(void)
 
     // Single-frame transfer is ejected immediately.
     meta_t meta = { .priority              = udpard_prio_high,
-                    .flag_ack              = false,
+                    .flag_reliable         = false,
                     .transfer_payload_size = 5,
                     .transfer_id           = 100,
                     .sender_uid            = remote_uid,
@@ -2076,7 +2066,7 @@ static void test_rx_session_unordered(void)
     meta.transfer_id           = 200;
     meta.transfer_payload_size = 10;
     meta.priority              = udpard_prio_fast;
-    meta.flag_ack              = true;
+    meta.flag_reliable         = true;
     now += 500;
     rx_session_update(ses,
                       &rx,
@@ -2154,7 +2144,7 @@ static void test_rx_session_unordered_reject_old(void)
     TEST_ASSERT_NOT_NULL(ses);
 
     meta_t meta = { .priority              = udpard_prio_fast,
-                    .flag_ack              = false,
+                    .flag_reliable         = false,
                     .transfer_payload_size = 3,
                     .transfer_id           = 10,
                     .sender_uid            = remote_uid,
@@ -2188,7 +2178,7 @@ static void test_rx_session_unordered_reject_old(void)
 
     meta.transfer_id           = 10;
     meta.transfer_payload_size = 3;
-    meta.flag_ack              = true;
+    meta.flag_reliable         = true;
     now += 1000;
     rx_session_update(ses,
                       &rx,
@@ -2256,7 +2246,7 @@ static void test_rx_session_unordered_duplicates(void)
     TEST_ASSERT_NOT_NULL(ses);
 
     meta_t meta = { .priority              = udpard_prio_nominal,
-                    .flag_ack              = false,
+                    .flag_reliable         = false,
                     .transfer_payload_size = 2,
                     .transfer_id           = 5,
                     .sender_uid            = remote_uid,
@@ -2332,7 +2322,7 @@ static void test_rx_session_ordered_reject_stale_after_jump(void)
     TEST_ASSERT_NOT_NULL(ses);
 
     meta_t meta = { .priority              = udpard_prio_nominal,
-                    .flag_ack              = false,
+                    .flag_reliable         = false,
                     .transfer_payload_size = 2,
                     .transfer_id           = 10,
                     .sender_uid            = remote_uid,
@@ -2439,7 +2429,7 @@ static void test_rx_session_ordered_zero_reordering_window(void)
     TEST_ASSERT_NOT_NULL(ses);
 
     meta_t meta = { .priority              = udpard_prio_nominal,
-                    .flag_ack              = false,
+                    .flag_reliable         = false,
                     .transfer_payload_size = 2,
                     .transfer_id           = 1,
                     .sender_uid            = remote_uid,
@@ -2496,7 +2486,7 @@ static void test_rx_session_ordered_zero_reordering_window(void)
 
 static void test_rx_port(void)
 {
-    // P2P responses go through the p2p vtable with topic hash exposed.
+    // P2P ports behave like ordinary ports for payload delivery.
     instrumented_allocator_t alloc_frag = { 0 };
     instrumented_allocator_new(&alloc_frag);
     instrumented_allocator_t alloc_session = { 0 };
@@ -2514,27 +2504,20 @@ static void test_rx_port(void)
     callback_result_t cb_result = { 0 };
     rx.user                     = &cb_result;
 
-    const uint64_t       local_uid = 0xCAFED00DCAFED00DULL;
-    udpard_rx_port_p2p_t port      = { 0 };
-    TEST_ASSERT(udpard_rx_port_new_p2p(&port, local_uid, 64, rx_mem, &callbacks_p2p));
+    const uint64_t   local_uid = 0xCAFED00DCAFED00DULL;
+    udpard_rx_port_t port      = { 0 };
+    TEST_ASSERT(udpard_rx_port_new(&port, local_uid, 64, udpard_rx_unordered, 0, rx_mem, &callbacks));
 
-    // Compose a P2P response datagram.
-    const uint64_t topic_hash                           = 0x1122334455667788ULL;
-    const uint64_t resp_tid                             = 55;
-    uint8_t        payload[UDPARD_P2P_HEADER_BYTES + 3] = { 0 };
-    uint8_t*       ptr                                  = payload;
-    *ptr++                                              = P2P_KIND_RESPONSE;
-    ptr += 7U;
-    ptr = serialize_u64(ptr, topic_hash);
-    ptr = serialize_u64(ptr, resp_tid);
-    memcpy(ptr, "abc", 3);
+    // Compose a P2P response datagram without a P2P header.
+    const uint64_t resp_tid   = 55;
+    const uint8_t  payload[3] = { 'a', 'b', 'c' };
 
     meta_t      meta  = { .priority              = udpard_prio_fast,
-                          .flag_ack              = false,
+                          .flag_reliable         = false,
                           .transfer_payload_size = sizeof(payload),
                           .transfer_id           = resp_tid,
                           .sender_uid            = 0x0BADF00D0BADF00DULL,
-                          .topic_hash            = port.base.topic_hash };
+                          .topic_hash            = port.topic_hash };
     rx_frame_t* frame = make_frame_ptr(meta, mem_payload, payload, 0, sizeof(payload));
     byte_t      dgram[HEADER_SIZE_BYTES + sizeof(payload)];
     header_serialize(dgram, meta, 0, 0, frame->base.crc);
@@ -2545,14 +2528,13 @@ static void test_rx_port(void)
 
     udpard_us_t now = 0;
     TEST_ASSERT(udpard_rx_port_push(&rx,
-                                    &port.base,
+                                    &port,
                                     now,
                                     (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1234 },
                                     (udpard_bytes_mut_t){ .data = push_payload, .size = sizeof(dgram) },
                                     del_payload,
                                     0));
     TEST_ASSERT_EQUAL(1, cb_result.message.count);
-    TEST_ASSERT_EQUAL_UINT64(topic_hash, cb_result.p2p_topic_hash);
     TEST_ASSERT_EQUAL(resp_tid, cb_result.message.history[0].transfer_id);
     udpard_fragment_t* const frag = udpard_fragment_seek(cb_result.message.history[0].payload, 0);
     TEST_ASSERT_NOT_NULL(frag);
@@ -2561,94 +2543,12 @@ static void test_rx_port(void)
     udpard_fragment_free_all(cb_result.message.history[0].payload, udpard_make_deleter(mem_frag));
     cb_result.message.history[0].payload = NULL;
 
-    udpard_rx_port_free(&rx, &port.base);
+    udpard_rx_port_free(&rx, &port);
     TEST_ASSERT_EQUAL(0, alloc_session.allocated_fragments);
     TEST_ASSERT_EQUAL(0, alloc_frag.allocated_fragments);
     TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments);
     instrumented_allocator_reset(&alloc_frag);
     instrumented_allocator_reset(&alloc_session);
-    instrumented_allocator_reset(&alloc_payload);
-}
-
-static void test_rx_p2p_fragment_offsets(void)
-{
-    // P2P header trimming must realign fragment offsets.
-    instrumented_allocator_t alloc_frag    = { 0 };
-    instrumented_allocator_t alloc_payload = { 0 };
-    instrumented_allocator_new(&alloc_frag);
-    instrumented_allocator_new(&alloc_payload);
-    const udpard_mem_t     mem_frag    = instrumented_allocator_make_resource(&alloc_frag);
-    const udpard_mem_t     mem_payload = instrumented_allocator_make_resource(&alloc_payload);
-    const udpard_deleter_t del_payload = instrumented_allocator_make_deleter(&alloc_payload);
-
-    udpard_rx_t rx;
-    udpard_rx_new(&rx, NULL);
-    callback_result_t cb_result = { 0 };
-    rx.user                     = &cb_result;
-
-    udpard_rx_port_p2p_t port =
-      (udpard_rx_port_p2p_t){ .vtable = &callbacks_p2p, .base = { .memory = { .fragment = mem_frag } } };
-
-    const uint64_t topic_hash                                      = 0xABCDEF0102030405ULL;
-    const uint64_t tid                                             = 7;
-    const uint8_t  body[]                                          = { 'p', '2', 'p', 'x', 'y' };
-    uint8_t        payload[UDPARD_P2P_HEADER_BYTES + sizeof(body)] = { 0 };
-    uint8_t*       ptr                                             = payload;
-    *ptr++                                                         = P2P_KIND_RESPONSE;
-    ptr += 7U;
-    ptr = serialize_u64(ptr, topic_hash);
-    ptr = serialize_u64(ptr, tid);
-    memcpy(ptr, body, sizeof(body));
-
-    const size_t   total_size = sizeof(payload);
-    const size_t   first_size = UDPARD_P2P_HEADER_BYTES + 2U;
-    udpard_tree_t* root       = NULL;
-    size_t         covered    = 0;
-    TEST_ASSERT_EQUAL(rx_fragment_tree_accepted,
-                      rx_fragment_tree_update(&root,
-                                              mem_frag,
-                                              del_payload,
-                                              make_frame_base(mem_payload, 0, first_size, payload),
-                                              total_size,
-                                              total_size,
-                                              &covered));
-    TEST_ASSERT_EQUAL(
-      rx_fragment_tree_done,
-      rx_fragment_tree_update(&root,
-                              mem_frag,
-                              del_payload,
-                              make_frame_base(mem_payload, first_size, total_size - first_size, payload + first_size),
-                              total_size,
-                              total_size,
-                              &covered));
-
-    udpard_rx_transfer_t transfer = { .priority            = udpard_prio_fast,
-                                      .payload_size_stored = total_size,
-                                      .payload_size_wire   = total_size,
-                                      .payload             = (udpard_fragment_t*)root };
-    rx_p2p_on_message(&rx, (udpard_rx_port_t*)&port, transfer);
-
-    TEST_ASSERT_EQUAL(1, cb_result.message.count);
-    TEST_ASSERT_EQUAL_UINT64(topic_hash, cb_result.p2p_topic_hash);
-    TEST_ASSERT_EQUAL_UINT64(tid, cb_result.message.history[0].transfer_id);
-    TEST_ASSERT_EQUAL_size_t(sizeof(body), cb_result.message.history[0].payload_size_stored);
-
-    udpard_fragment_t* frag0 = udpard_fragment_seek(cb_result.message.history[0].payload, 0);
-    TEST_ASSERT_NOT_NULL(frag0);
-    udpard_fragment_t* frag1 = udpard_fragment_next(frag0);
-    TEST_ASSERT_NOT_NULL(frag1);
-    TEST_ASSERT_EQUAL_size_t(0, frag0->offset);
-    TEST_ASSERT_EQUAL_size_t(first_size - UDPARD_P2P_HEADER_BYTES, frag0->view.size);
-    TEST_ASSERT_EQUAL_size_t(frag0->view.size, frag1->offset);
-    TEST_ASSERT_EQUAL_size_t(sizeof(body) - frag0->view.size, frag1->view.size);
-    TEST_ASSERT_EQUAL_MEMORY(body, frag0->view.data, frag0->view.size);
-    TEST_ASSERT_EQUAL_MEMORY(body + frag0->view.size, frag1->view.data, frag1->view.size);
-
-    udpard_fragment_free_all(cb_result.message.history[0].payload, udpard_make_deleter(mem_frag));
-    cb_result.message.history[0].payload = NULL;
-    TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
-    TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
-    instrumented_allocator_reset(&alloc_frag);
     instrumented_allocator_reset(&alloc_payload);
 }
 
@@ -2677,7 +2577,7 @@ static void test_rx_port_timeouts(void)
       udpard_rx_port_new(&port, 0xBADC0FFEE0DDF00DULL, 128, udpard_rx_ordered, 20 * KILO, rx_mem, &callbacks));
 
     meta_t       meta            = { .priority              = udpard_prio_nominal,
-                                     .flag_ack              = false,
+                                     .flag_reliable         = false,
                                      .transfer_payload_size = 4,
                                      .transfer_id           = 1,
                                      .sender_uid            = 0x1111222233334444ULL,
@@ -2740,7 +2640,7 @@ static void test_rx_port_oom(void)
     TEST_ASSERT(udpard_rx_port_new(&port, 0xCAFEBABECAFEBABEULL, 64, udpard_rx_unordered, 0, rx_mem, &callbacks));
 
     meta_t       meta            = { .priority              = udpard_prio_nominal,
-                                     .flag_ack              = false,
+                                     .flag_reliable         = false,
                                      .transfer_payload_size = 4,
                                      .transfer_id           = 1,
                                      .sender_uid            = 0x0101010101010101ULL,
@@ -2793,8 +2693,9 @@ static void test_rx_port_free_loop(void)
     callback_result_t cb_result = { 0 };
     rx.user                     = &cb_result;
 
-    udpard_rx_port_p2p_t port_p2p = { 0 };
-    TEST_ASSERT(udpard_rx_port_new_p2p(&port_p2p, 0xCAFED00DCAFED00DULL, SIZE_MAX, rx_mem, &callbacks_p2p));
+    udpard_rx_port_t port_p2p = { 0 };
+    TEST_ASSERT(
+      udpard_rx_port_new(&port_p2p, 0xCAFED00DCAFED00DULL, SIZE_MAX, udpard_rx_unordered, 0, rx_mem, &callbacks));
     udpard_rx_port_t port_extra       = { 0 };
     const uint64_t   topic_hash_extra = 0xDEADBEEFF00D1234ULL;
     TEST_ASSERT(udpard_rx_port_new(&port_extra, topic_hash_extra, 1000, udpard_rx_ordered, 5000, rx_mem, &callbacks));
@@ -2805,11 +2706,11 @@ static void test_rx_port_free_loop(void)
     {
         const char* payload = "INCOMPLETE";
         meta_t      meta    = { .priority              = udpard_prio_slow,
-                                .flag_ack              = false,
+                                .flag_reliable         = false,
                                 .transfer_payload_size = (uint32_t)strlen(payload),
                                 .transfer_id           = 10,
                                 .sender_uid            = 0xAAAAULL,
-                                .topic_hash            = port_p2p.base.topic_hash };
+                                .topic_hash            = port_p2p.topic_hash };
         rx_frame_t* frame   = make_frame_ptr(meta, mem_payload, payload, 0, 4);
         byte_t      dgram[HEADER_SIZE_BYTES + 4];
         header_serialize(dgram, meta, 0, 0, frame->base.crc);
@@ -2819,7 +2720,7 @@ static void test_rx_port_free_loop(void)
         memcpy(push_payload, dgram, sizeof(dgram));
         now += 1000;
         TEST_ASSERT(udpard_rx_port_push(&rx,
-                                        &port_p2p.base,
+                                        &port_p2p,
                                         now,
                                         (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1234 },
                                         (udpard_bytes_mut_t){ .data = push_payload, .size = sizeof(dgram) },
@@ -2831,7 +2732,7 @@ static void test_rx_port_free_loop(void)
     {
         const char* payload = "FRAGMENTS";
         meta_t      meta    = { .priority              = udpard_prio_fast,
-                                .flag_ack              = false,
+                                .flag_reliable         = false,
                                 .transfer_payload_size = (uint32_t)strlen(payload),
                                 .transfer_id           = 20,
                                 .sender_uid            = 0xBBBBULL,
@@ -2855,7 +2756,7 @@ static void test_rx_port_free_loop(void)
 
     TEST_ASSERT(alloc_session.allocated_fragments >= 2);
     TEST_ASSERT(alloc_frag.allocated_fragments >= 2);
-    udpard_rx_port_free(&rx, &port_p2p.base);
+    udpard_rx_port_free(&rx, &port_p2p);
     udpard_rx_port_free(&rx, &port_extra);
     TEST_ASSERT_EQUAL_size_t(0, alloc_session.allocated_fragments);
     TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
@@ -2882,14 +2783,6 @@ static void stub_on_collision(udpard_rx_t* const rx, udpard_rx_port_t* const por
     g_collision_count++;
 }
 
-static void stub_on_message_p2p(udpard_rx_t* const             rx,
-                                udpard_rx_port_p2p_t* const    port,
-                                const udpard_rx_transfer_p2p_t transfer)
-{
-    (void)rx;
-    udpard_fragment_free_all(transfer.base.payload, udpard_make_deleter(port->base.memory.fragment));
-}
-
 static udpard_udpip_ep_t make_ep(const uint32_t ip) { return (udpard_udpip_ep_t){ .ip = ip, .port = 1U }; }
 
 static void test_rx_additional_coverage(void)
@@ -2900,6 +2793,19 @@ static void test_rx_additional_coverage(void)
     instrumented_allocator_new(&alloc_ses);
     const udpard_rx_mem_resources_t mem = { .session  = instrumented_allocator_make_resource(&alloc_ses),
                                             .fragment = instrumented_allocator_make_resource(&alloc_frag) };
+    // Memory validation rejects missing hooks.
+    const udpard_mem_vtable_t vtable_no_free  = { .base = { .free = NULL }, .alloc = dummy_alloc };
+    const udpard_mem_vtable_t vtable_no_alloc = { .base = { .free = dummy_free }, .alloc = NULL };
+    udpard_rx_mem_resources_t bad_mem         = mem;
+    bad_mem.session.vtable                    = &vtable_no_free;
+    TEST_ASSERT_FALSE(rx_validate_mem_resources(bad_mem));
+    bad_mem.session.vtable = &vtable_no_alloc;
+    TEST_ASSERT_FALSE(rx_validate_mem_resources(bad_mem));
+    bad_mem                 = mem;
+    bad_mem.fragment.vtable = &vtable_no_free;
+    TEST_ASSERT_FALSE(rx_validate_mem_resources(bad_mem));
+    bad_mem.fragment.vtable = &vtable_no_alloc;
+    TEST_ASSERT_FALSE(rx_validate_mem_resources(bad_mem));
 
     // Session helpers and free paths.
     udpard_rx_port_t port = { .memory            = mem,
@@ -2916,9 +2822,22 @@ static void test_rx_additional_coverage(void)
     ses->slots[0].state       = rx_slot_done;
     ses->slots[0].transfer_id = 5;
     TEST_ASSERT_TRUE(rx_session_is_transfer_interned(ses, 5));
+    ses->reordering_window_deadline = 5;
     // Comparator smoke-test with stable key.
     const rx_reordering_key_t dl_key = { .deadline = 5, .remote_uid = ses->remote.uid };
     (void)cavl_compare_rx_session_by_reordering_deadline(&dl_key, &ses->index_reordering_window);
+    // Comparator branches for UID and deadline ordering.
+    TEST_ASSERT_EQUAL(-1, cavl_compare_rx_session_by_remote_uid(&(uint64_t){ 10 }, &ses->index_remote_uid));
+    TEST_ASSERT_EQUAL(1, cavl_compare_rx_session_by_remote_uid(&(uint64_t){ 100 }, &ses->index_remote_uid));
+    rx_reordering_key_t dl_key_hi = { .deadline = 10, .remote_uid = ses->remote.uid + 1U };
+    TEST_ASSERT_EQUAL(1, cavl_compare_rx_session_by_reordering_deadline(&dl_key_hi, &ses->index_reordering_window));
+    rx_reordering_key_t dl_key_lo = { .deadline = 1, .remote_uid = ses->remote.uid - 1U };
+    TEST_ASSERT_EQUAL(-1, cavl_compare_rx_session_by_reordering_deadline(&dl_key_lo, &ses->index_reordering_window));
+    rx_reordering_key_t dl_key_uid_lo = { .deadline = 5, .remote_uid = ses->remote.uid - 1U };
+    TEST_ASSERT_EQUAL(-1,
+                      cavl_compare_rx_session_by_reordering_deadline(&dl_key_uid_lo, &ses->index_reordering_window));
+    rx_reordering_key_t dl_key_uid_hi = { .deadline = 5, .remote_uid = ses->remote.uid + 1U };
+    TEST_ASSERT_EQUAL(1, cavl_compare_rx_session_by_reordering_deadline(&dl_key_uid_hi, &ses->index_reordering_window));
     udpard_list_t  anim_list  = { 0 };
     udpard_tree_t* by_reorder = NULL;
     cavl2_find_or_insert(&port.index_session_by_remote_uid,
@@ -2950,6 +2869,26 @@ static void test_rx_additional_coverage(void)
     udpard_rx_t rx                = { 0 };
     rx_session_ordered_scan_slots(&ses_busy, &rx, 10, false);
 
+    // Ordered scan resets late busy slots.
+    rx_session_t ses_late;
+    mem_zero(sizeof(ses_late), &ses_late);
+    ses_late.port                 = &port;
+    ses_late.history[0]           = 42;
+    ses_late.slots[0].state       = rx_slot_busy;
+    ses_late.slots[0].transfer_id = 42;
+    rx_session_ordered_scan_slots(&ses_late, &rx, 10, false);
+    TEST_ASSERT_EQUAL(rx_slot_idle, ses_late.slots[0].state);
+
+    // Forced scan ejects a done slot.
+    rx_session_t ses_force;
+    mem_zero(sizeof(ses_force), &ses_force);
+    ses_force.port                 = &port;
+    ses_force.history[0]           = 1;
+    ses_force.slots[0].state       = rx_slot_done;
+    ses_force.slots[0].transfer_id = 100;
+    rx_session_ordered_scan_slots(&ses_force, &rx, 0, true);
+    TEST_ASSERT_EQUAL(rx_slot_idle, ses_force.slots[0].state);
+
     // Slot acquisition covers stale busy, busy eviction, and done eviction.
     rx_session_t ses_slots;
     mem_zero(sizeof(ses_slots), &ses_slots);
@@ -2979,6 +2918,32 @@ static void test_rx_additional_coverage(void)
     slot        = rx_session_get_slot(&ses_slots, &rx, 60, 3);
     TEST_ASSERT_NOT_NULL(slot);
 
+    // Ordered update retransmits ACK for ejected transfers.
+    rx_session_t ses_ack;
+    mem_zero(sizeof(ses_ack), &ses_ack);
+    ses_ack.port        = &port;
+    ses_ack.remote.uid  = 55;
+    ses_ack.history[0]  = 7;
+    ses_ack.initialized = true;
+    rx_frame_t ack_frame;
+    mem_zero(sizeof(ack_frame), &ack_frame);
+    void* ack_buf = mem_res_alloc(mem.fragment, ACK_SIZE_BYTES);
+    TEST_ASSERT_NOT_NULL(ack_buf);
+    memset(ack_buf, 0, ACK_SIZE_BYTES);
+    ack_frame.base.payload               = (udpard_bytes_t){ .data = ack_buf, .size = ACK_SIZE_BYTES };
+    ack_frame.base.origin                = (udpard_bytes_mut_t){ .data = ack_buf, .size = ACK_SIZE_BYTES };
+    ack_frame.base.offset                = 0;
+    ack_frame.meta.priority              = udpard_prio_nominal;
+    ack_frame.meta.flag_reliable         = true;
+    ack_frame.meta.transfer_payload_size = ACK_SIZE_BYTES;
+    ack_frame.meta.transfer_id           = 7;
+    ack_frame.meta.sender_uid            = ses_ack.remote.uid;
+    ack_frame.meta.topic_hash            = port.topic_hash;
+    rx.errors_ack_tx                     = 0;
+    rx.tx                                = NULL;
+    rx_session_update_ordered(&ses_ack, &rx, 0, &ack_frame, instrumented_allocator_make_deleter(&alloc_frag));
+    TEST_ASSERT_EQUAL_UINT64(1U, rx.errors_ack_tx);
+
     // Stateless accept success, OOM, malformed.
     g_collision_count = 0;
     port.vtable       = &(udpard_rx_port_vtable_t){ .on_message = stub_on_message, .on_collision = stub_on_collision };
@@ -3006,46 +2971,22 @@ static void test_rx_additional_coverage(void)
     frame.base.payload.size          = 0;
     frame.meta.transfer_payload_size = 8;
     rx_port_accept_stateless(&rx, &port, 0, make_ep(1), &frame, instrumented_allocator_make_deleter(&alloc_frag), 0);
+    // Stateless accept rejects nonzero offsets.
+    alloc_frag.limit_fragments = SIZE_MAX;
+    void* payload_buf2         = mem_res_alloc(mem.fragment, sizeof(payload));
+    TEST_ASSERT_NOT_NULL(payload_buf2);
+    memcpy(payload_buf2, payload, sizeof(payload));
+    frame.base.payload               = (udpard_bytes_t){ .data = payload_buf2, .size = sizeof(payload) };
+    frame.base.origin                = (udpard_bytes_mut_t){ .data = payload_buf2, .size = sizeof(payload) };
+    frame.base.offset                = 1U;
+    frame.meta.transfer_payload_size = (uint32_t)sizeof(payload);
+    rx_port_accept_stateless(&rx, &port, 0, make_ep(1), &frame, instrumented_allocator_make_deleter(&alloc_frag), 0);
+    frame.base.offset                   = 0;
     udpard_rx_port_t port_stateless_new = { 0 };
     TEST_ASSERT_TRUE(udpard_rx_port_new(&port_stateless_new, 22, 8, udpard_rx_stateless, 0, mem, port.vtable));
     TEST_ASSERT_NOT_NULL(port_stateless_new.vtable_private);
     udpard_rx_port_free(&rx, &port_stateless_new);
     instrumented_allocator_reset(&alloc_frag);
-
-    // P2P ack dispatch.
-    udpard_rx_port_p2p_t port_p2p = { .vtable = &(udpard_rx_port_p2p_vtable_t){ .on_message = stub_on_message_p2p },
-                                      .base   = { .memory = mem } };
-    byte_t               p2p_header[UDPARD_P2P_HEADER_BYTES] = { P2P_KIND_ACK };
-    void*                ack_buf                             = mem_res_alloc(mem.fragment, UDPARD_P2P_HEADER_BYTES);
-    TEST_ASSERT_NOT_NULL(ack_buf);
-    memcpy(ack_buf, p2p_header, UDPARD_P2P_HEADER_BYTES);
-    udpard_fragment_t* frag = (udpard_fragment_t*)mem_res_alloc(mem.fragment, sizeof(udpard_fragment_t));
-    TEST_ASSERT_NOT_NULL(frag);
-    mem_zero(sizeof(*frag), frag);
-    frag->view                    = (udpard_bytes_t){ .data = ack_buf, .size = UDPARD_P2P_HEADER_BYTES };
-    frag->origin                  = (udpard_bytes_mut_t){ .data = ack_buf, .size = UDPARD_P2P_HEADER_BYTES };
-    frag->payload_deleter         = instrumented_allocator_make_deleter(&alloc_frag);
-    udpard_rx_transfer_t transfer = { .payload             = frag,
-                                      .payload_size_stored = UDPARD_P2P_HEADER_BYTES,
-                                      .payload_size_wire   = UDPARD_P2P_HEADER_BYTES };
-    rx_p2p_on_message(&rx, (udpard_rx_port_t*)&port_p2p, transfer);
-    udpard_fragment_t* frag_short = mem_res_alloc(mem.fragment, sizeof(udpard_fragment_t));
-    TEST_ASSERT_NOT_NULL(frag_short);
-    mem_zero(sizeof(*frag_short), frag_short);
-    byte_t small_buf[UDPARD_P2P_HEADER_BYTES - 1] = { 0 };
-    frag_short->view                              = (udpard_bytes_t){ .data = small_buf, .size = sizeof(small_buf) };
-    frag_short->origin =
-      (udpard_bytes_mut_t){ .data = mem_res_alloc(mem.fragment, sizeof(small_buf)), .size = sizeof(small_buf) };
-    frag_short->payload_deleter = instrumented_allocator_make_deleter(&alloc_frag);
-    memcpy(frag_short->origin.data, small_buf, sizeof(small_buf));
-    transfer.payload             = frag_short;
-    rx.errors_transfer_malformed = 0;
-    rx_p2p_on_message(&rx, (udpard_rx_port_t*)&port_p2p, transfer);
-    TEST_ASSERT_GREATER_THAN_UINT64(0, rx.errors_transfer_malformed);
-    rx_p2p_on_collision(&rx, (udpard_rx_port_t*)&port_p2p, (udpard_remote_t){ 0 });
-
-    // P2P constructor failure.
-    TEST_ASSERT_FALSE(udpard_rx_port_new_p2p(&port_p2p, 1U, 8U, mem, &(udpard_rx_port_p2p_vtable_t){ 0 }));
 
     // Port push collision and malformed header.
     udpard_rx_port_t port_normal = { 0 };
@@ -3055,7 +2996,7 @@ static void test_rx_additional_coverage(void)
       &rx, &port_normal, 0, make_ep(2), bad_payload, instrumented_allocator_make_deleter(&alloc_frag), 0));
     byte_t good_dgram[HEADER_SIZE_BYTES + 1] = { 0 };
     meta_t meta                              = { .priority              = udpard_prio_nominal,
-                                                 .flag_ack              = false,
+                                                 .flag_reliable         = false,
                                                  .transfer_payload_size = 1,
                                                  .transfer_id           = 1,
                                                  .sender_uid            = 2,
@@ -3069,7 +3010,10 @@ static void test_rx_additional_coverage(void)
       &rx, &port_normal, 0, make_ep(3), good_payload, instrumented_allocator_make_deleter(&alloc_frag), 1));
     TEST_ASSERT_GREATER_THAN_UINT64(0, g_collision_count);
     udpard_rx_port_free(&rx, &port_normal);
-    udpard_rx_port_free(&rx, (udpard_rx_port_t*)&port_p2p);
+    // Short ACK messages are ignored.
+    rx.errors_ack_tx = 0;
+    rx_accept_ack(&rx, (udpard_bytes_t){ .data = payload, .size = 1U });
+    TEST_ASSERT_EQUAL_UINT64(0, rx.errors_ack_tx);
     instrumented_allocator_reset(&alloc_frag);
     instrumented_allocator_reset(&alloc_ses);
 }
@@ -3099,7 +3043,6 @@ int main(void)
     RUN_TEST(test_rx_session_ordered_zero_reordering_window);
 
     RUN_TEST(test_rx_port);
-    RUN_TEST(test_rx_p2p_fragment_offsets);
     RUN_TEST(test_rx_port_timeouts);
     RUN_TEST(test_rx_port_oom);
     RUN_TEST(test_rx_port_free_loop);

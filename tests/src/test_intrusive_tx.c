@@ -134,6 +134,15 @@ static void test_bytes_scattered_read(void)
         TEST_ASSERT_EQUAL_PTR(&frag, reader.cursor);
         TEST_ASSERT_EQUAL_size_t(frag.bytes.size, reader.position);
     }
+
+    // Size accounts for chained fragments.
+    {
+        const byte_t                   frag_a[] = { 1U, 2U };
+        const byte_t                   frag_b[] = { 3U, 4U, 5U };
+        const udpard_bytes_scattered_t tail     = { .bytes = { .size = sizeof(frag_b), .data = frag_b }, .next = NULL };
+        const udpard_bytes_scattered_t head = { .bytes = { .size = sizeof(frag_a), .data = frag_a }, .next = &tail };
+        TEST_ASSERT_EQUAL_size_t(sizeof(frag_a) + sizeof(frag_b), bytes_scattered_size(head));
+    }
 }
 
 static void test_tx_serialize_header(void)
@@ -148,7 +157,8 @@ static void test_tx_serialize_header(void)
         header_buffer_t buffer;
         const meta_t    meta = {
                .priority              = udpard_prio_fast,
-               .flag_ack              = false,
+               .flag_reliable         = false,
+               .flag_acknowledgement  = false,
                .transfer_payload_size = 12345,
                .transfer_id           = 0xBADC0FFEE0DDF00DULL,
                .sender_uid            = 0x0123456789ABCDEFULL,
@@ -159,12 +169,13 @@ static void test_tx_serialize_header(void)
         // Verify version and priority in first byte
         TEST_ASSERT_EQUAL((HEADER_VERSION | ((unsigned)udpard_prio_fast << 5U)), buffer.data[0]);
     }
-    // Test case 2: Ack flag
+    // Test case 2: Reliable flag
     {
         header_buffer_t buffer;
         const meta_t    meta = {
                .priority              = udpard_prio_nominal,
-               .flag_ack              = true,
+               .flag_reliable         = true,
+               .flag_acknowledgement  = false,
                .transfer_payload_size = 5000,
                .transfer_id           = 0xAAAAAAAAAAAAAAAAULL,
                .sender_uid            = 0xBBBBBBBBBBBBBBBBULL,
@@ -172,7 +183,23 @@ static void test_tx_serialize_header(void)
         };
         (void)header_serialize(buffer.data, meta, 100, 200, 0);
         TEST_ASSERT_EQUAL((HEADER_VERSION | ((unsigned)udpard_prio_nominal << 5U)), buffer.data[0]);
-        TEST_ASSERT_EQUAL(HEADER_FLAG_ACK, buffer.data[1]);
+        TEST_ASSERT_EQUAL(HEADER_FLAG_RELIABLE, buffer.data[1]);
+    }
+    // Test case 3: ACK flag
+    {
+        header_buffer_t buffer;
+        const meta_t    meta = {
+               .priority              = udpard_prio_nominal,
+               .flag_reliable         = false,
+               .flag_acknowledgement  = true,
+               .transfer_payload_size = 16,
+               .transfer_id           = 0x1111111111111111ULL,
+               .sender_uid            = 0x2222222222222222ULL,
+               .topic_hash            = 0x3333333333333333ULL,
+        };
+        (void)header_serialize(buffer.data, meta, 0, 0, 0);
+        TEST_ASSERT_EQUAL((HEADER_VERSION | ((unsigned)udpard_prio_nominal << 5U)), buffer.data[0]);
+        TEST_ASSERT_EQUAL(HEADER_FLAG_ACKNOWLEDGEMENT, buffer.data[1]);
     }
 }
 
@@ -181,6 +208,28 @@ static void test_tx_validation_and_free(void)
     // Invalid memory config fails fast.
     udpard_tx_mem_resources_t bad = { 0 };
     TEST_ASSERT_FALSE(tx_validate_mem_resources(bad));
+    // Reject payload vtables with missing hooks.
+    const udpard_mem_vtable_t vtable_no_free  = { .base = { .free = NULL }, .alloc = dummy_alloc };
+    const udpard_mem_vtable_t vtable_no_alloc = { .base = { .free = noop_free }, .alloc = NULL };
+    const udpard_mem_vtable_t vtable_ok       = { .base = { .free = noop_free }, .alloc = dummy_alloc };
+    udpard_tx_mem_resources_t bad_payload     = { .transfer = { .vtable = &vtable_ok, .context = NULL } };
+    for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
+        bad_payload.payload[i] = (udpard_mem_t){ .vtable = &vtable_no_free, .context = NULL };
+    }
+    TEST_ASSERT_FALSE(tx_validate_mem_resources(bad_payload));
+    for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
+        bad_payload.payload[i] = (udpard_mem_t){ .vtable = &vtable_no_alloc, .context = NULL };
+    }
+    TEST_ASSERT_FALSE(tx_validate_mem_resources(bad_payload));
+    // Reject transfer vtables with missing hooks.
+    udpard_tx_mem_resources_t bad_transfer = bad_payload;
+    for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
+        bad_transfer.payload[i] = (udpard_mem_t){ .vtable = &vtable_ok, .context = NULL };
+    }
+    bad_transfer.transfer = (udpard_mem_t){ .vtable = &vtable_no_free, .context = NULL };
+    TEST_ASSERT_FALSE(tx_validate_mem_resources(bad_transfer));
+    bad_transfer.transfer = (udpard_mem_t){ .vtable = &vtable_no_alloc, .context = NULL };
+    TEST_ASSERT_FALSE(tx_validate_mem_resources(bad_transfer));
 
     instrumented_allocator_t alloc_transfer = { 0 };
     instrumented_allocator_t alloc_payload  = { 0 };
@@ -251,6 +300,26 @@ static void test_tx_comparators_and_feedback(void)
     TEST_ASSERT_EQUAL(1, tx_cavl_compare_deadline(&tkey, &tr.index_deadline));
     tkey.time = 6;
     TEST_ASSERT_EQUAL(-1, tx_cavl_compare_deadline(&tkey, &tr.index_deadline));
+    // Staged comparator covers topic_hash/transfer_id branches.
+    tkey = (tx_time_key_t){ .time = tr.staged_until, .topic_hash = tr.topic_hash - 1, .transfer_id = tr.transfer_id };
+    TEST_ASSERT_EQUAL(-1, tx_cavl_compare_staged(&tkey, &tr.index_staged));
+    tkey.topic_hash = tr.topic_hash + 1;
+    TEST_ASSERT_EQUAL(1, tx_cavl_compare_staged(&tkey, &tr.index_staged));
+    tkey.topic_hash  = tr.topic_hash;
+    tkey.transfer_id = tr.transfer_id - 1;
+    TEST_ASSERT_EQUAL(-1, tx_cavl_compare_staged(&tkey, &tr.index_staged));
+    tkey.transfer_id = tr.transfer_id + 1;
+    TEST_ASSERT_EQUAL(1, tx_cavl_compare_staged(&tkey, &tr.index_staged));
+    // Deadline comparator covers topic_hash/transfer_id branches.
+    tkey = (tx_time_key_t){ .time = tr.deadline, .topic_hash = tr.topic_hash - 1, .transfer_id = tr.transfer_id };
+    TEST_ASSERT_EQUAL(-1, tx_cavl_compare_deadline(&tkey, &tr.index_deadline));
+    tkey.topic_hash = tr.topic_hash + 1;
+    TEST_ASSERT_EQUAL(1, tx_cavl_compare_deadline(&tkey, &tr.index_deadline));
+    tkey.topic_hash  = tr.topic_hash;
+    tkey.transfer_id = tr.transfer_id - 1;
+    TEST_ASSERT_EQUAL(-1, tx_cavl_compare_deadline(&tkey, &tr.index_deadline));
+    tkey.transfer_id = tr.transfer_id + 1;
+    TEST_ASSERT_EQUAL(1, tx_cavl_compare_deadline(&tkey, &tr.index_deadline));
 
     // Transfer comparator covers all branches.
     tx_transfer_key_t key = { .topic_hash = 5, .transfer_id = 1 };
@@ -289,12 +358,15 @@ static void test_tx_spool_and_queue_errors(void)
     tx.memory.payload[0]                      = instrumented_allocator_make_resource(&alloc_payload);
     byte_t                         buffer[64] = { 0 };
     const udpard_bytes_scattered_t payload    = make_scattered(buffer, sizeof(buffer));
-    const meta_t                   meta       = { .priority              = udpard_prio_fast,
-                                                  .flag_ack              = false,
-                                                  .transfer_payload_size = (uint32_t)payload.bytes.size,
-                                                  .transfer_id           = 1,
-                                                  .sender_uid            = 1,
-                                                  .topic_hash            = 1 };
+    const meta_t                   meta       = {
+                                .priority              = udpard_prio_fast,
+                                .flag_reliable         = false,
+                                .flag_acknowledgement  = false,
+                                .transfer_payload_size = (uint32_t)payload.bytes.size,
+                                .transfer_id           = 1,
+                                .sender_uid            = 1,
+                                .topic_hash            = 1,
+    };
     TEST_ASSERT_NULL(tx_spool(&tx, tx.memory.payload[0], 32, meta, payload));
     TEST_ASSERT_EQUAL_size_t(0, tx.enqueued_frames_count);
     TEST_ASSERT_EQUAL_UINT64(80, tx_ack_timeout(5, udpard_prio_high, 1));
@@ -445,7 +517,34 @@ static void test_tx_ack_and_scheduler(void)
     tx_receive_ack(&rx, 21, 42);
     TEST_ASSERT_EQUAL_size_t(1, fstate.count);
     TEST_ASSERT_EQUAL_UINT32(0U, udpard_tx_pending_ifaces(&tx1));
+    // Ignore ACKs when RX has no TX.
+    rx.tx = NULL;
+    tx_receive_ack(&rx, 21, 42);
     udpard_tx_free(&tx1);
+
+    // Best-effort transfers ignore ACKs.
+    udpard_tx_t tx_be = { 0 };
+    TEST_ASSERT_TRUE(udpard_tx_new(
+      &tx_be,
+      10U,
+      1U,
+      8U,
+      mem,
+      &(udpard_tx_vtable_t){ .eject_subject = eject_subject_with_flag, .eject_p2p = eject_p2p_with_flag }));
+    TEST_ASSERT_TRUE(udpard_tx_push(&tx_be,
+                                    0,
+                                    1000,
+                                    iface_bitmap_01,
+                                    udpard_prio_fast,
+                                    22,
+                                    43,
+                                    make_scattered(NULL, 0),
+                                    NULL,
+                                    UDPARD_USER_CONTEXT_NULL));
+    udpard_rx_t rx_be = { .tx = &tx_be };
+    tx_receive_ack(&rx_be, 22, 43);
+    TEST_ASSERT_NOT_NULL(tx_transfer_find(&tx_be, 22, 43));
+    udpard_tx_free(&tx_be);
 
     // Ack suppressed when coverage not improved.
     udpard_tx_t tx2 = { 0 };
@@ -576,6 +675,9 @@ static void test_tx_ack_and_scheduler(void)
     tx_promote_staged_transfers(&tx5, 1);
     TEST_ASSERT_NOT_NULL(tx5.queue[0][staged.priority].head);
     TEST_ASSERT_EQUAL_UINT32(1U << 0U, udpard_tx_pending_ifaces(&tx5));
+    // Already-listed transfers stay in the queue.
+    tx_promote_staged_transfers(&tx5, 1000);
+    TEST_ASSERT_EQUAL_PTR(&staged.queue[0], tx5.queue[0][staged.priority].head);
 
     // Ejection stops when NIC refuses.
     staged.cursor[0]                   = staged.head[0];
@@ -932,8 +1034,6 @@ static void test_tx_cancel_p2p(void)
                                         0,
                                         1000,
                                         udpard_prio_fast,
-                                        0xABCD,
-                                        42,
                                         remote,
                                         make_scattered(NULL, 0),
                                         record_feedback,
@@ -949,10 +1049,6 @@ static void test_tx_cancel_p2p(void)
     TEST_ASSERT_NULL(tx_transfer_find(&tx, remote.uid, out_tid));
     TEST_ASSERT_EQUAL_size_t(1, fstate.count);
     TEST_ASSERT_EQUAL_UINT32(0, fstate.last.acknowledgements);
-    // Feedback returns request metadata, not internal P2P metadata.
-    TEST_ASSERT_EQUAL_UINT64(0xABCD, fstate.last.topic_hash);
-    TEST_ASSERT_EQUAL_UINT64(42, fstate.last.transfer_id);
-
     // Cancelling again returns false (already cancelled).
     TEST_ASSERT_FALSE(udpard_tx_cancel_p2p(&tx, remote.uid, out_tid));
 
@@ -963,8 +1059,6 @@ static void test_tx_cancel_p2p(void)
                                         0,
                                         1000,
                                         udpard_prio_fast,
-                                        0xBEEF,
-                                        99,
                                         remote,
                                         make_scattered(NULL, 0),
                                         record_feedback,
@@ -986,38 +1080,20 @@ static void test_tx_cancel_p2p(void)
     // Best-effort P2P transfer cancels quietly (no feedback); using NULL for out_transfer_id.
     fstate.count      = 0;
     uint64_t out_tid3 = 0;
-    TEST_ASSERT_TRUE(udpard_tx_push_p2p(&tx,
-                                        0,
-                                        1000,
-                                        udpard_prio_nominal,
-                                        0x1234,
-                                        77,
-                                        remote,
-                                        make_scattered(NULL, 0),
-                                        NULL,
-                                        UDPARD_USER_CONTEXT_NULL,
-                                        &out_tid3));
+    TEST_ASSERT_TRUE(udpard_tx_push_p2p(
+      &tx, 0, 1000, udpard_prio_nominal, remote, make_scattered(NULL, 0), NULL, UDPARD_USER_CONTEXT_NULL, &out_tid3));
     TEST_ASSERT_TRUE(udpard_tx_cancel_p2p(&tx, remote.uid, out_tid3));
     TEST_ASSERT_EQUAL_size_t(0, fstate.count); // no feedback for best-effort
 
     // Test cancel_all with P2P transfers (using destination_uid as topic_hash).
     // Pass NULL for out_transfer_id to verify optional behavior.
     TEST_ASSERT_TRUE(udpard_tx_push_p2p(
-      &tx, 0, 1000, udpard_prio_fast, 0xA, 1, remote, make_scattered(NULL, 0), NULL, UDPARD_USER_CONTEXT_NULL, NULL));
+      &tx, 0, 1000, udpard_prio_fast, remote, make_scattered(NULL, 0), NULL, UDPARD_USER_CONTEXT_NULL, NULL));
     TEST_ASSERT_TRUE(udpard_tx_push_p2p(
-      &tx, 0, 1000, udpard_prio_fast, 0xB, 2, remote, make_scattered(NULL, 0), NULL, UDPARD_USER_CONTEXT_NULL, NULL));
+      &tx, 0, 1000, udpard_prio_fast, remote, make_scattered(NULL, 0), NULL, UDPARD_USER_CONTEXT_NULL, NULL));
     const udpard_remote_t other_remote = { .uid = 777, .endpoints = { make_ep(30) } };
-    TEST_ASSERT_TRUE(udpard_tx_push_p2p(&tx,
-                                        0,
-                                        1000,
-                                        udpard_prio_fast,
-                                        0xC,
-                                        3,
-                                        other_remote,
-                                        make_scattered(NULL, 0),
-                                        NULL,
-                                        UDPARD_USER_CONTEXT_NULL,
-                                        NULL));
+    TEST_ASSERT_TRUE(udpard_tx_push_p2p(
+      &tx, 0, 1000, udpard_prio_fast, other_remote, make_scattered(NULL, 0), NULL, UDPARD_USER_CONTEXT_NULL, NULL));
     TEST_ASSERT_EQUAL_size_t(2, udpard_tx_cancel_all(&tx, remote.uid));
     TEST_ASSERT_EQUAL_size_t(1, udpard_tx_cancel_all(&tx, other_remote.uid));
 
@@ -1184,17 +1260,8 @@ static void test_tx_eject_only_from_poll(void)
 
     // Push a P2P transfer; eject must NOT be called.
     const udpard_remote_t remote = { .uid = 999, .endpoints = { make_ep(10) } };
-    TEST_ASSERT_TRUE(udpard_tx_push_p2p(&tx,
-                                        0,
-                                        1000,
-                                        udpard_prio_fast,
-                                        0xABCD,
-                                        42,
-                                        remote,
-                                        make_scattered(NULL, 0),
-                                        NULL,
-                                        UDPARD_USER_CONTEXT_NULL,
-                                        NULL));
+    TEST_ASSERT_TRUE(udpard_tx_push_p2p(
+      &tx, 0, 1000, udpard_prio_fast, remote, make_scattered(NULL, 0), NULL, UDPARD_USER_CONTEXT_NULL, NULL));
     TEST_ASSERT_EQUAL_size_t(0, eject.count); // eject NOT called from push_p2p
 
     // Now poll; eject MUST be called.
@@ -1216,17 +1283,8 @@ static void test_tx_eject_only_from_poll(void)
                                     UDPARD_USER_CONTEXT_NULL));
     TEST_ASSERT_EQUAL_size_t(eject_count_before, eject.count); // eject NOT called from push
 
-    TEST_ASSERT_TRUE(udpard_tx_push_p2p(&tx,
-                                        0,
-                                        1000,
-                                        udpard_prio_nominal,
-                                        0xBEEF,
-                                        99,
-                                        remote,
-                                        make_scattered(NULL, 0),
-                                        NULL,
-                                        UDPARD_USER_CONTEXT_NULL,
-                                        NULL));
+    TEST_ASSERT_TRUE(udpard_tx_push_p2p(
+      &tx, 0, 1000, udpard_prio_nominal, remote, make_scattered(NULL, 0), NULL, UDPARD_USER_CONTEXT_NULL, NULL));
     TEST_ASSERT_EQUAL_size_t(eject_count_before, eject.count); // eject NOT called from push_p2p
 
     // Poll again; eject called again (but rejected by callback).

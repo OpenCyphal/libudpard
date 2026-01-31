@@ -23,7 +23,6 @@ struct FeedbackState
 {
     size_t   count            = 0;
     uint16_t acknowledgements = 0;
-    uint64_t transfer_id      = 0;
 };
 
 struct RxContext
@@ -90,7 +89,6 @@ void record_feedback(udpard_tx_t*, const udpard_tx_feedback_t fb)
     if (st != nullptr) {
         st->count++;
         st->acknowledgements = fb.acknowledgements;
-        st->transfer_id      = fb.transfer_id;
     }
 }
 
@@ -125,11 +123,11 @@ void on_collision(udpard_rx_t* const rx, udpard_rx_port_t* const /*port*/, const
 constexpr udpard_rx_port_vtable_t callbacks{ .on_message = &on_message, .on_collision = &on_collision };
 
 // Ack port frees responses.
-void on_ack_response(udpard_rx_t*, udpard_rx_port_p2p_t* port, const udpard_rx_transfer_p2p_t tr)
+void on_ack_response(udpard_rx_t*, udpard_rx_port_t* port, const udpard_rx_transfer_t tr)
 {
-    udpard_fragment_free_all(tr.base.payload, udpard_make_deleter(port->base.memory.fragment));
+    udpard_fragment_free_all(tr.payload, udpard_make_deleter(port->memory.fragment));
 }
-constexpr udpard_rx_port_p2p_vtable_t ack_callbacks{ &on_ack_response };
+constexpr udpard_rx_port_vtable_t ack_callbacks{ .on_message = &on_ack_response, .on_collision = &on_collision };
 
 // Reliable delivery must survive data and ack loss.
 // Each node uses exactly one TX and one RX instance as per the library design.
@@ -185,9 +183,9 @@ void test_reliable_delivery_under_losses()
 
     udpard_rx_t pub_rx{};
     udpard_rx_new(&pub_rx, &pub_tx);
-    udpard_rx_port_p2p_t pub_p2p_port{};
+    udpard_rx_port_t pub_p2p_port{};
     TEST_ASSERT_TRUE(
-      udpard_rx_port_new_p2p(&pub_p2p_port, pub_uid, UDPARD_P2P_HEADER_BYTES, pub_rx_mem, &ack_callbacks));
+      udpard_rx_port_new(&pub_p2p_port, pub_uid, 16, udpard_rx_unordered, 0, pub_rx_mem, &ack_callbacks));
 
     // Subscriber node: single TX, single RX (linked to TX for sending ACKs).
     constexpr uint64_t         sub_uid = 0xABCDEF0012345678ULL;
@@ -282,7 +280,7 @@ void test_reliable_delivery_under_losses()
             }
             ack_sent = true;
             TEST_ASSERT_TRUE(udpard_rx_port_push(&pub_rx,
-                                                 reinterpret_cast<udpard_rx_port_t*>(&pub_p2p_port),
+                                                 &pub_p2p_port,
                                                  now,
                                                  subscriber_sources[ack.iface_index],
                                                  ack.datagram,
@@ -302,7 +300,7 @@ void test_reliable_delivery_under_losses()
 
     // Cleanup.
     udpard_rx_port_free(&sub_rx, &sub_port);
-    udpard_rx_port_free(&pub_rx, reinterpret_cast<udpard_rx_port_t*>(&pub_p2p_port));
+    udpard_rx_port_free(&pub_rx, &pub_p2p_port);
     udpard_tx_free(&pub_tx);
     udpard_tx_free(&sub_tx);
 

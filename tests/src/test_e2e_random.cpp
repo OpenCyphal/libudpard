@@ -131,11 +131,11 @@ void record_feedback(udpard_tx_t*, const udpard_tx_feedback_t fb)
     }
 }
 
-void on_ack_response(udpard_rx_t*, udpard_rx_port_p2p_t* port, const udpard_rx_transfer_p2p_t tr)
+void on_ack_response(udpard_rx_t*, udpard_rx_port_t* port, const udpard_rx_transfer_t tr)
 {
-    udpard_fragment_free_all(tr.base.payload, udpard_make_deleter(port->base.memory.fragment));
+    udpard_fragment_free_all(tr.payload, udpard_make_deleter(port->memory.fragment));
 }
-constexpr udpard_rx_port_p2p_vtable_t ack_callbacks{ &on_ack_response };
+constexpr udpard_rx_port_vtable_t ack_callbacks{ .on_message = &on_ack_response, .on_collision = nullptr };
 
 void on_message(udpard_rx_t* const rx, udpard_rx_port_t* const port, const udpard_rx_transfer_t transfer)
 {
@@ -232,7 +232,7 @@ void test_udpard_tx_rx_end_to_end()
     const udpard_rx_mem_resources_t ack_rx_mem{ .session  = instrumented_allocator_make_resource(&ack_rx_alloc_session),
                                                 .fragment = instrumented_allocator_make_resource(&ack_rx_alloc_frag) };
     udpard_rx_t                     ack_rx{};
-    udpard_rx_port_p2p_t            ack_port{};
+    udpard_rx_port_t                ack_port{};
     udpard_rx_new(&ack_rx, &tx);
 
     // Test parameters.
@@ -265,7 +265,7 @@ void test_udpard_tx_rx_end_to_end()
     std::vector<CapturedFrame> ack_frames;
     ack_tx.user = &ack_frames;
     TEST_ASSERT_TRUE(
-      udpard_rx_port_new_p2p(&ack_port, tx.local_uid, UDPARD_P2P_HEADER_BYTES, ack_rx_mem, &ack_callbacks));
+      udpard_rx_port_new(&ack_port, tx.local_uid, 16, udpard_rx_unordered, 0, ack_rx_mem, &ack_callbacks));
     std::array<udpard_udpip_ep_t, UDPARD_IFACE_COUNT_MAX> ack_sources{};
     for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
         ack_sources[i] = { .ip = static_cast<uint32_t>(0x0A000020U + i), .port = static_cast<uint16_t>(7700U + i) };
@@ -360,23 +360,13 @@ void test_udpard_tx_rx_end_to_end()
                 continue;
             }
             ack_delivered = true;
-            TEST_ASSERT_TRUE(udpard_rx_port_push(&ack_rx,
-                                                 reinterpret_cast<udpard_rx_port_t*>(&ack_port),
-                                                 now,
-                                                 ack_sources[iface_index],
-                                                 datagram,
-                                                 tx_payload_deleter,
-                                                 iface_index));
+            TEST_ASSERT_TRUE(udpard_rx_port_push(
+              &ack_rx, &ack_port, now, ack_sources[iface_index], datagram, tx_payload_deleter, iface_index));
         }
         if (reliable && !ack_delivered && !ack_frames.empty()) {
             const auto& [datagram, iface_index] = ack_frames.front();
-            TEST_ASSERT_TRUE(udpard_rx_port_push(&ack_rx,
-                                                 reinterpret_cast<udpard_rx_port_t*>(&ack_port),
-                                                 now,
-                                                 ack_sources[iface_index],
-                                                 datagram,
-                                                 tx_payload_deleter,
-                                                 iface_index));
+            TEST_ASSERT_TRUE(udpard_rx_port_push(
+              &ack_rx, &ack_port, now, ack_sources[iface_index], datagram, tx_payload_deleter, iface_index));
         }
         udpard_rx_poll(&ack_rx, now);
     }
@@ -393,7 +383,7 @@ void test_udpard_tx_rx_end_to_end()
     for (auto& port : ports) {
         udpard_rx_port_free(&rx, &port);
     }
-    udpard_rx_port_free(&ack_rx, reinterpret_cast<udpard_rx_port_t*>(&ack_port));
+    udpard_rx_port_free(&ack_rx, &ack_port);
     udpard_tx_free(&tx);
     udpard_tx_free(&ack_tx);
     TEST_ASSERT_EQUAL_size_t(0, rx_alloc_frag.allocated_fragments);
