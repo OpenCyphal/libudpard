@@ -551,6 +551,7 @@ bool udpard_tx_push_p2p(udpard_tx_t* const             self,
 void udpard_tx_poll(udpard_tx_t* const self, const udpard_us_t now, const uint16_t iface_bitmap);
 
 /// Cancel a previously enqueued transfer.
+/// To cancel a P2P transfer, pass the destination node's UID as the topic_hash.
 /// If provided, the feedback callback will be invoked with success==false.
 /// Not safe to call from the eject() callback.
 /// Returns true if a transfer was found and cancelled, false if no such transfer was found.
@@ -558,7 +559,6 @@ void udpard_tx_poll(udpard_tx_t* const self, const udpard_us_t now, const uint16
 /// and f is the number of frames in the transfer.
 /// The function will free the memory associated with the transfer.
 bool udpard_tx_cancel(udpard_tx_t* const self, const uint64_t topic_hash, const uint64_t transfer_id);
-bool udpard_tx_cancel_p2p(udpard_tx_t* const self, const uint64_t destination_uid, const uint64_t transfer_id);
 
 /// Like udpard_tx_cancel(), but cancels all transfers matching the given topic hash.
 /// Returns the number of matched transfers.

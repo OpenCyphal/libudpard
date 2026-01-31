@@ -1401,11 +1401,6 @@ bool udpard_tx_cancel(udpard_tx_t* const self, const uint64_t topic_hash, const 
     return cancelled;
 }
 
-bool udpard_tx_cancel_p2p(udpard_tx_t* const self, const uint64_t destination_uid, const uint64_t transfer_id)
-{
-    return udpard_tx_cancel(self, destination_uid, transfer_id);
-}
-
 size_t udpard_tx_cancel_all(udpard_tx_t* const self, const uint64_t topic_hash)
 {
     size_t count = 0;
