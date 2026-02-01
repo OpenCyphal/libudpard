@@ -524,6 +524,7 @@ static bool header_deserialize(const udpard_bytes_mut_t dgram_payload,
             const byte_t flags             = *ptr++;
             out_meta->flag_reliable        = (flags & HEADER_FLAG_RELIABLE) != 0U;
             out_meta->flag_acknowledgement = (flags & HEADER_FLAG_ACKNOWLEDGEMENT) != 0U;
+            const byte_t incompatibility   = (byte_t)(flags & ~(HEADER_FLAG_RELIABLE | HEADER_FLAG_ACKNOWLEDGEMENT));
             ptr += 2U;
             ptr = deserialize_u32(ptr, frame_index);
             ptr = deserialize_u32(ptr, frame_payload_offset);
@@ -539,8 +540,9 @@ static bool header_deserialize(const udpard_bytes_mut_t dgram_payload,
             // Finalize the fields.
             *frame_index = HEADER_FRAME_INDEX_MAX & *frame_index;
             // Validate the fields.
-            ok = ((uint64_t)*frame_payload_offset + (uint64_t)out_payload->size) <=
-                 (uint64_t)out_meta->transfer_payload_size;
+            ok = ok && (incompatibility == 0U);
+            ok = ok && (((uint64_t)*frame_payload_offset + (uint64_t)out_payload->size) <=
+                        (uint64_t)out_meta->transfer_payload_size);
             ok = ok && ((0 == *frame_index) == (0 == *frame_payload_offset));
             // The prefix-CRC of the first frame of a transfer equals the CRC of its payload.
             ok = ok && ((0 < *frame_payload_offset) || (crc_full(out_payload->size, out_payload->data) == *prefix_crc));
