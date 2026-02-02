@@ -480,12 +480,10 @@ bool udpard_tx_new(udpard_tx_t* const              self,
 /// invalidated immediately after this function returns. When redundant interfaces are used, the library will attempt to
 /// minimize the number of copies by reusing frames across interfaces with identical MTU values and memory resources.
 ///
-/// The caller shall increment the transfer-ID counter after each successful invocation of this function per topic.
-/// There shall be a separate transfer-ID counter per topic. The initial value shall be chosen randomly
-/// such that it is likely to be distinct per application startup (embedded systems can use noinit memory sections,
-/// hash uninitialized SRAM, use timers or ADC noise, etc); hashing with the topic hash is possible for extra entropy.
-/// It is essential to provide a monotonic contiguous counter per topic.
-/// The random starting point will ensure global uniqueness across topics.
+/// The caller shall increment the transfer-ID counter after each successful invocation of this function per subject.
+/// The initial value shall be chosen randomly such that it is likely to be distinct per application startup
+/// (embedded systems can use noinit memory sections, hash uninitialized SRAM, use timers or ADC noise, etc).
+/// The random starting point will ensure global uniqueness across different subjects.
 /// Related thread on random transfer-ID init: https://forum.opencyphal.org/t/improve-the-transfer-id-timeout/2375
 ///
 /// The user context value is carried through to the callbacks. It must contain enough context to allow subject-ID

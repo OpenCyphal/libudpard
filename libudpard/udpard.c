@@ -453,7 +453,7 @@ typedef enum frame_kind_t
     frame_ack,
 } frame_kind_t;
 
-/// The transfer-ID is designed to be unique per pending transfer. The uniquness is achieved by randomization.
+/// The transfer-ID is designed to be unique per pending transfer. The uniqueness is achieved by randomization.
 /// For extra entropy, P2P transfers have their transfer-ID computed as (base_counter++)+destination_uid;
 /// the base counter is seeded with a random value.
 typedef struct
@@ -2018,7 +2018,7 @@ static void rx_port_accept_stateless(udpard_rx_t* const      rx,
                 .priority            = frame->meta.priority,
                 .transfer_id         = frame->meta.transfer_id,
                 .remote              = remote,
-                .payload_size_stored = required_size,
+                .payload_size_stored = frame->base.payload.size,
                 .payload_size_wire   = frame->meta.transfer_payload_size,
                 .payload             = frag,
             };
