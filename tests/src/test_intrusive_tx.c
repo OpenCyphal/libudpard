@@ -114,6 +114,27 @@ static tx_transfer_t* find_transfer_by_id(udpard_tx_t* const tx, const uint64_t 
     return ((tr != NULL) && (tr->transfer_id == transfer_id)) ? tr : NULL;
 }
 
+// Counts transfers by transfer-ID and kind.
+static size_t count_transfers_by_id_and_kind(udpard_tx_t* const tx, const uint64_t transfer_id, const frame_kind_t kind)
+{
+    if (tx == NULL) {
+        return 0;
+    }
+    size_t                     count = 0;
+    const tx_key_transfer_id_t key   = { .transfer_id = transfer_id, .seq_no = 0 };
+    for (tx_transfer_t* tr =
+           CAVL2_TO_OWNER(cavl2_lower_bound(tx->index_transfer_id, &key, &tx_cavl_compare_transfer_id),
+                          tx_transfer_t,
+                          index_transfer_id);
+         (tr != NULL) && (tr->transfer_id == transfer_id);
+         tr = CAVL2_TO_OWNER(cavl2_next_greater(&tr->index_transfer_id), tx_transfer_t, index_transfer_id)) {
+        if (tr->kind == kind) {
+            count++;
+        }
+    }
+    return count;
+}
+
 static void test_bytes_scattered_read(void)
 {
     // Skips empty fragments and spans boundaries.
@@ -509,6 +530,70 @@ static void test_tx_ack_and_scheduler(void)
     TEST_ASSERT_NOT_NULL(find_transfer_by_id(&tx_be, 43));
     udpard_tx_free(&tx_be);
 
+    // ACK acceptance skips colliding P2P transfers from other remotes.
+    udpard_tx_t tx_coll_rx = { 0 };
+    TEST_ASSERT_TRUE(udpard_tx_new(
+      &tx_coll_rx,
+      10U,
+      1U,
+      8U,
+      mem,
+      &(udpard_tx_vtable_t){ .eject_subject = eject_subject_with_flag, .eject_p2p = eject_p2p_with_flag }));
+    udpard_rx_t      rx_coll = { .tx = &tx_coll_rx };
+    feedback_state_t fb_a    = { 0 };
+    feedback_state_t fb_b    = { 0 };
+    const uint64_t   coll_id = 55;
+    // Insert first colliding transfer.
+    tx_transfer_t* tr_a = mem_alloc(mem.transfer, sizeof(tx_transfer_t));
+    mem_zero(sizeof(*tr_a), tr_a);
+    tr_a->kind           = frame_msg_reliable;
+    tr_a->is_p2p         = true;
+    tr_a->transfer_id    = coll_id;
+    tr_a->seq_no         = 1;
+    tr_a->deadline       = 10;
+    tr_a->priority       = udpard_prio_fast;
+    tr_a->p2p_remote.uid = 1001;
+    tr_a->user           = make_user_context(&fb_a);
+    tr_a->feedback       = record_feedback;
+    cavl2_find_or_insert(
+      &tx_coll_rx.index_deadline, tr_a, tx_cavl_compare_deadline, &tr_a->index_deadline, cavl2_trivial_factory);
+    cavl2_find_or_insert(&tx_coll_rx.index_transfer_id,
+                         &(tx_key_transfer_id_t){ .transfer_id = tr_a->transfer_id, .seq_no = tr_a->seq_no },
+                         tx_cavl_compare_transfer_id,
+                         &tr_a->index_transfer_id,
+                         cavl2_trivial_factory);
+    enlist_head(&tx_coll_rx.agewise, &tr_a->agewise);
+    // Insert second colliding transfer with different remote UID.
+    tx_transfer_t* tr_b = mem_alloc(mem.transfer, sizeof(tx_transfer_t));
+    mem_zero(sizeof(*tr_b), tr_b);
+    tr_b->kind           = frame_msg_reliable;
+    tr_b->is_p2p         = true;
+    tr_b->transfer_id    = coll_id;
+    tr_b->seq_no         = 2;
+    tr_b->deadline       = 10;
+    tr_b->priority       = udpard_prio_fast;
+    tr_b->p2p_remote.uid = 1002;
+    tr_b->user           = make_user_context(&fb_b);
+    tr_b->feedback       = record_feedback;
+    cavl2_find_or_insert(
+      &tx_coll_rx.index_deadline, tr_b, tx_cavl_compare_deadline, &tr_b->index_deadline, cavl2_trivial_factory);
+    cavl2_find_or_insert(&tx_coll_rx.index_transfer_id,
+                         &(tx_key_transfer_id_t){ .transfer_id = tr_b->transfer_id, .seq_no = tr_b->seq_no },
+                         tx_cavl_compare_transfer_id,
+                         &tr_b->index_transfer_id,
+                         cavl2_trivial_factory);
+    enlist_head(&tx_coll_rx.agewise, &tr_b->agewise);
+    // Accept ack for the second transfer only.
+    tx_receive_ack(&rx_coll, tr_b->p2p_remote.uid, coll_id);
+    TEST_ASSERT_EQUAL_size_t(0, fb_a.count);
+    TEST_ASSERT_EQUAL_size_t(1, fb_b.count);
+    TEST_ASSERT_EQUAL_size_t(1, count_transfers_by_id_and_kind(&tx_coll_rx, coll_id, frame_msg_reliable));
+    // Accept ack for the first transfer.
+    tx_receive_ack(&rx_coll, tr_a->p2p_remote.uid, coll_id);
+    TEST_ASSERT_EQUAL_size_t(1, fb_a.count);
+    TEST_ASSERT_EQUAL_size_t(0, count_transfers_by_id_and_kind(&tx_coll_rx, coll_id, frame_msg_reliable));
+    udpard_tx_free(&tx_coll_rx);
+
     // Ack suppressed when coverage not improved.
     udpard_tx_t tx2 = { 0 };
     TEST_ASSERT_TRUE(udpard_tx_new(
@@ -558,6 +643,33 @@ static void test_tx_ack_and_scheduler(void)
     tx_send_ack(&rx, 0, udpard_prio_fast, 9, (udpard_remote_t){ .uid = 11, .endpoints = { make_ep(4), make_ep(5) } });
     TEST_ASSERT_NOT_EQUAL(0U, udpard_tx_pending_ifaces(&tx3));
     udpard_tx_free(&tx3);
+
+    // Ack emission ignores colliding non-ack transfers.
+    udpard_tx_t tx_coll_ack = { 0 };
+    TEST_ASSERT_TRUE(udpard_tx_new(
+      &tx_coll_ack,
+      12U,
+      3U,
+      4U,
+      mem,
+      &(udpard_tx_vtable_t){ .eject_subject = eject_subject_with_flag, .eject_p2p = eject_p2p_with_flag }));
+    rx.tx            = &tx_coll_ack;
+    rx.errors_ack_tx = 0;
+    TEST_ASSERT_TRUE(udpard_tx_push(&tx_coll_ack,
+                                    0,
+                                    1000,
+                                    iface_bitmap_01,
+                                    udpard_prio_fast,
+                                    60,
+                                    make_scattered(NULL, 0),
+                                    record_feedback,
+                                    make_user_context(&fstate)));
+    TEST_ASSERT_EQUAL_size_t(1, count_transfers_by_id_and_kind(&tx_coll_ack, 60, frame_msg_reliable));
+    tx_send_ack(&rx, 0, udpard_prio_fast, 60, (udpard_remote_t){ .uid = 77, .endpoints = { make_ep(7) } });
+    TEST_ASSERT_EQUAL_UINT64(0, rx.errors_ack_tx);
+    TEST_ASSERT_EQUAL_size_t(1, count_transfers_by_id_and_kind(&tx_coll_ack, 60, frame_msg_reliable));
+    TEST_ASSERT_EQUAL_size_t(1, count_transfers_by_id_and_kind(&tx_coll_ack, 60, frame_ack));
+    udpard_tx_free(&tx_coll_ack);
 
     // Ack push failure with TX present.
     udpard_tx_mem_resources_t fail_mem = { .transfer = { .vtable = &mem_vtable_noop_alloc, .context = NULL } };
@@ -824,6 +936,61 @@ static void test_tx_cancel(void)
         &tx, 0, 100, iface_bitmap_1, udpard_prio_fast, 201, make_scattered(NULL, 0), NULL, UDPARD_USER_CONTEXT_NULL));
     TEST_ASSERT_TRUE(udpard_tx_cancel(&tx, 201, false));
     TEST_ASSERT_EQUAL_size_t(0, tx.enqueued_frames_count);
+
+    // Collisions cancel all reliable transfers with the same ID.
+    fstate.count           = 0;
+    const uint64_t coll_id = 300;
+    TEST_ASSERT_TRUE(udpard_tx_push(&tx,
+                                    0,
+                                    100,
+                                    iface_bitmap_1,
+                                    udpard_prio_fast,
+                                    coll_id,
+                                    make_scattered(NULL, 0),
+                                    record_feedback,
+                                    make_user_context(&fstate)));
+    TEST_ASSERT_TRUE(udpard_tx_push(&tx,
+                                    0,
+                                    100,
+                                    iface_bitmap_1,
+                                    udpard_prio_fast,
+                                    coll_id,
+                                    make_scattered(NULL, 0),
+                                    record_feedback,
+                                    make_user_context(&fstate)));
+    TEST_ASSERT_EQUAL_size_t(2, count_transfers_by_id_and_kind(&tx, coll_id, frame_msg_reliable));
+    TEST_ASSERT_TRUE(udpard_tx_cancel(&tx, coll_id, true));
+    TEST_ASSERT_EQUAL_size_t(0, count_transfers_by_id_and_kind(&tx, coll_id, frame_msg_reliable));
+    TEST_ASSERT_EQUAL_size_t(2, fstate.count);
+
+    // Best-effort collisions do not cancel reliable transfers.
+    fstate.count            = 0;
+    const uint64_t coll_id2 = 301;
+    TEST_ASSERT_TRUE(udpard_tx_push(&tx,
+                                    0,
+                                    100,
+                                    iface_bitmap_1,
+                                    udpard_prio_fast,
+                                    coll_id2,
+                                    make_scattered(NULL, 0),
+                                    record_feedback,
+                                    make_user_context(&fstate)));
+    TEST_ASSERT_TRUE(udpard_tx_push(&tx,
+                                    0,
+                                    100,
+                                    iface_bitmap_1,
+                                    udpard_prio_fast,
+                                    coll_id2,
+                                    make_scattered(NULL, 0),
+                                    NULL,
+                                    UDPARD_USER_CONTEXT_NULL));
+    TEST_ASSERT_EQUAL_size_t(1, count_transfers_by_id_and_kind(&tx, coll_id2, frame_msg_reliable));
+    TEST_ASSERT_EQUAL_size_t(1, count_transfers_by_id_and_kind(&tx, coll_id2, frame_msg_best));
+    TEST_ASSERT_TRUE(udpard_tx_cancel(&tx, coll_id2, false));
+    TEST_ASSERT_EQUAL_size_t(1, count_transfers_by_id_and_kind(&tx, coll_id2, frame_msg_reliable));
+    TEST_ASSERT_EQUAL_size_t(0, count_transfers_by_id_and_kind(&tx, coll_id2, frame_msg_best));
+    TEST_ASSERT_TRUE(udpard_tx_cancel(&tx, coll_id2, true));
+    TEST_ASSERT_EQUAL_size_t(0, count_transfers_by_id_and_kind(&tx, coll_id2, frame_msg_reliable));
 
     udpard_tx_free(&tx);
     instrumented_allocator_reset(&alloc);
