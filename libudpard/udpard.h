@@ -28,7 +28,6 @@
 ///   The TX pipeline adds a small overhead of sizeof(tx_frame_t).
 /// - sizeof(tx_transfer_t) blocks for the TX pipeline to store outgoing transfer metadata.
 /// - sizeof(rx_session_t) blocks for the RX pipeline to store incoming transfer session metadata.
-/// - sizeof(rx_slot_t) blocks for the RX pipeline to store specific transfer reassembly state.
 /// - sizeof(udpard_fragment_t) blocks for the RX pipeline to store received data fragments.
 ///
 /// Suitable memory allocators may be found here:
@@ -624,8 +623,8 @@ typedef struct udpard_rx_t
 /// simple applications may choose to use the same memory resource implemented via malloc()/free() for all of them.
 typedef struct udpard_rx_mem_resources_t
 {
-    /// Provides memory for rx_session_t and rx_slot_t.
-    /// Instances are fixed-size and similar in size, so a trivial zero-fragmentation block allocator is sufficient.
+    /// Provides memory for rx_session_t described below.
+    /// Each instance is fixed-size, so a trivial zero-fragmentation block allocator is sufficient.
     udpard_mem_t session;
 
     /// The udpard_fragment_t handles are allocated per payload fragment; each contains a pointer to its fragment.
