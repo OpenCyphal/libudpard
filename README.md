@@ -24,15 +24,13 @@ next-generation intelligent vehicles: manned and unmanned aircraft, spacecraft, 
 - ≤1-copy TX pipeline with deduplication across multiple interfaces and scattered input buffer support.
 - Support for redundant network interfaces with seamless interface aggregation and zero fail-over delay.
 - Robust message reassembler supporting highly distorted datagram streams:
-  out-of-order fragments, message ordering recovery, fragment/message deduplication, interleaving, variable MTU, ...
-- Robust message ordering recovery for ordering-sensitive applications (e.g., state estimators, control loops)
-  with well-defined deterministic recovery in the event of lost messages.
+  out-of-order fragments, fragment/message deduplication, interleaving, variable MTU, ...
 - Packet loss mitigation via:
   - reliable topics (retransmit until acknowledged; callback notifications for successful/failed deliveries).
   - redundant interfaces (packet lost on one interface may be received on another, transparent to the application);
 - Heap not required (but supported); the library can be used with fixed-size block pool allocators.
 - Detailed time complexity and memory requirement models for the benefit of real-time high-integrity applications.
-- Highly scalable: designed to handle thousands of topics and hundreds of concurrent transfers with minimal resources.
+- Scalable: designed to handle thousands of topics and hundreds of concurrent transfers with minimal resources.
 - Runs anywhere out of the box, including extremely resource-constrained baremetal environments with ~100K ROM/RAM.
   No porting required.
 - Partial MISRA C compliance (reach out to <https://forum.opencyphal.org>).
