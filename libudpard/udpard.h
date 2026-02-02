@@ -397,7 +397,8 @@ struct udpard_tx_t
     /// The globally unique identifier of the local node. Must not change after initialization.
     uint64_t local_uid;
 
-    /// A random-initialized transfer-ID counter for all outgoing P2P transfers. Must not be changed by the application.
+    /// A random-initialized counter for outgoing P2P transfers. Must not be changed by the application.
+    /// The shared counter for all P2P transfers ensures uniqueness of the transfer-ID per remote node.
     uint64_t p2p_transfer_id;
 
     /// The maximum number of Cyphal transfer payload bytes per UDP datagram. See UDPARD_MTU_*.
@@ -433,6 +434,10 @@ struct udpard_tx_t
     /// READ-ONLY!
     size_t enqueued_frames_count;
 
+    /// Starts at zero and increments with every enqueued transfer. Do not modify!
+    /// This is used internally as a tiebreaker in non-unique indexes.
+    uint64_t next_seq_no;
+
     udpard_tx_mem_resources_t memory;
 
     /// Error counters incremented automatically when the corresponding error condition occurs.
@@ -444,11 +449,10 @@ struct udpard_tx_t
 
     /// Internal use only, do not modify! See tx_transfer_t for details.
     udpard_list_t  queue[UDPARD_IFACE_COUNT_MAX][UDPARD_PRIORITY_COUNT]; ///< Next to transmit at the tail.
-    udpard_list_t  agewise;                                              ///< Oldest at the tail.
-    udpard_tree_t* index_staged;
+    udpard_tree_t* index_transfer_id;
     udpard_tree_t* index_deadline;
-    udpard_tree_t* index_transfer;
-    udpard_tree_t* index_transfer_ack;
+    udpard_tree_t* index_staged;
+    udpard_list_t  agewise; ///< Oldest at the tail.
 
     /// Opaque pointer for the application use only. Not accessed by the library.
     void* user;
@@ -471,7 +475,7 @@ struct udpard_tx_t
 /// True on success, false if any of the arguments are invalid.
 bool udpard_tx_new(udpard_tx_t* const              self,
                    const uint64_t                  local_uid,
-                   const uint64_t                  p2p_transfer_id_initial,
+                   const uint64_t                  p2p_transfer_id_seed,
                    const size_t                    enqueued_frames_limit,
                    const udpard_tx_mem_resources_t memory,
                    const udpard_tx_vtable_t* const vtable);
@@ -483,7 +487,10 @@ bool udpard_tx_new(udpard_tx_t* const              self,
 /// The caller shall increment the transfer-ID counter after each successful invocation of this function per topic.
 /// There shall be a separate transfer-ID counter per topic. The initial value shall be chosen randomly
 /// such that it is likely to be distinct per application startup (embedded systems can use noinit memory sections,
-/// hash uninitialized SRAM, use timers or ADC noise, etc).
+/// hash uninitialized SRAM, use timers or ADC noise, etc); hashing with the topic hash is possible for extra entropy.
+/// It is essential to provide a monotonic contiguous counter per topic to allow remotes to recover the original
+/// publication order and detect lost messages.
+/// The random starting point will ensure global uniqueness across topics.
 /// Related thread on random transfer-ID init: https://forum.opencyphal.org/t/improve-the-transfer-id-timeout/2375
 ///
 /// The user context value is carried through to the callbacks. It must contain enough context to allow subject-ID
@@ -496,9 +503,6 @@ bool udpard_tx_new(udpard_tx_t* const              self,
 /// The subject-ID is computed inside the udpard_tx_vtable::eject_subject() callback at the time of transmission.
 /// The subject-ID cannot be computed beforehand at the time of enqueuing because the topic->subject consensus protocol
 /// may find a different subject-ID allocation between the time of enqueuing and the time of (re)transmission.
-///
-/// An attempt to push a transfer with a (topic hash, transfer-ID) pair that is already enqueued will fail,
-/// as that violates the transfer-ID uniqueness requirement stated above.
 ///
 /// The feedback callback is set to NULL for best-effort (non-acknowledged) transfers. Otherwise, the transfer is
 /// treated as reliable, requesting a delivery acknowledgement from remote subscribers with repeated retransmissions if
@@ -522,21 +526,19 @@ bool udpard_tx_push(udpard_tx_t* const             self,
                     const udpard_us_t              deadline,
                     const uint16_t                 iface_bitmap,
                     const udpard_prio_t            priority,
-                    const uint64_t                 topic_hash,
                     const uint64_t                 transfer_id,
                     const udpard_bytes_scattered_t payload,
                     void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t), // NULL if best-effort.
                     const udpard_user_context_t user);
 
 /// This is a specialization of the general push function for P2P transfers.
-/// P2P transfers treat the topic hash as the destination node's UID.
-/// The transfer-ID counter is shared for all P2P outgoing P2P transfers and is managed automatically.
+/// The transfer-ID counter is managed automatically.
 /// If out_transfer_id is not NULL, the assigned internal transfer-ID is stored there for use with udpard_tx_cancel_p2p.
 bool udpard_tx_push_p2p(udpard_tx_t* const             self,
                         const udpard_us_t              now,
                         const udpard_us_t              deadline,
                         const udpard_prio_t            priority,
-                        const udpard_remote_t          remote, // Endpoints may be invalid for some ifaces.
+                        const udpard_remote_t          remote, // Endpoints may be empty (zero) for some ifaces.
                         const udpard_bytes_scattered_t payload,
                         void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t), // NULL if best-effort.
                         const udpard_user_context_t user,
@@ -550,20 +552,14 @@ bool udpard_tx_push_p2p(udpard_tx_t* const             self,
 /// The function may deallocate memory. The time complexity is logarithmic in the number of enqueued transfers.
 void udpard_tx_poll(udpard_tx_t* const self, const udpard_us_t now, const uint16_t iface_bitmap);
 
-/// Cancel a previously enqueued transfer.
-/// To cancel a P2P transfer, pass the destination node's UID as the topic_hash.
+/// Cancel a previously enqueued transfer of the specified transfer-ID and QoS.
 /// If provided, the feedback callback will be invoked with success==false.
 /// Not safe to call from the eject() callback.
 /// Returns true if a transfer was found and cancelled, false if no such transfer was found.
 /// The complexity is O(log t + f), where t is the number of enqueued transfers,
 /// and f is the number of frames in the transfer.
 /// The function will free the memory associated with the transfer.
-bool udpard_tx_cancel(udpard_tx_t* const self, const uint64_t topic_hash, const uint64_t transfer_id);
-
-/// Like udpard_tx_cancel(), but cancels all transfers matching the given topic hash.
-/// Returns the number of matched transfers.
-/// This is important to invoke when destroying a topic to ensure no dangling callbacks remain.
-size_t udpard_tx_cancel_all(udpard_tx_t* const self, const uint64_t topic_hash);
+bool udpard_tx_cancel(udpard_tx_t* const self, const uint64_t transfer_id, const bool reliable);
 
 /// Returns a bitmap of interfaces that have pending transmissions. This is useful for IO multiplexing loops.
 /// Zero indicates that there are no pending transmissions.
@@ -596,8 +592,7 @@ void udpard_tx_free(udpard_tx_t* const self);
 /// The application needs to listen to all these sockets simultaneously and pass the received UDP datagrams to the
 /// corresponding RX port instance as they arrive.
 ///
-/// P2P transfers are handled in a similar way, except that the topic hash is replaced with the destination node's UID,
-/// and the UDP/IP endpoints are unicast addresses instead of multicast addresses.
+/// P2P transfers are handled in a similar way, except that the UDP/IP endpoints are unicast instead of multicast.
 ///
 /// Graphically, the subscription pipeline is arranged per port as shown below.
 /// Remember that the application with N RX ports would have N such pipelines, one per port.
@@ -720,21 +715,11 @@ typedef struct udpard_rx_port_vtable_t
 {
     /// A new message is received on a port. The handler takes ownership of the payload; it must free it after use.
     void (*on_message)(udpard_rx_t*, udpard_rx_port_t*, udpard_rx_transfer_t);
-
-    /// A topic hash collision is detected on a port.
-    /// On P2P ports, this indicates that the destination UID doesn't match the local UID (misaddressed message);
-    /// safe to ignore.
-    /// May be NULL if the application is not interested.
-    void (*on_collision)(udpard_rx_t*, udpard_rx_port_t*, udpard_remote_t);
 } udpard_rx_port_vtable_t;
 
 /// This type represents an open input port, such as a subscription to a topic.
 struct udpard_rx_port_t
 {
-    /// Mismatch will be filtered out and the collision notification callback invoked.
-    /// For P2P ports, this is the destination node's UID (i.e., the local node's UID).
-    uint64_t topic_hash;
-
     /// Transfer payloads exceeding this extent may be truncated.
     /// The total size of the received payload may still exceed this extent setting by some small margin.
     size_t extent;
@@ -742,6 +727,10 @@ struct udpard_rx_port_t
     /// Behavior undefined if the reassembly mode or the reordering window are switched on a live port.
     udpard_rx_mode_t mode;
     udpard_us_t      reordering_window;
+
+    /// True if this port is used for P2P transfers, false for subject subscriptions.
+    /// There shall be exactly one P2P port per RX instance.
+    bool is_p2p;
 
     udpard_rx_mem_resources_t memory;
 
@@ -839,17 +828,11 @@ void udpard_rx_poll(udpard_rx_t* const self, const udpard_us_t now);
 ///     3. Read data from the sockets continuously and forward each datagram to udpard_rx_port_push(),
 ///        along with the index of the redundant interface the datagram was received on.
 ///
-/// For P2P ports, the procedure is identical, except that the topic hash is set to the local node's UID.
-/// There must be exactly one P2P port per node. The P2P port is also used for acks.
-///
 /// The extent defines the maximum possible size of received objects, considering also possible future data type
 /// versions with new fields. It is safe to pick larger values. Note well that the extent is not the same thing as
 /// the maximum size of the object, it is usually larger! Transfers that carry payloads beyond the specified extent
 /// still keep fragments that start before the extent, so the delivered payload may exceed it; fragments starting past
 /// the limit are dropped.
-///
-/// The topic hash is needed to detect and ignore transfers that use different topics on the same subject-ID.
-/// The collision callback is invoked if a topic hash collision is detected.
 ///
 /// If not sure which reassembly mode to choose, consider `udpard_rx_unordered` as the default choice.
 /// For ordering-sensitive use cases, such as state estimators and control loops, use `udpard_rx_ordered` with a short
@@ -860,12 +843,17 @@ void udpard_rx_poll(udpard_rx_t* const self, const udpard_us_t now);
 /// The return value is true on success, false if any of the arguments are invalid.
 /// The time complexity is constant. This function does not invoke the dynamic memory manager.
 bool udpard_rx_port_new(udpard_rx_port_t* const              self,
-                        const uint64_t                       topic_hash, // For P2P ports, this is the local node's UID.
                         const size_t                         extent,
                         const udpard_rx_mode_t               mode,
                         const udpard_us_t                    reordering_window,
                         const udpard_rx_mem_resources_t      memory,
                         const udpard_rx_port_vtable_t* const vtable);
+
+/// The P2P counterpart. There must be exactly one P2P port per node.
+bool udpard_rx_port_new_p2p(udpard_rx_port_t* const              self,
+                            const size_t                         extent,
+                            const udpard_rx_mem_resources_t      memory,
+                            const udpard_rx_port_vtable_t* const vtable);
 
 /// Returns all memory allocated for the sessions, slots, fragments, etc of the given port.
 /// Does not free the port itself since it is allocated by the application rather than the library,
