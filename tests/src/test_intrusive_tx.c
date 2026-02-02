@@ -258,6 +258,9 @@ static void test_tx_validation_and_free(void)
     TEST_ASSERT_FALSE(tx_validate_mem_resources(bad_transfer));
     bad_transfer.transfer = (udpard_mem_t){ .vtable = &vtable_no_alloc, .context = NULL };
     TEST_ASSERT_FALSE(tx_validate_mem_resources(bad_transfer));
+    // Reject null transfer vtable.
+    bad_transfer.transfer = (udpard_mem_t){ .vtable = NULL, .context = NULL };
+    TEST_ASSERT_FALSE(tx_validate_mem_resources(bad_transfer));
 
     instrumented_allocator_t alloc_transfer = { 0 };
     instrumented_allocator_t alloc_payload  = { 0 };
@@ -320,6 +323,14 @@ static void test_tx_comparators_and_feedback(void)
     TEST_ASSERT_EQUAL(1, tx_cavl_compare_deadline(&key, &tr.index_deadline));
     key.deadline = 6;
     TEST_ASSERT_EQUAL(-1, tx_cavl_compare_deadline(&key, &tr.index_deadline));
+
+    // Equality returns zero for staged and deadline comparators.
+    key.staged_until = tr.staged_until;
+    key.seq_no       = tr.seq_no;
+    TEST_ASSERT_EQUAL(0, tx_cavl_compare_staged(&key, &tr.index_staged));
+    key.deadline = tr.deadline;
+    key.seq_no   = tr.seq_no;
+    TEST_ASSERT_EQUAL(0, tx_cavl_compare_deadline(&key, &tr.index_deadline));
     // Staged comparator covers seq_no branches.
     key.staged_until = tr.staged_until;
     key.seq_no       = tr.seq_no - 1;
@@ -530,6 +541,35 @@ static void test_tx_ack_and_scheduler(void)
     TEST_ASSERT_NOT_NULL(find_transfer_by_id(&tx_be, 43));
     udpard_tx_free(&tx_be);
 
+    // Ack lookup misses when the lower bound has a different transfer-ID.
+    udpard_tx_t tx_miss = { 0 };
+    TEST_ASSERT_TRUE(udpard_tx_new(
+      &tx_miss,
+      10U,
+      1U,
+      8U,
+      mem,
+      &(udpard_tx_vtable_t){ .eject_subject = eject_subject_with_flag, .eject_p2p = eject_p2p_with_flag }));
+    tx_transfer_t* miss = mem_alloc(mem.transfer, sizeof(tx_transfer_t));
+    mem_zero(sizeof(*miss), miss);
+    miss->kind        = frame_msg_best;
+    miss->transfer_id = 100;
+    miss->seq_no      = 1;
+    miss->deadline    = 50;
+    miss->priority    = udpard_prio_fast;
+    cavl2_find_or_insert(
+      &tx_miss.index_deadline, miss, tx_cavl_compare_deadline, &miss->index_deadline, cavl2_trivial_factory);
+    cavl2_find_or_insert(&tx_miss.index_transfer_id,
+                         &(tx_key_transfer_id_t){ .transfer_id = miss->transfer_id, .seq_no = miss->seq_no },
+                         tx_cavl_compare_transfer_id,
+                         &miss->index_transfer_id,
+                         cavl2_trivial_factory);
+    enlist_head(&tx_miss.agewise, &miss->agewise);
+    udpard_rx_t rx_miss = { .tx = &tx_miss };
+    tx_receive_ack(&rx_miss, 21, 99);
+    TEST_ASSERT_NOT_NULL(find_transfer_by_id(&tx_miss, 100));
+    udpard_tx_free(&tx_miss);
+
     // ACK acceptance skips colliding P2P transfers from other remotes.
     udpard_tx_t tx_coll_rx = { 0 };
     TEST_ASSERT_TRUE(udpard_tx_new(
@@ -629,6 +669,39 @@ static void test_tx_ack_and_scheduler(void)
     tx_transfer_retire(&tx2, prior, false);
     udpard_tx_free(&tx2);
 
+    // Ack search skips prior with the same transfer-ID but different UID.
+    udpard_tx_t tx_uid = { 0 };
+    TEST_ASSERT_TRUE(udpard_tx_new(
+      &tx_uid,
+      11U,
+      2U,
+      4U,
+      mem,
+      &(udpard_tx_vtable_t){ .eject_subject = eject_subject_with_flag, .eject_p2p = eject_p2p_with_flag }));
+    rx.tx                    = &tx_uid;
+    rx.errors_ack_tx         = 0;
+    tx_transfer_t* prior_uid = mem_alloc(mem.transfer, sizeof(tx_transfer_t));
+    mem_zero(sizeof(*prior_uid), prior_uid);
+    prior_uid->kind                    = frame_ack;
+    prior_uid->is_p2p                  = true;
+    prior_uid->transfer_id             = 7;
+    prior_uid->seq_no                  = 1;
+    prior_uid->deadline                = 100;
+    prior_uid->priority                = udpard_prio_fast;
+    prior_uid->p2p_remote.uid          = 1;
+    prior_uid->p2p_remote.endpoints[0] = make_ep(2);
+    cavl2_find_or_insert(
+      &tx_uid.index_deadline, prior_uid, tx_cavl_compare_deadline, &prior_uid->index_deadline, cavl2_trivial_factory);
+    cavl2_find_or_insert(&tx_uid.index_transfer_id,
+                         &(tx_key_transfer_id_t){ .transfer_id = prior_uid->transfer_id, .seq_no = prior_uid->seq_no },
+                         tx_cavl_compare_transfer_id,
+                         &prior_uid->index_transfer_id,
+                         cavl2_trivial_factory);
+    enlist_head(&tx_uid.agewise, &prior_uid->agewise);
+    tx_send_ack(&rx, 0, udpard_prio_fast, 7, (udpard_remote_t){ .uid = 2, .endpoints = { make_ep(3) } });
+    TEST_ASSERT_EQUAL_size_t(2, count_transfers_by_id_and_kind(&tx_uid, 7, frame_ack));
+    udpard_tx_free(&tx_uid);
+
     // Ack replaced with broader coverage.
     udpard_tx_t tx3 = { 0 };
     TEST_ASSERT_TRUE(udpard_tx_new(
@@ -643,6 +716,44 @@ static void test_tx_ack_and_scheduler(void)
     tx_send_ack(&rx, 0, udpard_prio_fast, 9, (udpard_remote_t){ .uid = 11, .endpoints = { make_ep(4), make_ep(5) } });
     TEST_ASSERT_NOT_EQUAL(0U, udpard_tx_pending_ifaces(&tx3));
     udpard_tx_free(&tx3);
+
+    // Ack search ignores prior with different transfer-ID.
+    udpard_tx_t tx_mismatch = { 0 };
+    TEST_ASSERT_TRUE(udpard_tx_new(
+      &tx_mismatch,
+      12U,
+      3U,
+      4U,
+      mem,
+      &(udpard_tx_vtable_t){ .eject_subject = eject_subject_with_flag, .eject_p2p = eject_p2p_with_flag }));
+    rx.tx                    = &tx_mismatch;
+    rx.errors_ack_tx         = 0;
+    tx_transfer_t* prior_ack = mem_alloc(mem.transfer, sizeof(tx_transfer_t));
+    mem_zero(sizeof(*prior_ack), prior_ack);
+    prior_ack->kind                    = frame_ack;
+    prior_ack->is_p2p                  = true;
+    prior_ack->transfer_id             = 100;
+    prior_ack->seq_no                  = 1;
+    prior_ack->deadline                = 100;
+    prior_ack->priority                = udpard_prio_fast;
+    prior_ack->p2p_remote.uid          = 9;
+    prior_ack->p2p_remote.endpoints[0] = make_ep(3);
+    cavl2_find_or_insert(&tx_mismatch.index_deadline,
+                         prior_ack,
+                         tx_cavl_compare_deadline,
+                         &prior_ack->index_deadline,
+                         cavl2_trivial_factory);
+    cavl2_find_or_insert(&tx_mismatch.index_transfer_id,
+                         &(tx_key_transfer_id_t){ .transfer_id = prior_ack->transfer_id, .seq_no = prior_ack->seq_no },
+                         tx_cavl_compare_transfer_id,
+                         &prior_ack->index_transfer_id,
+                         cavl2_trivial_factory);
+    enlist_head(&tx_mismatch.agewise, &prior_ack->agewise);
+    tx_send_ack(&rx, 0, udpard_prio_fast, 99, (udpard_remote_t){ .uid = 9, .endpoints = { make_ep(4) } });
+    TEST_ASSERT_EQUAL_UINT64(0, rx.errors_ack_tx);
+    TEST_ASSERT_EQUAL_size_t(1, count_transfers_by_id_and_kind(&tx_mismatch, 100, frame_ack));
+    TEST_ASSERT_EQUAL_size_t(1, count_transfers_by_id_and_kind(&tx_mismatch, 99, frame_ack));
+    udpard_tx_free(&tx_mismatch);
 
     // Ack emission ignores colliding non-ack transfers.
     udpard_tx_t tx_coll_ack = { 0 };
@@ -892,6 +1003,33 @@ static void test_tx_stage_if_short_deadline(void)
     instrumented_allocator_reset(&alloc);
 }
 
+static void test_tx_push_p2p_success(void)
+{
+    // Successful P2P push uses valid endpoints and returns a transfer-ID.
+    instrumented_allocator_t alloc = { 0 };
+    instrumented_allocator_new(&alloc);
+    udpard_tx_mem_resources_t mem = { .transfer = instrumented_allocator_make_resource(&alloc) };
+    for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
+        mem.payload[i] = instrumented_allocator_make_resource(&alloc);
+    }
+    udpard_tx_t tx = { 0 };
+    TEST_ASSERT_TRUE(udpard_tx_new(
+      &tx,
+      1U,
+      2U,
+      8U,
+      mem,
+      &(udpard_tx_vtable_t){ .eject_subject = eject_subject_with_flag, .eject_p2p = eject_p2p_with_flag }));
+    const udpard_remote_t remote  = { .uid = 42, .endpoints = { make_ep(11) } };
+    uint64_t              out_tid = 0;
+    TEST_ASSERT_TRUE(udpard_tx_push_p2p(
+      &tx, 0, 10, udpard_prio_fast, remote, make_scattered(NULL, 0), NULL, UDPARD_USER_CONTEXT_NULL, &out_tid));
+    TEST_ASSERT_NOT_EQUAL(0U, out_tid);
+    TEST_ASSERT_TRUE(udpard_tx_cancel(&tx, out_tid, false));
+    udpard_tx_free(&tx);
+    instrumented_allocator_reset(&alloc);
+}
+
 // Cancels transfers and reports outcome.
 static void test_tx_cancel(void)
 {
@@ -991,6 +1129,14 @@ static void test_tx_cancel(void)
     TEST_ASSERT_EQUAL_size_t(0, count_transfers_by_id_and_kind(&tx, coll_id2, frame_msg_best));
     TEST_ASSERT_TRUE(udpard_tx_cancel(&tx, coll_id2, true));
     TEST_ASSERT_EQUAL_size_t(0, count_transfers_by_id_and_kind(&tx, coll_id2, frame_msg_reliable));
+
+    // Cancel misses when ID is not present but tree is non-empty.
+    TEST_ASSERT_TRUE(udpard_tx_push(
+      &tx, 0, 100, iface_bitmap_1, udpard_prio_fast, 400, make_scattered(NULL, 0), NULL, UDPARD_USER_CONTEXT_NULL));
+    TEST_ASSERT_FALSE(udpard_tx_cancel(&tx, 399, false));
+    TEST_ASSERT_NOT_NULL(find_transfer_by_id(&tx, 400));
+    TEST_ASSERT_TRUE(udpard_tx_cancel(&tx, 400, false));
+    TEST_ASSERT_NULL(find_transfer_by_id(&tx, 400));
 
     udpard_tx_free(&tx);
     instrumented_allocator_reset(&alloc);
@@ -1193,6 +1339,7 @@ int main(void)
     RUN_TEST(test_tx_stage_if);
     RUN_TEST(test_tx_stage_if_via_tx_push);
     RUN_TEST(test_tx_stage_if_short_deadline);
+    RUN_TEST(test_tx_push_p2p_success);
     RUN_TEST(test_tx_cancel);
     RUN_TEST(test_tx_spool_deduplication);
     RUN_TEST(test_tx_eject_only_from_poll);

@@ -87,6 +87,8 @@ static void test_mem_endpoint_list_guards(void)
     udpard_listed_t tail = { 0 };
     enlist_head(&list, &tail);
     TEST_ASSERT_TRUE(is_listed(&list, &member));
+    // is_listed returns true when next is populated.
+    TEST_ASSERT_TRUE(is_listed(&list, &tail));
 
     // NULL endpoint list yields empty bitmap.
     TEST_ASSERT_EQUAL_UINT16(0U, valid_ep_bitmap(NULL));
@@ -158,12 +160,19 @@ static void test_tx_guards(void)
     // Push helpers reject invalid timing and null handles.
     const uint16_t                 iface_bitmap_1 = (1U << 0U);
     const udpard_bytes_scattered_t empty_payload  = { .bytes = { .size = 0U, .data = NULL }, .next = NULL };
+    const udpard_remote_t          remote_ok      = { .uid = 1, .endpoints = { { .ip = 1U, .port = UDP_PORT } } };
     TEST_ASSERT_FALSE(
       udpard_tx_push(&tx, 10, 5, iface_bitmap_1, udpard_prio_fast, 1U, empty_payload, NULL, UDPARD_USER_CONTEXT_NULL));
     TEST_ASSERT_FALSE(
       udpard_tx_push(NULL, 0, 0, iface_bitmap_1, udpard_prio_fast, 1U, empty_payload, NULL, UDPARD_USER_CONTEXT_NULL));
-    TEST_ASSERT_FALSE(udpard_tx_push_p2p(
-      NULL, 0, 0, udpard_prio_fast, (udpard_remote_t){ 0 }, empty_payload, NULL, UDPARD_USER_CONTEXT_NULL, NULL));
+    TEST_ASSERT_FALSE(
+      udpard_tx_push_p2p(NULL, 0, 0, udpard_prio_fast, remote_ok, empty_payload, NULL, UDPARD_USER_CONTEXT_NULL, NULL));
+    // P2P pushes reject expired deadlines.
+    TEST_ASSERT_FALSE(
+      udpard_tx_push_p2p(&tx, 2, 1, udpard_prio_fast, remote_ok, empty_payload, NULL, UDPARD_USER_CONTEXT_NULL, NULL));
+    // P2P pushes reject negative timestamps.
+    TEST_ASSERT_FALSE(
+      udpard_tx_push_p2p(&tx, -1, 0, udpard_prio_fast, remote_ok, empty_payload, NULL, UDPARD_USER_CONTEXT_NULL, NULL));
     // Reject invalid payload pointer and empty interface bitmap.
     const udpard_bytes_scattered_t bad_payload = { .bytes = { .size = 1U, .data = NULL }, .next = NULL };
     TEST_ASSERT_FALSE(
@@ -173,6 +182,34 @@ static void test_tx_guards(void)
     const udpard_remote_t remote_bad = { .uid = 1, .endpoints = { { 0 } } };
     TEST_ASSERT_FALSE(
       udpard_tx_push_p2p(&tx, 0, 1, udpard_prio_fast, remote_bad, empty_payload, NULL, UDPARD_USER_CONTEXT_NULL, NULL));
+
+    // Reject invalid timestamps and priority.
+    TEST_ASSERT_FALSE(
+      udpard_tx_push(&tx, -1, 0, iface_bitmap_1, udpard_prio_fast, 1U, empty_payload, NULL, UDPARD_USER_CONTEXT_NULL));
+    // Use an out-of-range priority without a constant enum cast.
+    udpard_prio_t  bad_prio     = udpard_prio_optional;
+    const unsigned bad_prio_raw = UDPARD_PRIORITY_COUNT;
+    memcpy(&bad_prio, &bad_prio_raw, sizeof(bad_prio));
+    TEST_ASSERT_FALSE(
+      udpard_tx_push(&tx, 0, 1, iface_bitmap_1, bad_prio, 1U, empty_payload, NULL, UDPARD_USER_CONTEXT_NULL));
+
+    // Reject zero local UID.
+    const uint64_t saved_uid = tx.local_uid;
+    tx.local_uid             = 0U;
+    TEST_ASSERT_FALSE(
+      udpard_tx_push(&tx, 0, 1, iface_bitmap_1, udpard_prio_fast, 1U, empty_payload, NULL, UDPARD_USER_CONTEXT_NULL));
+    tx.local_uid = saved_uid;
+
+    // P2P guard paths cover local UID, priority, and payload pointer.
+    uint64_t out_tid = 0;
+    tx.local_uid     = 0U;
+    TEST_ASSERT_FALSE(udpard_tx_push_p2p(
+      &tx, 0, 1, udpard_prio_fast, remote_ok, empty_payload, NULL, UDPARD_USER_CONTEXT_NULL, &out_tid));
+    tx.local_uid = saved_uid;
+    TEST_ASSERT_FALSE(
+      udpard_tx_push_p2p(&tx, 0, 1, bad_prio, remote_ok, empty_payload, NULL, UDPARD_USER_CONTEXT_NULL, &out_tid));
+    TEST_ASSERT_FALSE(udpard_tx_push_p2p(
+      &tx, 0, 1, udpard_prio_fast, remote_ok, bad_payload, NULL, UDPARD_USER_CONTEXT_NULL, &out_tid));
 
     // Poll and refcount no-ops on null data.
     udpard_tx_poll(NULL, 0, 0);
@@ -199,6 +236,20 @@ static void test_tx_predictor_sharing(void)
                                                                  make_mem(&shared_tag[1]),
                                                                  make_mem(&shared_tag[1]) };
     TEST_ASSERT_EQUAL_size_t(2U, tx_predict_frame_count(mtu, mem_arr_split, iface_bitmap_12, 16U));
+
+    // Shared spool when payload fits smaller MTU despite mismatch.
+    const size_t   mtu_mixed[UDPARD_IFACE_COUNT_MAX] = { 64U, 128U, 128U };
+    const uint16_t iface_bitmap_01                   = (1U << 0U) | (1U << 1U);
+    TEST_ASSERT_EQUAL_size_t(1U, tx_predict_frame_count(mtu_mixed, mem_arr, iface_bitmap_01, 32U));
+
+    // Gapped bitmap exercises the unset-bit branch.
+    static char        gap_tag[3];
+    const udpard_mem_t mem_gap[UDPARD_IFACE_COUNT_MAX] = { make_mem(&gap_tag[0]),
+                                                           make_mem(&gap_tag[1]),
+                                                           make_mem(&gap_tag[2]) };
+    const size_t       mtu_gap[UDPARD_IFACE_COUNT_MAX] = { 64U, 64U, 64U };
+    const uint16_t     iface_bitmap_02                 = (1U << 0U) | (1U << 2U);
+    TEST_ASSERT_EQUAL_size_t(2U, tx_predict_frame_count(mtu_gap, mem_gap, iface_bitmap_02, 16U));
 }
 
 static void test_rx_guards(void)
@@ -229,7 +280,11 @@ static void test_rx_guards(void)
     TEST_ASSERT_FALSE(rx_validate_mem_resources(bad_fragment));
     bad_fragment.fragment.vtable = &vtable_no_alloc;
     TEST_ASSERT_FALSE(rx_validate_mem_resources(bad_fragment));
+    bad_fragment.fragment.vtable = NULL;
+    TEST_ASSERT_FALSE(rx_validate_mem_resources(bad_fragment));
     TEST_ASSERT_TRUE(udpard_rx_port_new_stateless(&port, 8U, rx_mem, &rx_vtb));
+    TEST_ASSERT_FALSE(udpard_rx_port_new_stateless(&port, 8U, bad_fragment, &rx_vtb));
+    TEST_ASSERT_FALSE(udpard_rx_port_new_p2p(&port, 8U, bad_fragment, &rx_vtb));
 
     // Invalid datagram inputs are rejected without processing.
     udpard_rx_t rx;
@@ -250,6 +305,59 @@ static void test_rx_guards(void)
                           small_payload,
                           (udpard_deleter_t){ .vtable = &(udpard_deleter_vtable_t){ .free = NULL }, .context = NULL },
                           0));
+    // Cover each guard term with a valid baseline payload.
+    const udpard_deleter_t deleter_ok = { .vtable = &deleter_vtable, .context = NULL };
+    byte_t                 dgram[HEADER_SIZE_BYTES];
+    const meta_t           meta = { .priority              = udpard_prio_nominal,
+                                    .kind                  = frame_msg_best,
+                                    .transfer_payload_size = 0,
+                                    .transfer_id           = 1,
+                                    .sender_uid            = 2 };
+    header_serialize(dgram, meta, 0, 0, crc_full(0, NULL));
+    const udpard_bytes_mut_t dgram_view = { .size = sizeof(dgram), .data = dgram };
+    const udpard_udpip_ep_t  ep_ok      = { .ip = 1U, .port = UDP_PORT };
+    TEST_ASSERT_FALSE(udpard_rx_port_push(NULL, &port, 0, ep_ok, dgram_view, deleter_ok, 0));
+    TEST_ASSERT_FALSE(udpard_rx_port_push(&rx, NULL, 0, ep_ok, dgram_view, deleter_ok, 0));
+    TEST_ASSERT_FALSE(udpard_rx_port_push(&rx, &port, -1, ep_ok, dgram_view, deleter_ok, 0));
+    TEST_ASSERT_FALSE(
+      udpard_rx_port_push(&rx, &port, 0, (udpard_udpip_ep_t){ .ip = 0U, .port = UDP_PORT }, dgram_view, deleter_ok, 0));
+    TEST_ASSERT_FALSE(
+      udpard_rx_port_push(&rx, &port, 0, ep_ok, (udpard_bytes_mut_t){ .size = 1U, .data = NULL }, deleter_ok, 0));
+    TEST_ASSERT_FALSE(udpard_rx_port_push(&rx, &port, 0, ep_ok, dgram_view, deleter_ok, UDPARD_IFACE_COUNT_MAX));
+    TEST_ASSERT_FALSE(
+      udpard_rx_port_push(&rx, &port, 0, ep_ok, dgram_view, (udpard_deleter_t){ .vtable = NULL, .context = NULL }, 0));
+    TEST_ASSERT_FALSE(
+      udpard_rx_port_push(&rx,
+                          &port,
+                          0,
+                          ep_ok,
+                          dgram_view,
+                          (udpard_deleter_t){ .vtable = &(udpard_deleter_vtable_t){ .free = NULL }, .context = NULL },
+                          0));
+
+    // ACK frames are accepted on P2P ports.
+    udpard_rx_port_t port_p2p;
+    TEST_ASSERT_TRUE(udpard_rx_port_new_p2p(&port_p2p, 8U, rx_mem, &rx_vtb));
+    const meta_t ack_meta = { .priority              = udpard_prio_nominal,
+                              .kind                  = frame_ack,
+                              .transfer_payload_size = 0,
+                              .transfer_id           = 2,
+                              .sender_uid            = 3 };
+    header_serialize(dgram, ack_meta, 0, 0, crc_full(0, NULL));
+    TEST_ASSERT_TRUE(udpard_rx_port_push(&rx, &port_p2p, 0, ep_ok, dgram_view, deleter_ok, 0));
+
+    // ACK frames are rejected on non-P2P ports.
+    const uint64_t errors_before_ack = rx.errors_frame_malformed;
+    header_serialize(dgram, ack_meta, 0, 0, crc_full(0, NULL));
+    TEST_ASSERT_TRUE(udpard_rx_port_push(&rx, &port, 0, ep_ok, dgram_view, deleter_ok, 0));
+    TEST_ASSERT_EQUAL_UINT64(errors_before_ack + 1U, rx.errors_frame_malformed);
+
+    // Malformed frames are rejected after parsing.
+    const uint64_t errors_before_bad = rx.errors_frame_malformed;
+    header_serialize(dgram, meta, 0, 0, crc_full(0, NULL));
+    dgram[HEADER_SIZE_BYTES - 1] ^= 0xFFU;
+    TEST_ASSERT_TRUE(udpard_rx_port_push(&rx, &port, 0, ep_ok, dgram_view, deleter_ok, 0));
+    TEST_ASSERT_EQUAL_UINT64(errors_before_bad + 1U, rx.errors_frame_malformed);
 
     // Port freeing should tolerate null rx.
     udpard_rx_port_free(NULL, &port);

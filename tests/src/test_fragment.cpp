@@ -86,6 +86,19 @@ void test_udpard_fragment_seek()
     instrumented_allocator_reset(&alloc_frag);
     instrumented_allocator_reset(&alloc_payload);
 
+    // Test 1b: Seek before the first fragment returns NULL.
+    udpard_fragment_t* single_hi = make_test_fragment(mem_frag, mem_payload, del_payload, 5, 2, "hi");
+    TEST_ASSERT_NOT_NULL(single_hi);
+    single_hi->index_offset.up    = nullptr;
+    single_hi->index_offset.lr[0] = nullptr;
+    single_hi->index_offset.lr[1] = nullptr;
+    single_hi->index_offset.bf    = 0;
+    TEST_ASSERT_NULL(udpard_fragment_seek(single_hi, 1));
+    mem_res_free(mem_payload, single_hi->origin.size, single_hi->origin.data);
+    mem_res_free(mem_frag, sizeof(udpard_fragment_t), single_hi);
+    instrumented_allocator_reset(&alloc_frag);
+    instrumented_allocator_reset(&alloc_payload);
+
     // Test 2: Tree with root and child - to test the root-finding loop.
     // Create a simple tree: root at offset 5, left child at offset 0, right child at offset 10
     udpard_fragment_t* root  = make_test_fragment(mem_frag, mem_payload, del_payload, 5, 3, "mid");

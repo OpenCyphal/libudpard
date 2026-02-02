@@ -202,6 +202,60 @@ static void test_rx_fragment_tree_update_a(void)
     instrumented_allocator_reset(&alloc_frag);
     instrumented_allocator_reset(&alloc_payload);
 
+    // Redundant fragment removal when a larger fragment bridges neighbors.
+    {
+        udpard_tree_t*                   root      = NULL;
+        size_t                           cov       = 0;
+        rx_fragment_tree_update_result_t res       = rx_fragment_tree_rejected;
+        const char                       payload[] = "abcdefghij";
+
+        res = rx_fragment_tree_update(&root, //
+                                      mem_frag,
+                                      del_payload,
+                                      make_frame_base(mem_payload, 0, 2, payload),
+                                      10,
+                                      10,
+                                      &cov);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_accepted, res);
+        res = rx_fragment_tree_update(&root, //
+                                      mem_frag,
+                                      del_payload,
+                                      make_frame_base(mem_payload, 2, 2, payload + 2),
+                                      10,
+                                      10,
+                                      &cov);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_accepted, res);
+        res = rx_fragment_tree_update(&root, //
+                                      mem_frag,
+                                      del_payload,
+                                      make_frame_base(mem_payload, 6, 2, payload + 6),
+                                      10,
+                                      10,
+                                      &cov);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_accepted, res);
+        TEST_ASSERT_EQUAL_size_t(3, tree_count(root));
+
+        res = rx_fragment_tree_update(&root, //
+                                      mem_frag,
+                                      del_payload,
+                                      make_frame_base(mem_payload, 1, 6, payload + 1),
+                                      10,
+                                      10,
+                                      &cov);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_accepted, res);
+        TEST_ASSERT_EQUAL_size_t(3, tree_count(root));
+        TEST_ASSERT_EQUAL_size_t(0, fragment_at(root, 0)->offset);
+        TEST_ASSERT_EQUAL_size_t(1, fragment_at(root, 1)->offset);
+        TEST_ASSERT_EQUAL_size_t(6, fragment_at(root, 2)->offset);
+
+        // Cleanup.
+        udpard_fragment_free_all((udpard_fragment_t*)root, udpard_make_deleter(mem_frag));
+        TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
+        TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
+    }
+    instrumented_allocator_reset(&alloc_frag);
+    instrumented_allocator_reset(&alloc_payload);
+
     // Non-empty payload test with zero extent.
     {
         udpard_tree_t*                   root = NULL;
