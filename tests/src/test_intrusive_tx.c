@@ -102,6 +102,18 @@ static tx_transfer_t* latest_transfer(udpard_tx_t* const tx)
     return LIST_MEMBER(tx->agewise.head, tx_transfer_t, agewise);
 }
 
+// Looks up a transfer by transfer-ID.
+static tx_transfer_t* find_transfer_by_id(udpard_tx_t* const tx, const uint64_t transfer_id)
+{
+    if (tx == NULL) {
+        return NULL;
+    }
+    const tx_key_transfer_id_t key = { .transfer_id = transfer_id, .seq_no = 0 };
+    tx_transfer_t* const       tr  = CAVL2_TO_OWNER(
+      cavl2_lower_bound(tx->index_transfer_id, &key, &tx_cavl_compare_transfer_id), tx_transfer_t, index_transfer_id);
+    return ((tr != NULL) && (tr->transfer_id == transfer_id)) ? tr : NULL;
+}
+
 static void test_bytes_scattered_read(void)
 {
     // Skips empty fragments and spans boundaries.
@@ -157,49 +169,44 @@ static void test_tx_serialize_header(void)
         header_buffer_t buffer;
         const meta_t    meta = {
                .priority              = udpard_prio_fast,
-               .flag_reliable         = false,
-               .flag_acknowledgement  = false,
+               .kind                  = frame_msg_best,
                .transfer_payload_size = 12345,
                .transfer_id           = 0xBADC0FFEE0DDF00DULL,
                .sender_uid            = 0x0123456789ABCDEFULL,
-               .topic_hash            = 0xFEDCBA9876543210ULL,
         };
         (void)header_serialize(buffer.data, meta, 12345, 0, 0);
         TEST_ASSERT_EQUAL(HEADER_SIZE_BYTES, sizeof(buffer.data));
         // Verify version and priority in first byte
         TEST_ASSERT_EQUAL((HEADER_VERSION | ((unsigned)udpard_prio_fast << 5U)), buffer.data[0]);
+        TEST_ASSERT_EQUAL_UINT8(frame_msg_best, buffer.data[1]);
     }
     // Test case 2: Reliable flag
     {
         header_buffer_t buffer;
         const meta_t    meta = {
                .priority              = udpard_prio_nominal,
-               .flag_reliable         = true,
-               .flag_acknowledgement  = false,
+               .kind                  = frame_msg_reliable,
                .transfer_payload_size = 5000,
                .transfer_id           = 0xAAAAAAAAAAAAAAAAULL,
                .sender_uid            = 0xBBBBBBBBBBBBBBBBULL,
-               .topic_hash            = 0xCCCCCCCCCCCCCCCCULL,
         };
         (void)header_serialize(buffer.data, meta, 100, 200, 0);
         TEST_ASSERT_EQUAL((HEADER_VERSION | ((unsigned)udpard_prio_nominal << 5U)), buffer.data[0]);
-        TEST_ASSERT_EQUAL(HEADER_FLAG_RELIABLE, buffer.data[1]);
+        TEST_ASSERT_EQUAL_UINT8(frame_msg_reliable, buffer.data[1]);
     }
     // Test case 3: ACK flag
     {
         header_buffer_t buffer;
         const meta_t    meta = {
                .priority              = udpard_prio_nominal,
-               .flag_reliable         = false,
-               .flag_acknowledgement  = true,
-               .transfer_payload_size = 16,
+               .kind                  = frame_ack,
+               .transfer_payload_size = 0,
                .transfer_id           = 0x1111111111111111ULL,
                .sender_uid            = 0x2222222222222222ULL,
-               .topic_hash            = 0x3333333333333333ULL,
         };
         (void)header_serialize(buffer.data, meta, 0, 0, 0);
         TEST_ASSERT_EQUAL((HEADER_VERSION | ((unsigned)udpard_prio_nominal << 5U)), buffer.data[0]);
-        TEST_ASSERT_EQUAL(HEADER_FLAG_ACKNOWLEDGEMENT, buffer.data[1]);
+        TEST_ASSERT_EQUAL_UINT8(frame_ack, buffer.data[1]);
     }
 }
 
@@ -251,31 +258,24 @@ static void test_tx_validation_and_free(void)
       &(udpard_tx_vtable_t){ .eject_subject = eject_subject_with_flag, .eject_p2p = eject_p2p_with_flag }));
     tx_transfer_t* const tr = mem_alloc(mem.transfer, sizeof(tx_transfer_t));
     mem_zero(sizeof(*tr), tr);
-    tr->priority           = udpard_prio_fast;
-    tr->deadline           = 10;
-    tr->staged_until       = 1;
-    tr->remote_topic_hash  = 99;
-    tr->remote_transfer_id = 100;
-    tx_transfer_key_t key  = { .topic_hash = 5, .transfer_id = 7 };
+    tr->priority     = udpard_prio_fast;
+    tr->deadline     = 10;
+    tr->staged_until = 1;
+    tr->seq_no       = 1;
+    tr->transfer_id  = 7;
+    tr->kind         = frame_msg_best;
     // Insert with stable ordering keys.
-    const tx_time_key_t staged_key   = { .time        = tr->staged_until,
-                                         .topic_hash  = tr->topic_hash,
-                                         .transfer_id = tr->transfer_id };
-    const tx_time_key_t deadline_key = { .time        = tr->deadline,
-                                         .topic_hash  = tr->topic_hash,
-                                         .transfer_id = tr->transfer_id };
+    (void)cavl2_find_or_insert(&tx.index_staged, tr, tx_cavl_compare_staged, &tr->index_staged, cavl2_trivial_factory);
     (void)cavl2_find_or_insert(
-      &tx.index_staged, &staged_key, tx_cavl_compare_staged, &tr->index_staged, cavl2_trivial_factory);
+      &tx.index_deadline, tr, tx_cavl_compare_deadline, &tr->index_deadline, cavl2_trivial_factory);
+    const tx_key_transfer_id_t key_id = { .transfer_id = tr->transfer_id, .seq_no = tr->seq_no };
     (void)cavl2_find_or_insert(
-      &tx.index_deadline, &deadline_key, tx_cavl_compare_deadline, &tr->index_deadline, cavl2_trivial_factory);
-    (void)cavl2_find_or_insert(
-      &tx.index_transfer, &key, tx_cavl_compare_transfer, &tr->index_transfer, cavl2_trivial_factory);
-    (void)cavl2_find_or_insert(
-      &tx.index_transfer_ack, &key, tx_cavl_compare_transfer_remote, &tr->index_transfer_ack, cavl2_trivial_factory);
+      &tx.index_transfer_id, &key_id, tx_cavl_compare_transfer_id, &tr->index_transfer_id, cavl2_trivial_factory);
     enlist_head(&tx.agewise, &tr->agewise);
     tx_transfer_retire(&tx, tr, true);
     TEST_ASSERT_NULL(tx.index_staged);
-    TEST_ASSERT_NULL(tx.index_transfer_ack);
+    TEST_ASSERT_NULL(tx.index_transfer_id);
+    TEST_ASSERT_NULL(tx.index_deadline);
     instrumented_allocator_reset(&alloc_transfer);
     instrumented_allocator_reset(&alloc_payload);
 }
@@ -284,68 +284,46 @@ static void test_tx_comparators_and_feedback(void)
 {
     tx_transfer_t tr;
     mem_zero(sizeof(tr), &tr);
-    tr.staged_until       = 5;
-    tr.deadline           = 7;
-    tr.topic_hash         = 10;
-    tr.transfer_id        = 20;
-    tr.remote_topic_hash  = 3;
-    tr.remote_transfer_id = 4;
+    tr.staged_until = 5;
+    tr.deadline     = 7;
+    tr.transfer_id  = 20;
+    tr.seq_no       = 9;
 
     // Staged/deadline comparisons both ways.
-    tx_time_key_t tkey = { .time = 6, .topic_hash = tr.topic_hash, .transfer_id = tr.transfer_id };
-    TEST_ASSERT_EQUAL(1, tx_cavl_compare_staged(&tkey, &tr.index_staged));
-    tkey.time = 4;
-    TEST_ASSERT_EQUAL(-1, tx_cavl_compare_staged(&tkey, &tr.index_staged));
-    tkey.time = 8;
-    TEST_ASSERT_EQUAL(1, tx_cavl_compare_deadline(&tkey, &tr.index_deadline));
-    tkey.time = 6;
-    TEST_ASSERT_EQUAL(-1, tx_cavl_compare_deadline(&tkey, &tr.index_deadline));
-    // Staged comparator covers topic_hash/transfer_id branches.
-    tkey = (tx_time_key_t){ .time = tr.staged_until, .topic_hash = tr.topic_hash - 1, .transfer_id = tr.transfer_id };
-    TEST_ASSERT_EQUAL(-1, tx_cavl_compare_staged(&tkey, &tr.index_staged));
-    tkey.topic_hash = tr.topic_hash + 1;
-    TEST_ASSERT_EQUAL(1, tx_cavl_compare_staged(&tkey, &tr.index_staged));
-    tkey.topic_hash  = tr.topic_hash;
-    tkey.transfer_id = tr.transfer_id - 1;
-    TEST_ASSERT_EQUAL(-1, tx_cavl_compare_staged(&tkey, &tr.index_staged));
-    tkey.transfer_id = tr.transfer_id + 1;
-    TEST_ASSERT_EQUAL(1, tx_cavl_compare_staged(&tkey, &tr.index_staged));
-    // Deadline comparator covers topic_hash/transfer_id branches.
-    tkey = (tx_time_key_t){ .time = tr.deadline, .topic_hash = tr.topic_hash - 1, .transfer_id = tr.transfer_id };
-    TEST_ASSERT_EQUAL(-1, tx_cavl_compare_deadline(&tkey, &tr.index_deadline));
-    tkey.topic_hash = tr.topic_hash + 1;
-    TEST_ASSERT_EQUAL(1, tx_cavl_compare_deadline(&tkey, &tr.index_deadline));
-    tkey.topic_hash  = tr.topic_hash;
-    tkey.transfer_id = tr.transfer_id - 1;
-    TEST_ASSERT_EQUAL(-1, tx_cavl_compare_deadline(&tkey, &tr.index_deadline));
-    tkey.transfer_id = tr.transfer_id + 1;
-    TEST_ASSERT_EQUAL(1, tx_cavl_compare_deadline(&tkey, &tr.index_deadline));
+    tx_transfer_t key = tr;
+    key.staged_until  = 6;
+    TEST_ASSERT_EQUAL(1, tx_cavl_compare_staged(&key, &tr.index_staged));
+    key.staged_until = 4;
+    TEST_ASSERT_EQUAL(-1, tx_cavl_compare_staged(&key, &tr.index_staged));
+    key.deadline = 8;
+    TEST_ASSERT_EQUAL(1, tx_cavl_compare_deadline(&key, &tr.index_deadline));
+    key.deadline = 6;
+    TEST_ASSERT_EQUAL(-1, tx_cavl_compare_deadline(&key, &tr.index_deadline));
+    // Staged comparator covers seq_no branches.
+    key.staged_until = tr.staged_until;
+    key.seq_no       = tr.seq_no - 1;
+    TEST_ASSERT_EQUAL(-1, tx_cavl_compare_staged(&key, &tr.index_staged));
+    key.seq_no = tr.seq_no + 1;
+    TEST_ASSERT_EQUAL(1, tx_cavl_compare_staged(&key, &tr.index_staged));
+    // Deadline comparator covers seq_no branches.
+    key.deadline = tr.deadline;
+    key.seq_no   = tr.seq_no - 1;
+    TEST_ASSERT_EQUAL(-1, tx_cavl_compare_deadline(&key, &tr.index_deadline));
+    key.seq_no = tr.seq_no + 1;
+    TEST_ASSERT_EQUAL(1, tx_cavl_compare_deadline(&key, &tr.index_deadline));
 
-    // Transfer comparator covers all branches.
-    tx_transfer_key_t key = { .topic_hash = 5, .transfer_id = 1 };
-    TEST_ASSERT_EQUAL(-1, tx_cavl_compare_transfer(&key, &tr.index_transfer));
-    key.topic_hash = 15;
-    TEST_ASSERT_EQUAL(1, tx_cavl_compare_transfer(&key, &tr.index_transfer));
-    key.topic_hash  = tr.topic_hash;
-    key.transfer_id = 15;
-    TEST_ASSERT_EQUAL(-1, tx_cavl_compare_transfer(&key, &tr.index_transfer));
-    key.transfer_id = 25;
-    TEST_ASSERT_EQUAL(1, tx_cavl_compare_transfer(&key, &tr.index_transfer));
-    key.transfer_id = tr.transfer_id;
-    TEST_ASSERT_EQUAL(0, tx_cavl_compare_transfer(&key, &tr.index_transfer));
-
-    // Remote comparator mirrors the above.
-    tx_transfer_key_t rkey = { .topic_hash = 2, .transfer_id = 1 };
-    TEST_ASSERT_EQUAL(-1, tx_cavl_compare_transfer_remote(&rkey, &tr.index_transfer_ack));
-    rkey.topic_hash = 5;
-    TEST_ASSERT_EQUAL(1, tx_cavl_compare_transfer_remote(&rkey, &tr.index_transfer_ack));
-    rkey.topic_hash  = tr.remote_topic_hash;
-    rkey.transfer_id = 2;
-    TEST_ASSERT_EQUAL(-1, tx_cavl_compare_transfer_remote(&rkey, &tr.index_transfer_ack));
-    rkey.transfer_id = 6;
-    TEST_ASSERT_EQUAL(1, tx_cavl_compare_transfer_remote(&rkey, &tr.index_transfer_ack));
-    rkey.transfer_id = tr.remote_transfer_id;
-    TEST_ASSERT_EQUAL(0, tx_cavl_compare_transfer_remote(&rkey, &tr.index_transfer_ack));
+    // Transfer-ID comparator covers all branches.
+    tx_key_transfer_id_t key_id = { .transfer_id = 10, .seq_no = tr.seq_no };
+    TEST_ASSERT_EQUAL(-1, tx_cavl_compare_transfer_id(&key_id, &tr.index_transfer_id));
+    key_id.transfer_id = 30;
+    TEST_ASSERT_EQUAL(1, tx_cavl_compare_transfer_id(&key_id, &tr.index_transfer_id));
+    key_id.transfer_id = tr.transfer_id;
+    key_id.seq_no      = tr.seq_no - 1;
+    TEST_ASSERT_EQUAL(-1, tx_cavl_compare_transfer_id(&key_id, &tr.index_transfer_id));
+    key_id.seq_no = tr.seq_no + 1;
+    TEST_ASSERT_EQUAL(1, tx_cavl_compare_transfer_id(&key_id, &tr.index_transfer_id));
+    key_id.seq_no = tr.seq_no;
+    TEST_ASSERT_EQUAL(0, tx_cavl_compare_transfer_id(&key_id, &tr.index_transfer_id));
 }
 
 static void test_tx_spool_and_queue_errors(void)
@@ -360,12 +338,10 @@ static void test_tx_spool_and_queue_errors(void)
     const udpard_bytes_scattered_t payload    = make_scattered(buffer, sizeof(buffer));
     const meta_t                   meta       = {
                                 .priority              = udpard_prio_fast,
-                                .flag_reliable         = false,
-                                .flag_acknowledgement  = false,
+                                .kind                  = frame_msg_best,
                                 .transfer_payload_size = (uint32_t)payload.bytes.size,
                                 .transfer_id           = 1,
                                 .sender_uid            = 1,
-                                .topic_hash            = 1,
     };
     TEST_ASSERT_NULL(tx_spool(&tx, tx.memory.payload[0], 32, meta, payload));
     TEST_ASSERT_EQUAL_size_t(0, tx.enqueued_frames_count);
@@ -388,8 +364,8 @@ static void test_tx_spool_and_queue_errors(void)
     byte_t                         big_buf[2000]   = { 0 };
     const udpard_bytes_scattered_t big_payload     = make_scattered(big_buf, sizeof(big_buf));
     const uint16_t                 iface_bitmap_01 = (1U << 0U);
-    TEST_ASSERT_FALSE(udpard_tx_push(
-      &tx, 0, 1000, iface_bitmap_01, udpard_prio_fast, 11, 1, big_payload, NULL, UDPARD_USER_CONTEXT_NULL));
+    TEST_ASSERT_FALSE(
+      udpard_tx_push(&tx, 0, 1000, iface_bitmap_01, udpard_prio_fast, 11, big_payload, NULL, UDPARD_USER_CONTEXT_NULL));
     TEST_ASSERT_EQUAL_size_t(1, tx.errors_capacity);
 
     // Immediate rejection when the request exceeds limits.
@@ -411,20 +387,17 @@ static void test_tx_spool_and_queue_errors(void)
     mem_zero(sizeof(victim), &victim);
     victim.priority    = udpard_prio_fast;
     victim.deadline    = 1;
-    victim.topic_hash  = 7;
     victim.transfer_id = 9;
+    victim.seq_no      = 1;
+    victim.kind        = frame_msg_best;
     // Insert into deadline index with stable key.
-    const tx_time_key_t deadline_key = { .time        = victim.deadline,
-                                         .topic_hash  = victim.topic_hash,
-                                         .transfer_id = victim.transfer_id };
     (void)cavl2_find_or_insert(
-      &tx_sac.index_deadline, &deadline_key, tx_cavl_compare_deadline, &victim.index_deadline, cavl2_trivial_factory);
-    (void)cavl2_find_or_insert(
-      &tx_sac.index_transfer,
-      &(tx_transfer_key_t){ .topic_hash = victim.topic_hash, .transfer_id = victim.transfer_id },
-      tx_cavl_compare_transfer,
-      &victim.index_transfer,
-      cavl2_trivial_factory);
+      &tx_sac.index_deadline, &victim, tx_cavl_compare_deadline, &victim.index_deadline, cavl2_trivial_factory);
+    (void)cavl2_find_or_insert(&tx_sac.index_transfer_id,
+                               &(tx_key_transfer_id_t){ .transfer_id = victim.transfer_id, .seq_no = victim.seq_no },
+                               tx_cavl_compare_transfer_id,
+                               &victim.index_transfer_id,
+                               cavl2_trivial_factory);
     enlist_head(&tx_sac.agewise, &victim.agewise);
     TEST_ASSERT_FALSE(tx_ensure_queue_space(&tx_sac, 1));
     TEST_ASSERT_EQUAL_size_t(1, tx_sac.errors_sacrifice);
@@ -440,7 +413,7 @@ static void test_tx_spool_and_queue_errors(void)
       mem,
       &(udpard_tx_vtable_t){ .eject_subject = eject_subject_with_flag, .eject_p2p = eject_p2p_with_flag }));
     TEST_ASSERT_FALSE(udpard_tx_push(
-      &tx, 0, 1000, iface_bitmap_01, udpard_prio_fast, 12, 2, make_scattered(NULL, 0), NULL, UDPARD_USER_CONTEXT_NULL));
+      &tx, 0, 1000, iface_bitmap_01, udpard_prio_fast, 12, make_scattered(NULL, 0), NULL, UDPARD_USER_CONTEXT_NULL));
     TEST_ASSERT_EQUAL_size_t(1, tx.errors_oom);
 
     // Spool OOM inside tx_push.
@@ -452,8 +425,8 @@ static void test_tx_spool_and_queue_errors(void)
       4U,
       mem,
       &(udpard_tx_vtable_t){ .eject_subject = eject_subject_with_flag, .eject_p2p = eject_p2p_with_flag }));
-    TEST_ASSERT_FALSE(udpard_tx_push(
-      &tx, 0, 1000, iface_bitmap_01, udpard_prio_fast, 13, 3, big_payload, NULL, UDPARD_USER_CONTEXT_NULL));
+    TEST_ASSERT_FALSE(
+      udpard_tx_push(&tx, 0, 1000, iface_bitmap_01, udpard_prio_fast, 13, big_payload, NULL, UDPARD_USER_CONTEXT_NULL));
     TEST_ASSERT_EQUAL_size_t(1, tx.errors_oom);
 
     // Reliable transfer gets staged.
@@ -473,7 +446,6 @@ static void test_tx_spool_and_queue_errors(void)
                                     iface_bitmap_01,
                                     udpard_prio_nominal,
                                     14,
-                                    4,
                                     make_scattered(NULL, 0),
                                     record_feedback,
                                     make_user_context(&fstate)));
@@ -507,7 +479,6 @@ static void test_tx_ack_and_scheduler(void)
                                     1000,
                                     iface_bitmap_01,
                                     udpard_prio_fast,
-                                    21,
                                     42,
                                     make_scattered(NULL, 0),
                                     record_feedback,
@@ -531,19 +502,11 @@ static void test_tx_ack_and_scheduler(void)
       8U,
       mem,
       &(udpard_tx_vtable_t){ .eject_subject = eject_subject_with_flag, .eject_p2p = eject_p2p_with_flag }));
-    TEST_ASSERT_TRUE(udpard_tx_push(&tx_be,
-                                    0,
-                                    1000,
-                                    iface_bitmap_01,
-                                    udpard_prio_fast,
-                                    22,
-                                    43,
-                                    make_scattered(NULL, 0),
-                                    NULL,
-                                    UDPARD_USER_CONTEXT_NULL));
+    TEST_ASSERT_TRUE(udpard_tx_push(
+      &tx_be, 0, 1000, iface_bitmap_01, udpard_prio_fast, 43, make_scattered(NULL, 0), NULL, UDPARD_USER_CONTEXT_NULL));
     udpard_rx_t rx_be = { .tx = &tx_be };
     tx_receive_ack(&rx_be, 22, 43);
-    TEST_ASSERT_NOT_NULL(tx_transfer_find(&tx_be, 22, 43));
+    TEST_ASSERT_NOT_NULL(find_transfer_by_id(&tx_be, 43));
     udpard_tx_free(&tx_be);
 
     // Ack suppressed when coverage not improved.
@@ -555,22 +518,30 @@ static void test_tx_ack_and_scheduler(void)
       4U,
       mem,
       &(udpard_tx_vtable_t){ .eject_subject = eject_subject_with_flag, .eject_p2p = eject_p2p_with_flag }));
-    tx_transfer_t prior;
-    mem_zero(sizeof(prior), &prior);
-    prior.p2p_destination[0] = make_ep(3);
-    prior.iface_bitmap       = 1U; // matches p2p_destination[0] being valid
-    prior.remote_topic_hash  = 7;
-    prior.remote_transfer_id = 8;
-    cavl2_find_or_insert(&tx2.index_transfer_ack,
-                         &(tx_transfer_key_t){ .topic_hash = 7, .transfer_id = 8 },
-                         tx_cavl_compare_transfer_remote,
-                         &prior.index_transfer_ack,
+    tx_transfer_t* prior = mem_alloc(mem.transfer, sizeof(tx_transfer_t));
+    mem_zero(sizeof(*prior), prior);
+    prior->kind                    = frame_ack;
+    prior->is_p2p                  = true;
+    prior->transfer_id             = 8;
+    prior->seq_no                  = 1;
+    prior->deadline                = 100;
+    prior->priority                = udpard_prio_fast;
+    prior->p2p_remote.uid          = 9;
+    prior->p2p_remote.endpoints[0] = make_ep(3);
+    cavl2_find_or_insert(
+      &tx2.index_deadline, prior, tx_cavl_compare_deadline, &prior->index_deadline, cavl2_trivial_factory);
+    cavl2_find_or_insert(&tx2.index_transfer_id,
+                         &(tx_key_transfer_id_t){ .transfer_id = prior->transfer_id, .seq_no = prior->seq_no },
+                         tx_cavl_compare_transfer_id,
+                         &prior->index_transfer_id,
                          cavl2_trivial_factory);
+    enlist_head(&tx2.agewise, &prior->agewise);
     rx.errors_ack_tx = 0;
     rx.tx            = &tx2;
-    tx_send_ack(&rx, 0, udpard_prio_fast, 7, 8, (udpard_remote_t){ .uid = 9, .endpoints = { make_ep(3) } });
+    tx_send_ack(&rx, 0, udpard_prio_fast, 8, (udpard_remote_t){ .uid = 9, .endpoints = { make_ep(3) } });
     TEST_ASSERT_EQUAL_UINT64(0, rx.errors_ack_tx);
     TEST_ASSERT_EQUAL_UINT32(0U, udpard_tx_pending_ifaces(&tx2));
+    tx_transfer_retire(&tx2, prior, false);
     udpard_tx_free(&tx2);
 
     // Ack replaced with broader coverage.
@@ -583,9 +554,8 @@ static void test_tx_ack_and_scheduler(void)
       mem,
       &(udpard_tx_vtable_t){ .eject_subject = eject_subject_with_flag, .eject_p2p = eject_p2p_with_flag }));
     rx.tx = &tx3;
-    tx_send_ack(&rx, 0, udpard_prio_fast, 9, 9, (udpard_remote_t){ .uid = 11, .endpoints = { make_ep(4) } });
-    tx_send_ack(
-      &rx, 0, udpard_prio_fast, 9, 9, (udpard_remote_t){ .uid = 11, .endpoints = { make_ep(4), make_ep(5) } });
+    tx_send_ack(&rx, 0, udpard_prio_fast, 9, (udpard_remote_t){ .uid = 11, .endpoints = { make_ep(4) } });
+    tx_send_ack(&rx, 0, udpard_prio_fast, 9, (udpard_remote_t){ .uid = 11, .endpoints = { make_ep(4), make_ep(5) } });
     TEST_ASSERT_NOT_EQUAL(0U, udpard_tx_pending_ifaces(&tx3));
     udpard_tx_free(&tx3);
 
@@ -604,13 +574,13 @@ static void test_tx_ack_and_scheduler(void)
       &(udpard_tx_vtable_t){ .eject_subject = eject_subject_with_flag, .eject_p2p = eject_p2p_with_flag }));
     rx.errors_ack_tx = 0;
     rx.tx            = &tx6;
-    tx_send_ack(&rx, 0, udpard_prio_fast, 2, 2, (udpard_remote_t){ .uid = 1, .endpoints = { make_ep(6) } });
+    tx_send_ack(&rx, 0, udpard_prio_fast, 2, (udpard_remote_t){ .uid = 1, .endpoints = { make_ep(6) } });
     TEST_ASSERT_GREATER_THAN_UINT64(0, rx.errors_ack_tx);
     udpard_tx_free(&tx6);
 
     // Ack push failure increments error.
     udpard_rx_t rx_fail = { .tx = NULL };
-    tx_send_ack(&rx_fail, 0, udpard_prio_fast, 1, 1, (udpard_remote_t){ 0 });
+    tx_send_ack(&rx_fail, 0, udpard_prio_fast, 1, (udpard_remote_t){ 0 });
     TEST_ASSERT_GREATER_THAN_UINT64(0, rx_fail.errors_ack_tx);
 
     // Expired transfer purge with feedback.
@@ -627,21 +597,18 @@ static void test_tx_ack_and_scheduler(void)
     mem_zero(sizeof(*exp), exp);
     exp->deadline    = 1;
     exp->priority    = udpard_prio_slow;
-    exp->topic_hash  = 55;
     exp->transfer_id = 66;
+    exp->seq_no      = 1;
+    exp->kind        = frame_msg_reliable;
     exp->user        = make_user_context(&fstate);
-    exp->reliable    = true;
     exp->feedback    = record_feedback;
     // Insert into deadline index with stable key.
-    const tx_time_key_t tx4_deadline_key = { .time        = exp->deadline,
-                                             .topic_hash  = exp->topic_hash,
-                                             .transfer_id = exp->transfer_id };
     (void)cavl2_find_or_insert(
-      &tx4.index_deadline, &tx4_deadline_key, tx_cavl_compare_deadline, &exp->index_deadline, cavl2_trivial_factory);
-    (void)cavl2_find_or_insert(&tx4.index_transfer,
-                               &(tx_transfer_key_t){ .topic_hash = 55, .transfer_id = 66 },
-                               tx_cavl_compare_transfer,
-                               &exp->index_transfer,
+      &tx4.index_deadline, exp, tx_cavl_compare_deadline, &exp->index_deadline, cavl2_trivial_factory);
+    (void)cavl2_find_or_insert(&tx4.index_transfer_id,
+                               &(tx_key_transfer_id_t){ .transfer_id = exp->transfer_id, .seq_no = exp->seq_no },
+                               tx_cavl_compare_transfer_id,
+                               &exp->index_transfer_id,
                                cavl2_trivial_factory);
     tx_purge_expired_transfers(&tx4, 2);
     TEST_ASSERT_GREATER_THAN_UINT64(0, tx4.errors_expiration);
@@ -658,19 +625,17 @@ static void test_tx_ack_and_scheduler(void)
       &(udpard_tx_vtable_t){ .eject_subject = eject_subject_with_flag, .eject_p2p = eject_p2p_with_flag }));
     tx_transfer_t staged;
     mem_zero(sizeof(staged), &staged);
-    staged.staged_until       = 0;
-    staged.deadline           = 100;
-    staged.priority           = udpard_prio_fast;
-    staged.iface_bitmap       = (1U << 0U);
-    staged.p2p_destination[0] = make_ep(7);
-    tx_frame_t dummy_frame    = { 0 };
+    staged.staged_until    = 0;
+    staged.deadline        = 100;
+    staged.priority        = udpard_prio_fast;
+    staged.seq_no          = 1;
+    staged.transfer_id     = 7;
+    staged.kind            = frame_msg_reliable;
+    tx_frame_t dummy_frame = { 0 };
     staged.head[0] = staged.cursor[0] = &dummy_frame;
     // Insert into staged index with stable key.
-    const tx_time_key_t tx5_staged_key = { .time        = staged.staged_until,
-                                           .topic_hash  = staged.topic_hash,
-                                           .transfer_id = staged.transfer_id };
     cavl2_find_or_insert(
-      &tx5.index_staged, &tx5_staged_key, tx_cavl_compare_staged, &staged.index_staged, cavl2_trivial_factory);
+      &tx5.index_staged, &staged, tx_cavl_compare_staged, &staged.index_staged, cavl2_trivial_factory);
     tx5.ack_baseline_timeout = 1;
     tx_promote_staged_transfers(&tx5, 1);
     TEST_ASSERT_NOT_NULL(tx5.queue[0][staged.priority].head);
@@ -706,6 +671,7 @@ static void test_tx_stage_if(void)
     tr.priority     = udpard_prio_nominal;
     tr.deadline     = 1000;
     tr.staged_until = 100;
+    tr.kind         = frame_msg_reliable;
 
     udpard_us_t expected = tr.staged_until;
 
@@ -755,7 +721,6 @@ static void test_tx_stage_if_via_tx_push(void)
                                     iface_bitmap_12,
                                     udpard_prio_nominal,
                                     77,
-                                    1,
                                     make_scattered(NULL, 0),
                                     record_feedback,
                                     make_user_context(&fb)));
@@ -801,7 +766,6 @@ static void test_tx_stage_if_short_deadline(void)
                                     iface_bitmap_1,
                                     udpard_prio_nominal,
                                     78,
-                                    1,
                                     make_scattered(NULL, 0),
                                     record_feedback,
                                     make_user_context(&fb)));
@@ -842,165 +806,23 @@ static void test_tx_cancel(void)
                                                    iface_bitmap_1,
                                                    udpard_prio_fast,
                                                    200,
-                                                   1,
                                                    make_scattered(NULL, 0),
                                                    record_feedback,
                                                    make_user_context(&fstate)));
-    TEST_ASSERT_NOT_NULL(tx_transfer_find(&tx, 200, 1));
-    TEST_ASSERT_TRUE(udpard_tx_cancel(&tx, 200, 1));
-    TEST_ASSERT_NULL(tx_transfer_find(&tx, 200, 1));
+    TEST_ASSERT_NOT_NULL(find_transfer_by_id(&tx, 200));
+    TEST_ASSERT_TRUE(udpard_tx_cancel(&tx, 200, true));
+    TEST_ASSERT_NULL(find_transfer_by_id(&tx, 200));
     TEST_ASSERT_EQUAL_size_t(1, fstate.count);
     TEST_ASSERT_EQUAL_UINT32(0, fstate.last.acknowledgements);
     TEST_ASSERT_EQUAL_size_t(0, tx.enqueued_frames_count);
-    TEST_ASSERT_FALSE(udpard_tx_cancel(&tx, 200, 1));
+    TEST_ASSERT_FALSE(udpard_tx_cancel(&tx, 200, true));
 
     // Best-effort transfer cancels quietly.
-    TEST_ASSERT_GREATER_THAN_UINT32(0,
-                                    udpard_tx_push(&tx,
-                                                   0,
-                                                   100,
-                                                   iface_bitmap_1,
-                                                   udpard_prio_fast,
-                                                   201,
-                                                   2,
-                                                   make_scattered(NULL, 0),
-                                                   NULL,
-                                                   UDPARD_USER_CONTEXT_NULL));
-    TEST_ASSERT_TRUE(udpard_tx_cancel(&tx, 201, 2));
-    TEST_ASSERT_EQUAL_size_t(0, tx.enqueued_frames_count);
-
-    udpard_tx_free(&tx);
-    instrumented_allocator_reset(&alloc);
-}
-
-// Cancels all transfers matching a topic hash.
-static void test_tx_cancel_all(void)
-{
-    // NULL self returns zero.
-    TEST_ASSERT_EQUAL_size_t(0, udpard_tx_cancel_all(NULL, 0));
-
-    instrumented_allocator_t alloc = { 0 };
-    instrumented_allocator_new(&alloc);
-    udpard_tx_mem_resources_t mem = { .transfer = instrumented_allocator_make_resource(&alloc) };
-    for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
-        mem.payload[i] = instrumented_allocator_make_resource(&alloc);
-    }
-
-    udpard_tx_t        tx             = { 0 };
-    feedback_state_t   fstate         = { 0 };
-    eject_state_t      eject          = { .count = 0, .allow = false }; // Block ejection to retain frames.
-    const uint16_t     iface_bitmap_1 = (1U << 0U);
-    udpard_tx_vtable_t vt             = { .eject_subject = eject_subject_with_flag, .eject_p2p = eject_p2p_with_flag };
-    TEST_ASSERT_TRUE(udpard_tx_new(&tx, 40U, 1U, 16U, mem, &vt));
-    tx.user = &eject;
-
-    // Cancel with no matching transfers returns zero.
-    TEST_ASSERT_EQUAL_size_t(0, udpard_tx_cancel_all(&tx, 999));
-
-    // Push multiple transfers with different topic hashes.
-    // Topic 100: transfers 1, 2, 3 (reliable)
-    TEST_ASSERT_TRUE(udpard_tx_push(&tx,
-                                    0,
-                                    1000,
-                                    iface_bitmap_1,
-                                    udpard_prio_fast,
-                                    100,
-                                    1,
-                                    make_scattered(NULL, 0),
-                                    record_feedback,
-                                    make_user_context(&fstate)));
-    TEST_ASSERT_TRUE(udpard_tx_push(&tx,
-                                    0,
-                                    1000,
-                                    iface_bitmap_1,
-                                    udpard_prio_fast,
-                                    100,
-                                    2,
-                                    make_scattered(NULL, 0),
-                                    record_feedback,
-                                    make_user_context(&fstate)));
-    TEST_ASSERT_TRUE(udpard_tx_push(&tx,
-                                    0,
-                                    1000,
-                                    iface_bitmap_1,
-                                    udpard_prio_fast,
-                                    100,
-                                    3,
-                                    make_scattered(NULL, 0),
-                                    record_feedback,
-                                    make_user_context(&fstate)));
-    // Topic 200: transfers 1, 2 (best-effort)
-    TEST_ASSERT_TRUE(udpard_tx_push(&tx,
-                                    0,
-                                    1000,
-                                    iface_bitmap_1,
-                                    udpard_prio_nominal,
-                                    200,
-                                    1,
-                                    make_scattered(NULL, 0),
-                                    NULL,
-                                    UDPARD_USER_CONTEXT_NULL));
-    TEST_ASSERT_TRUE(udpard_tx_push(&tx,
-                                    0,
-                                    1000,
-                                    iface_bitmap_1,
-                                    udpard_prio_nominal,
-                                    200,
-                                    2,
-                                    make_scattered(NULL, 0),
-                                    NULL,
-                                    UDPARD_USER_CONTEXT_NULL));
-    // Topic 300: transfer 1 (reliable)
-    TEST_ASSERT_TRUE(udpard_tx_push(&tx,
-                                    0,
-                                    1000,
-                                    iface_bitmap_1,
-                                    udpard_prio_low,
-                                    300,
-                                    1,
-                                    make_scattered(NULL, 0),
-                                    record_feedback,
-                                    make_user_context(&fstate)));
-
-    TEST_ASSERT_EQUAL_size_t(6, tx.enqueued_frames_count);
-    TEST_ASSERT_NOT_NULL(tx_transfer_find(&tx, 100, 1));
-    TEST_ASSERT_NOT_NULL(tx_transfer_find(&tx, 100, 2));
-    TEST_ASSERT_NOT_NULL(tx_transfer_find(&tx, 100, 3));
-    TEST_ASSERT_NOT_NULL(tx_transfer_find(&tx, 200, 1));
-    TEST_ASSERT_NOT_NULL(tx_transfer_find(&tx, 200, 2));
-    TEST_ASSERT_NOT_NULL(tx_transfer_find(&tx, 300, 1));
-
-    // Cancel all topic 100 transfers; feedback invoked for each reliable transfer.
-    fstate.count = 0;
-    TEST_ASSERT_EQUAL_size_t(3, udpard_tx_cancel_all(&tx, 100));
-    TEST_ASSERT_EQUAL_size_t(3, fstate.count);
-    TEST_ASSERT_EQUAL_UINT32(0, fstate.last.acknowledgements);
-    TEST_ASSERT_NULL(tx_transfer_find(&tx, 100, 1));
-    TEST_ASSERT_NULL(tx_transfer_find(&tx, 100, 2));
-    TEST_ASSERT_NULL(tx_transfer_find(&tx, 100, 3));
-    // Other topics remain.
-    TEST_ASSERT_NOT_NULL(tx_transfer_find(&tx, 200, 1));
-    TEST_ASSERT_NOT_NULL(tx_transfer_find(&tx, 200, 2));
-    TEST_ASSERT_NOT_NULL(tx_transfer_find(&tx, 300, 1));
-    TEST_ASSERT_EQUAL_size_t(3, tx.enqueued_frames_count);
-
-    // Cancel topic 200 (best-effort, no feedback).
-    fstate.count = 0;
-    TEST_ASSERT_EQUAL_size_t(2, udpard_tx_cancel_all(&tx, 200));
-    TEST_ASSERT_EQUAL_size_t(0, fstate.count);
-    TEST_ASSERT_NULL(tx_transfer_find(&tx, 200, 1));
-    TEST_ASSERT_NULL(tx_transfer_find(&tx, 200, 2));
-    TEST_ASSERT_NOT_NULL(tx_transfer_find(&tx, 300, 1));
-    TEST_ASSERT_EQUAL_size_t(1, tx.enqueued_frames_count);
-
-    // Cancel already-cancelled topic returns zero.
-    TEST_ASSERT_EQUAL_size_t(0, udpard_tx_cancel_all(&tx, 100));
-
-    // Cancel last remaining topic.
-    fstate.count = 0;
-    TEST_ASSERT_EQUAL_size_t(1, udpard_tx_cancel_all(&tx, 300));
-    TEST_ASSERT_EQUAL_size_t(1, fstate.count);
-    TEST_ASSERT_NULL(tx_transfer_find(&tx, 300, 1));
+    TEST_ASSERT_GREATER_THAN_UINT32(
+      0,
+      udpard_tx_push(
+        &tx, 0, 100, iface_bitmap_1, udpard_prio_fast, 201, make_scattered(NULL, 0), NULL, UDPARD_USER_CONTEXT_NULL));
+    TEST_ASSERT_TRUE(udpard_tx_cancel(&tx, 201, false));
     TEST_ASSERT_EQUAL_size_t(0, tx.enqueued_frames_count);
 
     udpard_tx_free(&tx);
@@ -1037,7 +859,6 @@ static void test_tx_spool_deduplication(void)
                                     iface_bitmap_12,
                                     udpard_prio_nominal,
                                     1,
-                                    1,
                                     make_scattered(payload_big, sizeof(payload_big)),
                                     NULL,
                                     UDPARD_USER_CONTEXT_NULL));
@@ -1066,7 +887,6 @@ static void test_tx_spool_deduplication(void)
                                     iface_bitmap_12,
                                     udpard_prio_nominal,
                                     2,
-                                    2,
                                     make_scattered(payload_small, sizeof(payload_small)),
                                     NULL,
                                     UDPARD_USER_CONTEXT_NULL));
@@ -1092,7 +912,6 @@ static void test_tx_spool_deduplication(void)
                                     1000,
                                     iface_bitmap_12,
                                     udpard_prio_nominal,
-                                    3,
                                     3,
                                     make_scattered(payload_split, sizeof(payload_split)),
                                     NULL,
@@ -1127,7 +946,6 @@ static void test_tx_spool_deduplication(void)
                                     iface_bitmap_12,
                                     udpard_prio_nominal,
                                     4,
-                                    4,
                                     make_scattered(payload_one, sizeof(payload_one)),
                                     NULL,
                                     UDPARD_USER_CONTEXT_NULL));
@@ -1161,7 +979,7 @@ static void test_tx_eject_only_from_poll(void)
     // Push a subject transfer; eject must NOT be called.
     eject.count = 0;
     TEST_ASSERT_TRUE(udpard_tx_push(
-      &tx, 0, 1000, iface_bitmap_1, udpard_prio_fast, 100, 1, make_scattered(NULL, 0), NULL, UDPARD_USER_CONTEXT_NULL));
+      &tx, 0, 1000, iface_bitmap_1, udpard_prio_fast, 100, make_scattered(NULL, 0), NULL, UDPARD_USER_CONTEXT_NULL));
     TEST_ASSERT_EQUAL_size_t(0, eject.count); // eject NOT called from push
 
     // Push a P2P transfer; eject must NOT be called.
@@ -1177,16 +995,8 @@ static void test_tx_eject_only_from_poll(void)
     // Push more transfers while frames are pending; eject still must NOT be called.
     const size_t eject_count_before = eject.count;
     eject.allow                     = false; // block ejection to keep frames pending
-    TEST_ASSERT_TRUE(udpard_tx_push(&tx,
-                                    0,
-                                    1000,
-                                    iface_bitmap_1,
-                                    udpard_prio_nominal,
-                                    200,
-                                    2,
-                                    make_scattered(NULL, 0),
-                                    NULL,
-                                    UDPARD_USER_CONTEXT_NULL));
+    TEST_ASSERT_TRUE(udpard_tx_push(
+      &tx, 0, 1000, iface_bitmap_1, udpard_prio_nominal, 200, make_scattered(NULL, 0), NULL, UDPARD_USER_CONTEXT_NULL));
     TEST_ASSERT_EQUAL_size_t(eject_count_before, eject.count); // eject NOT called from push
 
     TEST_ASSERT_TRUE(udpard_tx_push_p2p(
@@ -1217,7 +1027,6 @@ int main(void)
     RUN_TEST(test_tx_stage_if_via_tx_push);
     RUN_TEST(test_tx_stage_if_short_deadline);
     RUN_TEST(test_tx_cancel);
-    RUN_TEST(test_tx_cancel_all);
     RUN_TEST(test_tx_spool_deduplication);
     RUN_TEST(test_tx_eject_only_from_poll);
     RUN_TEST(test_tx_ack_and_scheduler);

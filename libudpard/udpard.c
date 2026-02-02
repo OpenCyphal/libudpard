@@ -1326,11 +1326,13 @@ bool udpard_tx_cancel(udpard_tx_t* const self, const uint64_t transfer_id, const
                          tx_transfer_t,
                          index_transfer_id);
         while ((tr != NULL) && (tr->transfer_id == transfer_id)) {
+            tx_transfer_t* const next =
+              CAVL2_TO_OWNER(cavl2_next_greater(&tr->index_transfer_id), tx_transfer_t, index_transfer_id);
             if (tr->kind == (reliable ? frame_msg_reliable : frame_msg_best)) { // Cancel all matching (normally <=1).
                 tx_transfer_retire(self, tr, false);
                 cancelled = true;
             }
-            tr = CAVL2_TO_OWNER(cavl2_next_greater(&tr->index_transfer_id), tx_transfer_t, index_transfer_id);
+            tr = next;
         }
     }
     return cancelled;

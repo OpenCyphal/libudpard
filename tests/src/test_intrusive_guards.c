@@ -59,13 +59,6 @@ static void on_message_stub(udpard_rx_t* const rx, udpard_rx_port_t* const port,
     (void)transfer;
 }
 
-static void on_collision_stub(udpard_rx_t* const rx, udpard_rx_port_t* const port, const udpard_remote_t remote)
-{
-    (void)rx;
-    (void)port;
-    (void)remote;
-}
-
 static void test_mem_endpoint_list_guards(void)
 {
     // mem_same covers identical and divergent resources.
@@ -165,18 +158,18 @@ static void test_tx_guards(void)
     // Push helpers reject invalid timing and null handles.
     const uint16_t                 iface_bitmap_1 = (1U << 0U);
     const udpard_bytes_scattered_t empty_payload  = { .bytes = { .size = 0U, .data = NULL }, .next = NULL };
-    TEST_ASSERT_FALSE(udpard_tx_push(
-      &tx, 10, 5, iface_bitmap_1, udpard_prio_fast, 1U, 1U, empty_payload, NULL, UDPARD_USER_CONTEXT_NULL));
-    TEST_ASSERT_FALSE(udpard_tx_push(
-      NULL, 0, 0, iface_bitmap_1, udpard_prio_fast, 1U, 1U, empty_payload, NULL, UDPARD_USER_CONTEXT_NULL));
+    TEST_ASSERT_FALSE(
+      udpard_tx_push(&tx, 10, 5, iface_bitmap_1, udpard_prio_fast, 1U, empty_payload, NULL, UDPARD_USER_CONTEXT_NULL));
+    TEST_ASSERT_FALSE(
+      udpard_tx_push(NULL, 0, 0, iface_bitmap_1, udpard_prio_fast, 1U, empty_payload, NULL, UDPARD_USER_CONTEXT_NULL));
     TEST_ASSERT_FALSE(udpard_tx_push_p2p(
       NULL, 0, 0, udpard_prio_fast, (udpard_remote_t){ 0 }, empty_payload, NULL, UDPARD_USER_CONTEXT_NULL, NULL));
     // Reject invalid payload pointer and empty interface bitmap.
     const udpard_bytes_scattered_t bad_payload = { .bytes = { .size = 1U, .data = NULL }, .next = NULL };
     TEST_ASSERT_FALSE(
-      udpard_tx_push(&tx, 0, 1, iface_bitmap_1, udpard_prio_fast, 1U, 1U, bad_payload, NULL, UDPARD_USER_CONTEXT_NULL));
+      udpard_tx_push(&tx, 0, 1, iface_bitmap_1, udpard_prio_fast, 1U, bad_payload, NULL, UDPARD_USER_CONTEXT_NULL));
     TEST_ASSERT_FALSE(
-      udpard_tx_push(&tx, 0, 1, 0U, udpard_prio_fast, 1U, 1U, empty_payload, NULL, UDPARD_USER_CONTEXT_NULL));
+      udpard_tx_push(&tx, 0, 1, 0U, udpard_prio_fast, 1U, empty_payload, NULL, UDPARD_USER_CONTEXT_NULL));
     const udpard_remote_t remote_bad = { .uid = 1, .endpoints = { { 0 } } };
     TEST_ASSERT_FALSE(
       udpard_tx_push_p2p(&tx, 0, 1, udpard_prio_fast, remote_bad, empty_payload, NULL, UDPARD_USER_CONTEXT_NULL, NULL));
@@ -214,15 +207,15 @@ static void test_rx_guards(void)
     static char                     rx_tag_a;
     static char                     rx_tag_b;
     const udpard_rx_mem_resources_t rx_mem = { .session = make_mem(&rx_tag_a), .fragment = make_mem(&rx_tag_b) };
-    const udpard_rx_port_vtable_t   rx_vtb = { .on_message = on_message_stub, .on_collision = on_collision_stub };
+    const udpard_rx_port_vtable_t   rx_vtb = { .on_message = on_message_stub };
     udpard_rx_port_t                port;
-    TEST_ASSERT_FALSE(udpard_rx_port_new(NULL, 0, 0, udpard_rx_ordered, 0, rx_mem, &rx_vtb));
-    TEST_ASSERT_FALSE(udpard_rx_port_new(&port, 0, 0, udpard_rx_ordered, 0, rx_mem, NULL));
-    const udpard_rx_port_vtable_t rx_vtb_no_msg = { .on_message = NULL, .on_collision = on_collision_stub };
-    TEST_ASSERT_FALSE(udpard_rx_port_new(&port, 0, 0, udpard_rx_ordered, 0, rx_mem, &rx_vtb_no_msg));
+    TEST_ASSERT_FALSE(udpard_rx_port_new(NULL, 0, rx_mem, &rx_vtb));
+    TEST_ASSERT_FALSE(udpard_rx_port_new(&port, 0, rx_mem, NULL));
+    const udpard_rx_port_vtable_t rx_vtb_no_msg = { .on_message = NULL };
+    TEST_ASSERT_FALSE(udpard_rx_port_new(&port, 0, rx_mem, &rx_vtb_no_msg));
     udpard_rx_mem_resources_t bad_rx_mem = rx_mem;
     bad_rx_mem.session.vtable            = NULL;
-    TEST_ASSERT_FALSE(udpard_rx_port_new(&port, 0, 0, udpard_rx_unordered, 0, bad_rx_mem, &rx_vtb));
+    TEST_ASSERT_FALSE(udpard_rx_port_new(&port, 0, bad_rx_mem, &rx_vtb));
     // rx_validate_mem_resources rejects missing hooks.
     const udpard_mem_vtable_t vtable_no_free  = { .base = { .free = NULL }, .alloc = alloc_stub };
     const udpard_mem_vtable_t vtable_no_alloc = { .base = { .free = free_noop }, .alloc = NULL };
@@ -236,10 +229,7 @@ static void test_rx_guards(void)
     TEST_ASSERT_FALSE(rx_validate_mem_resources(bad_fragment));
     bad_fragment.fragment.vtable = &vtable_no_alloc;
     TEST_ASSERT_FALSE(rx_validate_mem_resources(bad_fragment));
-    // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange)
-    TEST_ASSERT_FALSE(udpard_rx_port_new(&port, 0, 0, (udpard_rx_mode_t)99, 0, rx_mem, &rx_vtb));
-    TEST_ASSERT_FALSE(udpard_rx_port_new(&port, 0, 0, udpard_rx_ordered, (udpard_us_t)-1, rx_mem, &rx_vtb));
-    TEST_ASSERT_TRUE(udpard_rx_port_new(&port, 0xAA, 8U, udpard_rx_stateless, 0, rx_mem, &rx_vtb));
+    TEST_ASSERT_TRUE(udpard_rx_port_new_stateless(&port, 8U, rx_mem, &rx_vtb));
 
     // Invalid datagram inputs are rejected without processing.
     udpard_rx_t rx;

@@ -74,7 +74,6 @@ struct ReceivedTransfer
 {
     std::vector<uint8_t> payload;
     uint64_t             transfer_id;
-    uint64_t             topic_hash;
     uint64_t             remote_uid;
     size_t               payload_size_wire;
 };
@@ -82,7 +81,6 @@ struct ReceivedTransfer
 struct TestContext
 {
     std::vector<ReceivedTransfer> received_transfers;
-    size_t                        collisions = 0;
 };
 
 // =====================================================================================================================
@@ -131,7 +129,6 @@ void on_message(udpard_rx_t* const rx, udpard_rx_port_t* const port, const udpar
     if (ctx != nullptr) {
         ReceivedTransfer rt{};
         rt.transfer_id       = transfer.transfer_id;
-        rt.topic_hash        = port->topic_hash;
         rt.remote_uid        = transfer.remote.uid;
         rt.payload_size_wire = transfer.payload_size_wire;
 
@@ -145,15 +142,7 @@ void on_message(udpard_rx_t* const rx, udpard_rx_port_t* const port, const udpar
     udpard_fragment_free_all(transfer.payload, udpard_make_deleter(port->memory.fragment));
 }
 
-void on_collision(udpard_rx_t* const rx, udpard_rx_port_t* const, const udpard_remote_t)
-{
-    auto* ctx = static_cast<TestContext*>(rx->user);
-    if (ctx != nullptr) {
-        ctx->collisions++;
-    }
-}
-
-constexpr udpard_rx_port_vtable_t rx_port_vtable{ .on_message = &on_message, .on_collision = &on_collision };
+constexpr udpard_rx_port_vtable_t rx_port_vtable{ .on_message = &on_message };
 
 // =====================================================================================================================
 // Fixtures and helpers
@@ -227,10 +216,10 @@ struct RxFixture
 };
 
 // Create a subject port.
-udpard_rx_port_t make_subject_port(const uint64_t topic_hash, const size_t extent, RxFixture& rx)
+udpard_rx_port_t make_subject_port(const size_t extent, RxFixture& rx)
 {
     udpard_rx_port_t port{};
-    TEST_ASSERT_TRUE(udpard_rx_port_new(&port, topic_hash, extent, udpard_rx_unordered, 0, rx.mem, &rx_port_vtable));
+    TEST_ASSERT_TRUE(udpard_rx_port_new(&port, extent, rx.mem, &rx_port_vtable));
     return port;
 }
 
@@ -278,7 +267,6 @@ void test_single_frame_transfer()
     seed_prng();
 
     constexpr uint64_t publisher_uid = 0x1111222233334444ULL;
-    constexpr uint64_t topic_hash    = 0x0123456789ABCDEFULL;
     constexpr uint64_t transfer_id   = 42U;
 
     // Set up publisher.
@@ -288,7 +276,7 @@ void test_single_frame_transfer()
     // Set up subscriber.
     RxFixture sub{};
     sub.init();
-    udpard_rx_port_t sub_port = make_subject_port(topic_hash, 4096, sub);
+    udpard_rx_port_t sub_port = make_subject_port(4096, sub);
 
     // Send a small payload.
     const std::vector<uint8_t>     payload      = { 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08 };
@@ -302,7 +290,6 @@ void test_single_frame_transfer()
                                     deadline,
                                     1U, // iface_bitmap: interface 0 only
                                     udpard_prio_nominal,
-                                    topic_hash,
                                     transfer_id,
                                     payload_view,
                                     nullptr,
@@ -318,11 +305,9 @@ void test_single_frame_transfer()
     // Verify transfer.
     TEST_ASSERT_EQUAL_size_t(1, sub.ctx.received_transfers.size());
     TEST_ASSERT_EQUAL_UINT64(transfer_id, sub.ctx.received_transfers[0].transfer_id);
-    TEST_ASSERT_EQUAL_UINT64(topic_hash, sub.ctx.received_transfers[0].topic_hash);
     TEST_ASSERT_EQUAL_UINT64(publisher_uid, sub.ctx.received_transfers[0].remote_uid);
     TEST_ASSERT_EQUAL_size_t(payload.size(), sub.ctx.received_transfers[0].payload.size());
     TEST_ASSERT_EQUAL_MEMORY(payload.data(), sub.ctx.received_transfers[0].payload.data(), payload.size());
-    TEST_ASSERT_EQUAL_size_t(0, sub.ctx.collisions);
 
     // Cleanup.
     udpard_rx_port_free(&sub.rx, &sub_port);
@@ -336,7 +321,6 @@ void test_multi_frame_transfer()
     seed_prng();
 
     constexpr uint64_t publisher_uid = 0x5555666677778888ULL;
-    constexpr uint64_t topic_hash    = 0xFEDCBA9876543210ULL;
     constexpr size_t   payload_size  = 50000; // Large enough to require many frames
 
     // Set up publisher.
@@ -346,7 +330,7 @@ void test_multi_frame_transfer()
     // Set up subscriber.
     RxFixture sub{};
     sub.init();
-    udpard_rx_port_t sub_port = make_subject_port(topic_hash, payload_size + 1024, sub);
+    udpard_rx_port_t sub_port = make_subject_port(payload_size + 1024, sub);
 
     // Generate random payload.
     const std::vector<uint8_t>     payload      = make_payload(payload_size);
@@ -360,7 +344,6 @@ void test_multi_frame_transfer()
                                     deadline,
                                     1U, // iface_bitmap
                                     udpard_prio_nominal,
-                                    topic_hash,
                                     100,
                                     payload_view,
                                     nullptr,
@@ -377,7 +360,6 @@ void test_multi_frame_transfer()
     TEST_ASSERT_EQUAL_size_t(1, sub.ctx.received_transfers.size());
     TEST_ASSERT_EQUAL_size_t(payload_size, sub.ctx.received_transfers[0].payload.size());
     TEST_ASSERT_EQUAL_MEMORY(payload.data(), sub.ctx.received_transfers[0].payload.data(), payload_size);
-    TEST_ASSERT_EQUAL_size_t(0, sub.ctx.collisions);
 
     // Cleanup.
     udpard_rx_port_free(&sub.rx, &sub_port);
@@ -391,7 +373,6 @@ void test_multi_frame_with_reordering()
     seed_prng();
 
     constexpr uint64_t publisher_uid = 0xABCDEF0123456789ULL;
-    constexpr uint64_t topic_hash    = 0x1234ABCD5678EF00ULL;
     constexpr size_t   payload_size  = 20000;
 
     NetworkSimulator sim(0.0, true, static_cast<uint32_t>(rand())); // No loss, deterministic shuffle
@@ -403,7 +384,7 @@ void test_multi_frame_with_reordering()
     // Set up subscriber.
     RxFixture sub{};
     sub.init();
-    udpard_rx_port_t sub_port = make_subject_port(topic_hash, payload_size + 1024, sub);
+    udpard_rx_port_t sub_port = make_subject_port(payload_size + 1024, sub);
 
     // Generate random payload and send.
     const std::vector<uint8_t>     payload      = make_payload(payload_size);
@@ -415,7 +396,6 @@ void test_multi_frame_with_reordering()
                                     now + 5000000,
                                     1U, // iface_bitmap
                                     udpard_prio_nominal,
-                                    topic_hash,
                                     50,
                                     payload_view,
                                     nullptr,
@@ -432,7 +412,6 @@ void test_multi_frame_with_reordering()
     TEST_ASSERT_EQUAL_size_t(payload_size, sub.ctx.received_transfers[0].payload.size());
     TEST_ASSERT_EQUAL_MEMORY(payload.data(), sub.ctx.received_transfers[0].payload.data(), payload_size);
     TEST_ASSERT_TRUE((pub.frames.size() < 2U) || sim.reordered());
-    TEST_ASSERT_EQUAL_size_t(0, sub.ctx.collisions);
 
     // Cleanup.
     udpard_rx_port_free(&sub.rx, &sub_port);
@@ -445,15 +424,14 @@ void test_multiple_publishers()
 {
     seed_prng();
 
-    constexpr uint64_t topic_hash            = 0x1234567890ABCDEFULL;
-    constexpr size_t   num_publishers        = 3;
-    constexpr size_t   num_transfers_per_pub = 5;
-    constexpr size_t   payload_size          = 100;
+    constexpr size_t num_publishers        = 3;
+    constexpr size_t num_transfers_per_pub = 5;
+    constexpr size_t payload_size          = 100;
 
     // Set up subscriber.
     RxFixture sub{};
     sub.init();
-    udpard_rx_port_t sub_port = make_subject_port(topic_hash, 1024, sub);
+    udpard_rx_port_t sub_port = make_subject_port(1024, sub);
 
     // Set up publishers and send.
     std::array<TxFixture, num_publishers>                         publishers{};
@@ -479,7 +457,6 @@ void test_multiple_publishers()
                                             now + 1000000,
                                             1U, // iface_bitmap
                                             udpard_prio_nominal,
-                                            topic_hash,
                                             transfer_id,
                                             payload_view,
                                             nullptr,
@@ -513,7 +490,6 @@ void test_multiple_publishers()
             TEST_ASSERT_EQUAL_MEMORY(expected_payloads[i][tid].data(), it->payload.data(), payload_size);
         }
     }
-    TEST_ASSERT_EQUAL_size_t(0, sub.ctx.collisions);
 
     // Cleanup.
     udpard_rx_port_free(&sub.rx, &sub_port);
@@ -529,7 +505,6 @@ void test_partial_frame_loss()
     seed_prng();
 
     constexpr uint64_t publisher_uid = 0xDEADBEEFCAFEBABEULL;
-    constexpr uint64_t topic_hash    = 0xABCDEF0123456789ULL;
     constexpr size_t   payload_size  = 5000; // Multi-frame transfer
 
     NetworkSimulator sim(0.35, false, static_cast<uint32_t>(rand())); // Ensure some loss
@@ -541,7 +516,7 @@ void test_partial_frame_loss()
     // Set up subscriber.
     RxFixture sub{};
     sub.init();
-    udpard_rx_port_t sub_port = make_subject_port(topic_hash, payload_size + 1024, sub);
+    udpard_rx_port_t sub_port = make_subject_port(payload_size + 1024, sub);
 
     // Generate payload and send.
     const std::vector<uint8_t>     payload      = make_payload(payload_size);
@@ -553,7 +528,6 @@ void test_partial_frame_loss()
                                     now + 5000000,
                                     1U, // iface_bitmap
                                     udpard_prio_nominal,
-                                    topic_hash,
                                     50,
                                     payload_view,
                                     nullptr,
@@ -569,7 +543,6 @@ void test_partial_frame_loss()
     // Verify incomplete transfer is dropped.
     TEST_ASSERT_TRUE(sim.dropped() > 0U);
     TEST_ASSERT_EQUAL_size_t(0, sub.ctx.received_transfers.size());
-    TEST_ASSERT_EQUAL_size_t(0, sub.ctx.collisions);
 
     // Cleanup.
     udpard_rx_port_free(&sub.rx, &sub_port);
@@ -583,7 +556,6 @@ void test_no_loss_baseline()
     seed_prng();
 
     constexpr uint64_t publisher_uid = 0xAAAABBBBCCCCDDDDULL;
-    constexpr uint64_t topic_hash    = 0x9999888877776666ULL;
     constexpr size_t   payload_size  = 10000;
 
     // Set up publisher.
@@ -593,7 +565,7 @@ void test_no_loss_baseline()
     // Set up subscriber.
     RxFixture sub{};
     sub.init();
-    udpard_rx_port_t sub_port = make_subject_port(topic_hash, payload_size + 1024, sub);
+    udpard_rx_port_t sub_port = make_subject_port(payload_size + 1024, sub);
 
     // Generate payload and send.
     const std::vector<uint8_t>     payload      = make_payload(payload_size);
@@ -605,7 +577,6 @@ void test_no_loss_baseline()
                                     now + 5000000,
                                     1U, // iface_bitmap
                                     udpard_prio_nominal,
-                                    topic_hash,
                                     75,
                                     payload_view,
                                     nullptr,
@@ -621,7 +592,6 @@ void test_no_loss_baseline()
     TEST_ASSERT_EQUAL_size_t(1, sub.ctx.received_transfers.size());
     TEST_ASSERT_EQUAL_size_t(payload_size, sub.ctx.received_transfers[0].payload.size());
     TEST_ASSERT_EQUAL_MEMORY(payload.data(), sub.ctx.received_transfers[0].payload.data(), payload_size);
-    TEST_ASSERT_EQUAL_size_t(0, sub.ctx.collisions);
 
     // Cleanup.
     udpard_rx_port_free(&sub.rx, &sub_port);
@@ -635,7 +605,6 @@ void test_extent_truncation()
     seed_prng();
 
     constexpr uint64_t publisher_uid = 0x1234567890ABCDEFULL;
-    constexpr uint64_t topic_hash    = 0xFEDCBA0987654321ULL;
     constexpr size_t   payload_size  = 5000;
     constexpr size_t   extent        = 1000; // Less than payload_size
 
@@ -646,7 +615,7 @@ void test_extent_truncation()
     // Set up subscriber with limited extent.
     RxFixture sub{};
     sub.init();
-    udpard_rx_port_t sub_port = make_subject_port(topic_hash, extent, sub);
+    udpard_rx_port_t sub_port = make_subject_port(extent, sub);
 
     // Generate payload and send.
     const std::vector<uint8_t>     payload      = make_payload(payload_size);
@@ -658,7 +627,6 @@ void test_extent_truncation()
                                     now + 5000000,
                                     1U, // iface_bitmap
                                     udpard_prio_nominal,
-                                    topic_hash,
                                     100,
                                     payload_view,
                                     nullptr,
@@ -676,7 +644,6 @@ void test_extent_truncation()
     TEST_ASSERT_EQUAL_size_t(payload_size, sub.ctx.received_transfers[0].payload_size_wire);
     TEST_ASSERT_EQUAL_MEMORY(
       payload.data(), sub.ctx.received_transfers[0].payload.data(), sub.ctx.received_transfers[0].payload.size());
-    TEST_ASSERT_EQUAL_size_t(0, sub.ctx.collisions);
 
     // Cleanup.
     udpard_rx_port_free(&sub.rx, &sub_port);

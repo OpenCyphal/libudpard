@@ -31,7 +31,6 @@ struct RxContext
     std::array<udpard_udpip_ep_t, UDPARD_IFACE_COUNT_MAX> sources{};
     uint64_t                                              remote_uid = 0;
     size_t                                                received   = 0;
-    size_t                                                collisions = 0;
 };
 
 // Refcount helpers keep captured datagrams alive.
@@ -115,19 +114,14 @@ void on_message(udpard_rx_t* const rx, udpard_rx_port_t* const port, const udpar
     ctx->received++;
 }
 
-void on_collision(udpard_rx_t* const rx, udpard_rx_port_t* const /*port*/, const udpard_remote_t /*remote*/)
-{
-    auto* ctx = static_cast<RxContext*>(rx->user);
-    ctx->collisions++;
-}
-constexpr udpard_rx_port_vtable_t callbacks{ .on_message = &on_message, .on_collision = &on_collision };
+constexpr udpard_rx_port_vtable_t callbacks{ .on_message = &on_message };
 
 // Ack port frees responses.
 void on_ack_response(udpard_rx_t*, udpard_rx_port_t* port, const udpard_rx_transfer_t tr)
 {
     udpard_fragment_free_all(tr.payload, udpard_make_deleter(port->memory.fragment));
 }
-constexpr udpard_rx_port_vtable_t ack_callbacks{ .on_message = &on_ack_response, .on_collision = &on_collision };
+constexpr udpard_rx_port_vtable_t ack_callbacks{ .on_message = &on_ack_response };
 
 // Reliable delivery must survive data and ack loss.
 // Each node uses exactly one TX and one RX instance as per the library design.
@@ -184,8 +178,7 @@ void test_reliable_delivery_under_losses()
     udpard_rx_t pub_rx{};
     udpard_rx_new(&pub_rx, &pub_tx);
     udpard_rx_port_t pub_p2p_port{};
-    TEST_ASSERT_TRUE(
-      udpard_rx_port_new(&pub_p2p_port, pub_uid, 16, udpard_rx_unordered, 0, pub_rx_mem, &ack_callbacks));
+    TEST_ASSERT_TRUE(udpard_rx_port_new_p2p(&pub_p2p_port, 16, pub_rx_mem, &ack_callbacks));
 
     // Subscriber node: single TX, single RX (linked to TX for sending ACKs).
     constexpr uint64_t         sub_uid = 0xABCDEF0012345678ULL;
@@ -197,8 +190,7 @@ void test_reliable_delivery_under_losses()
     udpard_rx_t sub_rx{};
     udpard_rx_new(&sub_rx, &sub_tx);
     udpard_rx_port_t sub_port{};
-    const uint64_t   topic_hash = 0x0123456789ABCDEFULL;
-    TEST_ASSERT_TRUE(udpard_rx_port_new(&sub_port, topic_hash, 6000, udpard_rx_unordered, 0, sub_rx_mem, &callbacks));
+    TEST_ASSERT_TRUE(udpard_rx_port_new(&sub_port, 6000, sub_rx_mem, &callbacks));
 
     // Endpoints.
     const std::array<udpard_udpip_ep_t, UDPARD_IFACE_COUNT_MAX> publisher_sources{
@@ -235,7 +227,6 @@ void test_reliable_delivery_under_losses()
                                     deadline,
                                     iface_bitmap_all,
                                     udpard_prio_fast,
-                                    topic_hash,
                                     1U,
                                     payload_view,
                                     &record_feedback,
@@ -296,8 +287,6 @@ void test_reliable_delivery_under_losses()
     TEST_ASSERT_EQUAL_size_t(1, fb.count);
     TEST_ASSERT_EQUAL_UINT32(1, fb.acknowledgements);
     TEST_ASSERT_EQUAL_size_t(1, ctx.received);
-    TEST_ASSERT_EQUAL_size_t(0, ctx.collisions);
-
     // Cleanup.
     udpard_rx_port_free(&sub_rx, &sub_port);
     udpard_rx_port_free(&pub_rx, &pub_p2p_port);
@@ -350,7 +339,6 @@ void test_reliable_stats_and_failures()
                                     10,
                                     iface_bitmap_1,
                                     udpard_prio_fast,
-                                    0xABCULL,
                                     5U,
                                     exp_payload,
                                     &record_feedback,
@@ -399,7 +387,7 @@ void test_reliable_stats_and_failures()
     ctx.expected.assign({ 1U, 2U, 3U, 4U });
     udpard_rx_new(&rx, nullptr);
     rx.user = &ctx;
-    TEST_ASSERT_TRUE(udpard_rx_port_new(&port, 0x12340000ULL, 64, udpard_rx_unordered, 0, rx_mem, &callbacks));
+    TEST_ASSERT_TRUE(udpard_rx_port_new(&port, 64, rx_mem, &callbacks));
 
     const udpard_bytes_scattered_t src_payload = make_scattered(ctx.expected.data(), ctx.expected.size());
     FeedbackState                  fb_ignore{};
@@ -408,7 +396,6 @@ void test_reliable_stats_and_failures()
                                     1000,
                                     iface_bitmap_1,
                                     udpard_prio_fast,
-                                    port.topic_hash,
                                     7U,
                                     src_payload,
                                     &record_feedback,
