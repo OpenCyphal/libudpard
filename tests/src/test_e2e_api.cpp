@@ -157,6 +157,7 @@ void test_reliable_delivery_under_losses()
         res = instrumented_allocator_make_resource(&pub_tx_alloc_payload);
     }
     const udpard_rx_mem_resources_t pub_rx_mem{ .session  = instrumented_allocator_make_resource(&pub_rx_alloc_session),
+                                                .slot     = instrumented_allocator_make_resource(&pub_rx_alloc_session),
                                                 .fragment = instrumented_allocator_make_resource(&pub_rx_alloc_frag) };
 
     udpard_tx_mem_resources_t sub_tx_mem{};
@@ -165,6 +166,7 @@ void test_reliable_delivery_under_losses()
         res = instrumented_allocator_make_resource(&sub_tx_alloc_payload);
     }
     const udpard_rx_mem_resources_t sub_rx_mem{ .session  = instrumented_allocator_make_resource(&sub_rx_alloc_session),
+                                                .slot     = instrumented_allocator_make_resource(&sub_rx_alloc_session),
                                                 .fragment = instrumented_allocator_make_resource(&sub_rx_alloc_frag) };
 
     // Publisher node: single TX, single RX (linked to TX for ACK processing).
@@ -368,6 +370,7 @@ void test_reliable_stats_and_failures()
     instrumented_allocator_new(&src_alloc_transfer);
     instrumented_allocator_new(&src_alloc_payload);
     const udpard_rx_mem_resources_t rx_mem{ .session  = instrumented_allocator_make_resource(&rx_alloc_session),
+                                            .slot     = instrumented_allocator_make_resource(&rx_alloc_session),
                                             .fragment = instrumented_allocator_make_resource(&rx_alloc_frag) };
     udpard_tx_mem_resources_t       src_mem{};
     src_mem.transfer = instrumented_allocator_make_resource(&src_alloc_transfer);

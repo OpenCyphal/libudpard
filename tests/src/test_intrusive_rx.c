@@ -1237,17 +1237,21 @@ static void test_rx_slot_update(void)
     instrumented_allocator_new(&alloc_frag);
     const udpard_mem_t mem_frag = instrumented_allocator_make_resource(&alloc_frag);
 
+    instrumented_allocator_t alloc_slot = { 0 };
+    instrumented_allocator_new(&alloc_slot);
+    const udpard_mem_t mem_slot = instrumented_allocator_make_resource(&alloc_slot);
+
     instrumented_allocator_t alloc_payload = { 0 };
     instrumented_allocator_new(&alloc_payload);
     const udpard_mem_t     mem_payload = instrumented_allocator_make_resource(&alloc_payload);
     const udpard_deleter_t del_payload = instrumented_allocator_make_deleter(&alloc_payload);
 
-    uint64_t errors_oom                = 0;
-    uint64_t errors_transfer_malformed = 0;
+    uint64_t errors_oom = 0;
 
-    // Test 1: Initialize slot from idle state (slot->busy == false branch)
+    // Test 1: Initialize slot from idle state.
     {
-        rx_slot_t slot = { 0 };
+        rx_slot_t* slot = rx_slot_new(mem_slot);
+        TEST_ASSERT_NOT_NULL(slot);
 
         rx_frame_t frame                 = { 0 };
         frame.base                       = make_frame_base(mem_payload, 0, 5, "hello");
@@ -1257,30 +1261,28 @@ static void test_rx_slot_update(void)
 
         const udpard_us_t ts = 1000;
 
-        // Single-frame transfer should complete immediately.
-        const bool done =
-          rx_slot_update(&slot, ts, mem_frag, del_payload, &frame, 5, &errors_oom, &errors_transfer_malformed);
+        const rx_slot_update_result_t res =
+          rx_slot_update(slot, ts, mem_frag, del_payload, &frame, 5, &errors_oom);
 
-        // Verify slot was initialized
-        TEST_ASSERT_TRUE(done);
-        TEST_ASSERT_FALSE(slot.busy);
-        TEST_ASSERT_EQUAL(123, slot.transfer_id);
-        TEST_ASSERT_EQUAL(ts, slot.ts_min);
-        TEST_ASSERT_EQUAL(ts, slot.ts_max);
-        TEST_ASSERT_EQUAL_size_t(5, slot.covered_prefix);
+        TEST_ASSERT_EQUAL(rx_slot_complete, res);
+        TEST_ASSERT_EQUAL(123, slot->transfer_id);
+        TEST_ASSERT_EQUAL(ts, slot->ts_min);
+        TEST_ASSERT_EQUAL(ts, slot->ts_max);
+        TEST_ASSERT_EQUAL_size_t(5, slot->covered_prefix);
         TEST_ASSERT_EQUAL(0, errors_oom);
 
-        rx_slot_reset(&slot, mem_frag);
-        rx_slot_reset(&slot, mem_frag); // idempotent
+        rx_slot_destroy(&slot, mem_frag, mem_slot);
+        TEST_ASSERT_NULL(slot);
     }
     instrumented_allocator_reset(&alloc_frag);
+    instrumented_allocator_reset(&alloc_slot);
     instrumented_allocator_reset(&alloc_payload);
 
-    // Test 2: Multi-frame transfer with timestamp updates (later/earlier branches)
+    // Test 2: Multi-frame transfer with timestamp updates.
     {
-        rx_slot_t slot = { 0 };
+        rx_slot_t* slot = rx_slot_new(mem_slot);
+        TEST_ASSERT_NOT_NULL(slot);
 
-        // First frame at offset 0
         rx_frame_t frame1                 = { 0 };
         frame1.base                       = make_frame_base(mem_payload, 0, 3, "abc");
         frame1.base.crc                   = 0x12345678;
@@ -1288,69 +1290,63 @@ static void test_rx_slot_update(void)
         frame1.meta.transfer_payload_size = 10;
 
         const udpard_us_t ts1 = 2000;
-        // First frame initializes slot but does not complete transfer.
-        const bool done1 =
-          rx_slot_update(&slot, ts1, mem_frag, del_payload, &frame1, 10, &errors_oom, &errors_transfer_malformed);
+        const rx_slot_update_result_t res1 =
+          rx_slot_update(slot, ts1, mem_frag, del_payload, &frame1, 10, &errors_oom);
 
-        TEST_ASSERT_FALSE(done1);
-        TEST_ASSERT_TRUE(slot.busy);
-        TEST_ASSERT_EQUAL(ts1, slot.ts_min);
-        TEST_ASSERT_EQUAL(ts1, slot.ts_max);
-        TEST_ASSERT_EQUAL_size_t(3, slot.covered_prefix);
-        TEST_ASSERT_EQUAL(3, slot.crc_end);
-        TEST_ASSERT_EQUAL(0x12345678, slot.crc);
+        TEST_ASSERT_EQUAL(rx_slot_incomplete, res1);
+        TEST_ASSERT_EQUAL(ts1, slot->ts_min);
+        TEST_ASSERT_EQUAL(ts1, slot->ts_max);
+        TEST_ASSERT_EQUAL_size_t(3, slot->covered_prefix);
+        TEST_ASSERT_EQUAL(3, slot->crc_end);
+        TEST_ASSERT_EQUAL(0x12345678, slot->crc);
 
-        // Second frame at offset 5, with later timestamp
         rx_frame_t frame2                 = { 0 };
         frame2.base                       = make_frame_base(mem_payload, 5, 3, "def");
         frame2.base.crc                   = 0x87654321;
         frame2.meta.transfer_id           = 456;
         frame2.meta.transfer_payload_size = 10;
 
-        const udpard_us_t ts2 = 3000; // Later than ts1
-        // Later frame updates timestamps and CRC tracking.
-        const bool done2 =
-          rx_slot_update(&slot, ts2, mem_frag, del_payload, &frame2, 10, &errors_oom, &errors_transfer_malformed);
+        const udpard_us_t ts2 = 3000;
+        const rx_slot_update_result_t res2 =
+          rx_slot_update(slot, ts2, mem_frag, del_payload, &frame2, 10, &errors_oom);
 
-        TEST_ASSERT_FALSE(done2);
-        TEST_ASSERT_TRUE(slot.busy);
-        TEST_ASSERT_EQUAL(ts1, slot.ts_min);              // Unchanged (ts2 is later)
-        TEST_ASSERT_EQUAL(ts2, slot.ts_max);              // Updated to later time
-        TEST_ASSERT_EQUAL_size_t(3, slot.covered_prefix); // Still 3 due to gap at [3-5)
-        TEST_ASSERT_EQUAL(8, slot.crc_end);               // Updated to end of frame2
-        TEST_ASSERT_EQUAL(0x87654321, slot.crc);          // Updated to frame2's CRC
+        TEST_ASSERT_EQUAL(rx_slot_incomplete, res2);
+        TEST_ASSERT_EQUAL(ts1, slot->ts_min);
+        TEST_ASSERT_EQUAL(ts2, slot->ts_max);
+        TEST_ASSERT_EQUAL_size_t(3, slot->covered_prefix);
+        TEST_ASSERT_EQUAL(8, slot->crc_end);
+        TEST_ASSERT_EQUAL(0x87654321, slot->crc);
 
-        // Third frame at offset 3 (fills gap), with earlier timestamp
         rx_frame_t frame3                 = { 0 };
         frame3.base                       = make_frame_base(mem_payload, 3, 2, "XX");
         frame3.base.crc                   = 0xAABBCCDD;
         frame3.meta.transfer_id           = 456;
         frame3.meta.transfer_payload_size = 10;
 
-        const udpard_us_t ts3 = 1500; // Earlier than ts1
-        // Earlier frame updates ts_min and extends covered prefix.
-        const bool done3 =
-          rx_slot_update(&slot, ts3, mem_frag, del_payload, &frame3, 10, &errors_oom, &errors_transfer_malformed);
+        const udpard_us_t ts3 = 1500;
+        const rx_slot_update_result_t res3 =
+          rx_slot_update(slot, ts3, mem_frag, del_payload, &frame3, 10, &errors_oom);
 
-        TEST_ASSERT_FALSE(done3);
-        TEST_ASSERT_TRUE(slot.busy);
-        TEST_ASSERT_EQUAL(ts3, slot.ts_min);              // Updated to earlier time
-        TEST_ASSERT_EQUAL(ts2, slot.ts_max);              // Unchanged (ts3 is earlier)
-        TEST_ASSERT_EQUAL_size_t(8, slot.covered_prefix); // Now contiguous 0-8
-        TEST_ASSERT_EQUAL(8, slot.crc_end);               // Unchanged (frame3 doesn't extend beyond frame2)
-        TEST_ASSERT_EQUAL(0x87654321, slot.crc);          // Unchanged (crc_end didn't increase)
+        TEST_ASSERT_EQUAL(rx_slot_incomplete, res3);
+        TEST_ASSERT_EQUAL(ts3, slot->ts_min);
+        TEST_ASSERT_EQUAL(ts2, slot->ts_max);
+        TEST_ASSERT_EQUAL_size_t(8, slot->covered_prefix);
+        TEST_ASSERT_EQUAL(8, slot->crc_end);
+        TEST_ASSERT_EQUAL(0x87654321, slot->crc);
 
-        rx_slot_reset(&slot, mem_frag);
+        rx_slot_destroy(&slot, mem_frag, mem_slot);
+        TEST_ASSERT_NULL(slot);
     }
     instrumented_allocator_reset(&alloc_frag);
+    instrumented_allocator_reset(&alloc_slot);
     instrumented_allocator_reset(&alloc_payload);
 
-    // Test 3: OOM handling (tree_res == rx_fragment_tree_oom branch)
+    // Test 3: OOM handling.
     {
-        rx_slot_t slot = { 0 };
-        errors_oom     = 0;
+        rx_slot_t* slot = rx_slot_new(mem_slot);
+        TEST_ASSERT_NOT_NULL(slot);
+        errors_oom = 0;
 
-        // Limit allocations to trigger OOM
         alloc_frag.limit_fragments = 0;
 
         rx_frame_t frame                 = { 0 };
@@ -1359,62 +1355,51 @@ static void test_rx_slot_update(void)
         frame.meta.transfer_id           = 789;
         frame.meta.transfer_payload_size = 5;
 
-        // OOM should not complete the transfer.
-        const bool done =
-          rx_slot_update(&slot, 5000, mem_frag, del_payload, &frame, 5, &errors_oom, &errors_transfer_malformed);
+        const rx_slot_update_result_t res =
+          rx_slot_update(slot, 5000, mem_frag, del_payload, &frame, 5, &errors_oom);
 
-        // Verify OOM error was counted
-        TEST_ASSERT_FALSE(done);
+        TEST_ASSERT_EQUAL(rx_slot_incomplete, res);
         TEST_ASSERT_EQUAL(1, errors_oom);
-        TEST_ASSERT_TRUE(slot.busy);                      // Slot initialized but fragment not added
-        TEST_ASSERT_EQUAL_size_t(0, slot.covered_prefix); // No fragments accepted
+        TEST_ASSERT_EQUAL_size_t(0, slot->covered_prefix);
 
-        // Restore allocation limit
-        alloc_frag.limit_fragments = SIZE_MAX;
-
-        rx_slot_reset(&slot, mem_frag);
+        rx_slot_destroy(&slot, mem_frag, mem_slot);
+        TEST_ASSERT_NULL(slot);
     }
     instrumented_allocator_reset(&alloc_frag);
+    instrumented_allocator_reset(&alloc_slot);
     instrumented_allocator_reset(&alloc_payload);
 
-    // Test 4: Malformed transfer handling (CRC failure in rx_fragment_tree_finalize)
+    // Test 4: Malformed transfer handling (CRC failure).
     {
-        rx_slot_t slot            = { 0 };
-        errors_transfer_malformed = 0;
+        rx_slot_t* slot = rx_slot_new(mem_slot);
+        TEST_ASSERT_NOT_NULL(slot);
+        errors_oom = 0;
 
-        // Single-frame transfer with incorrect CRC
         rx_frame_t frame                 = { 0 };
         frame.base                       = make_frame_base(mem_payload, 0, 4, "test");
         frame.base.crc                   = 0xDEADBEEF; // Incorrect CRC
         frame.meta.transfer_id           = 999;
         frame.meta.transfer_payload_size = 4;
 
-        // CRC failure should reset the slot and report malformed.
-        const bool done =
-          rx_slot_update(&slot, 6000, mem_frag, del_payload, &frame, 4, &errors_oom, &errors_transfer_malformed);
+        const rx_slot_update_result_t res =
+          rx_slot_update(slot, 6000, mem_frag, del_payload, &frame, 4, &errors_oom);
 
-        // Verify malformed error was counted and slot was reset
-        TEST_ASSERT_FALSE(done);
-        TEST_ASSERT_EQUAL(1, errors_transfer_malformed);
-        TEST_ASSERT_FALSE(slot.busy); // Slot reset after CRC failure
-        TEST_ASSERT_EQUAL_size_t(0, slot.covered_prefix);
-        TEST_ASSERT_NULL(slot.fragments);
+        TEST_ASSERT_EQUAL(rx_slot_failure, res);
 
-        rx_slot_reset(&slot, mem_frag);
+        rx_slot_destroy(&slot, mem_frag, mem_slot);
+        TEST_ASSERT_NULL(slot);
     }
     instrumented_allocator_reset(&alloc_frag);
+    instrumented_allocator_reset(&alloc_slot);
     instrumented_allocator_reset(&alloc_payload);
 
-    // Test 5: Successful completion with correct CRC (tree_res == rx_fragment_tree_done, CRC pass)
+    // Test 5: Successful completion with correct CRC.
     {
-        rx_slot_t slot            = { 0 };
-        errors_transfer_malformed = 0;
-        errors_oom                = 0;
+        rx_slot_t* slot = rx_slot_new(mem_slot);
+        TEST_ASSERT_NOT_NULL(slot);
+        errors_oom = 0;
 
-        // Single-frame transfer with correct CRC
-        // CRC calculation for "test": using Python pycyphal.transport.commons.crc.CRC32C
-        // >>> from pycyphal.transport.commons.crc import CRC32C
-        // >>> hex(CRC32C.new(b"test").value)
+        // CRC value computed from "test".
         const uint32_t correct_crc = 0x86a072c0UL;
 
         rx_frame_t frame                 = { 0 };
@@ -1423,88 +1408,81 @@ static void test_rx_slot_update(void)
         frame.meta.transfer_id           = 1111;
         frame.meta.transfer_payload_size = 4;
 
-        // Correct CRC should complete the transfer.
-        const bool done =
-          rx_slot_update(&slot, 7000, mem_frag, del_payload, &frame, 4, &errors_oom, &errors_transfer_malformed);
+        const rx_slot_update_result_t res =
+          rx_slot_update(slot, 7000, mem_frag, del_payload, &frame, 4, &errors_oom);
 
-        // Verify successful completion
-        TEST_ASSERT_TRUE(done);
-        TEST_ASSERT_EQUAL(0, errors_transfer_malformed);
-        TEST_ASSERT_FALSE(slot.busy); // Successfully completed
-        TEST_ASSERT_EQUAL_size_t(4, slot.covered_prefix);
-        TEST_ASSERT_NOT_NULL(slot.fragments);
+        TEST_ASSERT_EQUAL(rx_slot_complete, res);
+        TEST_ASSERT_EQUAL(0, errors_oom);
+        TEST_ASSERT_EQUAL_size_t(4, slot->covered_prefix);
+        TEST_ASSERT_NOT_NULL(slot->fragments);
 
-        rx_slot_reset(&slot, mem_frag);
+        rx_slot_destroy(&slot, mem_frag, mem_slot);
+        TEST_ASSERT_NULL(slot);
     }
     instrumented_allocator_reset(&alloc_frag);
+    instrumented_allocator_reset(&alloc_slot);
     instrumented_allocator_reset(&alloc_payload);
 
-    // Test 6: CRC end update only when crc_end >= slot->crc_end
+    // Test 6: CRC end update rules.
     {
-        rx_slot_t slot            = { 0 };
-        errors_transfer_malformed = 0;
-        errors_oom                = 0;
+        rx_slot_t* slot = rx_slot_new(mem_slot);
+        TEST_ASSERT_NOT_NULL(slot);
+        errors_oom = 0;
 
-        // Frame 1 at offset 5 (will set crc_end to 10)
         rx_frame_t frame1                 = { 0 };
         frame1.base                       = make_frame_base(mem_payload, 5, 5, "world");
         frame1.base.crc                   = 0xAAAAAAAA;
         frame1.meta.transfer_id           = 2222;
         frame1.meta.transfer_payload_size = 20;
 
-        // First frame initializes CRC tracking.
-        const bool done1 =
-          rx_slot_update(&slot, 8000, mem_frag, del_payload, &frame1, 20, &errors_oom, &errors_transfer_malformed);
+        const rx_slot_update_result_t res1 =
+          rx_slot_update(slot, 8000, mem_frag, del_payload, &frame1, 20, &errors_oom);
 
-        TEST_ASSERT_FALSE(done1);
-        TEST_ASSERT_TRUE(slot.busy);
-        TEST_ASSERT_EQUAL(10, slot.crc_end);
-        TEST_ASSERT_EQUAL(0xAAAAAAAA, slot.crc);
+        TEST_ASSERT_EQUAL(rx_slot_incomplete, res1);
+        TEST_ASSERT_EQUAL(10, slot->crc_end);
+        TEST_ASSERT_EQUAL(0xAAAAAAAA, slot->crc);
 
-        // Frame 2 at offset 0 (crc_end would be 3, less than current 10, so CRC shouldn't update)
         rx_frame_t frame2                 = { 0 };
         frame2.base                       = make_frame_base(mem_payload, 0, 3, "abc");
         frame2.base.crc                   = 0xBBBBBBBB;
         frame2.meta.transfer_id           = 2222;
         frame2.meta.transfer_payload_size = 20;
 
-        // Earlier CRC end should not update tracking.
-        const bool done2 =
-          rx_slot_update(&slot, 8100, mem_frag, del_payload, &frame2, 20, &errors_oom, &errors_transfer_malformed);
+        const rx_slot_update_result_t res2 =
+          rx_slot_update(slot, 8100, mem_frag, del_payload, &frame2, 20, &errors_oom);
 
-        TEST_ASSERT_FALSE(done2);
-        TEST_ASSERT_TRUE(slot.busy);
-        TEST_ASSERT_EQUAL(10, slot.crc_end);     // Unchanged
-        TEST_ASSERT_EQUAL(0xAAAAAAAA, slot.crc); // Unchanged (frame2 didn't update it)
+        TEST_ASSERT_EQUAL(rx_slot_incomplete, res2);
+        TEST_ASSERT_EQUAL(10, slot->crc_end);
+        TEST_ASSERT_EQUAL(0xAAAAAAAA, slot->crc);
 
-        // Frame 3 at offset 10 (crc_end would be 15, greater than current 10, so CRC should update)
         rx_frame_t frame3                 = { 0 };
         frame3.base                       = make_frame_base(mem_payload, 10, 5, "hello");
         frame3.base.crc                   = 0xCCCCCCCC;
         frame3.meta.transfer_id           = 2222;
         frame3.meta.transfer_payload_size = 20;
 
-        // Later CRC end should update tracking.
-        const bool done3 =
-          rx_slot_update(&slot, 8200, mem_frag, del_payload, &frame3, 20, &errors_oom, &errors_transfer_malformed);
+        const rx_slot_update_result_t res3 =
+          rx_slot_update(slot, 8200, mem_frag, del_payload, &frame3, 20, &errors_oom);
 
-        TEST_ASSERT_FALSE(done3);
-        TEST_ASSERT_TRUE(slot.busy);
-        TEST_ASSERT_EQUAL(15, slot.crc_end);     // Updated
-        TEST_ASSERT_EQUAL(0xCCCCCCCC, slot.crc); // Updated
+        TEST_ASSERT_EQUAL(rx_slot_incomplete, res3);
+        TEST_ASSERT_EQUAL(15, slot->crc_end);
+        TEST_ASSERT_EQUAL(0xCCCCCCCC, slot->crc);
 
-        rx_slot_reset(&slot, mem_frag);
+        rx_slot_destroy(&slot, mem_frag, mem_slot);
+        TEST_ASSERT_NULL(slot);
     }
     instrumented_allocator_reset(&alloc_frag);
+    instrumented_allocator_reset(&alloc_slot);
     instrumented_allocator_reset(&alloc_payload);
 
-    // Test 7: Inconsistent frame fields; suspicious transfer rejected.
+    // Test 7: Inconsistent frame fields.
     {
-        rx_slot_t slot            = { 0 };
-        errors_transfer_malformed = 0;
-        errors_oom                = 0;
+        errors_oom = 0;
 
-        // First frame initializes the slot with transfer_payload_size=20 and priority=udpard_prio_high
+        // Total size mismatch.
+        rx_slot_t* slot = rx_slot_new(mem_slot);
+        TEST_ASSERT_NOT_NULL(slot);
+
         rx_frame_t frame1                 = { 0 };
         frame1.base                       = make_frame_base(mem_payload, 0, 5, "hello");
         frame1.base.crc                   = 0x12345678;
@@ -1512,40 +1490,28 @@ static void test_rx_slot_update(void)
         frame1.meta.transfer_payload_size = 20;
         frame1.meta.priority              = udpard_prio_high;
 
-        // First frame initializes the slot.
-        const bool done1 =
-          rx_slot_update(&slot, 9000, mem_frag, del_payload, &frame1, 20, &errors_oom, &errors_transfer_malformed);
+        const rx_slot_update_result_t res1 =
+          rx_slot_update(slot, 9000, mem_frag, del_payload, &frame1, 20, &errors_oom);
+        TEST_ASSERT_EQUAL(rx_slot_incomplete, res1);
 
-        TEST_ASSERT_FALSE(done1);
-        TEST_ASSERT_TRUE(slot.busy);
-        TEST_ASSERT_EQUAL(20, slot.total_size);
-        TEST_ASSERT_EQUAL(udpard_prio_high, slot.priority);
-        TEST_ASSERT_EQUAL_size_t(5, slot.covered_prefix);
-        TEST_ASSERT_EQUAL(0, errors_transfer_malformed);
-
-        // Second frame with DIFFERENT transfer_payload_size (should trigger the branch and reset the slot)
         rx_frame_t frame2                 = { 0 };
         frame2.base                       = make_frame_base(mem_payload, 5, 5, "world");
         frame2.base.crc                   = 0xABCDEF00;
         frame2.meta.transfer_id           = 3333;
-        frame2.meta.transfer_payload_size = 25; // DIFFERENT from frame1's 20
+        frame2.meta.transfer_payload_size = 25;
         frame2.meta.priority              = udpard_prio_high;
 
-        // Inconsistent total_size should reset the slot.
-        const bool done2 =
-          rx_slot_update(&slot, 9100, mem_frag, del_payload, &frame2, 25, &errors_oom, &errors_transfer_malformed);
+        const rx_slot_update_result_t res2 =
+          rx_slot_update(slot, 9100, mem_frag, del_payload, &frame2, 25, &errors_oom);
+        TEST_ASSERT_EQUAL(rx_slot_failure, res2);
 
-        // Verify that the malformed error was counted and slot was reset
-        TEST_ASSERT_FALSE(done2);
-        TEST_ASSERT_EQUAL(1, errors_transfer_malformed);
-        TEST_ASSERT_FALSE(slot.busy); // Slot reset due to inconsistent total_size
-        TEST_ASSERT_EQUAL_size_t(0, slot.covered_prefix);
-        TEST_ASSERT_NULL(slot.fragments);
+        rx_slot_destroy(&slot, mem_frag, mem_slot);
+        TEST_ASSERT_NULL(slot);
 
-        // Reset counters
-        errors_transfer_malformed = 0;
+        // Priority mismatch.
+        slot = rx_slot_new(mem_slot);
+        TEST_ASSERT_NOT_NULL(slot);
 
-        // Third frame initializes the slot again with transfer_payload_size=30 and priority=udpard_prio_low
         rx_frame_t frame3                 = { 0 };
         frame3.base                       = make_frame_base(mem_payload, 0, 5, "test1");
         frame3.base.crc                   = 0x11111111;
@@ -1553,40 +1519,28 @@ static void test_rx_slot_update(void)
         frame3.meta.transfer_payload_size = 30;
         frame3.meta.priority              = udpard_prio_low;
 
-        // Reinitialize after reset.
-        const bool done3 =
-          rx_slot_update(&slot, 9200, mem_frag, del_payload, &frame3, 30, &errors_oom, &errors_transfer_malformed);
+        const rx_slot_update_result_t res3 =
+          rx_slot_update(slot, 9200, mem_frag, del_payload, &frame3, 30, &errors_oom);
+        TEST_ASSERT_EQUAL(rx_slot_incomplete, res3);
 
-        TEST_ASSERT_FALSE(done3);
-        TEST_ASSERT_TRUE(slot.busy);
-        TEST_ASSERT_EQUAL(30, slot.total_size);
-        TEST_ASSERT_EQUAL(udpard_prio_low, slot.priority);
-        TEST_ASSERT_EQUAL_size_t(5, slot.covered_prefix);
-        TEST_ASSERT_EQUAL(0, errors_transfer_malformed);
-
-        // Fourth frame with DIFFERENT priority (should trigger the branch and reset the slot)
         rx_frame_t frame4                 = { 0 };
         frame4.base                       = make_frame_base(mem_payload, 5, 5, "test2");
         frame4.base.crc                   = 0x22222222;
         frame4.meta.transfer_id           = 4444;
-        frame4.meta.transfer_payload_size = 30;               // Same as frame3
-        frame4.meta.priority              = udpard_prio_high; // DIFFERENT from frame3's udpard_prio_low
+        frame4.meta.transfer_payload_size = 30;
+        frame4.meta.priority              = udpard_prio_high;
 
-        // Inconsistent priority should reset the slot.
-        const bool done4 =
-          rx_slot_update(&slot, 9300, mem_frag, del_payload, &frame4, 30, &errors_oom, &errors_transfer_malformed);
+        const rx_slot_update_result_t res4 =
+          rx_slot_update(slot, 9300, mem_frag, del_payload, &frame4, 30, &errors_oom);
+        TEST_ASSERT_EQUAL(rx_slot_failure, res4);
 
-        // Verify that the malformed error was counted and slot was reset
-        TEST_ASSERT_FALSE(done4);
-        TEST_ASSERT_EQUAL(1, errors_transfer_malformed);
-        TEST_ASSERT_FALSE(slot.busy); // Slot reset due to inconsistent priority
-        TEST_ASSERT_EQUAL_size_t(0, slot.covered_prefix);
-        TEST_ASSERT_NULL(slot.fragments);
+        rx_slot_destroy(&slot, mem_frag, mem_slot);
+        TEST_ASSERT_NULL(slot);
 
-        // Reset counters
-        errors_transfer_malformed = 0;
+        // Total size and priority mismatch.
+        slot = rx_slot_new(mem_slot);
+        TEST_ASSERT_NOT_NULL(slot);
 
-        // Fifth frame initializes the slot again
         rx_frame_t frame5                 = { 0 };
         frame5.base                       = make_frame_base(mem_payload, 0, 5, "test3");
         frame5.base.crc                   = 0x33333333;
@@ -1594,43 +1548,31 @@ static void test_rx_slot_update(void)
         frame5.meta.transfer_payload_size = 40;
         frame5.meta.priority              = udpard_prio_nominal;
 
-        // Reinitialize after reset.
-        const bool done5 =
-          rx_slot_update(&slot, 9400, mem_frag, del_payload, &frame5, 40, &errors_oom, &errors_transfer_malformed);
+        const rx_slot_update_result_t res5 =
+          rx_slot_update(slot, 9400, mem_frag, del_payload, &frame5, 40, &errors_oom);
+        TEST_ASSERT_EQUAL(rx_slot_incomplete, res5);
 
-        TEST_ASSERT_FALSE(done5);
-        TEST_ASSERT_TRUE(slot.busy);
-        TEST_ASSERT_EQUAL(40, slot.total_size);
-        TEST_ASSERT_EQUAL(udpard_prio_nominal, slot.priority);
-        TEST_ASSERT_EQUAL_size_t(5, slot.covered_prefix);
-        TEST_ASSERT_EQUAL(0, errors_transfer_malformed);
-
-        // Sixth frame with BOTH different transfer_payload_size AND priority (should still trigger the branch)
         rx_frame_t frame6                 = { 0 };
         frame6.base                       = make_frame_base(mem_payload, 5, 5, "test4");
         frame6.base.crc                   = 0x44444444;
         frame6.meta.transfer_id           = 5555;
-        frame6.meta.transfer_payload_size = 50;               // DIFFERENT from frame5's 40
-        frame6.meta.priority              = udpard_prio_fast; // DIFFERENT from frame5's udpard_prio_nominal
+        frame6.meta.transfer_payload_size = 50;
+        frame6.meta.priority              = udpard_prio_fast;
 
-        // Inconsistent priority and total_size should reset the slot.
-        const bool done6 =
-          rx_slot_update(&slot, 9500, mem_frag, del_payload, &frame6, 50, &errors_oom, &errors_transfer_malformed);
+        const rx_slot_update_result_t res6 =
+          rx_slot_update(slot, 9500, mem_frag, del_payload, &frame6, 50, &errors_oom);
+        TEST_ASSERT_EQUAL(rx_slot_failure, res6);
 
-        // Verify that the malformed error was counted and slot was reset
-        TEST_ASSERT_FALSE(done6);
-        TEST_ASSERT_EQUAL(1, errors_transfer_malformed);
-        TEST_ASSERT_FALSE(slot.busy); // Slot reset due to both inconsistencies
-        TEST_ASSERT_EQUAL_size_t(0, slot.covered_prefix);
-        TEST_ASSERT_NULL(slot.fragments);
-
-        rx_slot_reset(&slot, mem_frag);
+        rx_slot_destroy(&slot, mem_frag, mem_slot);
+        TEST_ASSERT_NULL(slot);
     }
     instrumented_allocator_reset(&alloc_frag);
+    instrumented_allocator_reset(&alloc_slot);
     instrumented_allocator_reset(&alloc_payload);
 
-    // Verify no memory leaks
+    // Verify no memory leaks.
     TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0, alloc_slot.allocated_fragments);
     TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
 }
 
@@ -1770,7 +1712,7 @@ static void test_rx_ack_enqueued(void)
     const udpard_mem_t     mem_payload = instrumented_allocator_make_resource(&alloc_payload);
     const udpard_deleter_t del_payload = instrumented_allocator_make_deleter(&alloc_payload);
 
-    const udpard_rx_mem_resources_t rx_mem = { .fragment = mem_frag, .session = mem_session };
+    const udpard_rx_mem_resources_t rx_mem = { .fragment = mem_frag, .session = mem_session, .slot = mem_session };
 
     tx_fixture_t tx_fix = { 0 };
     tx_fixture_init(&tx_fix, 0xBADC0FFEE0DDF00DULL, 8);
@@ -1856,7 +1798,7 @@ static void test_rx_session_unordered(void)
     const udpard_mem_t              mem_session = instrumented_allocator_make_resource(&alloc_session);
     const udpard_mem_t              mem_payload = instrumented_allocator_make_resource(&alloc_payload);
     const udpard_deleter_t          del_payload = instrumented_allocator_make_deleter(&alloc_payload);
-    const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
+    const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session, .slot = mem_session };
 
     udpard_rx_t rx;
     udpard_rx_new(&rx, NULL);
@@ -1996,7 +1938,7 @@ static void test_rx_session_unordered_reject_old(void)
     instrumented_allocator_new(&alloc_payload);
     const udpard_mem_t              mem_payload = instrumented_allocator_make_resource(&alloc_payload);
     const udpard_deleter_t          del_payload = instrumented_allocator_make_deleter(&alloc_payload);
-    const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
+    const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session, .slot = mem_session };
 
     tx_fixture_t tx_fix = { 0 };
     tx_fixture_init(&tx_fix, 0xF00DCAFEF00DCAFEULL, 4);
@@ -2099,7 +2041,7 @@ static void test_rx_session_unordered_duplicates(void)
     const udpard_mem_t              mem_session = instrumented_allocator_make_resource(&alloc_session);
     const udpard_mem_t              mem_payload = instrumented_allocator_make_resource(&alloc_payload);
     const udpard_deleter_t          del_payload = instrumented_allocator_make_deleter(&alloc_payload);
-    const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
+    const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session, .slot = mem_session };
 
     udpard_rx_t rx;
     udpard_rx_new(&rx, NULL);
@@ -2173,7 +2115,7 @@ static void test_rx_port(void)
     const udpard_mem_t              mem_session = instrumented_allocator_make_resource(&alloc_session);
     const udpard_mem_t              mem_payload = instrumented_allocator_make_resource(&alloc_payload);
     const udpard_deleter_t          del_payload = instrumented_allocator_make_deleter(&alloc_payload);
-    const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
+    const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session, .slot = mem_session };
 
     udpard_rx_t rx;
     udpard_rx_new(&rx, NULL);
@@ -2239,7 +2181,7 @@ static void test_rx_port_timeouts(void)
     const udpard_mem_t              mem_session = instrumented_allocator_make_resource(&alloc_session);
     const udpard_mem_t              mem_payload = instrumented_allocator_make_resource(&alloc_payload);
     const udpard_deleter_t          del_payload = instrumented_allocator_make_deleter(&alloc_payload);
-    const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
+    const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session, .slot = mem_session };
 
     udpard_rx_t rx;
     udpard_rx_new(&rx, NULL);
@@ -2301,7 +2243,7 @@ static void test_rx_port_oom(void)
     const udpard_mem_t              mem_session = instrumented_allocator_make_resource(&alloc_session);
     const udpard_mem_t              mem_payload = instrumented_allocator_make_resource(&alloc_payload);
     const udpard_deleter_t          del_payload = instrumented_allocator_make_deleter(&alloc_payload);
-    const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
+    const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session, .slot = mem_session };
 
     udpard_rx_t rx;
     udpard_rx_new(&rx, NULL);
@@ -2357,7 +2299,7 @@ static void test_rx_port_free_loop(void)
     const udpard_mem_t              mem_session = instrumented_allocator_make_resource(&alloc_session);
     const udpard_mem_t              mem_payload = instrumented_allocator_make_resource(&alloc_payload);
     const udpard_deleter_t          del_payload = instrumented_allocator_make_deleter(&alloc_payload);
-    const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
+    const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session, .slot = mem_session };
 
     udpard_rx_t rx;
     udpard_rx_new(&rx, NULL);
@@ -2449,6 +2391,7 @@ static void test_rx_additional_coverage(void)
     instrumented_allocator_new(&alloc_frag);
     instrumented_allocator_new(&alloc_ses);
     const udpard_rx_mem_resources_t mem = { .session  = instrumented_allocator_make_resource(&alloc_ses),
+                                            .slot     = instrumented_allocator_make_resource(&alloc_ses),
                                             .fragment = instrumented_allocator_make_resource(&alloc_frag) };
     // Memory validation rejects missing hooks.
     const udpard_mem_vtable_t vtable_no_free  = { .base = { .free = NULL }, .alloc = dummy_alloc };
@@ -2462,6 +2405,11 @@ static void test_rx_additional_coverage(void)
     bad_mem.fragment.vtable = &vtable_no_free;
     TEST_ASSERT_FALSE(rx_validate_mem_resources(bad_mem));
     bad_mem.fragment.vtable = &vtable_no_alloc;
+    TEST_ASSERT_FALSE(rx_validate_mem_resources(bad_mem));
+    bad_mem = mem;
+    bad_mem.slot.vtable = &vtable_no_free;
+    TEST_ASSERT_FALSE(rx_validate_mem_resources(bad_mem));
+    bad_mem.slot.vtable = &vtable_no_alloc;
     TEST_ASSERT_FALSE(rx_validate_mem_resources(bad_mem));
 
     // Session helpers and free paths.
@@ -2488,7 +2436,7 @@ static void test_rx_additional_coverage(void)
     TEST_ASSERT_EQUAL(1, cavl_compare_rx_session_by_remote_uid(&(uint64_t){ 100 }, &ses->index_remote_uid));
     rx_session_free(ses, &anim_list);
 
-    // Slot acquisition covers stale busy and eviction.
+    // Slot acquisition covers stale cleanup and eviction.
     udpard_rx_t  rx = { 0 };
     rx_session_t ses_slots;
     mem_zero(sizeof(ses_slots), &ses_slots);
@@ -2497,17 +2445,31 @@ static void test_rx_additional_coverage(void)
     for (size_t i = 0; i < RX_TRANSFER_HISTORY_COUNT; i++) {
         ses_slots.history[i] = 1;
     }
-    ses_slots.slots[0].busy        = true;
-    ses_slots.slots[0].ts_max      = 0;
-    ses_slots.slots[0].transfer_id = 1;
-    rx_slot_t* slot                = rx_session_get_slot(&ses_slots, SESSION_LIFETIME + 1, 99);
-    TEST_ASSERT_NOT_NULL(slot);
+    // Allocate one slot to simulate a stale in-progress transfer.
+    ses_slots.slots[0] = rx_slot_new(mem.slot);
+    TEST_ASSERT_NOT_NULL(ses_slots.slots[0]);
+    ses_slots.slots[0]->ts_max      = 0;
+    ses_slots.slots[0]->transfer_id = 1;
+    rx_slot_t** slot_ref            = rx_session_get_slot(&ses_slots, SESSION_LIFETIME + 1, 99);
+    TEST_ASSERT_NOT_NULL(slot_ref);
+    TEST_ASSERT_NOT_NULL(*slot_ref);
+    // Fill all slots to exercise eviction.
     for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
-        ses_slots.slots[i].busy   = true;
-        ses_slots.slots[i].ts_max = 10 + (udpard_us_t)i;
+        if (ses_slots.slots[i] == NULL) {
+            ses_slots.slots[i] = rx_slot_new(mem.slot);
+        }
+        TEST_ASSERT_NOT_NULL(ses_slots.slots[i]);
+        ses_slots.slots[i]->ts_max = 10 + (udpard_us_t)i;
     }
-    slot = rx_session_get_slot(&ses_slots, 50, 2);
-    TEST_ASSERT_NOT_NULL(slot);
+    slot_ref = rx_session_get_slot(&ses_slots, 50, 2);
+    TEST_ASSERT_NOT_NULL(slot_ref);
+    TEST_ASSERT_NOT_NULL(*slot_ref);
+    // Release slot allocations from the helper session.
+    for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
+        if (ses_slots.slots[i] != NULL) {
+            rx_slot_destroy(&ses_slots.slots[i], mem.fragment, mem.slot);
+        }
+    }
 
     // Stateless accept success, OOM, malformed.
     udpard_rx_port_t port_stateless = { 0 };

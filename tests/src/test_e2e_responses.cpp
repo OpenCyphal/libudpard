@@ -215,6 +215,7 @@ void test_topic_with_p2p_response()
         res = instrumented_allocator_make_resource(&a_tx_alloc_payload);
     }
     const udpard_rx_mem_resources_t a_rx_mem{ .session  = instrumented_allocator_make_resource(&a_rx_alloc_session),
+                                              .slot     = instrumented_allocator_make_resource(&a_rx_alloc_session),
                                               .fragment = instrumented_allocator_make_resource(&a_rx_alloc_frag) };
 
     udpard_tx_mem_resources_t b_tx_mem{};
@@ -223,6 +224,7 @@ void test_topic_with_p2p_response()
         res = instrumented_allocator_make_resource(&b_tx_alloc_payload);
     }
     const udpard_rx_mem_resources_t b_rx_mem{ .session  = instrumented_allocator_make_resource(&b_rx_alloc_session),
+                                              .slot     = instrumented_allocator_make_resource(&b_rx_alloc_session),
                                               .fragment = instrumented_allocator_make_resource(&b_rx_alloc_frag) };
 
     // ================================================================================================================
@@ -497,6 +499,7 @@ void test_topic_with_p2p_response_under_loss()
         res = instrumented_allocator_make_resource(&a_tx_alloc_payload);
     }
     const udpard_rx_mem_resources_t a_rx_mem{ .session  = instrumented_allocator_make_resource(&a_rx_alloc_session),
+                                              .slot     = instrumented_allocator_make_resource(&a_rx_alloc_session),
                                               .fragment = instrumented_allocator_make_resource(&a_rx_alloc_frag) };
 
     udpard_tx_mem_resources_t b_tx_mem{};
@@ -505,6 +508,7 @@ void test_topic_with_p2p_response_under_loss()
         res = instrumented_allocator_make_resource(&b_tx_alloc_payload);
     }
     const udpard_rx_mem_resources_t b_rx_mem{ .session  = instrumented_allocator_make_resource(&b_rx_alloc_session),
+                                              .slot     = instrumented_allocator_make_resource(&b_rx_alloc_session),
                                               .fragment = instrumented_allocator_make_resource(&b_rx_alloc_frag) };
 
     // ================================================================================================================

@@ -119,6 +119,7 @@ struct Fixture
             res = instrumented_allocator_make_resource(&tx_alloc_payload);
         }
         const udpard_rx_mem_resources_t rx_mem{ .session  = instrumented_allocator_make_resource(&rx_alloc_session),
+                                                .slot     = instrumented_allocator_make_resource(&rx_alloc_session),
                                                 .fragment = instrumented_allocator_make_resource(&rx_alloc_frag) };
         tx_payload_deleter = udpard_deleter_t{ .vtable = &tx_refcount_deleter_vt, .context = nullptr };
         source             = { .ip = 0x0A000001U, .port = 7501U };
@@ -328,6 +329,7 @@ void test_udpard_tx_push_p2p()
     tx.user = &frames;
 
     const udpard_rx_mem_resources_t rx_mem{ .session  = instrumented_allocator_make_resource(&rx_alloc_session),
+                                            .slot     = instrumented_allocator_make_resource(&rx_alloc_session),
                                             .fragment = instrumented_allocator_make_resource(&rx_alloc_frag) };
     udpard_rx_t                     rx{};
     udpard_rx_port_t                port{};
@@ -390,6 +392,7 @@ void test_udpard_tx_minimum_mtu()
         res = instrumented_allocator_make_resource(&tx_alloc_payload);
     }
     const udpard_rx_mem_resources_t rx_mem{ .session  = instrumented_allocator_make_resource(&rx_alloc_session),
+                                            .slot     = instrumented_allocator_make_resource(&rx_alloc_session),
                                             .fragment = instrumented_allocator_make_resource(&rx_alloc_frag) };
 
     udpard_tx_t tx{};
@@ -503,6 +506,7 @@ void test_udpard_rx_zero_extent()
         res = instrumented_allocator_make_resource(&tx_alloc_payload);
     }
     const udpard_rx_mem_resources_t rx_mem{ .session  = instrumented_allocator_make_resource(&rx_alloc_session),
+                                            .slot     = instrumented_allocator_make_resource(&rx_alloc_session),
                                             .fragment = instrumented_allocator_make_resource(&rx_alloc_frag) };
 
     udpard_tx_t tx{};

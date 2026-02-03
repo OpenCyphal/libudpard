@@ -257,7 +257,9 @@ static void test_rx_guards(void)
     // RX port creation guards reject invalid parameters.
     static char                     rx_tag_a;
     static char                     rx_tag_b;
-    const udpard_rx_mem_resources_t rx_mem = { .session = make_mem(&rx_tag_a), .fragment = make_mem(&rx_tag_b) };
+    const udpard_rx_mem_resources_t rx_mem = { .session  = make_mem(&rx_tag_a),
+                                               .slot     = make_mem(&rx_tag_a),
+                                               .fragment = make_mem(&rx_tag_b) };
     const udpard_rx_port_vtable_t   rx_vtb = { .on_message = on_message_stub };
     udpard_rx_port_t                port;
     TEST_ASSERT_FALSE(udpard_rx_port_new(NULL, 0, rx_mem, &rx_vtb));
@@ -275,6 +277,11 @@ static void test_rx_guards(void)
     TEST_ASSERT_FALSE(rx_validate_mem_resources(bad_session));
     bad_session.session.vtable = &vtable_no_alloc;
     TEST_ASSERT_FALSE(rx_validate_mem_resources(bad_session));
+    udpard_rx_mem_resources_t bad_slot = rx_mem;
+    bad_slot.slot.vtable               = &vtable_no_free;
+    TEST_ASSERT_FALSE(rx_validate_mem_resources(bad_slot));
+    bad_slot.slot.vtable = &vtable_no_alloc;
+    TEST_ASSERT_FALSE(rx_validate_mem_resources(bad_slot));
     udpard_rx_mem_resources_t bad_fragment = rx_mem;
     bad_fragment.fragment.vtable           = &vtable_no_free;
     TEST_ASSERT_FALSE(rx_validate_mem_resources(bad_fragment));

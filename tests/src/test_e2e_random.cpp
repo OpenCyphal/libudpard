@@ -207,6 +207,7 @@ void test_udpard_tx_rx_end_to_end()
     instrumented_allocator_t rx_alloc_session{};
     instrumented_allocator_new(&rx_alloc_session);
     const udpard_rx_mem_resources_t rx_mem{ .session  = instrumented_allocator_make_resource(&rx_alloc_session),
+                                            .slot     = instrumented_allocator_make_resource(&rx_alloc_session),
                                             .fragment = instrumented_allocator_make_resource(&rx_alloc_frag) };
     udpard_rx_t                     rx;
     udpard_rx_new(&rx, &ack_tx);
@@ -215,6 +216,7 @@ void test_udpard_tx_rx_end_to_end()
     instrumented_allocator_new(&ack_rx_alloc_frag);
     instrumented_allocator_new(&ack_rx_alloc_session);
     const udpard_rx_mem_resources_t ack_rx_mem{ .session  = instrumented_allocator_make_resource(&ack_rx_alloc_session),
+                                                .slot     = instrumented_allocator_make_resource(&ack_rx_alloc_session),
                                                 .fragment = instrumented_allocator_make_resource(&ack_rx_alloc_frag) };
     udpard_rx_t                     ack_rx{};
     udpard_rx_port_t                ack_port{};

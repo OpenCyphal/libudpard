@@ -203,6 +203,7 @@ struct RxFixture
         instrumented_allocator_new(&session);
         instrumented_allocator_new(&fragment);
         mem.session  = instrumented_allocator_make_resource(&session);
+        mem.slot     = instrumented_allocator_make_resource(&session);
         mem.fragment = instrumented_allocator_make_resource(&fragment);
         udpard_rx_new(&rx, nullptr);
         rx.user = &ctx;
