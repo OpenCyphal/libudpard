@@ -104,6 +104,11 @@ static void mem_free_payload(const udpard_deleter_t memory, const udpard_bytes_m
     }
 }
 
+static bool mem_validate(const udpard_mem_t mem)
+{
+    return (mem.vtable != NULL) && (mem.vtable->alloc != NULL) && (mem.vtable->base.free != NULL);
+}
+
 static byte_t* serialize_u32(byte_t* ptr, const uint32_t value)
 {
     for (size_t i = 0; i < sizeof(value); i++) {
@@ -616,15 +621,11 @@ typedef struct tx_transfer_t
 static bool tx_validate_mem_resources(const udpard_tx_mem_resources_t memory)
 {
     for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
-        if ((memory.payload[i].vtable == NULL) ||            //
-            (memory.payload[i].vtable->base.free == NULL) || //
-            (memory.payload[i].vtable->alloc == NULL)) {
+        if (!mem_validate(memory.payload[i])) {
             return false;
         }
     }
-    return (memory.transfer.vtable != NULL) &&            //
-           (memory.transfer.vtable->base.free != NULL) && //
-           (memory.transfer.vtable->alloc != NULL);
+    return mem_validate(memory.transfer);
 }
 
 static void tx_transfer_free_payload(tx_transfer_t* const tr)
@@ -1658,8 +1659,6 @@ static bool rx_fragment_tree_finalize(udpard_tree_t* const root, const uint32_t 
 /// The redundant interfaces may use distinct MTU, which requires special fragment tree handling.
 typedef struct
 {
-    bool busy;
-
     uint64_t transfer_id; ///< Which transfer we're reassembling here.
 
     udpard_us_t ts_min; ///< Earliest frame timestamp, aka transfer reception timestamp.
@@ -1676,30 +1675,49 @@ typedef struct
     udpard_tree_t* fragments;
 } rx_slot_t;
 
-static void rx_slot_reset(rx_slot_t* const slot, const udpard_mem_t fragment_memory)
+static rx_slot_t* rx_slot_new(const udpard_mem_t slot_memory)
 {
-    udpard_fragment_free_all((udpard_fragment_t*)slot->fragments, udpard_make_deleter(fragment_memory));
-    slot->fragments      = NULL;
-    slot->busy           = false;
-    slot->covered_prefix = 0U;
-    slot->crc_end        = 0U;
-    slot->crc            = CRC_INITIAL;
+    rx_slot_t* const slot = mem_alloc(slot_memory, sizeof(rx_slot_t));
+    if (slot != NULL) {
+        mem_zero(sizeof(*slot), slot);
+        slot->ts_min         = HEAT_DEATH;
+        slot->ts_max         = BIG_BANG;
+        slot->covered_prefix = 0;
+        slot->crc_end        = 0;
+        slot->crc            = CRC_INITIAL;
+        slot->fragments      = NULL;
+    }
+    return slot;
 }
 
-/// The caller will accept the ownership of the fragments iff the result is true.
-static bool rx_slot_update(rx_slot_t* const       slot,
-                           const udpard_us_t      ts,
-                           const udpard_mem_t     fragment_memory,
-                           const udpard_deleter_t payload_deleter,
-                           rx_frame_t* const      frame,
-                           const size_t           extent,
-                           uint64_t* const        errors_oom,
-                           uint64_t* const        errors_transfer_malformed)
+/// Will NULL out the original slot pointer.
+static void rx_slot_destroy(rx_slot_t** const  slot_ref,
+                            const udpard_mem_t fragment_memory,
+                            const udpard_mem_t slot_memory)
 {
-    bool done = false;
-    if (!slot->busy) {
-        rx_slot_reset(slot, fragment_memory);
-        slot->busy        = true;
+    UDPARD_ASSERT((slot_ref != NULL) && (*slot_ref != NULL));
+    udpard_fragment_free_all((udpard_fragment_t*)(*slot_ref)->fragments, udpard_make_deleter(fragment_memory));
+    mem_free(slot_memory, sizeof(rx_slot_t), *slot_ref);
+    *slot_ref = NULL;
+}
+
+typedef enum
+{
+    rx_slot_incomplete,
+    rx_slot_complete,
+    rx_slot_failure,
+} rx_slot_update_result_t;
+
+/// The caller will accept the ownership of the fragments iff the result is true.
+static rx_slot_update_result_t rx_slot_update(rx_slot_t* const       slot,
+                                              const udpard_us_t      ts,
+                                              const udpard_mem_t     fragment_memory,
+                                              const udpard_deleter_t payload_deleter,
+                                              rx_frame_t* const      frame,
+                                              const size_t           extent,
+                                              uint64_t* const        errors_oom)
+{
+    if ((slot->ts_min == HEAT_DEATH) && (slot->ts_max == BIG_BANG)) {
         slot->transfer_id = frame->meta.transfer_id;
         slot->ts_min      = ts;
         slot->ts_max      = ts;
@@ -1709,10 +1727,8 @@ static bool rx_slot_update(rx_slot_t* const       slot,
     }
     // Enforce consistent per-frame values throughout the transfer.
     if ((slot->total_size != frame->meta.transfer_payload_size) || (slot->priority != frame->meta.priority)) {
-        ++*errors_transfer_malformed;
         mem_free_payload(payload_deleter, frame->base.origin);
-        rx_slot_reset(slot, fragment_memory);
-        return false;
+        return rx_slot_failure;
     }
     const rx_fragment_tree_update_result_t tree_res = rx_fragment_tree_update(&slot->fragments,
                                                                               fragment_memory,
@@ -1735,14 +1751,11 @@ static bool rx_slot_update(rx_slot_t* const       slot,
     }
     if (tree_res == rx_fragment_tree_done) {
         if (rx_fragment_tree_finalize(slot->fragments, slot->crc)) {
-            slot->busy = false;
-            done       = true;
-        } else {
-            ++*errors_transfer_malformed;
-            rx_slot_reset(slot, fragment_memory);
+            return rx_slot_complete;
         }
+        return rx_slot_failure;
     }
-    return done;
+    return rx_slot_incomplete;
 }
 
 // ---------------------------------------------  SESSION & PORT  ---------------------------------------------
@@ -1753,8 +1766,6 @@ typedef struct rx_session_t
 {
     udpard_tree_t   index_remote_uid; ///< Must be the first member.
     udpard_remote_t remote;           ///< Most recent discovered reverse path for P2P to the sender.
-
-    udpard_rx_port_t* port;
 
     /// LRU last animated list for automatic retirement of stale sessions.
     udpard_listed_t list_by_animation;
@@ -1767,10 +1778,9 @@ typedef struct rx_session_t
 
     bool initialized; ///< Set after the first frame is seen.
 
-    // TODO: Static slots are taking too much space; allocate them dynamically instead.
-    //       Each is <=56 bytes so it fits nicely into a 64-byte o1heap block.
-    //       The slot state enum can be replaced with a simple "done" flag.
-    rx_slot_t slots[RX_SLOT_COUNT];
+    udpard_rx_port_t* port;
+
+    rx_slot_t* slots[RX_SLOT_COUNT];
 } rx_session_t;
 
 /// The reassembly strategy is composed once at initialization time by choosing a vtable with the desired behavior.
@@ -1823,8 +1833,7 @@ static udpard_tree_t* cavl_factory_rx_session_by_remote_uid(void* const user)
         out->index_remote_uid  = (udpard_tree_t){ NULL, { NULL, NULL }, 0 };
         out->list_by_animation = (udpard_listed_t){ NULL, NULL };
         for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
-            out->slots[i].fragments = NULL;
-            rx_slot_reset(&out->slots[i], args->owner->memory.fragment);
+            out->slots[i] = NULL;
         }
         out->remote.uid       = args->remote_uid;
         out->port             = args->owner;
@@ -1840,7 +1849,9 @@ static udpard_tree_t* cavl_factory_rx_session_by_remote_uid(void* const user)
 static void rx_session_free(rx_session_t* const self, udpard_list_t* const sessions_by_animation)
 {
     for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
-        rx_slot_reset(&self->slots[i], self->port->memory.fragment);
+        if (self->slots[i] != NULL) {
+            rx_slot_destroy(&self->slots[i], self->port->memory.fragment, self->port->memory.slot);
+        }
     }
     cavl2_remove(&self->port->index_session_by_remote_uid, &self->index_remote_uid);
     delist(sessions_by_animation, &self->list_by_animation);
@@ -1848,8 +1859,10 @@ static void rx_session_free(rx_session_t* const self, udpard_list_t* const sessi
 }
 
 /// The payload ownership is transferred to the application.
-static void rx_session_eject(rx_session_t* const self, udpard_rx_t* const rx, rx_slot_t* const slot)
+static void rx_session_eject(rx_session_t* const self, udpard_rx_t* const rx, rx_slot_t** const slot_ref)
 {
+    rx_slot_t* const slot = *slot_ref;
+
     // Update the history -- overwrite the oldest entry.
     self->history_current                = (self->history_current + 1U) % RX_TRANSFER_HISTORY_COUNT;
     self->history[self->history_current] = slot->transfer_id;
@@ -1866,48 +1879,48 @@ static void rx_session_eject(rx_session_t* const self, udpard_rx_t* const rx, rx
     };
     self->port->vtable->on_message(rx, self->port, transfer);
 
-    // Finally, reset the slot.
+    // Finally, destroy the slot to reclaim memory.
     slot->fragments = NULL; // Transfer ownership to the application.
-    rx_slot_reset(slot, self->port->memory.fragment);
+    rx_slot_destroy(slot_ref, self->port->memory.fragment, self->port->memory.slot);
 }
 
-/// Finds an existing in-progress slot with the specified transfer-ID, or allocates a new one.
-/// Allocation always succeeds so the result is never NULL, but it may cancel a stale slot with incomplete transfer.
-static rx_slot_t* rx_session_get_slot(rx_session_t* const self, const udpard_us_t ts, const uint64_t transfer_id)
+/// Finds an existing in-progress slot with the specified transfer-ID, or allocates a new one. Returns NULL of OOM.
+/// We return a pointer to pointer to allow the caller to NULL out the slot on destruction.
+static rx_slot_t** rx_session_get_slot(rx_session_t* const self, const udpard_us_t ts, const uint64_t transfer_id)
 {
     // First, check if one is in progress already; resume it if so.
     for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
-        if (self->slots[i].busy && (self->slots[i].transfer_id == transfer_id)) {
-            return &self->slots[i];
+        if ((self->slots[i] != NULL) && (self->slots[i]->transfer_id == transfer_id)) {
+            return &self->slots[i]; // Not checking for timeout; transfer-IDs are unique so it's fine.
         }
     }
     // Use this opportunity to check for timed-out in-progress slots. This may free up a slot for the search below.
     for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
-        if (self->slots[i].busy && (ts >= (self->slots[i].ts_max + SESSION_LIFETIME))) {
-            rx_slot_reset(&self->slots[i], self->port->memory.fragment);
+        if ((self->slots[i] != NULL) && (ts >= (self->slots[i]->ts_max + SESSION_LIFETIME))) {
+            rx_slot_destroy(&self->slots[i], self->port->memory.fragment, self->port->memory.slot);
         }
     }
     // This appears to be a new transfer, so we will need to allocate a new slot for it.
     for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
-        if (!self->slots[i].busy) {
+        if (self->slots[i] == NULL) {
+            self->slots[i] = rx_slot_new(self->port->memory.slot); // may fail
             return &self->slots[i];
         }
     }
     // All slots are currently occupied; find the oldest slot to sacrifice.
-    rx_slot_t*  slot      = NULL;
-    udpard_us_t oldest_ts = HEAT_DEATH;
+    size_t oldest_index = 0;
     for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
-        UDPARD_ASSERT(self->slots[i].busy); // Checked this already.
-        if (self->slots[i].ts_max < oldest_ts) {
-            oldest_ts = self->slots[i].ts_max;
-            slot      = &self->slots[i];
+        UDPARD_ASSERT(self->slots[i] != NULL); // Checked this already.
+        UDPARD_ASSERT(self->slots[oldest_index] != NULL);
+        if (self->slots[i]->ts_max < self->slots[oldest_index]->ts_max) {
+            oldest_index = i;
         }
     }
-    UDPARD_ASSERT((slot != NULL) && slot->busy);
     // It is probably just a stale transfer, so it's a no-brainer to evict it, it's probably dead anyway.
-    rx_slot_reset(slot, self->port->memory.fragment);
-    UDPARD_ASSERT((slot != NULL) && !slot->busy);
-    return slot;
+    // We allocate immediately after destruction so we expect no OOM; still fine if it OOMs but we lose one transfer.
+    rx_slot_destroy(&self->slots[oldest_index], self->port->memory.fragment, self->port->memory.slot);
+    self->slots[oldest_index] = rx_slot_new(self->port->memory.slot); // may fail
+    return &self->slots[oldest_index];
 }
 
 static void rx_session_update(rx_session_t* const     self,
@@ -1939,24 +1952,28 @@ static void rx_session_update(rx_session_t* const     self,
         }
     }
 
-    // UNORDERED mode update. There are no other modes now -- there used to be ORDERED in an experimental revision once.
+    // UNORDERED mode update.
+    // There are no other modes now -- there used to be ORDERED; last commit 9296213e0270afc164e193d88dcb74f97a348767.
     if (!rx_session_is_transfer_ejected(self, frame->meta.transfer_id)) {
-        rx_slot_t* const slot = rx_session_get_slot(self, ts, frame->meta.transfer_id); // new or continuation
-        UDPARD_ASSERT(slot != NULL);
-        UDPARD_ASSERT((!slot->busy) || (slot->transfer_id == frame->meta.transfer_id));
-        const bool done = rx_slot_update(slot,
-                                         ts,
-                                         self->port->memory.fragment,
-                                         payload_deleter,
-                                         frame,
-                                         self->port->extent,
-                                         &rx->errors_oom,
-                                         &rx->errors_transfer_malformed);
-        if (done) {
-            if (frame->meta.kind == frame_msg_reliable) {
-                tx_send_ack(rx, ts, slot->priority, slot->transfer_id, self->remote);
+        rx_slot_t** const slot_ref = rx_session_get_slot(self, ts, frame->meta.transfer_id); // new or continuation
+        rx_slot_t* const  slot     = *slot_ref;
+        if (slot == NULL) {
+            mem_free_payload(payload_deleter, frame->base.origin);
+            rx->errors_oom++;
+        } else {
+            const rx_slot_update_result_t upd_res = rx_slot_update(
+              slot, ts, self->port->memory.fragment, payload_deleter, frame, self->port->extent, &rx->errors_oom);
+            if (upd_res == rx_slot_complete) {
+                if (frame->meta.kind == frame_msg_reliable) {
+                    tx_send_ack(rx, ts, slot->priority, slot->transfer_id, self->remote);
+                }
+                rx_session_eject(self, rx, slot_ref); // will destroy the slot.
+            } else if (upd_res == rx_slot_failure) {
+                rx->errors_transfer_malformed++;
+                rx_slot_destroy(slot_ref, self->port->memory.fragment, self->port->memory.slot);
+            } else {
+                UDPARD_ASSERT(upd_res == rx_slot_incomplete);
             }
-            rx_session_eject(self, rx, slot);
         }
     } else { // retransmit ACK if needed
         if ((frame->meta.kind == frame_msg_reliable) && (frame->base.offset == 0U)) {
@@ -2042,10 +2059,7 @@ static const udpard_rx_port_vtable_private_t rx_port_vtb_stateless = { .accept =
 
 static bool rx_validate_mem_resources(const udpard_rx_mem_resources_t memory)
 {
-    return (memory.session.vtable != NULL) && (memory.session.vtable->base.free != NULL) &&
-           (memory.session.vtable->alloc != NULL) && //
-           (memory.fragment.vtable != NULL) && (memory.fragment.vtable->base.free != NULL) &&
-           (memory.fragment.vtable->alloc != NULL);
+    return mem_validate(memory.session) && mem_validate(memory.slot) && mem_validate(memory.fragment);
 }
 
 void udpard_rx_new(udpard_rx_t* const self, udpard_tx_t* const tx)
@@ -2074,7 +2088,8 @@ bool udpard_rx_port_new(udpard_rx_port_t* const              self,
                         const udpard_rx_mem_resources_t      memory,
                         const udpard_rx_port_vtable_t* const vtable)
 {
-    bool ok = (self != NULL) && rx_validate_mem_resources(memory) && (vtable != NULL) && (vtable->on_message != NULL);
+    const bool ok =
+      (self != NULL) && rx_validate_mem_resources(memory) && (vtable != NULL) && (vtable->on_message != NULL);
     if (ok) {
         mem_zero(sizeof(*self), self);
         self->extent                      = extent;
@@ -2159,3 +2174,13 @@ bool udpard_rx_port_push(udpard_rx_t* const       rx,
     }
     return ok;
 }
+
+// ---------------------------------------------  HEAP OBJECT SIZE LIMITS  ---------------------------------------------
+
+// On a 32-bit platform, the block overhead of o1heap is 8 bytes.
+// Rounding up to the power of 2 results in possible allocation sizes of 8, 24, 56, 120, 248, 504, 1016, ... bytes.
+
+static_assert((sizeof(void*) > 4) || (sizeof(tx_transfer_t) <= (256 - 8)), "tx_transfer_t is too large");
+static_assert((sizeof(void*) > 4) || (sizeof(rx_session_t) <= (512 - 8)), "rx_session_t is too large");
+static_assert((sizeof(void*) > 4) || (sizeof(rx_slot_t) <= (64 - 8)), "rx_slot_t is too large");
+static_assert((sizeof(void*) > 4) || (sizeof(udpard_fragment_t) <= (64 - 8)), "udpard_fragment_t is too large");

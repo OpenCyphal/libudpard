@@ -28,6 +28,7 @@
 ///   The TX pipeline adds a small overhead of sizeof(tx_frame_t).
 /// - sizeof(tx_transfer_t) blocks for the TX pipeline to store outgoing transfer metadata.
 /// - sizeof(rx_session_t) blocks for the RX pipeline to store incoming transfer session metadata.
+/// - sizeof(rx_slot_t) blocks for the RX pipeline to store specific transfer reassembly state.
 /// - sizeof(udpard_fragment_t) blocks for the RX pipeline to store received data fragments.
 ///
 /// Suitable memory allocators may be found here:
@@ -619,15 +620,12 @@ typedef struct udpard_rx_t
 /// These are used to serve the memory needs of the library to keep state while reassembling incoming transfers.
 /// Several memory resources are provided to enable fine control over the allocated memory if necessary; however,
 /// simple applications may choose to use the same memory resource implemented via malloc()/free() for all of them.
+/// Instances are fixed-size, so a trivial zero-fragmentation block allocator is sufficient.
 typedef struct udpard_rx_mem_resources_t
 {
-    /// Provides memory for rx_session_t described below.
-    /// Each instance is fixed-size, so a trivial zero-fragmentation block allocator is sufficient.
-    udpard_mem_t session;
-
-    /// The udpard_fragment_t handles are allocated per payload fragment; each contains a pointer to its fragment.
-    /// Each instance is of a very small fixed size, so a trivial zero-fragmentation block allocator is sufficient.
-    udpard_mem_t fragment;
+    udpard_mem_t session;  ///< Provides memory for rx_session_t.
+    udpard_mem_t slot;     ///< Provides memory for rx_slot_t.
+    udpard_mem_t fragment; ///< udpard_fragment_t are allocated per payload fragment; each points to its fragment.
 } udpard_rx_mem_resources_t;
 
 typedef struct udpard_rx_port_t     udpard_rx_port_t;
@@ -658,7 +656,8 @@ struct udpard_rx_port_t
     /// For example, if the local node is subscribed to a certain subject and there are X nodes publishing
     /// transfers on that subject, then there will be X sessions created for that subject.
     ///
-    /// Each session instance takes sizeof(rx_session_t) bytes of dynamic memory for itself.
+    /// Each session instance takes sizeof(rx_session_t) bytes of dynamic memory for itself, plus sizeof(rx_slot_t)
+    /// times the number of concurrent interleaved transfers from the remote node (usually 1), up to the static limit.
     /// On top of that, each session instance holds memory for the transfer payload fragments and small fixed-size
     /// metadata objects of type udpard_fragment_t, one handle per fragment.
     ///
