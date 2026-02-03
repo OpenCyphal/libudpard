@@ -1261,8 +1261,7 @@ static void test_rx_slot_update(void)
 
         const udpard_us_t ts = 1000;
 
-        const rx_slot_update_result_t res =
-          rx_slot_update(slot, ts, mem_frag, del_payload, &frame, 5, &errors_oom);
+        const rx_slot_update_result_t res = rx_slot_update(slot, ts, mem_frag, del_payload, &frame, 5, &errors_oom);
 
         TEST_ASSERT_EQUAL(rx_slot_complete, res);
         TEST_ASSERT_EQUAL(123, slot->transfer_id);
@@ -1289,9 +1288,8 @@ static void test_rx_slot_update(void)
         frame1.meta.transfer_id           = 456;
         frame1.meta.transfer_payload_size = 10;
 
-        const udpard_us_t ts1 = 2000;
-        const rx_slot_update_result_t res1 =
-          rx_slot_update(slot, ts1, mem_frag, del_payload, &frame1, 10, &errors_oom);
+        const udpard_us_t             ts1  = 2000;
+        const rx_slot_update_result_t res1 = rx_slot_update(slot, ts1, mem_frag, del_payload, &frame1, 10, &errors_oom);
 
         TEST_ASSERT_EQUAL(rx_slot_incomplete, res1);
         TEST_ASSERT_EQUAL(ts1, slot->ts_min);
@@ -1306,9 +1304,8 @@ static void test_rx_slot_update(void)
         frame2.meta.transfer_id           = 456;
         frame2.meta.transfer_payload_size = 10;
 
-        const udpard_us_t ts2 = 3000;
-        const rx_slot_update_result_t res2 =
-          rx_slot_update(slot, ts2, mem_frag, del_payload, &frame2, 10, &errors_oom);
+        const udpard_us_t             ts2  = 3000;
+        const rx_slot_update_result_t res2 = rx_slot_update(slot, ts2, mem_frag, del_payload, &frame2, 10, &errors_oom);
 
         TEST_ASSERT_EQUAL(rx_slot_incomplete, res2);
         TEST_ASSERT_EQUAL(ts1, slot->ts_min);
@@ -1323,9 +1320,8 @@ static void test_rx_slot_update(void)
         frame3.meta.transfer_id           = 456;
         frame3.meta.transfer_payload_size = 10;
 
-        const udpard_us_t ts3 = 1500;
-        const rx_slot_update_result_t res3 =
-          rx_slot_update(slot, ts3, mem_frag, del_payload, &frame3, 10, &errors_oom);
+        const udpard_us_t             ts3  = 1500;
+        const rx_slot_update_result_t res3 = rx_slot_update(slot, ts3, mem_frag, del_payload, &frame3, 10, &errors_oom);
 
         TEST_ASSERT_EQUAL(rx_slot_incomplete, res3);
         TEST_ASSERT_EQUAL(ts3, slot->ts_min);
@@ -1355,8 +1351,7 @@ static void test_rx_slot_update(void)
         frame.meta.transfer_id           = 789;
         frame.meta.transfer_payload_size = 5;
 
-        const rx_slot_update_result_t res =
-          rx_slot_update(slot, 5000, mem_frag, del_payload, &frame, 5, &errors_oom);
+        const rx_slot_update_result_t res = rx_slot_update(slot, 5000, mem_frag, del_payload, &frame, 5, &errors_oom);
 
         TEST_ASSERT_EQUAL(rx_slot_incomplete, res);
         TEST_ASSERT_EQUAL(1, errors_oom);
@@ -1381,8 +1376,7 @@ static void test_rx_slot_update(void)
         frame.meta.transfer_id           = 999;
         frame.meta.transfer_payload_size = 4;
 
-        const rx_slot_update_result_t res =
-          rx_slot_update(slot, 6000, mem_frag, del_payload, &frame, 4, &errors_oom);
+        const rx_slot_update_result_t res = rx_slot_update(slot, 6000, mem_frag, del_payload, &frame, 4, &errors_oom);
 
         TEST_ASSERT_EQUAL(rx_slot_failure, res);
 
@@ -1408,8 +1402,7 @@ static void test_rx_slot_update(void)
         frame.meta.transfer_id           = 1111;
         frame.meta.transfer_payload_size = 4;
 
-        const rx_slot_update_result_t res =
-          rx_slot_update(slot, 7000, mem_frag, del_payload, &frame, 4, &errors_oom);
+        const rx_slot_update_result_t res = rx_slot_update(slot, 7000, mem_frag, del_payload, &frame, 4, &errors_oom);
 
         TEST_ASSERT_EQUAL(rx_slot_complete, res);
         TEST_ASSERT_EQUAL(0, errors_oom);
@@ -2406,7 +2399,7 @@ static void test_rx_additional_coverage(void)
     TEST_ASSERT_FALSE(rx_validate_mem_resources(bad_mem));
     bad_mem.fragment.vtable = &vtable_no_alloc;
     TEST_ASSERT_FALSE(rx_validate_mem_resources(bad_mem));
-    bad_mem = mem;
+    bad_mem             = mem;
     bad_mem.slot.vtable = &vtable_no_free;
     TEST_ASSERT_FALSE(rx_validate_mem_resources(bad_mem));
     bad_mem.slot.vtable = &vtable_no_alloc;
