@@ -2095,6 +2095,86 @@ static void test_rx_session_unordered_duplicates(void)
     instrumented_allocator_reset(&alloc_payload);
 }
 
+static void test_rx_session_malformed(void)
+{
+    // Malformed transfer increments error counter and drops slot.
+    instrumented_allocator_t alloc_frag = { 0 };
+    instrumented_allocator_new(&alloc_frag);
+    instrumented_allocator_t alloc_session = { 0 };
+    instrumented_allocator_new(&alloc_session);
+    instrumented_allocator_t alloc_slot = { 0 };
+    instrumented_allocator_new(&alloc_slot);
+    instrumented_allocator_t alloc_payload = { 0 };
+    instrumented_allocator_new(&alloc_payload);
+    const udpard_mem_t              mem_frag    = instrumented_allocator_make_resource(&alloc_frag);
+    const udpard_mem_t              mem_session = instrumented_allocator_make_resource(&alloc_session);
+    const udpard_mem_t              mem_slot    = instrumented_allocator_make_resource(&alloc_slot);
+    const udpard_mem_t              mem_payload = instrumented_allocator_make_resource(&alloc_payload);
+    const udpard_deleter_t          del_payload = instrumented_allocator_make_deleter(&alloc_payload);
+    const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session, .slot = mem_slot };
+
+    udpard_rx_t rx;
+    udpard_rx_new(&rx, NULL);
+    callback_result_t cb_result = { 0 };
+    rx.user                     = &cb_result;
+
+    udpard_rx_port_t port = { 0 };
+    TEST_ASSERT(udpard_rx_port_new(&port, 64, rx_mem, &callbacks));
+
+    const uint64_t            remote_uid = 0xABCDEF1234567890ULL;
+    rx_session_factory_args_t fac_args   = {
+          .owner                 = &port,
+          .sessions_by_animation = &rx.list_session_by_animation,
+          .remote_uid            = remote_uid,
+          .now                   = 0,
+    };
+    rx_session_t* const ses = (rx_session_t*)cavl2_find_or_insert(&port.index_session_by_remote_uid,
+                                                                  &remote_uid,
+                                                                  &cavl_compare_rx_session_by_remote_uid,
+                                                                  &fac_args,
+                                                                  &cavl_factory_rx_session_by_remote_uid);
+    TEST_ASSERT_NOT_NULL(ses);
+
+    meta_t      meta = { .priority              = udpard_prio_nominal,
+                         .kind                  = frame_msg_best,
+                         .transfer_payload_size = 8,
+                         .transfer_id           = 1,
+                         .sender_uid            = remote_uid };
+    udpard_us_t now  = 0;
+    rx_session_update(ses,
+                      &rx,
+                      now,
+                      (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1111 },
+                      make_frame_ptr(meta, mem_payload, "ABCDEFGH", 0, 4),
+                      del_payload,
+                      0);
+    TEST_ASSERT_EQUAL_UINT64(0, rx.errors_transfer_malformed);
+    TEST_ASSERT_EQUAL(0, cb_result.message.count);
+    TEST_ASSERT_EQUAL_size_t(1, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(1, alloc_slot.allocated_fragments);
+
+    meta.priority = udpard_prio_high;
+    now += 10;
+    rx_session_update(ses,
+                      &rx,
+                      now,
+                      (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1111 },
+                      make_frame_ptr(meta, mem_payload, "ABCDEFGH", 4, 4),
+                      del_payload,
+                      0);
+    TEST_ASSERT_EQUAL_UINT64(1, rx.errors_transfer_malformed);
+    TEST_ASSERT_EQUAL(0, cb_result.message.count);
+    TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0, alloc_slot.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
+
+    udpard_rx_port_free(&rx, &port);
+    instrumented_allocator_reset(&alloc_frag);
+    instrumented_allocator_reset(&alloc_session);
+    instrumented_allocator_reset(&alloc_slot);
+    instrumented_allocator_reset(&alloc_payload);
+}
+
 static void test_rx_port(void)
 {
     // P2P ports behave like ordinary ports for payload delivery.
@@ -2277,6 +2357,67 @@ static void test_rx_port_oom(void)
     instrumented_allocator_reset(&alloc_frag);
     instrumented_allocator_reset(&alloc_session);
     instrumented_allocator_reset(&alloc_payload);
+
+    // Slot allocation failure should be reported gracefully.
+    instrumented_allocator_t alloc_frag_slot = { 0 };
+    instrumented_allocator_new(&alloc_frag_slot);
+    instrumented_allocator_t alloc_session_slot = { 0 };
+    instrumented_allocator_new(&alloc_session_slot);
+    instrumented_allocator_t alloc_slot = { 0 };
+    instrumented_allocator_new(&alloc_slot);
+    alloc_slot.limit_fragments                  = 0; // force slot allocation failure
+    instrumented_allocator_t alloc_payload_slot = { 0 };
+    instrumented_allocator_new(&alloc_payload_slot);
+    const udpard_mem_t              mem_frag_slot    = instrumented_allocator_make_resource(&alloc_frag_slot);
+    const udpard_mem_t              mem_session_slot = instrumented_allocator_make_resource(&alloc_session_slot);
+    const udpard_mem_t              mem_slot         = instrumented_allocator_make_resource(&alloc_slot);
+    const udpard_mem_t              mem_payload_slot = instrumented_allocator_make_resource(&alloc_payload_slot);
+    const udpard_deleter_t          del_payload_slot = instrumented_allocator_make_deleter(&alloc_payload_slot);
+    const udpard_rx_mem_resources_t rx_mem_slot      = { .fragment = mem_frag_slot,
+                                                         .session  = mem_session_slot,
+                                                         .slot     = mem_slot };
+
+    udpard_rx_t rx_slot;
+    udpard_rx_new(&rx_slot, NULL);
+    callback_result_t cb_result_slot = { 0 };
+    rx_slot.user                     = &cb_result_slot;
+
+    udpard_rx_port_t port_slot = { 0 };
+    TEST_ASSERT(udpard_rx_port_new(&port_slot, 64, rx_mem_slot, &callbacks));
+
+    meta_t       meta_slot      = { .priority              = udpard_prio_nominal,
+                                    .kind                  = frame_msg_best,
+                                    .transfer_payload_size = 4,
+                                    .transfer_id           = 1,
+                                    .sender_uid            = 0x0202020202020202ULL };
+    rx_frame_t*  frame_slot     = make_frame_ptr(meta_slot, mem_payload_slot, "oom!", 0, 4);
+    const byte_t payload_slot[] = { 'o', 'o', 'm', '!' };
+    byte_t       dgram_slot[HEADER_SIZE_BYTES + sizeof(payload_slot)];
+    header_serialize(dgram_slot, meta_slot, 0, 0, frame_slot->base.crc);
+    memcpy(dgram_slot + HEADER_SIZE_BYTES, payload_slot, sizeof(payload_slot));
+    mem_free(mem_payload_slot, frame_slot->base.origin.size, frame_slot->base.origin.data);
+    void* payload_buf_slot = mem_res_alloc(mem_payload_slot, sizeof(dgram_slot));
+    memcpy(payload_buf_slot, dgram_slot, sizeof(dgram_slot));
+
+    now = 0;
+    TEST_ASSERT(udpard_rx_port_push(&rx_slot,
+                                    &port_slot,
+                                    now,
+                                    (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1234 },
+                                    (udpard_bytes_mut_t){ .data = payload_buf_slot, .size = sizeof(dgram_slot) },
+                                    del_payload_slot,
+                                    0));
+    TEST_ASSERT_GREATER_THAN_UINT64(0, rx_slot.errors_oom);
+    TEST_ASSERT_EQUAL(1, alloc_session_slot.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, alloc_slot.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, alloc_frag_slot.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, alloc_payload_slot.allocated_fragments);
+    udpard_rx_port_free(&rx_slot, &port_slot);
+    TEST_ASSERT_EQUAL(0, alloc_session_slot.allocated_fragments);
+    instrumented_allocator_reset(&alloc_frag_slot);
+    instrumented_allocator_reset(&alloc_session_slot);
+    instrumented_allocator_reset(&alloc_slot);
+    instrumented_allocator_reset(&alloc_payload_slot);
 }
 
 static void test_rx_port_free_loop(void)
@@ -2548,6 +2689,7 @@ int main(void)
     RUN_TEST(test_rx_session_unordered);
     RUN_TEST(test_rx_session_unordered_reject_old);
     RUN_TEST(test_rx_session_unordered_duplicates);
+    RUN_TEST(test_rx_session_malformed);
 
     RUN_TEST(test_rx_port);
     RUN_TEST(test_rx_port_timeouts);
