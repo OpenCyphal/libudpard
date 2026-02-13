@@ -1672,7 +1672,10 @@ static void rx_session_update(rx_session_t* const     self,
                 UDPARD_ASSERT(upd_res == rx_slot_incomplete);
             }
         }
-    } // Here we used to have ACK retransmission, which has been removed -- no more reliable transfers.
+    } else {
+        // The transfer has been seen before, so just release this duplicate payload.
+        mem_free_payload(payload_deleter, frame->base.origin);
+    }
 }
 
 /// The stateful strategy maintains a dedicated session per remote node, indexed in a fast AVL tree.

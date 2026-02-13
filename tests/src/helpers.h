@@ -64,13 +64,110 @@ static inline udpard_bytes_scattered_t make_scattered(const void* const data, co
     return out;
 }
 
-// Wraps an application pointer for user context plumbing.
+// Legacy compatibility user context (removed from public API).
+typedef union
+{
+    void*         ptr[2];
+    unsigned char bytes[sizeof(void*) * 2];
+} udpard_user_context_t;
+#ifdef __cplusplus
+#define UDPARD_USER_CONTEXT_NULL \
+    udpard_user_context_t {}
+#else
+#define UDPARD_USER_CONTEXT_NULL ((udpard_user_context_t){ .ptr = { NULL } })
+#endif
+
+// Legacy compatibility feedback payload (reliable TX removed from public API).
+typedef struct
+{
+    udpard_user_context_t user;
+    uint16_t              acknowledgements;
+} udpard_tx_feedback_t;
+
+// Wraps an application pointer for legacy user context plumbing.
 static inline udpard_user_context_t make_user_context(void* const obj)
 {
     udpard_user_context_t out = UDPARD_USER_CONTEXT_NULL;
     out.ptr[0]                = obj;
     return out;
 }
+
+// Calls the current public TX push API directly.
+static inline bool udpard_tx_push_native(udpard_tx_t* const             self,
+                                         const udpard_us_t              now,
+                                         const udpard_us_t              deadline,
+                                         const uint16_t                 iface_bitmap,
+                                         const udpard_prio_t            priority,
+                                         const uint64_t                 transfer_id,
+                                         const udpard_udpip_ep_t        endpoint,
+                                         const udpard_bytes_scattered_t payload,
+                                         void* const                    user)
+{
+    return udpard_tx_push(self, now, deadline, iface_bitmap, priority, transfer_id, endpoint, payload, user);
+}
+
+// Calls the current public TX P2P push API directly.
+static inline bool udpard_tx_push_p2p_native(udpard_tx_t* const             self,
+                                             const udpard_us_t              now,
+                                             const udpard_us_t              deadline,
+                                             const udpard_prio_t            priority,
+                                             const udpard_udpip_ep_t        endpoints[UDPARD_IFACE_COUNT_MAX],
+                                             const udpard_bytes_scattered_t payload,
+                                             void* const                    user)
+{
+    return udpard_tx_push_p2p(self, now, deadline, priority, endpoints, payload, user);
+}
+
+// Calls the current public RX constructor directly.
+static inline void udpard_rx_new_native(udpard_rx_t* const self) { udpard_rx_new(self); }
+
+// Maps legacy subject push API to the new endpoint-based API.
+static inline bool udpard_tx_push_compat(udpard_tx_t* const             self,
+                                         const udpard_us_t              now,
+                                         const udpard_us_t              deadline,
+                                         const uint16_t                 iface_bitmap,
+                                         const udpard_prio_t            priority,
+                                         const uint64_t                 transfer_id,
+                                         const udpard_bytes_scattered_t payload,
+                                         void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t),
+                                         const udpard_user_context_t user)
+{
+    (void)feedback;
+    return udpard_tx_push_native(
+      self, now, deadline, iface_bitmap, priority, transfer_id, udpard_make_subject_endpoint(0U), payload, user.ptr[0]);
+}
+
+// Maps legacy P2P push API to the new endpoint-array API.
+static inline bool udpard_tx_push_p2p_compat(udpard_tx_t* const             self,
+                                             const udpard_us_t              now,
+                                             const udpard_us_t              deadline,
+                                             const udpard_prio_t            priority,
+                                             const udpard_remote_t          remote,
+                                             const udpard_bytes_scattered_t payload,
+                                             void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t),
+                                             const udpard_user_context_t user,
+                                             uint64_t* const             out_transfer_id)
+{
+    (void)feedback;
+    const uint64_t tid = (self != NULL) ? self->p2p_transfer_id : 0U;
+    const bool ok = udpard_tx_push_p2p_native(self, now, deadline, priority, remote.endpoints, payload, user.ptr[0]);
+    if (ok && (out_transfer_id != NULL)) {
+        *out_transfer_id = tid;
+    }
+    return ok;
+}
+
+// Maps legacy RX constructor API to the new standalone constructor.
+static inline void udpard_rx_new_compat(udpard_rx_t* const self, udpard_tx_t* const tx)
+{
+    (void)tx;
+    udpard_rx_new_native(self);
+}
+
+// Remap legacy symbol names used by old tests.
+#define udpard_tx_push     udpard_tx_push_compat
+#define udpard_tx_push_p2p udpard_tx_push_p2p_compat
+#define udpard_rx_new      udpard_rx_new_compat
 
 /// The instrumented allocator tracks memory consumption, checks for heap corruption, and can be configured to fail
 /// allocations above a certain threshold.

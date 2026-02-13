@@ -68,7 +68,7 @@ standards-compliant C99 compiler is available.
 
 ### v3.0 -- WORK IN PROGRESS
 
-The library has been redesigned from scratch to support Cyphal v1.1, named topics, and reliable transfers.
+The library has been redesigned from scratch to support Cyphal v1.1 and named topics.
 No porting guide is provided since the changes are too significant;
 please refer to the new API docs in `libudpard/udpard.h`.
 
