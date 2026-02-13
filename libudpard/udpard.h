@@ -106,7 +106,6 @@ typedef enum udpard_prio_t
     udpard_prio_optional    = 7,
 } udpard_prio_t;
 #define UDPARD_PRIORITY_COUNT 8U
-#define UDPARD_PRIORITY_MASK  (UDPARD_PRIORITY_COUNT - 1U)
 
 typedef struct udpard_tree_t
 {
@@ -145,11 +144,6 @@ typedef struct udpard_bytes_mut_t
     void*  data;
 } udpard_bytes_mut_t;
 
-/// The size can be changed arbitrarily. This value is a compromise between copy size and footprint and utility.
-#ifndef UDPARD_USER_CONTEXT_PTR_COUNT
-#define UDPARD_USER_CONTEXT_PTR_COUNT 2
-#endif
-
 /// Zeros if invalid/unset/unavailable.
 typedef struct udpard_udpip_ep_t
 {
@@ -176,8 +170,7 @@ typedef struct udpard_remote_t
 bool udpard_is_valid_endpoint(const udpard_udpip_ep_t ep);
 
 /// Returns the destination multicast UDP/IP endpoint for the given subject-ID.
-/// The application should use this function when setting up subscription sockets or sending datagrams in
-/// udpard_tx_vtable_t::eject_subject().
+/// The application should use this function when setting up subscription sockets or sending datagrams.
 /// If the subject-ID exceeds UDPARD_IPv4_SUBJECT_ID_MAX, the excessive bits are masked out.
 /// For P2P use the unicast node address directly instead, as provided by the RX pipeline per received transfer.
 udpard_udpip_ep_t udpard_make_subject_endpoint(const uint32_t subject_id);
@@ -337,7 +330,7 @@ typedef struct udpard_tx_vtable_t
     /// Invoked from udpard_tx_poll() to push outgoing UDP datagrams into the socket/NIC driver.
     /// It is GUARANTEED that ONLY udpard_tx_poll() can invoke this function; in particular, pushing new transfers
     /// will not trigger ejection callbacks.
-    /// The callback must not mutate the TX pipeline (no udpard_tx_push/cancel/free).
+    /// The callback must not mutate the TX pipeline (no udpard_tx_push/free).
     bool (*eject)(udpard_tx_t*, udpard_tx_ejection_t*);
 } udpard_tx_vtable_t;
 
@@ -377,10 +370,6 @@ struct udpard_tx_t
     /// via udpard_tx_refcount_dec().
     /// READ-ONLY!
     size_t enqueued_frames_count;
-
-    /// Starts at zero and increments with every enqueued transfer. Do not modify!
-    /// This is used internally as a tiebreaker in non-unique indexes.
-    uint64_t next_seq_no;
 
     udpard_tx_mem_resources_t memory;
 
@@ -426,6 +415,9 @@ bool udpard_tx_new(udpard_tx_t* const              self,
 /// invalidated immediately after this function returns. When redundant interfaces are used, the library will attempt to
 /// minimize the number of copies by reusing frames across interfaces with identical MTU values and memory resources.
 ///
+/// The endpoint depends on the subject-ID and is computed using udpard_make_subject_endpoint().
+/// The endpoint must satisfy udpard_is_valid_endpoint().
+///
 /// The caller shall increment the transfer-ID counter after each successful invocation of this function per subject.
 /// The initial value shall be chosen randomly such that it is likely to be distinct per application startup
 /// (embedded systems can use noinit memory sections, hash uninitialized SRAM, use timers or ADC noise, etc).
@@ -433,16 +425,12 @@ bool udpard_tx_new(udpard_tx_t* const              self,
 /// Excess most significant bits are ignored.
 /// Related thread on random transfer-ID init: https://forum.opencyphal.org/t/improve-the-transfer-id-timeout/2375
 ///
-/// The user context value is carried through to the callbacks. It must contain enough context to allow subject-ID
-/// derivation inside udpard_tx_vtable_t::eject_subject(). For example, it may contain a pointer to the topic struct.
+/// The enqueued transfer will be emitted over all interfaces specified in the iface_bitmap.
+///
+/// The user context value is carried through to the callbacks.
 ///
 /// Returns true on success. Runtime failures increment the corresponding error counters,
 /// while invocations with invalid arguments just return zero without modifying the queue state.
-///
-/// The enqueued transfer will be emitted over all interfaces specified in the iface_bitmap.
-/// The subject-ID is computed inside the udpard_tx_vtable::eject_subject() callback at the time of transmission.
-/// The subject-ID cannot be computed beforehand at the time of enqueuing because the topic->subject consensus protocol
-/// may find a different subject-ID allocation between the time of enqueuing and the time of (re)transmission.
 ///
 /// On success, the function allocates a single transfer state instance and a number of payload fragments.
 /// The time complexity is O(p + log e), where p is the transfer payload size, and e is the number of
@@ -453,6 +441,7 @@ bool udpard_tx_push(udpard_tx_t* const             self,
                     const uint16_t                 iface_bitmap,
                     const udpard_prio_t            priority,
                     const uint64_t                 transfer_id,
+                    const udpard_udpip_ep_t        endpoint,
                     const udpard_bytes_scattered_t payload,
                     void* const                    user);
 
@@ -611,7 +600,7 @@ struct udpard_rx_transfer_t
     udpard_us_t     timestamp;
     udpard_prio_t   priority;
     udpard_remote_t remote;
-    // Here we may provide a sequence restart flag if a large transfer-ID jump is detected -- not needed right now.
+    uint64_t        transfer_id;
 
     /// The total size of the payload available to the application, in bytes, is provided for convenience;
     /// it is the sum of the sizes of all its fragments. For example, if the sender emitted a transfer of 2000

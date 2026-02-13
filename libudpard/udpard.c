@@ -588,11 +588,10 @@ typedef struct tx_transfer_t
     /// The transmission iface set is indicated by which head[] entries are non-NULL.
     tx_frame_t* head[UDPARD_IFACE_COUNT_MAX];
     tx_frame_t* cursor[UDPARD_IFACE_COUNT_MAX];
-    uint32_t    epoch : 8; ///< Does not overflow due to exponential backoff; e.g. 1us with epoch=48 => 9 years.
 
     /// Constant transfer properties supplied by the client.
-    uint32_t          priority : 3;
     void*             user;
+    udpard_prio_t     priority;
     udpard_us_t       deadline;
     udpard_udpip_ep_t endpoints[UDPARD_IFACE_COUNT_MAX];
 } tx_transfer_t;
@@ -786,13 +785,14 @@ static bool tx_push(udpard_tx_t* const             tx,
                     const udpard_us_t              now,
                     const udpard_us_t              deadline,
                     const meta_t                   meta,
-                    const uint16_t                 iface_bitmap,
                     const udpard_udpip_ep_t        endpoints[UDPARD_IFACE_COUNT_MAX],
                     const udpard_bytes_scattered_t payload,
                     void* const                    user)
 {
     UDPARD_ASSERT(now <= deadline);
     UDPARD_ASSERT(tx != NULL);
+
+    const uint16_t iface_bitmap = valid_ep_bitmap(endpoints);
     UDPARD_ASSERT((iface_bitmap & UDPARD_IFACE_BITMAP_ALL) != 0);
     UDPARD_ASSERT((iface_bitmap & UDPARD_IFACE_BITMAP_ALL) == iface_bitmap);
 
@@ -806,10 +806,9 @@ static bool tx_push(udpard_tx_t* const             tx,
         return false;
     }
     mem_zero(sizeof(*tr), tr);
-    tr->epoch    = 0;
-    tr->priority = ((byte_t)meta.priority) & UDPARD_PRIORITY_MASK;
-    tr->deadline = deadline;
     tr->user     = user;
+    tr->priority = meta.priority;
+    tr->deadline = deadline;
     for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
         tr->head[i] = tr->cursor[i] = NULL;
         tr->endpoints[i]            = endpoints[i];
@@ -907,7 +906,6 @@ bool udpard_tx_new(udpard_tx_t* const              self,
         self->p2p_transfer_id       = p2p_transfer_id_seed + local_uid; // extra entropy
         self->enqueued_frames_limit = enqueued_frames_limit;
         self->enqueued_frames_count = 0;
-        self->next_seq_no           = 0;
         self->memory                = memory;
         self->index_deadline        = NULL;
         self->agewise               = (udpard_list_t){ NULL, NULL };
@@ -929,18 +927,27 @@ bool udpard_tx_push(udpard_tx_t* const             self,
                     const uint16_t                 iface_bitmap,
                     const udpard_prio_t            priority,
                     const uint64_t                 transfer_id,
+                    const udpard_udpip_ep_t        endpoint,
                     const udpard_bytes_scattered_t payload,
                     void* const                    user)
 {
     bool ok = (self != NULL) && (deadline >= now) && (now >= 0) && (self->local_uid != 0) &&
               ((iface_bitmap & UDPARD_IFACE_BITMAP_ALL) != 0) && (priority < UDPARD_PRIORITY_COUNT) &&
-              ((payload.bytes.data != NULL) || (payload.bytes.size == 0U));
+              udpard_is_valid_endpoint(endpoint) && ((payload.bytes.data != NULL) || (payload.bytes.size == 0U));
     if (ok) {
-        const meta_t meta = { .priority              = priority,
-                              .transfer_payload_size = (uint32_t)bytes_scattered_size(payload),
-                              .transfer_id           = transfer_id,
-                              .sender_uid            = self->local_uid };
-        ok = tx_push(self, now, deadline, meta, iface_bitmap & UDPARD_IFACE_BITMAP_ALL, NULL, payload, user);
+        const meta_t meta = {
+            .priority              = priority,
+            .transfer_payload_size = (uint32_t)bytes_scattered_size(payload),
+            .transfer_id           = transfer_id,
+            .sender_uid            = self->local_uid,
+        };
+        udpard_udpip_ep_t eps[UDPARD_IFACE_COUNT_MAX] = { 0 };
+        for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
+            if ((iface_bitmap & (1U << i)) != 0) {
+                eps[i] = endpoint;
+            }
+        }
+        ok = tx_push(self, now, deadline, meta, eps, payload, user);
     }
     return ok;
 }
@@ -953,15 +960,17 @@ bool udpard_tx_push_p2p(udpard_tx_t* const             self,
                         const udpard_bytes_scattered_t payload,
                         void* const                    user)
 {
-    const uint16_t iface_bitmap = valid_ep_bitmap(endpoints);
-    bool ok = (self != NULL) && (deadline >= now) && (now >= 0) && (self->local_uid != 0) && (iface_bitmap != 0) &&
-              (priority < UDPARD_PRIORITY_COUNT) && ((payload.bytes.data != NULL) || (payload.bytes.size == 0U));
+    bool ok = (self != NULL) && (deadline >= now) && (now >= 0) && (self->local_uid != 0) &&
+              (valid_ep_bitmap(endpoints) != 0) && (priority < UDPARD_PRIORITY_COUNT) &&
+              ((payload.bytes.data != NULL) || (payload.bytes.size == 0U));
     if (ok) {
-        const meta_t meta = { .priority              = priority,
-                              .transfer_payload_size = (uint32_t)bytes_scattered_size(payload),
-                              .transfer_id           = self->p2p_transfer_id++,
-                              .sender_uid            = self->local_uid };
-        ok = tx_push(self, now, deadline, meta, iface_bitmap, endpoints, payload, user); // --------------
+        const meta_t meta = {
+            .priority              = priority,
+            .transfer_payload_size = (uint32_t)bytes_scattered_size(payload),
+            .transfer_id           = self->p2p_transfer_id++,
+            .sender_uid            = self->local_uid,
+        };
+        ok = tx_push(self, now, deadline, meta, endpoints, payload, user);
     }
     return ok;
 }
@@ -993,6 +1002,7 @@ static void tx_eject_pending_frames(udpard_tx_t* const self, const udpard_us_t n
         {
             udpard_tx_ejection_t ejection = { .now         = now,
                                               .deadline    = tr->deadline,
+                                              .destination = tr->endpoints[ifindex],
                                               .iface_index = ifindex,
                                               .dscp        = self->dscp_value_per_priority[tr->priority],
                                               .datagram    = tx_frame_view(frame),
@@ -1562,6 +1572,7 @@ static void rx_session_eject(rx_session_t* const self, udpard_rx_t* const rx, rx
         .timestamp           = slot->ts_min,
         .priority            = slot->priority,
         .remote              = self->remote,
+        .transfer_id         = slot->transfer_id,
         .payload_size_stored = slot->covered_prefix,
         .payload_size_wire   = slot->total_size,
         .payload             = (udpard_fragment_t*)slot->fragments,
@@ -1716,6 +1727,7 @@ static void rx_port_accept_stateless(udpard_rx_t* const      rx,
                 .timestamp           = timestamp,
                 .priority            = frame->meta.priority,
                 .remote              = remote,
+                .transfer_id         = frame->meta.transfer_id,
                 .payload_size_stored = frame->base.payload.size,
                 .payload_size_wire   = frame->meta.transfer_payload_size,
                 .payload             = frag,
