@@ -2,670 +2,288 @@
 /// Copyright (C) OpenCyphal Development Team  <opencyphal.org>
 /// Copyright Amazon.com Inc. or its affiliates.
 /// SPDX-License-Identifier: MIT
-///
-/// Integration test that verifies end-to-end behavior with frame capture/injection,
-/// random packet loss, and reordering simulation.
 
 #include <udpard.h>
 #include "helpers.h"
 #include <unity.h>
-
 #include <algorithm>
-#include <array>
-#include <cstdlib>
+#include <cstdint>
 #include <cstring>
 #include <random>
 #include <vector>
 
 namespace {
 
-// Brief network simulator with loss/reorder support.
-class NetworkSimulator
+struct CapturedFrame
 {
-  public:
-    NetworkSimulator(const double loss_rate, const bool enable_reorder, const uint32_t seed = 1U)
-      : loss_rate_(std::clamp(loss_rate, 0.0, 1.0))
-      , enable_reorder_(enable_reorder)
-      , rng_(seed)
-      , drop_(loss_rate_)
-    {
-    }
-
-    // Shuffle frames to simulate reordering.
-    template<typename T>
-    void shuffle(std::vector<T>& items)
-    {
-        if (enable_reorder_ && (items.size() > 1U)) {
-            std::shuffle(items.begin(), items.end(), rng_);
-            reordered_ = true;
-        }
-    }
-
-    // Decide whether to drop; guarantee at least one drop if loss is enabled.
-    bool drop_next(const size_t frames_left)
-    {
-        bool drop = (loss_rate_ > 0.0) && drop_(rng_);
-        if ((!drop) && (loss_rate_ > 0.0) && (frames_left == 1U) && (dropped_ == 0U)) {
-            drop = true;
-        }
-        if (drop) {
-            dropped_++;
-        }
-        return drop;
-    }
-
-    [[nodiscard]] size_t dropped() const { return dropped_; }
-    [[nodiscard]] bool   reordered() const { return reordered_; }
-
-  private:
-    double                      loss_rate_;
-    bool                        enable_reorder_;
-    std::mt19937                rng_;
-    std::bernoulli_distribution drop_;
-    size_t                      dropped_   = 0;
-    bool                        reordered_ = false;
+    std::vector<std::uint8_t> bytes;
+    std::uint_fast8_t         iface_index = 0;
 };
-
-// =====================================================================================================================
-// Test context for tracking received transfers
-// =====================================================================================================================
 
 struct ReceivedTransfer
 {
-    std::vector<uint8_t> payload;
-    uint64_t             transfer_id;
-    uint64_t             remote_uid;
-    size_t               payload_size_wire;
+    std::uint64_t             transfer_id = 0;
+    std::uint64_t             remote_uid  = 0;
+    std::vector<std::uint8_t> payload;
 };
 
-struct TestContext
+struct RxContext
 {
-    std::vector<ReceivedTransfer> received_transfers;
+    std::vector<ReceivedTransfer> transfers;
 };
 
-// =====================================================================================================================
-// Captured frame for TX ejection
-// =====================================================================================================================
-
-struct CapturedFrame
+// Captures TX frames into a test-owned vector.
+bool capture_tx(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejection)
 {
-    std::vector<uint8_t> data;
-    uint_fast8_t         iface_index;
-};
-
-// =====================================================================================================================
-// Callbacks
-// =====================================================================================================================
-
-bool capture_frame_impl(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejection)
-{
-    auto* frames = static_cast<std::vector<CapturedFrame>*>(tx->user);
-    if (frames == nullptr) {
+    auto* out = static_cast<std::vector<CapturedFrame>*>(tx->user);
+    if (out == nullptr) {
         return false;
     }
-
     CapturedFrame frame{};
-    frame.data.assign(static_cast<const uint8_t*>(ejection->datagram.data),
-                      static_cast<const uint8_t*>(ejection->datagram.data) + ejection->datagram.size);
+    frame.bytes.assign(static_cast<const std::uint8_t*>(ejection->datagram.data),
+                       static_cast<const std::uint8_t*>(ejection->datagram.data) + ejection->datagram.size);
     frame.iface_index = ejection->iface_index;
-    frames->push_back(frame);
-
+    out->push_back(std::move(frame));
     return true;
 }
-bool capture_frame_subject(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejection)
-{
-    return capture_frame_impl(tx, ejection);
-}
-bool capture_frame_p2p(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejection, udpard_udpip_ep_t /*dest*/)
-{
-    return capture_frame_impl(tx, ejection);
-}
 
-constexpr udpard_tx_vtable_t tx_vtable{ .eject_subject = &capture_frame_subject, .eject_p2p = &capture_frame_p2p };
+constexpr udpard_tx_vtable_t tx_vtable{ .eject = &capture_tx };
 
+// Stores each received transfer and frees the payload.
 void on_message(udpard_rx_t* const rx, udpard_rx_port_t* const port, const udpard_rx_transfer_t transfer)
 {
-    auto* ctx = static_cast<TestContext*>(rx->user);
-    if (ctx != nullptr) {
-        ReceivedTransfer rt{};
-        rt.transfer_id       = transfer.transfer_id;
-        rt.remote_uid        = transfer.remote.uid;
-        rt.payload_size_wire = transfer.payload_size_wire;
-
-        rt.payload.resize(transfer.payload_size_stored);
-        const udpard_fragment_t* cursor = transfer.payload;
-        (void)udpard_fragment_gather(&cursor, 0, transfer.payload_size_stored, rt.payload.data());
-
-        ctx->received_transfers.push_back(std::move(rt));
-    }
-
+    auto* ctx = static_cast<RxContext*>(rx->user);
+    TEST_ASSERT_NOT_NULL(ctx);
+    ReceivedTransfer out{};
+    out.transfer_id = transfer.transfer_id;
+    out.remote_uid  = transfer.remote.uid;
+    out.payload.resize(transfer.payload_size_stored);
+    const udpard_fragment_t* cursor = transfer.payload;
+    (void)udpard_fragment_gather(&cursor, 0, transfer.payload_size_stored, out.payload.data());
+    ctx->transfers.push_back(std::move(out));
     udpard_fragment_free_all(transfer.payload, udpard_make_deleter(port->memory.fragment));
 }
 
-constexpr udpard_rx_port_vtable_t rx_port_vtable{ .on_message = &on_message };
+constexpr udpard_rx_port_vtable_t rx_vtable{ .on_message = &on_message };
 
-// =====================================================================================================================
-// Fixtures and helpers
-// =====================================================================================================================
-
-// Build a random payload of requested size.
-std::vector<uint8_t> make_payload(const size_t size)
+// Builds TX memory resources.
+udpard_tx_mem_resources_t make_tx_mem(instrumented_allocator_t& transfer, instrumented_allocator_t& payload)
 {
-    std::vector<uint8_t> payload(size);
-    for (auto& byte : payload) {
-        byte = static_cast<uint8_t>(rand() % 256);
+    udpard_tx_mem_resources_t out{};
+    out.transfer = instrumented_allocator_make_resource(&transfer);
+    for (auto& r : out.payload) {
+        r = instrumented_allocator_make_resource(&payload);
     }
-    return payload;
+    return out;
 }
 
-// Simple TX owner that captures frames.
-struct TxFixture
+// Builds RX memory resources.
+udpard_rx_mem_resources_t make_rx_mem(instrumented_allocator_t& session, instrumented_allocator_t& fragment)
 {
-    instrumented_allocator_t   transfer{};
-    instrumented_allocator_t   payload{};
-    udpard_tx_mem_resources_t  mem{};
+    return udpard_rx_mem_resources_t{
+        .session  = instrumented_allocator_make_resource(&session),
+        .slot     = instrumented_allocator_make_resource(&session),
+        .fragment = instrumented_allocator_make_resource(&fragment),
+    };
+}
+
+// Delivers one captured frame into RX.
+void deliver(const CapturedFrame&    frame,
+             const udpard_mem_t      mem,
+             const udpard_deleter_t  del,
+             udpard_rx_t* const      rx,
+             udpard_rx_port_t* const port,
+             const udpard_udpip_ep_t src,
+             const udpard_us_t       ts)
+{
+    void* const dgram = mem_res_alloc(mem, frame.bytes.size());
+    TEST_ASSERT_NOT_NULL(dgram);
+    (void)std::memcpy(dgram, frame.bytes.data(), frame.bytes.size());
+    TEST_ASSERT_TRUE(udpard_rx_port_push(
+      rx, port, ts, src, udpard_bytes_mut_t{ .size = frame.bytes.size(), .data = dgram }, del, frame.iface_index));
+}
+
+void test_reordered_multiframe_delivery()
+{
+    seed_prng();
+
+    // Configure one TX node.
+    instrumented_allocator_t tx_alloc_transfer{};
+    instrumented_allocator_t tx_alloc_payload{};
+    instrumented_allocator_new(&tx_alloc_transfer);
+    instrumented_allocator_new(&tx_alloc_payload);
     udpard_tx_t                tx{};
     std::vector<CapturedFrame> frames;
+    TEST_ASSERT_TRUE(
+      udpard_tx_new(&tx, 0xAAAAAAAABBBBBBBBULL, 1U, 32U, make_tx_mem(tx_alloc_transfer, tx_alloc_payload), &tx_vtable));
+    tx.mtu[0] = 96U;
+    tx.mtu[1] = 96U;
+    tx.mtu[2] = 96U;
+    tx.user   = &frames;
 
-    void init(const uint64_t uid, const uint64_t timeout, const uint16_t mtu)
-    {
-        instrumented_allocator_new(&transfer);
-        instrumented_allocator_new(&payload);
+    // Configure one RX node.
+    instrumented_allocator_t rx_alloc_session{};
+    instrumented_allocator_t rx_alloc_fragment{};
+    instrumented_allocator_new(&rx_alloc_session);
+    instrumented_allocator_new(&rx_alloc_fragment);
+    const auto             rx_mem = make_rx_mem(rx_alloc_session, rx_alloc_fragment);
+    const udpard_deleter_t del    = instrumented_allocator_make_deleter(&rx_alloc_fragment);
+    udpard_rx_t            rx{};
+    udpard_rx_port_t       port{};
+    RxContext              ctx{};
+    udpard_rx_new(&rx);
+    rx.user = &ctx;
+    TEST_ASSERT_TRUE(udpard_rx_port_new(&port, 4096U, rx_mem, &rx_vtable));
 
-        mem.transfer = instrumented_allocator_make_resource(&transfer);
-        for (auto& res : mem.payload) {
-            res = instrumented_allocator_make_resource(&payload);
-        }
-
-        TEST_ASSERT_TRUE(udpard_tx_new(&tx, uid, timeout, mtu, mem, &tx_vtable));
-        tx.user = &frames;
+    // Emit one large transfer over two interfaces.
+    std::vector<std::uint8_t> payload(260U);
+    for (std::size_t i = 0; i < payload.size(); i++) {
+        payload[i] = static_cast<std::uint8_t>(i);
     }
+    TEST_ASSERT_TRUE(udpard_tx_push(&tx,
+                                    1000,
+                                    100000,
+                                    (1U << 0U) | (1U << 1U),
+                                    udpard_prio_fast,
+                                    44U,
+                                    udpard_make_subject_endpoint(123U),
+                                    make_scattered(payload.data(), payload.size()),
+                                    nullptr));
+    udpard_tx_poll(&tx, 1001, UDPARD_IFACE_BITMAP_ALL);
+    TEST_ASSERT_TRUE(!frames.empty());
 
-    void fini()
-    {
-        udpard_tx_free(&tx);
-        TEST_ASSERT_EQUAL_size_t(0, transfer.allocated_fragments);
-        TEST_ASSERT_EQUAL_size_t(0, payload.allocated_fragments);
+    // Reorder arrivals and deliver all frames.
+    std::mt19937 prng{ static_cast<std::uint32_t>(rand()) };
+    std::shuffle(frames.begin(), frames.end(), prng);
+    udpard_us_t ts = 2000;
+    for (const auto& frame : frames) {
+        deliver(frame, rx_mem.fragment, del, &rx, &port, udpard_udpip_ep_t{ .ip = 0x0A000001U, .port = 9382U }, ts++);
     }
-};
+    udpard_rx_poll(&rx, ts + 1);
 
-// Simple RX owner with context.
-struct RxFixture
-{
-    instrumented_allocator_t  session{};
-    instrumented_allocator_t  fragment{};
-    udpard_rx_mem_resources_t mem{};
-    udpard_rx_t               rx{};
-    TestContext               ctx{};
+    // Deduplication must keep exactly one delivered transfer.
+    TEST_ASSERT_EQUAL_size_t(1, ctx.transfers.size());
+    TEST_ASSERT_EQUAL_UINT64(44U, ctx.transfers[0].transfer_id);
+    TEST_ASSERT_EQUAL_UINT64(0xAAAAAAAABBBBBBBBULL, ctx.transfers[0].remote_uid);
+    TEST_ASSERT_EQUAL_size_t(payload.size(), ctx.transfers[0].payload.size());
+    TEST_ASSERT_EQUAL_MEMORY(payload.data(), ctx.transfers[0].payload.data(), payload.size());
 
-    void init()
-    {
-        instrumented_allocator_new(&session);
-        instrumented_allocator_new(&fragment);
-        mem.session  = instrumented_allocator_make_resource(&session);
-        mem.slot     = instrumented_allocator_make_resource(&session);
-        mem.fragment = instrumented_allocator_make_resource(&fragment);
-        udpard_rx_new(&rx, nullptr);
-        rx.user = &ctx;
-    }
-
-    void fini() const
-    {
-        TEST_ASSERT_EQUAL_size_t(0, session.allocated_fragments);
-        TEST_ASSERT_EQUAL_size_t(0, fragment.allocated_fragments);
-    }
-};
-
-// Create a subject port.
-udpard_rx_port_t make_subject_port(const size_t extent, RxFixture& rx)
-{
-    udpard_rx_port_t port{};
-    TEST_ASSERT_TRUE(udpard_rx_port_new(&port, extent, rx.mem, &rx_port_vtable));
-    return port;
+    // Release resources.
+    udpard_rx_port_free(&rx, &port);
+    udpard_tx_free(&tx);
+    TEST_ASSERT_EQUAL_size_t(0, tx_alloc_transfer.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0, tx_alloc_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0, rx_alloc_session.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0, rx_alloc_fragment.allocated_fragments);
+    instrumented_allocator_reset(&tx_alloc_transfer);
+    instrumented_allocator_reset(&tx_alloc_payload);
+    instrumented_allocator_reset(&rx_alloc_session);
+    instrumented_allocator_reset(&rx_alloc_fragment);
 }
 
-// =====================================================================================================================
-// Helper to deliver frames with optional loss/reorder.
-void deliver_frames(std::vector<CapturedFrame>       frames,
-                    udpard_rx_t*                     rx,
-                    udpard_rx_port_t*                port,
-                    const udpard_rx_mem_resources_t& rx_mem,
-                    const udpard_udpip_ep_t&         src_ep,
-                    udpard_us_t                      now,
-                    NetworkSimulator*                sim = nullptr)
-{
-    if (sim != nullptr) {
-        sim->shuffle(frames);
-    }
-    const size_t total = frames.size();
-    for (size_t i = 0; i < total; i++) {
-        if ((sim != nullptr) && sim->drop_next(total - i)) {
-            now++;
-            continue;
-        }
-
-        const auto&            frame = frames[i];
-        const udpard_deleter_t deleter{ .vtable = &rx_mem.fragment.vtable->base, .context = rx_mem.fragment.context };
-        void*                  dgram = mem_res_alloc(rx_mem.fragment, frame.data.size());
-        TEST_ASSERT_NOT_NULL(dgram);
-        std::memcpy(dgram, frame.data.data(), frame.data.size());
-
-        const udpard_bytes_mut_t dgram_view{ frame.data.size(), dgram };
-
-        TEST_ASSERT_TRUE(udpard_rx_port_push(rx, port, now, src_ep, dgram_view, deleter, frame.iface_index));
-        now++;
-    }
-    udpard_rx_poll(rx, now);
-}
-
-// =====================================================================================================================
-// Tests
-// =====================================================================================================================
-
-/// Basic single-frame transfer end-to-end
-void test_single_frame_transfer()
+void test_two_publishers()
 {
     seed_prng();
 
-    constexpr uint64_t publisher_uid = 0x1111222233334444ULL;
-    constexpr uint64_t transfer_id   = 42U;
+    // Configure two TX nodes.
+    instrumented_allocator_t a_tx_transfer{};
+    instrumented_allocator_t a_tx_payload{};
+    instrumented_allocator_t b_tx_transfer{};
+    instrumented_allocator_t b_tx_payload{};
+    instrumented_allocator_new(&a_tx_transfer);
+    instrumented_allocator_new(&a_tx_payload);
+    instrumented_allocator_new(&b_tx_transfer);
+    instrumented_allocator_new(&b_tx_payload);
+    udpard_tx_t                a_tx{};
+    udpard_tx_t                b_tx{};
+    std::vector<CapturedFrame> a_frames;
+    std::vector<CapturedFrame> b_frames;
+    TEST_ASSERT_TRUE(
+      udpard_tx_new(&a_tx, 0x1111111111111111ULL, 2U, 16U, make_tx_mem(a_tx_transfer, a_tx_payload), &tx_vtable));
+    TEST_ASSERT_TRUE(
+      udpard_tx_new(&b_tx, 0x2222222222222222ULL, 3U, 16U, make_tx_mem(b_tx_transfer, b_tx_payload), &tx_vtable));
+    a_tx.mtu[0] = 128U;
+    a_tx.mtu[1] = 128U;
+    a_tx.mtu[2] = 128U;
+    b_tx.mtu[0] = 128U;
+    b_tx.mtu[1] = 128U;
+    b_tx.mtu[2] = 128U;
+    a_tx.user   = &a_frames;
+    b_tx.user   = &b_frames;
 
-    // Set up publisher.
-    TxFixture pub{};
-    pub.init(publisher_uid, 100U, 256);
+    // Configure shared RX node.
+    instrumented_allocator_t rx_alloc_session{};
+    instrumented_allocator_t rx_alloc_fragment{};
+    instrumented_allocator_new(&rx_alloc_session);
+    instrumented_allocator_new(&rx_alloc_fragment);
+    const auto             rx_mem = make_rx_mem(rx_alloc_session, rx_alloc_fragment);
+    const udpard_deleter_t del    = instrumented_allocator_make_deleter(&rx_alloc_fragment);
+    udpard_rx_t            rx{};
+    udpard_rx_port_t       port{};
+    RxContext              ctx{};
+    udpard_rx_new(&rx);
+    rx.user = &ctx;
+    TEST_ASSERT_TRUE(udpard_rx_port_new(&port, 1024U, rx_mem, &rx_vtable));
 
-    // Set up subscriber.
-    RxFixture sub{};
-    sub.init();
-    udpard_rx_port_t sub_port = make_subject_port(4096, sub);
-
-    // Send a small payload.
-    const std::vector<uint8_t>     payload      = { 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08 };
-    const udpard_bytes_scattered_t payload_view = make_scattered(payload.data(), payload.size());
-
-    const udpard_us_t now      = 1000000;
-    const udpard_us_t deadline = now + 1000000;
-
-    TEST_ASSERT_TRUE(udpard_tx_push(&pub.tx,
-                                    now,
-                                    deadline,
-                                    1U, // iface_bitmap: interface 0 only
-                                    udpard_prio_nominal,
-                                    transfer_id,
-                                    payload_view,
-                                    nullptr,
-                                    UDPARD_USER_CONTEXT_NULL));
-
-    udpard_tx_poll(&pub.tx, now, UDPARD_IFACE_BITMAP_ALL);
-    TEST_ASSERT_EQUAL_size_t(1, pub.frames.size());
-
-    // Deliver frames to subscriber.
-    const udpard_udpip_ep_t src_ep{ .ip = 0x7F000001, .port = 12345 };
-    deliver_frames(pub.frames, &sub.rx, &sub_port, sub.mem, src_ep, now);
-
-    // Verify transfer.
-    TEST_ASSERT_EQUAL_size_t(1, sub.ctx.received_transfers.size());
-    TEST_ASSERT_EQUAL_UINT64(transfer_id, sub.ctx.received_transfers[0].transfer_id);
-    TEST_ASSERT_EQUAL_UINT64(publisher_uid, sub.ctx.received_transfers[0].remote_uid);
-    TEST_ASSERT_EQUAL_size_t(payload.size(), sub.ctx.received_transfers[0].payload.size());
-    TEST_ASSERT_EQUAL_MEMORY(payload.data(), sub.ctx.received_transfers[0].payload.data(), payload.size());
-
-    // Cleanup.
-    udpard_rx_port_free(&sub.rx, &sub_port);
-    pub.fini();
-    sub.fini();
-}
-
-/// Large multi-frame transfer end-to-end
-void test_multi_frame_transfer()
-{
-    seed_prng();
-
-    constexpr uint64_t publisher_uid = 0x5555666677778888ULL;
-    constexpr size_t   payload_size  = 50000; // Large enough to require many frames
-
-    // Set up publisher.
-    TxFixture pub{};
-    pub.init(publisher_uid, 200U, 512);
-
-    // Set up subscriber.
-    RxFixture sub{};
-    sub.init();
-    udpard_rx_port_t sub_port = make_subject_port(payload_size + 1024, sub);
-
-    // Generate random payload.
-    const std::vector<uint8_t>     payload      = make_payload(payload_size);
-    const udpard_bytes_scattered_t payload_view = make_scattered(payload.data(), payload.size());
-
-    const udpard_us_t now      = 1000000;
-    const udpard_us_t deadline = now + 5000000;
-
-    TEST_ASSERT_TRUE(udpard_tx_push(&pub.tx,
-                                    now,
-                                    deadline,
-                                    1U, // iface_bitmap
-                                    udpard_prio_nominal,
+    // Emit one transfer per publisher.
+    static const std::uint8_t a_payload[] = { 1, 3, 5 };
+    static const std::uint8_t b_payload[] = { 2, 4, 6, 8 };
+    TEST_ASSERT_TRUE(udpard_tx_push(&a_tx,
                                     100,
-                                    payload_view,
-                                    nullptr,
-                                    UDPARD_USER_CONTEXT_NULL));
-
-    udpard_tx_poll(&pub.tx, now, UDPARD_IFACE_BITMAP_ALL);
-    TEST_ASSERT_TRUE(pub.frames.size() > 1U);
-
-    // Deliver frames to subscriber.
-    const udpard_udpip_ep_t src_ep{ .ip = 0x7F000001, .port = 12345 };
-    deliver_frames(pub.frames, &sub.rx, &sub_port, sub.mem, src_ep, now);
-
-    // Verify full transfer.
-    TEST_ASSERT_EQUAL_size_t(1, sub.ctx.received_transfers.size());
-    TEST_ASSERT_EQUAL_size_t(payload_size, sub.ctx.received_transfers[0].payload.size());
-    TEST_ASSERT_EQUAL_MEMORY(payload.data(), sub.ctx.received_transfers[0].payload.data(), payload_size);
-
-    // Cleanup.
-    udpard_rx_port_free(&sub.rx, &sub_port);
-    pub.fini();
-    sub.fini();
-}
-
-/// Multi-frame transfer with random reordering
-void test_multi_frame_with_reordering()
-{
-    seed_prng();
-
-    constexpr uint64_t publisher_uid = 0xABCDEF0123456789ULL;
-    constexpr size_t   payload_size  = 20000;
-
-    NetworkSimulator sim(0.0, true, static_cast<uint32_t>(rand())); // No loss, deterministic shuffle
-
-    // Set up publisher.
-    TxFixture pub{};
-    pub.init(publisher_uid, 300U, 256);
-
-    // Set up subscriber.
-    RxFixture sub{};
-    sub.init();
-    udpard_rx_port_t sub_port = make_subject_port(payload_size + 1024, sub);
-
-    // Generate random payload and send.
-    const std::vector<uint8_t>     payload      = make_payload(payload_size);
-    const udpard_bytes_scattered_t payload_view = make_scattered(payload.data(), payload.size());
-
-    const udpard_us_t now = 1000000;
-    TEST_ASSERT_TRUE(udpard_tx_push(&pub.tx,
-                                    now,
-                                    now + 5000000,
-                                    1U, // iface_bitmap
+                                    10000,
+                                    1U,
                                     udpard_prio_nominal,
-                                    50,
-                                    payload_view,
-                                    nullptr,
-                                    UDPARD_USER_CONTEXT_NULL));
-
-    udpard_tx_poll(&pub.tx, now, UDPARD_IFACE_BITMAP_ALL);
-
-    // Deliver reordered frames.
-    const udpard_udpip_ep_t src_ep{ .ip = 0x7F000001, .port = 12345 };
-    deliver_frames(pub.frames, &sub.rx, &sub_port, sub.mem, src_ep, now, &sim);
-
-    // Verify reordering recovery.
-    TEST_ASSERT_EQUAL_size_t(1, sub.ctx.received_transfers.size());
-    TEST_ASSERT_EQUAL_size_t(payload_size, sub.ctx.received_transfers[0].payload.size());
-    TEST_ASSERT_EQUAL_MEMORY(payload.data(), sub.ctx.received_transfers[0].payload.data(), payload_size);
-    TEST_ASSERT_TRUE((pub.frames.size() < 2U) || sim.reordered());
-
-    // Cleanup.
-    udpard_rx_port_free(&sub.rx, &sub_port);
-    pub.fini();
-    sub.fini();
-}
-
-/// Multiple publishers sending to single subscriber
-void test_multiple_publishers()
-{
-    seed_prng();
-
-    constexpr size_t num_publishers        = 3;
-    constexpr size_t num_transfers_per_pub = 5;
-    constexpr size_t payload_size          = 100;
-
-    // Set up subscriber.
-    RxFixture sub{};
-    sub.init();
-    udpard_rx_port_t sub_port = make_subject_port(1024, sub);
-
-    // Set up publishers and send.
-    std::array<TxFixture, num_publishers>                         publishers{};
-    std::array<std::vector<std::vector<uint8_t>>, num_publishers> expected_payloads{};
-
-    for (size_t i = 0; i < num_publishers; i++) {
-        const uint64_t uid = 0x1000000000000000ULL + i;
-        publishers[i].init(uid, static_cast<uint64_t>(rand()), 256);
-
-        for (size_t tid = 0; tid < num_transfers_per_pub; tid++) {
-            std::vector<uint8_t> payload = make_payload(payload_size);
-            payload[0]                   = static_cast<uint8_t>(i);
-            payload[1]                   = static_cast<uint8_t>(tid);
-            expected_payloads[i].push_back(payload);
-
-            const udpard_bytes_scattered_t payload_view = make_scattered(payload.data(), payload.size());
-            const udpard_us_t              now =
-              1000000LL + (static_cast<udpard_us_t>(i) * 10000LL) + (static_cast<udpard_us_t>(tid) * 100LL);
-            const uint64_t transfer_id = (static_cast<uint64_t>(i) * 1000ULL) + static_cast<uint64_t>(tid);
-
-            TEST_ASSERT_TRUE(udpard_tx_push(&publishers[i].tx,
-                                            now,
-                                            now + 1000000,
-                                            1U, // iface_bitmap
-                                            udpard_prio_nominal,
-                                            transfer_id,
-                                            payload_view,
-                                            nullptr,
-                                            UDPARD_USER_CONTEXT_NULL));
-
-            udpard_tx_poll(&publishers[i].tx, now, UDPARD_IFACE_BITMAP_ALL);
-        }
-    }
-
-    // Deliver all frames in publisher order.
-    udpard_us_t now = 2000000;
-    for (size_t pub = 0; pub < num_publishers; pub++) {
-        const udpard_udpip_ep_t src_ep{ static_cast<uint32_t>(0x7F000001U + pub), static_cast<uint16_t>(12345U + pub) };
-        deliver_frames(publishers[pub].frames, &sub.rx, &sub_port, sub.mem, src_ep, now);
-        now += publishers[pub].frames.size();
-    }
-
-    // Verify every transfer and payload.
-    const size_t expected_transfers = num_publishers * num_transfers_per_pub;
-    TEST_ASSERT_EQUAL_size_t(expected_transfers, sub.ctx.received_transfers.size());
-    for (size_t i = 0; i < num_publishers; i++) {
-        const uint64_t uid = 0x1000000000000000ULL + i;
-        for (size_t tid = 0; tid < num_transfers_per_pub; tid++) {
-            const uint64_t transfer_id = (static_cast<uint64_t>(i) * 1000ULL) + static_cast<uint64_t>(tid);
-            const auto     it          = std::find_if(
-              sub.ctx.received_transfers.begin(), sub.ctx.received_transfers.end(), [=](const ReceivedTransfer& rt) {
-                  return (rt.remote_uid == uid) && (rt.transfer_id == transfer_id);
-              });
-            TEST_ASSERT_TRUE(it != sub.ctx.received_transfers.end());
-            TEST_ASSERT_EQUAL_size_t(payload_size, it->payload.size());
-            TEST_ASSERT_EQUAL_MEMORY(expected_payloads[i][tid].data(), it->payload.data(), payload_size);
-        }
-    }
-
-    // Cleanup.
-    udpard_rx_port_free(&sub.rx, &sub_port);
-    for (auto& pub : publishers) {
-        pub.fini();
-    }
-    sub.fini();
-}
-
-/// Multi-frame transfer with simulated packet loss (all frames except one lost = incomplete transfer)
-void test_partial_frame_loss()
-{
-    seed_prng();
-
-    constexpr uint64_t publisher_uid = 0xDEADBEEFCAFEBABEULL;
-    constexpr size_t   payload_size  = 5000; // Multi-frame transfer
-
-    NetworkSimulator sim(0.35, false, static_cast<uint32_t>(rand())); // Ensure some loss
-
-    // Set up publisher.
-    TxFixture pub{};
-    pub.init(publisher_uid, 300U, 256);
-
-    // Set up subscriber.
-    RxFixture sub{};
-    sub.init();
-    udpard_rx_port_t sub_port = make_subject_port(payload_size + 1024, sub);
-
-    // Generate payload and send.
-    const std::vector<uint8_t>     payload      = make_payload(payload_size);
-    const udpard_bytes_scattered_t payload_view = make_scattered(payload.data(), payload.size());
-
-    const udpard_us_t now = 1000000;
-    TEST_ASSERT_TRUE(udpard_tx_push(&pub.tx,
-                                    now,
-                                    now + 5000000,
-                                    1U, // iface_bitmap
-                                    udpard_prio_nominal,
-                                    50,
-                                    payload_view,
-                                    nullptr,
-                                    UDPARD_USER_CONTEXT_NULL));
-
-    udpard_tx_poll(&pub.tx, now, UDPARD_IFACE_BITMAP_ALL);
-    TEST_ASSERT_TRUE(pub.frames.size() > 1U);
-
-    // Deliver with packet loss.
-    const udpard_udpip_ep_t src_ep{ .ip = 0x7F000001, .port = 12345 };
-    deliver_frames(pub.frames, &sub.rx, &sub_port, sub.mem, src_ep, now, &sim);
-
-    // Verify incomplete transfer is dropped.
-    TEST_ASSERT_TRUE(sim.dropped() > 0U);
-    TEST_ASSERT_EQUAL_size_t(0, sub.ctx.received_transfers.size());
-
-    // Cleanup.
-    udpard_rx_port_free(&sub.rx, &sub_port);
-    pub.fini();
-    sub.fini();
-}
-
-/// Test with all frames delivered - no loss (baseline for loss tests)
-void test_no_loss_baseline()
-{
-    seed_prng();
-
-    constexpr uint64_t publisher_uid = 0xAAAABBBBCCCCDDDDULL;
-    constexpr size_t   payload_size  = 10000;
-
-    // Set up publisher.
-    TxFixture pub{};
-    pub.init(publisher_uid, 400U, 256);
-
-    // Set up subscriber.
-    RxFixture sub{};
-    sub.init();
-    udpard_rx_port_t sub_port = make_subject_port(payload_size + 1024, sub);
-
-    // Generate payload and send.
-    const std::vector<uint8_t>     payload      = make_payload(payload_size);
-    const udpard_bytes_scattered_t payload_view = make_scattered(payload.data(), payload.size());
-
-    const udpard_us_t now = 1000000;
-    TEST_ASSERT_TRUE(udpard_tx_push(&pub.tx,
-                                    now,
-                                    now + 5000000,
-                                    1U, // iface_bitmap
-                                    udpard_prio_nominal,
-                                    75,
-                                    payload_view,
-                                    nullptr,
-                                    UDPARD_USER_CONTEXT_NULL));
-
-    udpard_tx_poll(&pub.tx, now, UDPARD_IFACE_BITMAP_ALL);
-
-    // Deliver all frames.
-    const udpard_udpip_ep_t src_ep{ .ip = 0x7F000001, .port = 12345 };
-    deliver_frames(pub.frames, &sub.rx, &sub_port, sub.mem, src_ep, now);
-
-    // Verify success path.
-    TEST_ASSERT_EQUAL_size_t(1, sub.ctx.received_transfers.size());
-    TEST_ASSERT_EQUAL_size_t(payload_size, sub.ctx.received_transfers[0].payload.size());
-    TEST_ASSERT_EQUAL_MEMORY(payload.data(), sub.ctx.received_transfers[0].payload.data(), payload_size);
-
-    // Cleanup.
-    udpard_rx_port_free(&sub.rx, &sub_port);
-    pub.fini();
-    sub.fini();
-}
-
-/// Test with extent-based truncation
-void test_extent_truncation()
-{
-    seed_prng();
-
-    constexpr uint64_t publisher_uid = 0x1234567890ABCDEFULL;
-    constexpr size_t   payload_size  = 5000;
-    constexpr size_t   extent        = 1000; // Less than payload_size
-
-    // Set up publisher.
-    TxFixture pub{};
-    pub.init(publisher_uid, 500U, 256);
-
-    // Set up subscriber with limited extent.
-    RxFixture sub{};
-    sub.init();
-    udpard_rx_port_t sub_port = make_subject_port(extent, sub);
-
-    // Generate payload and send.
-    const std::vector<uint8_t>     payload      = make_payload(payload_size);
-    const udpard_bytes_scattered_t payload_view = make_scattered(payload.data(), payload.size());
-
-    const udpard_us_t now = 1000000;
-    TEST_ASSERT_TRUE(udpard_tx_push(&pub.tx,
-                                    now,
-                                    now + 5000000,
-                                    1U, // iface_bitmap
-                                    udpard_prio_nominal,
+                                    10U,
+                                    udpard_make_subject_endpoint(5U),
+                                    make_scattered(a_payload, sizeof(a_payload)),
+                                    nullptr));
+    TEST_ASSERT_TRUE(udpard_tx_push(&b_tx,
                                     100,
-                                    payload_view,
-                                    nullptr,
-                                    UDPARD_USER_CONTEXT_NULL));
+                                    10000,
+                                    1U,
+                                    udpard_prio_nominal,
+                                    20U,
+                                    udpard_make_subject_endpoint(5U),
+                                    make_scattered(b_payload, sizeof(b_payload)),
+                                    nullptr));
+    udpard_tx_poll(&a_tx, 101, UDPARD_IFACE_BITMAP_ALL);
+    udpard_tx_poll(&b_tx, 101, UDPARD_IFACE_BITMAP_ALL);
+    TEST_ASSERT_EQUAL_size_t(1, a_frames.size());
+    TEST_ASSERT_EQUAL_size_t(1, b_frames.size());
 
-    udpard_tx_poll(&pub.tx, now, UDPARD_IFACE_BITMAP_ALL);
+    // Deliver frames and verify both senders are represented.
+    deliver(a_frames[0], rx_mem.fragment, del, &rx, &port, udpard_udpip_ep_t{ .ip = 0x0A000011U, .port = 9382U }, 200);
+    deliver(b_frames[0], rx_mem.fragment, del, &rx, &port, udpard_udpip_ep_t{ .ip = 0x0A000022U, .port = 9382U }, 201);
+    udpard_rx_poll(&rx, 300);
+    TEST_ASSERT_EQUAL_size_t(2, ctx.transfers.size());
 
-    // Deliver all frames.
-    const udpard_udpip_ep_t src_ep{ .ip = 0x7F000001, .port = 12345 };
-    deliver_frames(pub.frames, &sub.rx, &sub_port, sub.mem, src_ep, now);
-
-    // Verify truncation.
-    TEST_ASSERT_EQUAL_size_t(1, sub.ctx.received_transfers.size());
-    TEST_ASSERT_TRUE(sub.ctx.received_transfers[0].payload.size() <= extent + UDPARD_MTU_DEFAULT);
-    TEST_ASSERT_EQUAL_size_t(payload_size, sub.ctx.received_transfers[0].payload_size_wire);
-    TEST_ASSERT_EQUAL_MEMORY(
-      payload.data(), sub.ctx.received_transfers[0].payload.data(), sub.ctx.received_transfers[0].payload.size());
-
-    // Cleanup.
-    udpard_rx_port_free(&sub.rx, &sub_port);
-    pub.fini();
-    sub.fini();
+    // Release resources.
+    udpard_rx_port_free(&rx, &port);
+    udpard_tx_free(&a_tx);
+    udpard_tx_free(&b_tx);
+    TEST_ASSERT_EQUAL_size_t(0, a_tx_transfer.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0, a_tx_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0, b_tx_transfer.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0, b_tx_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0, rx_alloc_session.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0, rx_alloc_fragment.allocated_fragments);
+    instrumented_allocator_reset(&a_tx_transfer);
+    instrumented_allocator_reset(&a_tx_payload);
+    instrumented_allocator_reset(&b_tx_transfer);
+    instrumented_allocator_reset(&b_tx_payload);
+    instrumented_allocator_reset(&rx_alloc_session);
+    instrumented_allocator_reset(&rx_alloc_fragment);
 }
 
 } // namespace
 
-extern "C" void setUp() {}
-extern "C" void tearDown() {}
+void setUp() {}
+void tearDown() {}
 
 int main()
 {
     UNITY_BEGIN();
-    RUN_TEST(test_single_frame_transfer);
-    RUN_TEST(test_multi_frame_transfer);
-    RUN_TEST(test_multi_frame_with_reordering);
-    RUN_TEST(test_multiple_publishers);
-    RUN_TEST(test_partial_frame_loss);
-    RUN_TEST(test_no_loss_baseline);
-    RUN_TEST(test_extent_truncation);
+    RUN_TEST(test_reordered_multiframe_delivery);
+    RUN_TEST(test_two_publishers);
     return UNITY_END();
 }

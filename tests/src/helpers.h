@@ -64,14 +64,6 @@ static inline udpard_bytes_scattered_t make_scattered(const void* const data, co
     return out;
 }
 
-// Wraps an application pointer for user context plumbing.
-static inline udpard_user_context_t make_user_context(void* const obj)
-{
-    udpard_user_context_t out = UDPARD_USER_CONTEXT_NULL;
-    out.ptr[0]                = obj;
-    return out;
-}
-
 /// The instrumented allocator tracks memory consumption, checks for heap corruption, and can be configured to fail
 /// allocations above a certain threshold.
 #define INSTRUMENTED_ALLOCATOR_CANARY_SIZE 1024U
