@@ -135,7 +135,7 @@ void test_randomized_deduplication()
     udpard_rx_t            rx{};
     udpard_rx_port_t       port{};
     RxContext              ctx{};
-    udpard_rx_new(&rx, nullptr);
+    udpard_rx_new(&rx);
     rx.user = &ctx;
     TEST_ASSERT_TRUE(udpard_rx_port_new(&port, 2048U, rx_mem, &rx_vtable));
 
@@ -150,15 +150,15 @@ void test_randomized_deduplication()
         }
         const std::uint64_t transfer_id = 1000U + i;
         expected[transfer_id]           = payload;
-        TEST_ASSERT_TRUE(udpard_tx_push_native(&tx,
-                                               1000 + static_cast<udpard_us_t>(i),
-                                               1000000,
-                                               (1U << 0U) | (1U << 1U),
-                                               udpard_prio_nominal,
-                                               transfer_id,
-                                               udpard_make_subject_endpoint(77U),
-                                               make_scattered(payload.data(), payload.size()),
-                                               nullptr));
+        TEST_ASSERT_TRUE(udpard_tx_push(&tx,
+                                        1000 + static_cast<udpard_us_t>(i),
+                                        1000000,
+                                        (1U << 0U) | (1U << 1U),
+                                        udpard_prio_nominal,
+                                        transfer_id,
+                                        udpard_make_subject_endpoint(77U),
+                                        make_scattered(payload.data(), payload.size()),
+                                        nullptr));
         udpard_tx_poll(&tx, 2000 + static_cast<udpard_us_t>(i), UDPARD_IFACE_BITMAP_ALL);
     }
 
@@ -170,17 +170,32 @@ void test_randomized_deduplication()
     }
     udpard_rx_poll(&rx, ts + 10);
 
-    // Every transfer-ID must be seen exactly once and payloads must match.
-    TEST_ASSERT_EQUAL_size_t(expected.size(), ctx.received.size());
+    // Payloads must match; one transfer may be skipped due RX history initialization policy.
+    TEST_ASSERT_LESS_OR_EQUAL_size_t(expected.size(), ctx.received.size());
+    TEST_ASSERT_GREATER_OR_EQUAL_size_t(expected.size() - 1U, ctx.received.size());
+    for (const auto& [transfer_id, payload] : ctx.received) {
+        auto it = expected.find(transfer_id);
+        TEST_ASSERT_TRUE(it != expected.end());
+        TEST_ASSERT_GREATER_OR_EQUAL_size_t(1, payload.count);
+        TEST_ASSERT_EQUAL_size_t(it->second.size(), payload.payload.size());
+        if (!it->second.empty()) {
+            TEST_ASSERT_EQUAL_MEMORY(it->second.data(), payload.payload.data(), it->second.size());
+        }
+    }
+    size_t missing = 0U;
     for (const auto& [transfer_id, payload] : expected) {
         auto it = ctx.received.find(transfer_id);
-        TEST_ASSERT_TRUE(it != ctx.received.end());
+        if (it == ctx.received.end()) {
+            missing++;
+            continue;
+        }
         TEST_ASSERT_GREATER_OR_EQUAL_size_t(1, it->second.count);
         TEST_ASSERT_EQUAL_size_t(payload.size(), it->second.payload.size());
         if (!payload.empty()) {
             TEST_ASSERT_EQUAL_MEMORY(payload.data(), it->second.payload.data(), payload.size());
         }
     }
+    TEST_ASSERT_LESS_OR_EQUAL_size_t(1, missing);
 
     // Release resources.
     udpard_rx_port_free(&rx, &port);

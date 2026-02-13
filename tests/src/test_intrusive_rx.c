@@ -83,7 +83,7 @@ static void test_rx_single_frame(void)
     capture_t        cap  = { 0 };
     udpard_rx_t      rx   = { 0 };
     udpard_rx_port_t port = { 0 };
-    udpard_rx_new(&rx, NULL);
+    udpard_rx_new(&rx);
     rx.user = &cap;
     TEST_ASSERT_TRUE(udpard_rx_port_new(&port, 1024U, rx_mem, &callbacks));
 
@@ -133,7 +133,7 @@ static void test_rx_duplicate_rejected_and_freed(void)
     capture_t        cap  = { 0 };
     udpard_rx_t      rx   = { 0 };
     udpard_rx_port_t port = { 0 };
-    udpard_rx_new(&rx, NULL);
+    udpard_rx_new(&rx);
     rx.user = &cap;
     TEST_ASSERT_TRUE(udpard_rx_port_new(&port, 1024U, rx_mem, &callbacks));
 
@@ -188,7 +188,7 @@ static void test_rx_malformed_frame(void)
     capture_t        cap  = { 0 };
     udpard_rx_t      rx   = { 0 };
     udpard_rx_port_t port = { 0 };
-    udpard_rx_new(&rx, NULL);
+    udpard_rx_new(&rx);
     rx.user = &cap;
     TEST_ASSERT_TRUE(udpard_rx_port_new(&port, 1024U, rx_mem, &callbacks));
 
@@ -235,7 +235,7 @@ static void test_rx_p2p_remote_endpoint_tracking(void)
     capture_t        cap  = { 0 };
     udpard_rx_t      rx   = { 0 };
     udpard_rx_port_t port = { 0 };
-    udpard_rx_new(&rx, NULL);
+    udpard_rx_new(&rx);
     rx.user = &cap;
     TEST_ASSERT_TRUE(udpard_rx_port_new_p2p(&port, 1024U, rx_mem, &callbacks));
 

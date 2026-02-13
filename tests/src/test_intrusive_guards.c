@@ -100,16 +100,16 @@ static void test_tx_push_guards(void)
 
     // Validate argument checks for subject push.
     const udpard_bytes_scattered_t empty_payload = make_scattered("", 0U);
-    TEST_ASSERT_FALSE(udpard_tx_push_native(
-      NULL, 0, 1, 1U, udpard_prio_fast, 1U, udpard_make_subject_endpoint(1U), empty_payload, NULL));
-    TEST_ASSERT_FALSE(udpard_tx_push_native(
-      &tx, 2, 1, 1U, udpard_prio_fast, 1U, udpard_make_subject_endpoint(1U), empty_payload, NULL));
-    TEST_ASSERT_FALSE(udpard_tx_push_native(
-      &tx, 0, 1, 0U, udpard_prio_fast, 1U, udpard_make_subject_endpoint(1U), empty_payload, NULL));
-    TEST_ASSERT_FALSE(udpard_tx_push_native(
+    TEST_ASSERT_FALSE(
+      udpard_tx_push(NULL, 0, 1, 1U, udpard_prio_fast, 1U, udpard_make_subject_endpoint(1U), empty_payload, NULL));
+    TEST_ASSERT_FALSE(
+      udpard_tx_push(&tx, 2, 1, 1U, udpard_prio_fast, 1U, udpard_make_subject_endpoint(1U), empty_payload, NULL));
+    TEST_ASSERT_FALSE(
+      udpard_tx_push(&tx, 0, 1, 0U, udpard_prio_fast, 1U, udpard_make_subject_endpoint(1U), empty_payload, NULL));
+    TEST_ASSERT_FALSE(udpard_tx_push(
       &tx, 0, 1, 1U, udpard_prio_fast, 1U, (udpard_udpip_ep_t){ .ip = 0U, .port = 0U }, empty_payload, NULL));
-    TEST_ASSERT_TRUE(udpard_tx_push_native(
-      &tx, 0, 1, 1U, udpard_prio_fast, 1U, udpard_make_subject_endpoint(1U), empty_payload, NULL));
+    TEST_ASSERT_TRUE(
+      udpard_tx_push(&tx, 0, 1, 1U, udpard_prio_fast, 1U, udpard_make_subject_endpoint(1U), empty_payload, NULL));
     udpard_tx_free(&tx);
 }
 
@@ -129,11 +129,11 @@ static void test_tx_push_p2p_guards(void)
     const udpard_bytes_scattered_t empty_payload                     = make_scattered("", 0U);
     udpard_udpip_ep_t              endpoints[UDPARD_IFACE_COUNT_MAX] = { 0 };
     endpoints[0] = (udpard_udpip_ep_t){ .ip = 0x0A000001U, .port = 9000U };
-    TEST_ASSERT_FALSE(udpard_tx_push_p2p_native(NULL, 0, 1, udpard_prio_nominal, endpoints, empty_payload, NULL));
-    TEST_ASSERT_FALSE(udpard_tx_push_p2p_native(&tx, 2, 1, udpard_prio_nominal, endpoints, empty_payload, NULL));
-    TEST_ASSERT_TRUE(udpard_tx_push_p2p_native(&tx, 0, 1, udpard_prio_nominal, endpoints, empty_payload, NULL));
+    TEST_ASSERT_FALSE(udpard_tx_push_p2p(NULL, 0, 1, udpard_prio_nominal, endpoints, empty_payload, NULL));
+    TEST_ASSERT_FALSE(udpard_tx_push_p2p(&tx, 2, 1, udpard_prio_nominal, endpoints, empty_payload, NULL));
+    TEST_ASSERT_TRUE(udpard_tx_push_p2p(&tx, 0, 1, udpard_prio_nominal, endpoints, empty_payload, NULL));
     endpoints[0] = (udpard_udpip_ep_t){ .ip = 0U, .port = 0U };
-    TEST_ASSERT_FALSE(udpard_tx_push_p2p_native(&tx, 0, 1, udpard_prio_nominal, endpoints, empty_payload, NULL));
+    TEST_ASSERT_FALSE(udpard_tx_push_p2p(&tx, 0, 1, udpard_prio_nominal, endpoints, empty_payload, NULL));
     udpard_tx_free(&tx);
 }
 
@@ -149,7 +149,7 @@ static void test_rx_port_push_guards(void)
     };
     udpard_rx_t      rx   = { 0 };
     udpard_rx_port_t port = { 0 };
-    udpard_rx_new(&rx, NULL);
+    udpard_rx_new(&rx);
     TEST_ASSERT_TRUE(udpard_rx_port_new(&port, 256U, rx_mem, &rx_vtable));
 
     // Build one valid datagram then check argument validation.

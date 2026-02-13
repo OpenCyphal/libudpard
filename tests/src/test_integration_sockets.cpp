@@ -131,7 +131,7 @@ void test_reordered_multiframe_delivery()
     udpard_rx_t            rx{};
     udpard_rx_port_t       port{};
     RxContext              ctx{};
-    udpard_rx_new(&rx, nullptr);
+    udpard_rx_new(&rx);
     rx.user = &ctx;
     TEST_ASSERT_TRUE(udpard_rx_port_new(&port, 4096U, rx_mem, &rx_vtable));
 
@@ -140,15 +140,15 @@ void test_reordered_multiframe_delivery()
     for (std::size_t i = 0; i < payload.size(); i++) {
         payload[i] = static_cast<std::uint8_t>(i);
     }
-    TEST_ASSERT_TRUE(udpard_tx_push_native(&tx,
-                                           1000,
-                                           100000,
-                                           (1U << 0U) | (1U << 1U),
-                                           udpard_prio_fast,
-                                           44U,
-                                           udpard_make_subject_endpoint(123U),
-                                           make_scattered(payload.data(), payload.size()),
-                                           nullptr));
+    TEST_ASSERT_TRUE(udpard_tx_push(&tx,
+                                    1000,
+                                    100000,
+                                    (1U << 0U) | (1U << 1U),
+                                    udpard_prio_fast,
+                                    44U,
+                                    udpard_make_subject_endpoint(123U),
+                                    make_scattered(payload.data(), payload.size()),
+                                    nullptr));
     udpard_tx_poll(&tx, 1001, UDPARD_IFACE_BITMAP_ALL);
     TEST_ASSERT_TRUE(!frames.empty());
 
@@ -221,31 +221,31 @@ void test_two_publishers()
     udpard_rx_t            rx{};
     udpard_rx_port_t       port{};
     RxContext              ctx{};
-    udpard_rx_new(&rx, nullptr);
+    udpard_rx_new(&rx);
     rx.user = &ctx;
     TEST_ASSERT_TRUE(udpard_rx_port_new(&port, 1024U, rx_mem, &rx_vtable));
 
     // Emit one transfer per publisher.
     static const std::uint8_t a_payload[] = { 1, 3, 5 };
     static const std::uint8_t b_payload[] = { 2, 4, 6, 8 };
-    TEST_ASSERT_TRUE(udpard_tx_push_native(&a_tx,
-                                           100,
-                                           10000,
-                                           1U,
-                                           udpard_prio_nominal,
-                                           10U,
-                                           udpard_make_subject_endpoint(5U),
-                                           make_scattered(a_payload, sizeof(a_payload)),
-                                           nullptr));
-    TEST_ASSERT_TRUE(udpard_tx_push_native(&b_tx,
-                                           100,
-                                           10000,
-                                           1U,
-                                           udpard_prio_nominal,
-                                           20U,
-                                           udpard_make_subject_endpoint(5U),
-                                           make_scattered(b_payload, sizeof(b_payload)),
-                                           nullptr));
+    TEST_ASSERT_TRUE(udpard_tx_push(&a_tx,
+                                    100,
+                                    10000,
+                                    1U,
+                                    udpard_prio_nominal,
+                                    10U,
+                                    udpard_make_subject_endpoint(5U),
+                                    make_scattered(a_payload, sizeof(a_payload)),
+                                    nullptr));
+    TEST_ASSERT_TRUE(udpard_tx_push(&b_tx,
+                                    100,
+                                    10000,
+                                    1U,
+                                    udpard_prio_nominal,
+                                    20U,
+                                    udpard_make_subject_endpoint(5U),
+                                    make_scattered(b_payload, sizeof(b_payload)),
+                                    nullptr));
     udpard_tx_poll(&a_tx, 101, UDPARD_IFACE_BITMAP_ALL);
     udpard_tx_poll(&b_tx, 101, UDPARD_IFACE_BITMAP_ALL);
     TEST_ASSERT_EQUAL_size_t(1, a_frames.size());

@@ -125,7 +125,7 @@ void test_p2p_response_roundtrip()
     udpard_rx_t            a_rx{};
     udpard_rx_port_t       a_p2p{};
     RxState                a_state{};
-    udpard_rx_new(&a_rx, nullptr);
+    udpard_rx_new(&a_rx);
     a_rx.user = &a_state;
     TEST_ASSERT_TRUE(udpard_rx_port_new_p2p(&a_p2p, 1024U, rx_mem, &rx_vtable));
 
@@ -134,13 +134,13 @@ void test_p2p_response_roundtrip()
     udpard_udpip_ep_t       endpoints[UDPARD_IFACE_COUNT_MAX] = {};
     endpoints[0]                                              = a_endpoint;
     const std::vector<uint8_t> response_payload{ 0xDE, 0xAD, 0xBE, 0xEF };
-    TEST_ASSERT_TRUE(udpard_tx_push_p2p_native(&b_tx,
-                                               1000,
-                                               100000,
-                                               udpard_prio_high,
-                                               endpoints,
-                                               make_scattered(response_payload.data(), response_payload.size()),
-                                               nullptr));
+    TEST_ASSERT_TRUE(udpard_tx_push_p2p(&b_tx,
+                                        1000,
+                                        100000,
+                                        udpard_prio_high,
+                                        endpoints,
+                                        make_scattered(response_payload.data(), response_payload.size()),
+                                        nullptr));
     udpard_tx_poll(&b_tx, 1001, UDPARD_IFACE_BITMAP_ALL);
     TEST_ASSERT_EQUAL_size_t(1, b_frames.size());
     TEST_ASSERT_EQUAL_UINT32(a_endpoint.ip, b_frames[0].destination.ip);

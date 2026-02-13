@@ -92,7 +92,7 @@ static void test_tx_subject_ejection(void)
     const byte_t                   data[]  = { 1, 2, 3, 4, 5, 6 };
     const udpard_udpip_ep_t        subject = udpard_make_subject_endpoint(321U);
     const udpard_bytes_scattered_t payload = make_scattered(data, sizeof(data));
-    TEST_ASSERT_TRUE(udpard_tx_push_native(
+    TEST_ASSERT_TRUE(udpard_tx_push(
       &fx.tx, 0, 10000, (1U << 0U) | (1U << 2U), udpard_prio_fast, 0x0000AABBCCDDEEFFULL, subject, payload, NULL));
     TEST_ASSERT_EQUAL_UINT16((1U << 0U) | (1U << 2U), udpard_tx_pending_ifaces(&fx.tx));
 
@@ -116,7 +116,7 @@ static void test_tx_p2p_endpoints(void)
     udpard_udpip_ep_t              eps[UDPARD_IFACE_COUNT_MAX] = { 0 };
     eps[0] = (udpard_udpip_ep_t){ .ip = 0x0A000001U, .port = 8001U };
     eps[2] = (udpard_udpip_ep_t){ .ip = 0x0A000003U, .port = 8003U };
-    TEST_ASSERT_TRUE(udpard_tx_push_p2p_native(&fx.tx, 0, 10000, udpard_prio_nominal, eps, payload, NULL));
+    TEST_ASSERT_TRUE(udpard_tx_push_p2p(&fx.tx, 0, 10000, udpard_prio_nominal, eps, payload, NULL));
     TEST_ASSERT_EQUAL_UINT16((1U << 0U) | (1U << 2U), udpard_tx_pending_ifaces(&fx.tx));
 
     udpard_tx_poll(&fx.tx, 1, UDPARD_IFACE_BITMAP_ALL);
@@ -136,7 +136,7 @@ static void test_tx_expiration(void)
     fixture_init(&fx, 8U, 128U, false);
     const byte_t                   data[]  = { 0xAA };
     const udpard_bytes_scattered_t payload = make_scattered(data, sizeof(data));
-    TEST_ASSERT_TRUE(udpard_tx_push_native(
+    TEST_ASSERT_TRUE(udpard_tx_push(
       &fx.tx, 0, 10, (1U << 1U), udpard_prio_high, 5U, udpard_make_subject_endpoint(111U), payload, NULL));
     TEST_ASSERT_EQUAL_UINT16((1U << 1U), udpard_tx_pending_ifaces(&fx.tx));
 
@@ -156,8 +156,8 @@ static void test_tx_sacrifice_oldest(void)
     const byte_t                   data[]  = { 0x01, 0x02 };
     const udpard_bytes_scattered_t payload = make_scattered(data, sizeof(data));
     const udpard_udpip_ep_t        ep      = udpard_make_subject_endpoint(222U);
-    TEST_ASSERT_TRUE(udpard_tx_push_native(&fx.tx, 0, 10000, 1U, udpard_prio_nominal, 10U, ep, payload, NULL));
-    TEST_ASSERT_TRUE(udpard_tx_push_native(&fx.tx, 1, 10000, 1U, udpard_prio_nominal, 20U, ep, payload, NULL));
+    TEST_ASSERT_TRUE(udpard_tx_push(&fx.tx, 0, 10000, 1U, udpard_prio_nominal, 10U, ep, payload, NULL));
+    TEST_ASSERT_TRUE(udpard_tx_push(&fx.tx, 1, 10000, 1U, udpard_prio_nominal, 20U, ep, payload, NULL));
     TEST_ASSERT_EQUAL_UINT64(1U, fx.tx.errors_sacrifice);
 
     udpard_tx_poll(&fx.tx, 2, UDPARD_IFACE_BITMAP_ALL);
@@ -175,7 +175,7 @@ static void test_tx_transfer_id_masking(void)
     const byte_t                   data[]      = { 0x55 };
     const udpard_bytes_scattered_t payload     = make_scattered(data, sizeof(data));
     const uint64_t                 transfer_id = 0xABCDEF0123456789ULL;
-    TEST_ASSERT_TRUE(udpard_tx_push_native(
+    TEST_ASSERT_TRUE(udpard_tx_push(
       &fx.tx, 0, 10000, 1U, udpard_prio_nominal, transfer_id, udpard_make_subject_endpoint(333U), payload, NULL));
     udpard_tx_poll(&fx.tx, 1, UDPARD_IFACE_BITMAP_ALL);
     TEST_ASSERT_EQUAL_size_t(1, fx.eject.count);

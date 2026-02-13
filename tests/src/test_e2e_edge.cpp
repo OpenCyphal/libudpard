@@ -129,20 +129,20 @@ void test_zero_payload_transfer()
     udpard_rx_t            rx{};
     udpard_rx_port_t       port{};
     RxState                state{};
-    udpard_rx_new(&rx, nullptr);
+    udpard_rx_new(&rx);
     rx.user = &state;
     TEST_ASSERT_TRUE(udpard_rx_port_new(&port, 1024U, rx_mem, &rx_vtable));
 
     // Send a zero-size payload transfer.
-    TEST_ASSERT_TRUE(udpard_tx_push_native(&tx,
-                                           100,
-                                           10000,
-                                           1U,
-                                           udpard_prio_nominal,
-                                           1U,
-                                           udpard_make_subject_endpoint(1U),
-                                           make_scattered(nullptr, 0U),
-                                           nullptr));
+    TEST_ASSERT_TRUE(udpard_tx_push(&tx,
+                                    100,
+                                    10000,
+                                    1U,
+                                    udpard_prio_nominal,
+                                    1U,
+                                    udpard_make_subject_endpoint(1U),
+                                    make_scattered(nullptr, 0U),
+                                    nullptr));
     udpard_tx_poll(&tx, 200, UDPARD_IFACE_BITMAP_ALL);
     TEST_ASSERT_EQUAL_size_t(1, frames.size());
 
@@ -194,7 +194,7 @@ void test_out_of_order_multiframe_reassembly()
     udpard_rx_t            rx{};
     udpard_rx_port_t       port{};
     RxState                state{};
-    udpard_rx_new(&rx, nullptr);
+    udpard_rx_new(&rx);
     rx.user = &state;
     TEST_ASSERT_TRUE(udpard_rx_port_new(&port, 4096U, rx_mem, &rx_vtable));
 
@@ -204,15 +204,15 @@ void test_out_of_order_multiframe_reassembly()
         payload[i] = static_cast<std::uint8_t>(i ^ 0x5AU);
     }
     const std::uint64_t transfer_id = 0xABCDEF0123456789ULL;
-    TEST_ASSERT_TRUE(udpard_tx_push_native(&tx,
-                                           1000,
-                                           100000,
-                                           1U,
-                                           udpard_prio_fast,
-                                           transfer_id,
-                                           udpard_make_subject_endpoint(55U),
-                                           make_scattered(payload.data(), payload.size()),
-                                           nullptr));
+    TEST_ASSERT_TRUE(udpard_tx_push(&tx,
+                                    1000,
+                                    100000,
+                                    1U,
+                                    udpard_prio_fast,
+                                    transfer_id,
+                                    udpard_make_subject_endpoint(55U),
+                                    make_scattered(payload.data(), payload.size()),
+                                    nullptr));
     udpard_tx_poll(&tx, 1001, UDPARD_IFACE_BITMAP_ALL);
     TEST_ASSERT_TRUE(!frames.empty());
 

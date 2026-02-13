@@ -113,7 +113,7 @@ void test_subject_roundtrip()
     udpard_rx_t            rx{};
     udpard_rx_port_t       port{};
     RxState                state{};
-    udpard_rx_new(&rx, nullptr);
+    udpard_rx_new(&rx);
     rx.user = &state;
     TEST_ASSERT_TRUE(udpard_rx_port_new(&port, 1024U, rx_mem, &rx_vtable));
 
@@ -123,15 +123,15 @@ void test_subject_roundtrip()
         payload[i] = static_cast<uint8_t>(i);
     }
     const udpard_udpip_ep_t destination = udpard_make_subject_endpoint(1234U);
-    TEST_ASSERT_TRUE(udpard_tx_push_native(&tx,
-                                           1000,
-                                           100000,
-                                           (1U << 0U) | (1U << 1U),
-                                           udpard_prio_nominal,
-                                           55U,
-                                           destination,
-                                           make_scattered(payload.data(), payload.size()),
-                                           nullptr));
+    TEST_ASSERT_TRUE(udpard_tx_push(&tx,
+                                    1000,
+                                    100000,
+                                    (1U << 0U) | (1U << 1U),
+                                    udpard_prio_nominal,
+                                    55U,
+                                    destination,
+                                    make_scattered(payload.data(), payload.size()),
+                                    nullptr));
     udpard_tx_poll(&tx, 1001, UDPARD_IFACE_BITMAP_ALL);
     TEST_ASSERT_TRUE(!frames.empty());
 
