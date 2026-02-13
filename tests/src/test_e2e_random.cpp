@@ -18,19 +18,12 @@ namespace {
 struct TransferKey
 {
     uint64_t transfer_id;
-    uint64_t topic_hash;
-    bool     operator==(const TransferKey& other) const
-    {
-        return (transfer_id == other.transfer_id) && (topic_hash == other.topic_hash);
-    }
+    bool     operator==(const TransferKey& other) const { return transfer_id == other.transfer_id; }
 };
 
 struct TransferKeyHash
 {
-    size_t operator()(const TransferKey& key) const
-    {
-        return (std::hash<uint64_t>{}(key.transfer_id) << 1U) ^ std::hash<uint64_t>{}(key.topic_hash);
-    }
+    size_t operator()(const TransferKey& key) const { return std::hash<uint64_t>{}(key.transfer_id); }
 };
 
 struct ExpectedPayload
@@ -43,7 +36,6 @@ struct Context
 {
     std::unordered_map<TransferKey, ExpectedPayload, TransferKeyHash> expected;
     size_t                                                            received                  = 0;
-    size_t                                                            collisions                = 0;
     size_t                                                            truncated                 = 0;
     uint64_t                                                          remote_uid                = 0;
     size_t                                                            reliable_feedback_success = 0;
@@ -135,14 +127,14 @@ void on_ack_response(udpard_rx_t*, udpard_rx_port_t* port, const udpard_rx_trans
 {
     udpard_fragment_free_all(tr.payload, udpard_make_deleter(port->memory.fragment));
 }
-constexpr udpard_rx_port_vtable_t ack_callbacks{ .on_message = &on_ack_response, .on_collision = nullptr };
+constexpr udpard_rx_port_vtable_t ack_callbacks{ .on_message = &on_ack_response };
 
 void on_message(udpard_rx_t* const rx, udpard_rx_port_t* const port, const udpard_rx_transfer_t transfer)
 {
     auto* const ctx = static_cast<Context*>(rx->user);
 
     // Match the incoming transfer against the expected table keyed by topic hash and transfer-ID.
-    const TransferKey key{ .transfer_id = transfer.transfer_id, .topic_hash = port->topic_hash };
+    const TransferKey key{ .transfer_id = transfer.transfer_id };
     const auto        it = ctx->expected.find(key);
     if (it == ctx->expected.end()) {
         udpard_fragment_free_all(transfer.payload, udpard_make_deleter(port->memory.fragment));
@@ -178,14 +170,7 @@ void on_message(udpard_rx_t* const rx, udpard_rx_port_t* const port, const udpar
     ctx->received++;
 }
 
-void on_collision(udpard_rx_t* const rx, udpard_rx_port_t* const port, const udpard_remote_t remote)
-{
-    auto* ctx = static_cast<Context*>(rx->user);
-    (void)port;
-    (void)remote;
-    ctx->collisions++;
-}
-constexpr udpard_rx_port_vtable_t callbacks{ .on_message = &on_message, .on_collision = &on_collision };
+constexpr udpard_rx_port_vtable_t callbacks{ .on_message = &on_message };
 
 /// Randomized end-to-end TX/RX covering fragmentation, reordering, and extent-driven truncation.
 void test_udpard_tx_rx_end_to_end()
@@ -222,6 +207,7 @@ void test_udpard_tx_rx_end_to_end()
     instrumented_allocator_t rx_alloc_session{};
     instrumented_allocator_new(&rx_alloc_session);
     const udpard_rx_mem_resources_t rx_mem{ .session  = instrumented_allocator_make_resource(&rx_alloc_session),
+                                            .slot     = instrumented_allocator_make_resource(&rx_alloc_session),
                                             .fragment = instrumented_allocator_make_resource(&rx_alloc_frag) };
     udpard_rx_t                     rx;
     udpard_rx_new(&rx, &ack_tx);
@@ -230,24 +216,19 @@ void test_udpard_tx_rx_end_to_end()
     instrumented_allocator_new(&ack_rx_alloc_frag);
     instrumented_allocator_new(&ack_rx_alloc_session);
     const udpard_rx_mem_resources_t ack_rx_mem{ .session  = instrumented_allocator_make_resource(&ack_rx_alloc_session),
+                                                .slot     = instrumented_allocator_make_resource(&ack_rx_alloc_session),
                                                 .fragment = instrumented_allocator_make_resource(&ack_rx_alloc_frag) };
     udpard_rx_t                     ack_rx{};
     udpard_rx_port_t                ack_port{};
     udpard_rx_new(&ack_rx, &tx);
 
     // Test parameters.
-    constexpr std::array<uint64_t, 3>         topic_hashes{ 0x123456789ABCDEF0ULL,
-                                                    0x0FEDCBA987654321ULL,
-                                                    0x00ACE00ACE00ACEULL };
-    constexpr std::array<udpard_rx_mode_t, 3> modes{ udpard_rx_ordered, udpard_rx_unordered, udpard_rx_ordered };
-    constexpr std::array<udpard_us_t, 3>      windows{ 2000, 0, 5000 };
-    constexpr std::array<size_t, 3>           extents{ 1000, 5000, SIZE_MAX };
+    constexpr std::array<size_t, 3> extents{ 1000, 5000, SIZE_MAX };
 
     // Configure ports with varied extents and reordering windows to cover truncation and different RX modes.
     std::array<udpard_rx_port_t, 3> ports{};
     for (size_t i = 0; i < ports.size(); i++) {
-        TEST_ASSERT_TRUE(
-          udpard_rx_port_new(&ports[i], topic_hashes[i], extents[i], modes[i], windows[i], rx_mem, &callbacks));
+        TEST_ASSERT_TRUE(udpard_rx_port_new(&ports[i], extents[i], rx_mem, &callbacks));
     }
 
     // Setup the context.
@@ -264,26 +245,23 @@ void test_udpard_tx_rx_end_to_end()
     tx.user = &frames;
     std::vector<CapturedFrame> ack_frames;
     ack_tx.user = &ack_frames;
-    TEST_ASSERT_TRUE(
-      udpard_rx_port_new(&ack_port, tx.local_uid, 16, udpard_rx_unordered, 0, ack_rx_mem, &ack_callbacks));
+    TEST_ASSERT_TRUE(udpard_rx_port_new_p2p(&ack_port, 16, ack_rx_mem, &ack_callbacks));
     std::array<udpard_udpip_ep_t, UDPARD_IFACE_COUNT_MAX> ack_sources{};
     for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
         ack_sources[i] = { .ip = static_cast<uint32_t>(0x0A000020U + i), .port = static_cast<uint16_t>(7700U + i) };
     }
 
     // Main test loop: generate transfers, push into TX, drain and shuffle frames, push into RX.
-    std::array<uint64_t, 3> transfer_ids{ static_cast<uint64_t>(rand()),
-                                          static_cast<uint64_t>(rand()),
-                                          static_cast<uint64_t>(rand()) };
-    size_t                  reliable_total = 0;
-    udpard_us_t             now            = 0;
+    uint64_t    next_transfer_id = (static_cast<uint64_t>(rand()) << 32U) ^ static_cast<uint64_t>(rand());
+    size_t      reliable_total   = 0;
+    udpard_us_t now              = 0;
     for (size_t transfer_index = 0; transfer_index < 1000; transfer_index++) {
         now += static_cast<udpard_us_t>(random_range(1000, 5000));
         frames.clear();
 
         // Pick a port, build a random payload, and remember what to expect on that topic.
         const size_t         port_index   = random_range(0, ports.size() - 1U);
-        const uint64_t       transfer_id  = transfer_ids[port_index]++;
+        const uint64_t       transfer_id  = next_transfer_id++;
         const size_t         payload_size = random_range(0, 10000);
         std::vector<uint8_t> payload(payload_size);
         fill_random(payload);
@@ -295,7 +273,7 @@ void test_udpard_tx_rx_end_to_end()
         // Each transfer is sent on all redundant interfaces with different MTUs to exercise fragmentation variety.
         const udpard_bytes_scattered_t payload_view = make_scattered(payload.data(), payload.size());
         const auto        priority = static_cast<udpard_prio_t>(random_range(0, UDPARD_PRIORITY_COUNT - 1U));
-        const TransferKey key{ .transfer_id = transfer_id, .topic_hash = topic_hashes[port_index] };
+        const TransferKey key{ .transfer_id = transfer_id };
         const bool        inserted =
           ctx.expected.emplace(key, ExpectedPayload{ .payload = payload, .payload_size_wire = payload.size() }).second;
         TEST_ASSERT_TRUE(inserted);
@@ -315,7 +293,6 @@ void test_udpard_tx_rx_end_to_end()
                                         deadline,
                                         UDPARD_IFACE_BITMAP_ALL,
                                         priority,
-                                        topic_hashes[port_index],
                                         transfer_id,
                                         payload_view,
                                         reliable ? &record_feedback : nullptr,
@@ -377,7 +354,6 @@ void test_udpard_tx_rx_end_to_end()
     TEST_ASSERT_TRUE(ctx.expected.empty());
     TEST_ASSERT_EQUAL_size_t(1000, ctx.received);
     TEST_ASSERT_TRUE(ctx.truncated > 0);
-    TEST_ASSERT_EQUAL_size_t(0, ctx.collisions);
     TEST_ASSERT_EQUAL_size_t(reliable_total, ctx.reliable_feedback_success);
     TEST_ASSERT_EQUAL_size_t(0, ctx.reliable_feedback_failure);
     for (auto& port : ports) {

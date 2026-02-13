@@ -28,6 +28,7 @@
 ///   The TX pipeline adds a small overhead of sizeof(tx_frame_t).
 /// - sizeof(tx_transfer_t) blocks for the TX pipeline to store outgoing transfer metadata.
 /// - sizeof(rx_session_t) blocks for the RX pipeline to store incoming transfer session metadata.
+/// - sizeof(rx_slot_t) blocks for the RX pipeline to store specific transfer reassembly state.
 /// - sizeof(udpard_fragment_t) blocks for the RX pipeline to store received data fragments.
 ///
 /// Suitable memory allocators may be found here:
@@ -315,10 +316,6 @@ size_t udpard_fragment_gather(const udpard_fragment_t** cursor,
 ///
 /// Reliable messages published over high-fanout topics will generate a large amount of feedback acknowledgments,
 /// which must be kept in mind when designing the network.
-///
-/// Subscribers operating in the ORDERED mode do not acknowledge messages that have been designated as lost
-/// (arriving too late, after the reordering window has passed). No negative acknowledgments are sent either
-/// because there may be other subscribers on the same topic who might still be able to receive the message.
 typedef struct udpard_tx_t udpard_tx_t;
 
 typedef struct udpard_tx_mem_resources_t
@@ -397,7 +394,8 @@ struct udpard_tx_t
     /// The globally unique identifier of the local node. Must not change after initialization.
     uint64_t local_uid;
 
-    /// A random-initialized transfer-ID counter for all outgoing P2P transfers. Must not be changed by the application.
+    /// A random-initialized counter for outgoing P2P transfers. Must not be changed by the application.
+    /// The shared counter for all P2P transfers ensures uniqueness of the transfer-ID per remote node.
     uint64_t p2p_transfer_id;
 
     /// The maximum number of Cyphal transfer payload bytes per UDP datagram. See UDPARD_MTU_*.
@@ -433,6 +431,10 @@ struct udpard_tx_t
     /// READ-ONLY!
     size_t enqueued_frames_count;
 
+    /// Starts at zero and increments with every enqueued transfer. Do not modify!
+    /// This is used internally as a tiebreaker in non-unique indexes.
+    uint64_t next_seq_no;
+
     udpard_tx_mem_resources_t memory;
 
     /// Error counters incremented automatically when the corresponding error condition occurs.
@@ -444,11 +446,10 @@ struct udpard_tx_t
 
     /// Internal use only, do not modify! See tx_transfer_t for details.
     udpard_list_t  queue[UDPARD_IFACE_COUNT_MAX][UDPARD_PRIORITY_COUNT]; ///< Next to transmit at the tail.
-    udpard_list_t  agewise;                                              ///< Oldest at the tail.
-    udpard_tree_t* index_staged;
+    udpard_tree_t* index_transfer_id;
     udpard_tree_t* index_deadline;
-    udpard_tree_t* index_transfer;
-    udpard_tree_t* index_transfer_ack;
+    udpard_tree_t* index_staged;
+    udpard_list_t  agewise; ///< Oldest at the tail.
 
     /// Opaque pointer for the application use only. Not accessed by the library.
     void* user;
@@ -471,7 +472,7 @@ struct udpard_tx_t
 /// True on success, false if any of the arguments are invalid.
 bool udpard_tx_new(udpard_tx_t* const              self,
                    const uint64_t                  local_uid,
-                   const uint64_t                  p2p_transfer_id_initial,
+                   const uint64_t                  p2p_transfer_id_seed,
                    const size_t                    enqueued_frames_limit,
                    const udpard_tx_mem_resources_t memory,
                    const udpard_tx_vtable_t* const vtable);
@@ -480,10 +481,10 @@ bool udpard_tx_new(udpard_tx_t* const              self,
 /// invalidated immediately after this function returns. When redundant interfaces are used, the library will attempt to
 /// minimize the number of copies by reusing frames across interfaces with identical MTU values and memory resources.
 ///
-/// The caller shall increment the transfer-ID counter after each successful invocation of this function per topic.
-/// There shall be a separate transfer-ID counter per topic. The initial value shall be chosen randomly
-/// such that it is likely to be distinct per application startup (embedded systems can use noinit memory sections,
-/// hash uninitialized SRAM, use timers or ADC noise, etc).
+/// The caller shall increment the transfer-ID counter after each successful invocation of this function per subject.
+/// The initial value shall be chosen randomly such that it is likely to be distinct per application startup
+/// (embedded systems can use noinit memory sections, hash uninitialized SRAM, use timers or ADC noise, etc).
+/// The random starting point will ensure global uniqueness across different subjects.
 /// Related thread on random transfer-ID init: https://forum.opencyphal.org/t/improve-the-transfer-id-timeout/2375
 ///
 /// The user context value is carried through to the callbacks. It must contain enough context to allow subject-ID
@@ -497,9 +498,6 @@ bool udpard_tx_new(udpard_tx_t* const              self,
 /// The subject-ID cannot be computed beforehand at the time of enqueuing because the topic->subject consensus protocol
 /// may find a different subject-ID allocation between the time of enqueuing and the time of (re)transmission.
 ///
-/// An attempt to push a transfer with a (topic hash, transfer-ID) pair that is already enqueued will fail,
-/// as that violates the transfer-ID uniqueness requirement stated above.
-///
 /// The feedback callback is set to NULL for best-effort (non-acknowledged) transfers. Otherwise, the transfer is
 /// treated as reliable, requesting a delivery acknowledgement from remote subscribers with repeated retransmissions if
 /// necessary; it is guaranteed that delivery attempts will cease no later than by the specified deadline.
@@ -511,8 +509,7 @@ bool udpard_tx_new(udpard_tx_t* const              self,
 /// Beware that reliable delivery may cause message reordering. For example, when sending messages A and B,
 /// and A is lost on the first attempt, the next attempt may be scheduled after B is published,
 /// so that the remote sees B followed by A. Most applications tolerate it without issues; if this is not the case,
-/// the subscriber should use the ORDERED subscription mode (refer to the RX pipeline for details),
-/// which will reconstruct the original message ordering.
+/// the subscriber should reconstruct the original message ordering.
 ///
 /// On success, the function allocates a single transfer state instance and a number of payload fragments.
 /// The time complexity is O(p + log e), where p is the transfer payload size, and e is the number of
@@ -522,21 +519,19 @@ bool udpard_tx_push(udpard_tx_t* const             self,
                     const udpard_us_t              deadline,
                     const uint16_t                 iface_bitmap,
                     const udpard_prio_t            priority,
-                    const uint64_t                 topic_hash,
                     const uint64_t                 transfer_id,
                     const udpard_bytes_scattered_t payload,
                     void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t), // NULL if best-effort.
                     const udpard_user_context_t user);
 
 /// This is a specialization of the general push function for P2P transfers.
-/// P2P transfers treat the topic hash as the destination node's UID.
-/// The transfer-ID counter is shared for all P2P outgoing P2P transfers and is managed automatically.
+/// The transfer-ID counter is managed automatically.
 /// If out_transfer_id is not NULL, the assigned internal transfer-ID is stored there for use with udpard_tx_cancel_p2p.
 bool udpard_tx_push_p2p(udpard_tx_t* const             self,
                         const udpard_us_t              now,
                         const udpard_us_t              deadline,
                         const udpard_prio_t            priority,
-                        const udpard_remote_t          remote, // Endpoints may be invalid for some ifaces.
+                        const udpard_remote_t          remote, // Endpoints may be empty (zero) for some ifaces.
                         const udpard_bytes_scattered_t payload,
                         void (*const feedback)(udpard_tx_t*, udpard_tx_feedback_t), // NULL if best-effort.
                         const udpard_user_context_t user,
@@ -550,20 +545,14 @@ bool udpard_tx_push_p2p(udpard_tx_t* const             self,
 /// The function may deallocate memory. The time complexity is logarithmic in the number of enqueued transfers.
 void udpard_tx_poll(udpard_tx_t* const self, const udpard_us_t now, const uint16_t iface_bitmap);
 
-/// Cancel a previously enqueued transfer.
-/// To cancel a P2P transfer, pass the destination node's UID as the topic_hash.
+/// Cancel a previously enqueued transfer of the specified transfer-ID and QoS.
 /// If provided, the feedback callback will be invoked with success==false.
 /// Not safe to call from the eject() callback.
 /// Returns true if a transfer was found and cancelled, false if no such transfer was found.
 /// The complexity is O(log t + f), where t is the number of enqueued transfers,
 /// and f is the number of frames in the transfer.
 /// The function will free the memory associated with the transfer.
-bool udpard_tx_cancel(udpard_tx_t* const self, const uint64_t topic_hash, const uint64_t transfer_id);
-
-/// Like udpard_tx_cancel(), but cancels all transfers matching the given topic hash.
-/// Returns the number of matched transfers.
-/// This is important to invoke when destroying a topic to ensure no dangling callbacks remain.
-size_t udpard_tx_cancel_all(udpard_tx_t* const self, const uint64_t topic_hash);
+bool udpard_tx_cancel(udpard_tx_t* const self, const uint64_t transfer_id, const bool reliable);
 
 /// Returns a bitmap of interfaces that have pending transmissions. This is useful for IO multiplexing loops.
 /// Zero indicates that there are no pending transmissions.
@@ -596,8 +585,7 @@ void udpard_tx_free(udpard_tx_t* const self);
 /// The application needs to listen to all these sockets simultaneously and pass the received UDP datagrams to the
 /// corresponding RX port instance as they arrive.
 ///
-/// P2P transfers are handled in a similar way, except that the topic hash is replaced with the destination node's UID,
-/// and the UDP/IP endpoints are unicast addresses instead of multicast addresses.
+/// P2P transfers are handled in a similar way, except that the UDP/IP endpoints are unicast instead of multicast.
 ///
 /// Graphically, the subscription pipeline is arranged per port as shown below.
 /// Remember that the application with N RX ports would have N such pipelines, one per port.
@@ -607,71 +595,11 @@ void udpard_tx_free(udpard_tx_t* const self);
 ///     REDUNDANT INTERFACE B ---> UDP SOCKET ---+---> udpard_rx_port_t ---> TRANSFERS
 ///                                              |
 ///                                       ... ---+
-///
-/// The transfer reassembly state machine can operate in several modes described below. First, a brief summary:
-///
-/// Mode       Guarantees                       Limitations                        Reordering window
-/// -----------------------------------------−------------------------------------------------------------------
-/// ORDERED    Strictly increasing transfer-ID  May delay transfers, CPU heavier   Non-negative microseconds
-/// UNORDERED  Unique transfer-ID               Ordering not guaranteed            Ignored
-/// STATELESS  Constant time, constant memory   1-frame only, dups, no responses   Ignored
-///
-/// If not sure, choose unordered. The ordered mode is a good fit for ordering-sensitive use cases like state
-/// estimators and control loops, but it is not suitable for P2P.
-/// The stateless mode is chiefly intended for the heartbeat topic.
-///
-///     ORDERED
-///
-/// Each transfer is received at most once. The sequence of transfers delivered (ejected)
-/// to the application is STRICTLY INCREASING (with possible gaps in case of loss).
-///
-/// The reassembler may hold completed transfers for a brief time if they arrive out-of-order,
-/// hoping for the earlier missing transfers to show up, such that they are not permanently lost.
-/// For example, a sequence 1 2 4 3 5 will be delivered as 1 2 3 4 5 if 3 arrives shortly after 4;
-/// however, if 3 does not arrive within the configured reordering window,
-/// the application will receive 1 2 4 5, and transfer 3 will be permanently lost even if it arrives later
-/// because accepting it without violating the strictly increasing transfer-ID constraint is not possible.
-///
-/// This mode requires much more bookkeeping which results in a greater processing load per received fragment/transfer.
-///
-/// Zero is not really a special case for the reordering window; it simply means that out-of-order transfers
-/// are not waited for at all (declared permanently lost immediately), and no received transfer is delayed
-/// before ejection to the application.
-///
-/// The ORDERED mode is mostly intended for applications like state estimators, control systems, and data streaming
-/// where ordering is critical.
-///
-///     UNORDERED
-///
-/// Each transfer is ejected immediately upon successful reassembly. Ordering is not enforced,
-/// but duplicates are still removed. For example, a sequence 1 2 4 3 5 will be delivered as-is without delay.
-///
-/// This mode does not reject nor delay transfers arriving late, making it the desired choice for applications
-/// where all transfers need to be received no matter the order. This is in particular useful for request-response
-/// topics, where late arrivals occur not only due to network conditions but also due to the inherent
-/// asynchrony between requests and responses. For example, node A could publish messages X and Y on subject S,
-/// while node B could respond to X only after receiving Y, thus causing the response to X to arrive late with
-/// respect to Y. This would cause the ORDERED mode to delay or drop the response to X, which is undesirable;
-/// therefore, the UNORDERED mode is preferred for request-response topics.
-///
-/// The unordered mode should be the default mode for most use cases.
-///
-///     STATELESS
-///
-/// Only single-frame transfers are accepted (where the entire payload fits into a single datagram,
-/// or the extent does not exceed the MTU). No attempt to enforce ordering or remove duplicates is made.
-/// The return path is only discovered for the one interface that delivered the transfer.
-/// Transfers arriving from N interfaces are duplicated N times.
-///
-/// The stateless mode allocates only a fragment header per accepted frame and does not contain any
-/// variable-complexity processing logic, enabling great scalability for topics with a very large number of
-/// publishers where unordered and duplicated messages are acceptable, such as the heartbeat topic.
 
 /// The application will have a single RX instance to manage all subscriptions and P2P ports.
 typedef struct udpard_rx_t
 {
-    udpard_list_t  list_session_by_animation;   ///< Oldest at the tail.
-    udpard_tree_t* index_session_by_reordering; ///< Earliest reordering window closure on the left.
+    udpard_list_t list_session_by_animation; ///< Oldest at the tail.
 
     uint64_t errors_oom;                ///< A frame could not be processed (transfer possibly dropped) due to OOM.
     uint64_t errors_frame_malformed;    ///< A received frame was malformed and thus dropped.
@@ -692,27 +620,16 @@ typedef struct udpard_rx_t
 /// These are used to serve the memory needs of the library to keep state while reassembling incoming transfers.
 /// Several memory resources are provided to enable fine control over the allocated memory if necessary; however,
 /// simple applications may choose to use the same memory resource implemented via malloc()/free() for all of them.
+/// Instances are fixed-size, so a trivial zero-fragmentation block allocator is sufficient.
 typedef struct udpard_rx_mem_resources_t
 {
-    /// Provides memory for rx_session_t described below.
-    /// Each instance is fixed-size, so a trivial zero-fragmentation block allocator is sufficient.
-    udpard_mem_t session;
-
-    /// The udpard_fragment_t handles are allocated per payload fragment; each contains a pointer to its fragment.
-    /// Each instance is of a very small fixed size, so a trivial zero-fragmentation block allocator is sufficient.
-    udpard_mem_t fragment;
+    udpard_mem_t session;  ///< Provides memory for rx_session_t.
+    udpard_mem_t slot;     ///< Provides memory for rx_slot_t.
+    udpard_mem_t fragment; ///< udpard_fragment_t are allocated per payload fragment; each points to its fragment.
 } udpard_rx_mem_resources_t;
 
 typedef struct udpard_rx_port_t     udpard_rx_port_t;
 typedef struct udpard_rx_transfer_t udpard_rx_transfer_t;
-
-/// RX port mode for transfer reassembly behavior.
-typedef enum udpard_rx_mode_t
-{
-    udpard_rx_unordered = 0,
-    udpard_rx_ordered   = 1,
-    udpard_rx_stateless = 2,
-} udpard_rx_mode_t;
 
 /// Provided by the application per port instance to specify the callbacks to be invoked on certain events.
 /// This design allows distinct callbacks per port, which is especially useful for the P2P port.
@@ -720,28 +637,18 @@ typedef struct udpard_rx_port_vtable_t
 {
     /// A new message is received on a port. The handler takes ownership of the payload; it must free it after use.
     void (*on_message)(udpard_rx_t*, udpard_rx_port_t*, udpard_rx_transfer_t);
-
-    /// A topic hash collision is detected on a port.
-    /// On P2P ports, this indicates that the destination UID doesn't match the local UID (misaddressed message);
-    /// safe to ignore.
-    /// May be NULL if the application is not interested.
-    void (*on_collision)(udpard_rx_t*, udpard_rx_port_t*, udpard_remote_t);
 } udpard_rx_port_vtable_t;
 
 /// This type represents an open input port, such as a subscription to a topic.
 struct udpard_rx_port_t
 {
-    /// Mismatch will be filtered out and the collision notification callback invoked.
-    /// For P2P ports, this is the destination node's UID (i.e., the local node's UID).
-    uint64_t topic_hash;
-
     /// Transfer payloads exceeding this extent may be truncated.
     /// The total size of the received payload may still exceed this extent setting by some small margin.
     size_t extent;
 
-    /// Behavior undefined if the reassembly mode or the reordering window are switched on a live port.
-    udpard_rx_mode_t mode;
-    udpard_us_t      reordering_window;
+    /// True if this port is used for P2P transfers, false for subject subscriptions.
+    /// There shall be exactly one P2P port per RX instance.
+    bool is_p2p;
 
     udpard_rx_mem_resources_t memory;
 
@@ -749,7 +656,8 @@ struct udpard_rx_port_t
     /// For example, if the local node is subscribed to a certain subject and there are X nodes publishing
     /// transfers on that subject, then there will be X sessions created for that subject.
     ///
-    /// Each session instance takes sizeof(rx_session_t) bytes of dynamic memory for itself.
+    /// Each session instance takes sizeof(rx_session_t) bytes of dynamic memory for itself, plus sizeof(rx_slot_t)
+    /// times the number of concurrent interleaved transfers from the remote node (usually 1), up to the static limit.
     /// On top of that, each session instance holds memory for the transfer payload fragments and small fixed-size
     /// metadata objects of type udpard_fragment_t, one handle per fragment.
     ///
@@ -824,9 +732,9 @@ struct udpard_rx_transfer_t
 /// in which case it may be NULL.
 void udpard_rx_new(udpard_rx_t* const self, udpard_tx_t* const tx);
 
-/// Must be invoked at least every few milliseconds (more often is fine) to purge timed-out sessions and eject
-/// received transfers when the reordering window expires. If this is invoked simultaneously with rx subscription
-/// reception, then this function should ideally be invoked after the reception handling.
+/// Must be invoked at least every few milliseconds (more often is fine).
+/// If this is invoked simultaneously with rx subscription reception,
+/// then this function should ideally be invoked after the reception handling.
 /// The time complexity is logarithmic in the number of living sessions.
 void udpard_rx_poll(udpard_rx_t* const self, const udpard_us_t now);
 
@@ -839,33 +747,34 @@ void udpard_rx_poll(udpard_rx_t* const self, const udpard_us_t now);
 ///     3. Read data from the sockets continuously and forward each datagram to udpard_rx_port_push(),
 ///        along with the index of the redundant interface the datagram was received on.
 ///
-/// For P2P ports, the procedure is identical, except that the topic hash is set to the local node's UID.
-/// There must be exactly one P2P port per node. The P2P port is also used for acks.
-///
 /// The extent defines the maximum possible size of received objects, considering also possible future data type
 /// versions with new fields. It is safe to pick larger values. Note well that the extent is not the same thing as
 /// the maximum size of the object, it is usually larger! Transfers that carry payloads beyond the specified extent
 /// still keep fragments that start before the extent, so the delivered payload may exceed it; fragments starting past
 /// the limit are dropped.
 ///
-/// The topic hash is needed to detect and ignore transfers that use different topics on the same subject-ID.
-/// The collision callback is invoked if a topic hash collision is detected.
-///
-/// If not sure which reassembly mode to choose, consider `udpard_rx_unordered` as the default choice.
-/// For ordering-sensitive use cases, such as state estimators and control loops, use `udpard_rx_ordered` with a short
-/// window.
-///
 /// The pointed-to vtable instance must outlive the port instance.
 ///
 /// The return value is true on success, false if any of the arguments are invalid.
 /// The time complexity is constant. This function does not invoke the dynamic memory manager.
 bool udpard_rx_port_new(udpard_rx_port_t* const              self,
-                        const uint64_t                       topic_hash, // For P2P ports, this is the local node's UID.
                         const size_t                         extent,
-                        const udpard_rx_mode_t               mode,
-                        const udpard_us_t                    reordering_window,
                         const udpard_rx_mem_resources_t      memory,
                         const udpard_rx_port_vtable_t* const vtable);
+
+/// A specialization of udpard_rx_port_new() for scalable stateless subscriptions, where only single-frame transfers
+/// are accepted, and no attempt at deduplication is made. This is useful for the heartbeat topic mostly, and perhaps
+/// other topics with a great number of publishers and/or very high traffic.
+bool udpard_rx_port_new_stateless(udpard_rx_port_t* const              self,
+                                  const size_t                         extent,
+                                  const udpard_rx_mem_resources_t      memory,
+                                  const udpard_rx_port_vtable_t* const vtable);
+
+/// The P2P counterpart. There must be exactly one P2P port per node.
+bool udpard_rx_port_new_p2p(udpard_rx_port_t* const              self,
+                            const size_t                         extent,
+                            const udpard_rx_mem_resources_t      memory,
+                            const udpard_rx_port_vtable_t* const vtable);
 
 /// Returns all memory allocated for the sessions, slots, fragments, etc of the given port.
 /// Does not free the port itself since it is allocated by the application rather than the library,

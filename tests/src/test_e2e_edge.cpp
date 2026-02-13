@@ -14,8 +14,7 @@
 namespace {
 
 void                              on_message(udpard_rx_t* rx, udpard_rx_port_t* port, udpard_rx_transfer_t transfer);
-void                              on_collision(udpard_rx_t* rx, udpard_rx_port_t* port, udpard_remote_t remote);
-constexpr udpard_rx_port_vtable_t callbacks{ .on_message = &on_message, .on_collision = &on_collision };
+constexpr udpard_rx_port_vtable_t callbacks{ .on_message = &on_message };
 
 struct FbState
 {
@@ -84,7 +83,6 @@ void release_frames(std::vector<CapturedFrame>& frames)
 struct Context
 {
     std::vector<uint64_t> ids;
-    size_t                collisions   = 0;
     uint64_t              expected_uid = 0;
     udpard_udpip_ep_t     source{};
 };
@@ -103,14 +101,13 @@ struct Fixture
     Context                    ctx{};
     udpard_udpip_ep_t          dest{};
     udpard_udpip_ep_t          source{};
-    uint64_t                   topic_hash{ 0x90AB12CD34EF5678ULL };
 
     Fixture(const Fixture&)            = delete;
     Fixture& operator=(const Fixture&) = delete;
     Fixture(Fixture&&)                 = delete;
     Fixture& operator=(Fixture&&)      = delete;
 
-    explicit Fixture(const udpard_rx_mode_t mode, const udpard_us_t reordering_window)
+    explicit Fixture()
     {
         instrumented_allocator_new(&tx_alloc_transfer);
         instrumented_allocator_new(&tx_alloc_payload);
@@ -122,6 +119,7 @@ struct Fixture
             res = instrumented_allocator_make_resource(&tx_alloc_payload);
         }
         const udpard_rx_mem_resources_t rx_mem{ .session  = instrumented_allocator_make_resource(&rx_alloc_session),
+                                                .slot     = instrumented_allocator_make_resource(&rx_alloc_session),
                                                 .fragment = instrumented_allocator_make_resource(&rx_alloc_frag) };
         tx_payload_deleter = udpard_deleter_t{ .vtable = &tx_refcount_deleter_vt, .context = nullptr };
         source             = { .ip = 0x0A000001U, .port = 7501U };
@@ -133,7 +131,7 @@ struct Fixture
         ctx.expected_uid = tx.local_uid;
         ctx.source       = source;
         rx.user          = &ctx;
-        TEST_ASSERT_TRUE(udpard_rx_port_new(&port, topic_hash, 1024, mode, reordering_window, rx_mem, &callbacks));
+        TEST_ASSERT_TRUE(udpard_rx_port_new(&port, 1024, rx_mem, &callbacks));
     }
 
     ~Fixture()
@@ -168,7 +166,6 @@ struct Fixture
                                         deadline,
                                         iface_bitmap_1,
                                         udpard_prio_slow,
-                                        topic_hash,
                                         transfer_id,
                                         payload,
                                         nullptr,
@@ -192,16 +189,10 @@ void on_message(udpard_rx_t* const rx, udpard_rx_port_t* const port, const udpar
     udpard_fragment_free_all(transfer.payload, udpard_make_deleter(port->memory.fragment));
 }
 
-void on_collision(udpard_rx_t* const rx, udpard_rx_port_t* const /*port*/, const udpard_remote_t /*remote*/)
-{
-    auto* const ctx = static_cast<Context*>(rx->user);
-    ctx->collisions++;
-}
-
 /// UNORDERED mode should drop duplicates while keeping arrival order.
 void test_udpard_rx_unordered_duplicates()
 {
-    Fixture     fix{ udpard_rx_unordered, 0 };
+    Fixture     fix{};
     udpard_us_t now = 0;
 
     constexpr std::array<uint64_t, 6> ids{ 100, 20000, 10100, 5000, 20000, 100 };
@@ -217,118 +208,6 @@ void test_udpard_rx_unordered_duplicates()
     for (size_t i = 0; i < expected.size(); i++) {
         TEST_ASSERT_EQUAL_UINT64(expected[i], fix.ctx.ids[i]);
     }
-    TEST_ASSERT_EQUAL_size_t(0, fix.ctx.collisions);
-}
-
-/// ORDERED mode waits for the window, then rejects late arrivals.
-void test_udpard_rx_ordered_out_of_order()
-{
-    Fixture     fix{ udpard_rx_ordered, 50 };
-    udpard_us_t now = 0;
-
-    // First batch builds the ordered baseline.
-    fix.push_single(now, 100);
-    udpard_rx_poll(&fix.rx, now);
-    fix.push_single(++now, 300);
-    udpard_rx_poll(&fix.rx, now);
-    fix.push_single(++now, 200);
-    udpard_rx_poll(&fix.rx, now);
-
-    // Let the reordering window close for the early transfers.
-    now = 60;
-    udpard_rx_poll(&fix.rx, now);
-
-    // Queue far-future IDs while keeping the head at 300.
-    fix.push_single(now + 1, 10100);
-    udpard_rx_poll(&fix.rx, now + 1);
-    fix.push_single(now + 2, 10200);
-    udpard_rx_poll(&fix.rx, now + 2);
-
-    // Late arrivals inside the window shall be dropped.
-    fix.push_single(now + 3, 250);
-    udpard_rx_poll(&fix.rx, now + 3);
-    fix.push_single(now + 4, 150);
-    udpard_rx_poll(&fix.rx, now + 4);
-
-    // Allow the window to expire so the remaining interned transfers eject.
-    udpard_rx_poll(&fix.rx, now + 70);
-
-    constexpr std::array<uint64_t, 5> expected{ 100, 200, 300, 10100, 10200 };
-    TEST_ASSERT_EQUAL_size_t(expected.size(), fix.ctx.ids.size());
-    for (size_t i = 0; i < expected.size(); i++) {
-        TEST_ASSERT_EQUAL_UINT64(expected[i], fix.ctx.ids[i]);
-    }
-    TEST_ASSERT_EQUAL_size_t(0, fix.ctx.collisions);
-}
-
-/// ORDERED mode after head advance should reject late IDs arriving after window expiry.
-void test_udpard_rx_ordered_head_advanced_late()
-{
-    Fixture     fix{ udpard_rx_ordered, 50 };
-    udpard_us_t now = 0;
-
-    fix.push_single(now, 100);
-    udpard_rx_poll(&fix.rx, now);
-    fix.push_single(++now, 300);
-    udpard_rx_poll(&fix.rx, now);
-    fix.push_single(++now, 200);
-    udpard_rx_poll(&fix.rx, now);
-    now = 60;
-    udpard_rx_poll(&fix.rx, now); // head -> 300
-
-    fix.push_single(++now, 420);
-    udpard_rx_poll(&fix.rx, now);
-    fix.push_single(++now, 450);
-    udpard_rx_poll(&fix.rx, now);
-    now = 120;
-    udpard_rx_poll(&fix.rx, now); // head -> 450
-
-    fix.push_single(++now, 320);
-    udpard_rx_poll(&fix.rx, now);
-    fix.push_single(++now, 310);
-    udpard_rx_poll(&fix.rx, now);
-
-    constexpr std::array<uint64_t, 5> expected{ 100, 200, 300, 420, 450 };
-    TEST_ASSERT_EQUAL_size_t(expected.size(), fix.ctx.ids.size());
-    for (size_t i = 0; i < expected.size(); i++) {
-        TEST_ASSERT_EQUAL_UINT64(expected[i], fix.ctx.ids[i]);
-    }
-    TEST_ASSERT_EQUAL_size_t(0, fix.ctx.collisions);
-}
-
-/// ORDERED mode rejects transfer-IDs far behind the recent history window.
-void test_udpard_rx_ordered_reject_far_past()
-{
-    Fixture     fix{ udpard_rx_ordered, 50 };
-    udpard_us_t now = 0;
-
-    fix.push_single(now, 200000);
-    udpard_rx_poll(&fix.rx, now);
-
-    now = 60;
-    udpard_rx_poll(&fix.rx, now);
-
-    const uint64_t late_tid_close = 200000 - 1000;
-    fix.push_single(++now, late_tid_close);
-    udpard_rx_poll(&fix.rx, now);
-    udpard_rx_poll(&fix.rx, now + 100);
-
-    const uint64_t far_past_tid = 200000 - 100000;
-    fix.push_single(++now, far_past_tid);
-    udpard_rx_poll(&fix.rx, now);
-    udpard_rx_poll(&fix.rx, now + 50);
-
-    const uint64_t recent_tid = 200001;
-    fix.push_single(++now, recent_tid);
-    udpard_rx_poll(&fix.rx, now);
-    udpard_rx_poll(&fix.rx, now + 50);
-
-    constexpr std::array<uint64_t, 3> expected{ 200000, far_past_tid, recent_tid };
-    TEST_ASSERT_EQUAL_size_t(expected.size(), fix.ctx.ids.size());
-    for (size_t i = 0; i < expected.size(); i++) {
-        TEST_ASSERT_EQUAL_UINT64(expected[i], fix.ctx.ids[i]);
-    }
-    TEST_ASSERT_EQUAL_size_t(0, fix.ctx.collisions);
 }
 
 // Feedback must fire regardless of disposal path.
@@ -357,7 +236,6 @@ void test_udpard_tx_feedback_always_called()
                                         10,
                                         iface_bitmap_1,
                                         udpard_prio_fast,
-                                        1,
                                         11,
                                         make_scattered(nullptr, 0),
                                         fb_record,
@@ -382,7 +260,6 @@ void test_udpard_tx_feedback_always_called()
                                         1000,
                                         iface_bitmap_1,
                                         udpard_prio_fast,
-                                        2,
                                         21,
                                         make_scattered(nullptr, 0),
                                         fb_record,
@@ -392,7 +269,6 @@ void test_udpard_tx_feedback_always_called()
                              1000,
                              iface_bitmap_1,
                              udpard_prio_fast,
-                             3,
                              22,
                              make_scattered(nullptr, 0),
                              fb_record,
@@ -417,7 +293,6 @@ void test_udpard_tx_feedback_always_called()
                                         1000,
                                         iface_bitmap_1,
                                         udpard_prio_fast,
-                                        4,
                                         33,
                                         make_scattered(nullptr, 0),
                                         fb_record,
@@ -454,20 +329,21 @@ void test_udpard_tx_push_p2p()
     tx.user = &frames;
 
     const udpard_rx_mem_resources_t rx_mem{ .session  = instrumented_allocator_make_resource(&rx_alloc_session),
+                                            .slot     = instrumented_allocator_make_resource(&rx_alloc_session),
                                             .fragment = instrumented_allocator_make_resource(&rx_alloc_frag) };
     udpard_rx_t                     rx{};
     udpard_rx_port_t                port{};
     Context                         ctx{};
     const udpard_udpip_ep_t         source{ .ip = 0x0A0000AAU, .port = 7600U };
     const udpard_udpip_ep_t         dest{ .ip = 0x0A000010U, .port = 7400U };
-    const uint64_t                  local_uid = 0xCAFEBABECAFED00DULL;
-    ctx.expected_uid                          = tx.local_uid;
-    ctx.source                                = source;
-    rx.user                                   = &ctx;
-    TEST_ASSERT_TRUE(udpard_rx_port_new(&port, local_uid, 1024, udpard_rx_unordered, 0, rx_mem, &callbacks));
+    ctx.expected_uid = tx.local_uid;
+    ctx.source       = source;
+    rx.user          = &ctx;
+    TEST_ASSERT_TRUE(udpard_rx_port_new_p2p(&port, 1024, rx_mem, &callbacks));
 
+    const uint64_t  remote_uid = 0xCAFEBABECAFED00DULL;
     udpard_remote_t remote{};
-    remote.uid           = local_uid;
+    remote.uid           = remote_uid;
     remote.endpoints[0U] = dest;
 
     const std::array<uint8_t, 3>   user_payload{ 0xAAU, 0xBBU, 0xCCU };
@@ -486,8 +362,6 @@ void test_udpard_tx_push_p2p()
     udpard_rx_poll(&rx, now);
     TEST_ASSERT_EQUAL_size_t(1, ctx.ids.size());
     TEST_ASSERT_EQUAL_UINT64(out_tid, ctx.ids[0]);
-    TEST_ASSERT_EQUAL_size_t(0, ctx.collisions);
-
     udpard_rx_port_free(&rx, &port);
     udpard_tx_free(&tx);
     TEST_ASSERT_EQUAL(0, tx_alloc_transfer.allocated_fragments);
@@ -518,6 +392,7 @@ void test_udpard_tx_minimum_mtu()
         res = instrumented_allocator_make_resource(&tx_alloc_payload);
     }
     const udpard_rx_mem_resources_t rx_mem{ .session  = instrumented_allocator_make_resource(&rx_alloc_session),
+                                            .slot     = instrumented_allocator_make_resource(&rx_alloc_session),
                                             .fragment = instrumented_allocator_make_resource(&rx_alloc_frag) };
 
     udpard_tx_t tx{};
@@ -533,12 +408,11 @@ void test_udpard_tx_minimum_mtu()
     udpard_rx_t      rx{};
     udpard_rx_port_t port{};
     Context          ctx{};
-    const uint64_t   topic_hash = 0x1234567890ABCDEFULL;
-    ctx.expected_uid            = tx.local_uid;
-    ctx.source                  = { .ip = 0x0A000001U, .port = 7501U };
+    ctx.expected_uid = tx.local_uid;
+    ctx.source       = { .ip = 0x0A000001U, .port = 7501U };
     udpard_rx_new(&rx, nullptr);
     rx.user = &ctx;
-    TEST_ASSERT_TRUE(udpard_rx_port_new(&port, topic_hash, 4096, udpard_rx_unordered, 0, rx_mem, &callbacks));
+    TEST_ASSERT_TRUE(udpard_rx_port_new(&port, 4096, rx_mem, &callbacks));
 
     // Send a payload that will require fragmentation at minimum MTU
     std::array<uint8_t, 1000> payload{};
@@ -556,7 +430,6 @@ void test_udpard_tx_minimum_mtu()
                                     now + 1000000,
                                     iface_bitmap_1,
                                     udpard_prio_nominal,
-                                    topic_hash,
                                     1U,
                                     payload_view,
                                     nullptr,
@@ -594,7 +467,7 @@ void test_udpard_tx_minimum_mtu()
 /// Test with transfer-ID at uint64 boundary values (0, large values)
 void test_udpard_transfer_id_boundaries()
 {
-    Fixture fix{ udpard_rx_unordered, 0 };
+    Fixture fix{};
 
     // Test transfer-ID = 0 (first valid value)
     fix.push_single(0, 0);
@@ -613,8 +486,6 @@ void test_udpard_transfer_id_boundaries()
     udpard_rx_poll(&fix.rx, 2);
     TEST_ASSERT_EQUAL_size_t(3, fix.ctx.ids.size());
     TEST_ASSERT_EQUAL_UINT64(0x8000000000000000ULL, fix.ctx.ids[2]);
-
-    TEST_ASSERT_EQUAL_size_t(0, fix.ctx.collisions);
 }
 
 /// Test zero extent handling - should accept transfers but truncate payload
@@ -635,6 +506,7 @@ void test_udpard_rx_zero_extent()
         res = instrumented_allocator_make_resource(&tx_alloc_payload);
     }
     const udpard_rx_mem_resources_t rx_mem{ .session  = instrumented_allocator_make_resource(&rx_alloc_session),
+                                            .slot     = instrumented_allocator_make_resource(&rx_alloc_session),
                                             .fragment = instrumented_allocator_make_resource(&rx_alloc_frag) };
 
     udpard_tx_t tx{};
@@ -644,11 +516,10 @@ void test_udpard_rx_zero_extent()
 
     udpard_rx_t      rx{};
     udpard_rx_port_t port{};
-    const uint64_t   topic_hash = 0xFEDCBA9876543210ULL;
     udpard_rx_new(&rx, nullptr);
 
     // Create port with zero extent
-    TEST_ASSERT_TRUE(udpard_rx_port_new(&port, topic_hash, 0, udpard_rx_unordered, 0, rx_mem, &callbacks));
+    TEST_ASSERT_TRUE(udpard_rx_port_new(&port, 0, rx_mem, &callbacks));
 
     // Track received transfers
     struct ZeroExtentContext
@@ -672,10 +543,8 @@ void test_udpard_rx_zero_extent()
             z->payload_size_wire   = transfer.payload_size_wire;
             udpard_fragment_free_all(transfer.payload, udpard_make_deleter(port_arg->memory.fragment));
         }
-        static void on_collision(udpard_rx_t*, udpard_rx_port_t*, udpard_remote_t) {}
     };
-    static constexpr udpard_rx_port_vtable_t zero_callbacks{ .on_message   = &ZeroExtentCallbacks::on_message,
-                                                             .on_collision = &ZeroExtentCallbacks::on_collision };
+    static constexpr udpard_rx_port_vtable_t zero_callbacks{ .on_message = &ZeroExtentCallbacks::on_message };
     port.vtable = &zero_callbacks;
     rx.user     = &zctx;
 
@@ -696,7 +565,6 @@ void test_udpard_rx_zero_extent()
                                     now + 1000000,
                                     iface_bitmap_1,
                                     udpard_prio_nominal,
-                                    topic_hash,
                                     5U,
                                     payload_view,
                                     nullptr,
@@ -733,7 +601,7 @@ void test_udpard_rx_zero_extent()
 /// Test empty payload transfer (zero-size payload)
 void test_udpard_empty_payload()
 {
-    Fixture fix{ udpard_rx_unordered, 0 };
+    Fixture fix{};
 
     // Send an empty payload
     fix.frames.clear();
@@ -746,7 +614,6 @@ void test_udpard_empty_payload()
                                     deadline,
                                     iface_bitmap_1,
                                     udpard_prio_nominal,
-                                    fix.topic_hash,
                                     10U,
                                     empty_payload,
                                     nullptr,
@@ -769,7 +636,7 @@ void test_udpard_empty_payload()
 /// Test priority levels from exceptional (0) to optional (7)
 void test_udpard_all_priority_levels()
 {
-    Fixture     fix{ udpard_rx_unordered, 0 };
+    Fixture     fix{};
     udpard_us_t now = 0;
 
     constexpr uint16_t iface_bitmap_1 = (1U << 0U);
@@ -786,7 +653,6 @@ void test_udpard_all_priority_levels()
                                         now + 1000000,
                                         iface_bitmap_1,
                                         static_cast<udpard_prio_t>(prio),
-                                        fix.topic_hash,
                                         100U + prio,
                                         payload_view,
                                         nullptr,
@@ -809,87 +675,6 @@ void test_udpard_all_priority_levels()
     }
 }
 
-/// Test collision detection (topic hash mismatch)
-void test_udpard_topic_hash_collision()
-{
-    instrumented_allocator_t tx_alloc_transfer{};
-    instrumented_allocator_t tx_alloc_payload{};
-    instrumented_allocator_t rx_alloc_frag{};
-    instrumented_allocator_t rx_alloc_session{};
-    instrumented_allocator_new(&tx_alloc_transfer);
-    instrumented_allocator_new(&tx_alloc_payload);
-    instrumented_allocator_new(&rx_alloc_frag);
-    instrumented_allocator_new(&rx_alloc_session);
-
-    udpard_tx_mem_resources_t tx_mem{};
-    tx_mem.transfer = instrumented_allocator_make_resource(&tx_alloc_transfer);
-    for (auto& res : tx_mem.payload) {
-        res = instrumented_allocator_make_resource(&tx_alloc_payload);
-    }
-    const udpard_rx_mem_resources_t rx_mem{ .session  = instrumented_allocator_make_resource(&rx_alloc_session),
-                                            .fragment = instrumented_allocator_make_resource(&rx_alloc_frag) };
-
-    udpard_tx_t tx{};
-    TEST_ASSERT_TRUE(udpard_tx_new(&tx, 0x1111222233334444ULL, 300U, 64, tx_mem, &tx_vtable));
-    std::vector<CapturedFrame> frames;
-    tx.user = &frames;
-
-    udpard_rx_t      rx{};
-    udpard_rx_port_t port{};
-    Context          ctx{};
-    const uint64_t   rx_topic_hash = 0xAAAAAAAAAAAAAAAAULL; // Different from TX
-    const uint64_t   tx_topic_hash = 0xBBBBBBBBBBBBBBBBULL; // Different from RX
-    ctx.expected_uid               = tx.local_uid;
-    ctx.source                     = { .ip = 0x0A000003U, .port = 7503U };
-    udpard_rx_new(&rx, nullptr);
-    rx.user = &ctx;
-    TEST_ASSERT_TRUE(udpard_rx_port_new(&port, rx_topic_hash, 1024, udpard_rx_unordered, 0, rx_mem, &callbacks));
-
-    // Send with mismatched topic hash
-    std::array<uint8_t, 8>         payload{};
-    const udpard_bytes_scattered_t payload_view   = make_scattered(payload.data(), payload.size());
-    constexpr uint16_t             iface_bitmap_1 = (1U << 0U);
-
-    const udpard_us_t now = 0;
-    frames.clear();
-    TEST_ASSERT_TRUE(udpard_tx_push(&tx,
-                                    now,
-                                    now + 1000000,
-                                    iface_bitmap_1,
-                                    udpard_prio_nominal,
-                                    tx_topic_hash, // Different from port's topic_hash
-                                    1U,
-                                    payload_view,
-                                    nullptr,
-                                    UDPARD_USER_CONTEXT_NULL));
-    udpard_tx_poll(&tx, now, UDPARD_IFACE_BITMAP_ALL);
-    TEST_ASSERT_FALSE(frames.empty());
-
-    // Deliver to RX - should trigger collision callback
-    const udpard_deleter_t tx_payload_deleter{ .vtable = &tx_refcount_deleter_vt, .context = nullptr };
-    for (const auto& f : frames) {
-        TEST_ASSERT_TRUE(
-          udpard_rx_port_push(&rx, &port, now, ctx.source, f.datagram, tx_payload_deleter, f.iface_index));
-    }
-    udpard_rx_poll(&rx, now);
-
-    // No transfers received, but collision detected
-    TEST_ASSERT_EQUAL_size_t(0, ctx.ids.size());
-    TEST_ASSERT_EQUAL_size_t(1, ctx.collisions);
-
-    // Cleanup
-    udpard_rx_port_free(&rx, &port);
-    udpard_tx_free(&tx);
-    TEST_ASSERT_EQUAL(0, tx_alloc_transfer.allocated_fragments);
-    TEST_ASSERT_EQUAL(0, tx_alloc_payload.allocated_fragments);
-    TEST_ASSERT_EQUAL(0, rx_alloc_frag.allocated_fragments);
-    TEST_ASSERT_EQUAL(0, rx_alloc_session.allocated_fragments);
-    instrumented_allocator_reset(&tx_alloc_transfer);
-    instrumented_allocator_reset(&tx_alloc_payload);
-    instrumented_allocator_reset(&rx_alloc_frag);
-    instrumented_allocator_reset(&rx_alloc_session);
-}
-
 } // namespace
 
 extern "C" void setUp() {}
@@ -900,9 +685,6 @@ int main()
 {
     UNITY_BEGIN();
     RUN_TEST(test_udpard_rx_unordered_duplicates);
-    RUN_TEST(test_udpard_rx_ordered_out_of_order);
-    RUN_TEST(test_udpard_rx_ordered_head_advanced_late);
-    RUN_TEST(test_udpard_rx_ordered_reject_far_past);
     RUN_TEST(test_udpard_tx_feedback_always_called);
     RUN_TEST(test_udpard_tx_push_p2p);
     RUN_TEST(test_udpard_tx_minimum_mtu);
@@ -910,6 +692,5 @@ int main()
     RUN_TEST(test_udpard_rx_zero_extent);
     RUN_TEST(test_udpard_empty_payload);
     RUN_TEST(test_udpard_all_priority_levels);
-    RUN_TEST(test_udpard_topic_hash_collision);
     return UNITY_END();
 }

@@ -63,14 +63,14 @@ constexpr udpard_deleter_vtable_t tx_refcount_deleter_vt{ .free = &tx_refcount_f
 constexpr udpard_deleter_t        tx_payload_deleter{ .vtable = &tx_refcount_deleter_vt, .context = nullptr };
 
 // Check the ACK flag in the Cyphal/UDP header.
-constexpr size_t HeaderSizeBytes = 48U;
+constexpr size_t HeaderSizeBytes = 40U;
 bool             is_ack_frame(const udpard_bytes_mut_t& datagram)
 {
     if (datagram.size < HeaderSizeBytes) {
         return false;
     }
     const auto* p = static_cast<const uint8_t*>(datagram.data);
-    return (p[1] & 0x02U) != 0U;
+    return p[1] == 2U;
 }
 
 // --------------------------------------------------------------------------------------------------------------------
@@ -96,10 +96,9 @@ struct NodeBTopicContext
 {
     std::vector<uint8_t>                                  received_payload;
     std::array<udpard_udpip_ep_t, UDPARD_IFACE_COUNT_MAX> sender_sources{};
-    uint64_t                                              sender_uid     = 0;
-    uint64_t                                              received_topic = 0;
-    uint64_t                                              received_tid   = 0;
-    size_t                                                message_count  = 0;
+    uint64_t                                              sender_uid    = 0;
+    uint64_t                                              received_tid  = 0;
+    size_t                                                message_count = 0;
 };
 
 struct NodeAResponseContext
@@ -135,8 +134,7 @@ void node_b_on_topic_message(udpard_rx_t* const rx, udpard_rx_port_t* const port
     for (size_t i = 0; i < UDPARD_IFACE_COUNT_MAX; i++) {
         ctx->sender_sources[i] = transfer.remote.endpoints[i];
     }
-    ctx->received_topic = port->topic_hash;
-    ctx->received_tid   = transfer.transfer_id;
+    ctx->received_tid = transfer.transfer_id;
 
     ctx->received_payload.resize(transfer.payload_size_stored);
     const udpard_fragment_t* cursor = transfer.payload;
@@ -145,10 +143,7 @@ void node_b_on_topic_message(udpard_rx_t* const rx, udpard_rx_port_t* const port
     udpard_fragment_free_all(transfer.payload, udpard_make_deleter(port->memory.fragment));
 }
 
-void on_collision(udpard_rx_t* const, udpard_rx_port_t* const, const udpard_remote_t) {}
-
-constexpr udpard_rx_port_vtable_t topic_callbacks{ .on_message   = &node_b_on_topic_message,
-                                                   .on_collision = &on_collision };
+constexpr udpard_rx_port_vtable_t topic_callbacks{ .on_message = &node_b_on_topic_message };
 
 // Node A's P2P response reception callback - receives the response from B
 void node_a_on_p2p_response(udpard_rx_t* const rx, udpard_rx_port_t* const port, const udpard_rx_transfer_t transfer)
@@ -169,8 +164,7 @@ void node_a_on_p2p_response(udpard_rx_t* const rx, udpard_rx_port_t* const port,
     udpard_fragment_free_all(transfer.payload, udpard_make_deleter(port->memory.fragment));
 }
 
-constexpr udpard_rx_port_vtable_t p2p_response_callbacks{ .on_message   = &node_a_on_p2p_response,
-                                                          .on_collision = &on_collision };
+constexpr udpard_rx_port_vtable_t p2p_response_callbacks{ .on_message = &node_a_on_p2p_response };
 
 // ACK-only P2P port callback (for receiving ACKs, which have no user payload)
 void on_ack_only(udpard_rx_t*, udpard_rx_port_t* port, const udpard_rx_transfer_t tr)
@@ -178,7 +172,7 @@ void on_ack_only(udpard_rx_t*, udpard_rx_port_t* port, const udpard_rx_transfer_
     udpard_fragment_free_all(tr.payload, udpard_make_deleter(port->memory.fragment));
 }
 
-constexpr udpard_rx_port_vtable_t ack_only_callbacks{ .on_message = &on_ack_only, .on_collision = &on_collision };
+constexpr udpard_rx_port_vtable_t ack_only_callbacks{ .on_message = &on_ack_only };
 
 // --------------------------------------------------------------------------------------------------------------------
 // TEST: Basic topic message with P2P response flow
@@ -221,6 +215,7 @@ void test_topic_with_p2p_response()
         res = instrumented_allocator_make_resource(&a_tx_alloc_payload);
     }
     const udpard_rx_mem_resources_t a_rx_mem{ .session  = instrumented_allocator_make_resource(&a_rx_alloc_session),
+                                              .slot     = instrumented_allocator_make_resource(&a_rx_alloc_session),
                                               .fragment = instrumented_allocator_make_resource(&a_rx_alloc_frag) };
 
     udpard_tx_mem_resources_t b_tx_mem{};
@@ -229,6 +224,7 @@ void test_topic_with_p2p_response()
         res = instrumented_allocator_make_resource(&b_tx_alloc_payload);
     }
     const udpard_rx_mem_resources_t b_rx_mem{ .session  = instrumented_allocator_make_resource(&b_rx_alloc_session),
+                                              .slot     = instrumented_allocator_make_resource(&b_rx_alloc_session),
                                               .fragment = instrumented_allocator_make_resource(&b_rx_alloc_frag) };
 
     // ================================================================================================================
@@ -248,7 +244,6 @@ void test_topic_with_p2p_response()
         udpard_udpip_ep_t{ .ip = 0x0A000013U, .port = 7502U },
     };
 
-    constexpr uint64_t topic_hash  = 0x0123456789ABCDEFULL;
     constexpr uint64_t transfer_id = 42;
 
     // ================================================================================================================
@@ -269,8 +264,7 @@ void test_topic_with_p2p_response()
 
     // A's P2P port for receiving responses and ACKs
     udpard_rx_port_t a_p2p_port{};
-    TEST_ASSERT_TRUE(
-      udpard_rx_port_new(&a_p2p_port, node_a_uid, 4096, udpard_rx_unordered, 0, a_rx_mem, &p2p_response_callbacks));
+    TEST_ASSERT_TRUE(udpard_rx_port_new_p2p(&a_p2p_port, 4096, a_rx_mem, &p2p_response_callbacks));
 
     // Node B: single TX, single RX (linked to TX for ACK processing)
     udpard_tx_t                b_tx{};
@@ -287,13 +281,11 @@ void test_topic_with_p2p_response()
 
     // B's topic subscription port
     udpard_rx_port_t b_topic_port{};
-    TEST_ASSERT_TRUE(
-      udpard_rx_port_new(&b_topic_port, topic_hash, 4096, udpard_rx_unordered, 0, b_rx_mem, &topic_callbacks));
+    TEST_ASSERT_TRUE(udpard_rx_port_new(&b_topic_port, 4096, b_rx_mem, &topic_callbacks));
 
     // B's P2P port for receiving response ACKs
     udpard_rx_port_t b_p2p_port{};
-    TEST_ASSERT_TRUE(
-      udpard_rx_port_new(&b_p2p_port, node_b_uid, 16, udpard_rx_unordered, 0, b_rx_mem, &ack_only_callbacks));
+    TEST_ASSERT_TRUE(udpard_rx_port_new_p2p(&b_p2p_port, 16, b_rx_mem, &ack_only_callbacks));
 
     // ================================================================================================================
     // PAYLOADS AND FEEDBACK STATES
@@ -315,7 +307,6 @@ void test_topic_with_p2p_response()
                                     now + 1000000,
                                     iface_bitmap_1,
                                     udpard_prio_nominal,
-                                    topic_hash,
                                     transfer_id,
                                     topic_payload_scat,
                                     &record_feedback,
@@ -508,6 +499,7 @@ void test_topic_with_p2p_response_under_loss()
         res = instrumented_allocator_make_resource(&a_tx_alloc_payload);
     }
     const udpard_rx_mem_resources_t a_rx_mem{ .session  = instrumented_allocator_make_resource(&a_rx_alloc_session),
+                                              .slot     = instrumented_allocator_make_resource(&a_rx_alloc_session),
                                               .fragment = instrumented_allocator_make_resource(&a_rx_alloc_frag) };
 
     udpard_tx_mem_resources_t b_tx_mem{};
@@ -516,6 +508,7 @@ void test_topic_with_p2p_response_under_loss()
         res = instrumented_allocator_make_resource(&b_tx_alloc_payload);
     }
     const udpard_rx_mem_resources_t b_rx_mem{ .session  = instrumented_allocator_make_resource(&b_rx_alloc_session),
+                                              .slot     = instrumented_allocator_make_resource(&b_rx_alloc_session),
                                               .fragment = instrumented_allocator_make_resource(&b_rx_alloc_frag) };
 
     // ================================================================================================================
@@ -535,7 +528,6 @@ void test_topic_with_p2p_response_under_loss()
         udpard_udpip_ep_t{},
     };
 
-    constexpr uint64_t topic_hash  = 0xFEDCBA9876543210ULL;
     constexpr uint64_t transfer_id = 99;
 
     // ================================================================================================================
@@ -554,8 +546,7 @@ void test_topic_with_p2p_response_under_loss()
     a_rx.user = &a_node_ctx;
 
     udpard_rx_port_t a_p2p_port{};
-    TEST_ASSERT_TRUE(
-      udpard_rx_port_new(&a_p2p_port, node_a_uid, 4096, udpard_rx_unordered, 0, a_rx_mem, &p2p_response_callbacks));
+    TEST_ASSERT_TRUE(udpard_rx_port_new_p2p(&a_p2p_port, 4096, a_rx_mem, &p2p_response_callbacks));
 
     udpard_tx_t                b_tx{};
     std::vector<CapturedFrame> b_frames;
@@ -570,12 +561,10 @@ void test_topic_with_p2p_response_under_loss()
     b_rx.user = &b_node_ctx;
 
     udpard_rx_port_t b_topic_port{};
-    TEST_ASSERT_TRUE(
-      udpard_rx_port_new(&b_topic_port, topic_hash, 4096, udpard_rx_unordered, 0, b_rx_mem, &topic_callbacks));
+    TEST_ASSERT_TRUE(udpard_rx_port_new(&b_topic_port, 4096, b_rx_mem, &topic_callbacks));
 
     udpard_rx_port_t b_p2p_port{};
-    TEST_ASSERT_TRUE(
-      udpard_rx_port_new(&b_p2p_port, node_b_uid, 16, udpard_rx_unordered, 0, b_rx_mem, &ack_only_callbacks));
+    TEST_ASSERT_TRUE(udpard_rx_port_new_p2p(&b_p2p_port, 16, b_rx_mem, &ack_only_callbacks));
 
     // ================================================================================================================
     // PAYLOADS AND FEEDBACK STATES
@@ -597,7 +586,6 @@ void test_topic_with_p2p_response_under_loss()
                                     now + 500000,
                                     iface_bitmap_1,
                                     udpard_prio_fast,
-                                    topic_hash,
                                     transfer_id,
                                     topic_payload_scat,
                                     &record_feedback,

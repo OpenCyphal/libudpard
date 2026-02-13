@@ -202,6 +202,60 @@ static void test_rx_fragment_tree_update_a(void)
     instrumented_allocator_reset(&alloc_frag);
     instrumented_allocator_reset(&alloc_payload);
 
+    // Redundant fragment removal when a larger fragment bridges neighbors.
+    {
+        udpard_tree_t*                   root      = NULL;
+        size_t                           cov       = 0;
+        rx_fragment_tree_update_result_t res       = rx_fragment_tree_rejected;
+        const char                       payload[] = "abcdefghij";
+
+        res = rx_fragment_tree_update(&root, //
+                                      mem_frag,
+                                      del_payload,
+                                      make_frame_base(mem_payload, 0, 2, payload),
+                                      10,
+                                      10,
+                                      &cov);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_accepted, res);
+        res = rx_fragment_tree_update(&root, //
+                                      mem_frag,
+                                      del_payload,
+                                      make_frame_base(mem_payload, 2, 2, payload + 2),
+                                      10,
+                                      10,
+                                      &cov);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_accepted, res);
+        res = rx_fragment_tree_update(&root, //
+                                      mem_frag,
+                                      del_payload,
+                                      make_frame_base(mem_payload, 6, 2, payload + 6),
+                                      10,
+                                      10,
+                                      &cov);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_accepted, res);
+        TEST_ASSERT_EQUAL_size_t(3, tree_count(root));
+
+        res = rx_fragment_tree_update(&root, //
+                                      mem_frag,
+                                      del_payload,
+                                      make_frame_base(mem_payload, 1, 6, payload + 1),
+                                      10,
+                                      10,
+                                      &cov);
+        TEST_ASSERT_EQUAL(rx_fragment_tree_accepted, res);
+        TEST_ASSERT_EQUAL_size_t(3, tree_count(root));
+        TEST_ASSERT_EQUAL_size_t(0, fragment_at(root, 0)->offset);
+        TEST_ASSERT_EQUAL_size_t(1, fragment_at(root, 1)->offset);
+        TEST_ASSERT_EQUAL_size_t(6, fragment_at(root, 2)->offset);
+
+        // Cleanup.
+        udpard_fragment_free_all((udpard_fragment_t*)root, udpard_make_deleter(mem_frag));
+        TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
+        TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
+    }
+    instrumented_allocator_reset(&alloc_frag);
+    instrumented_allocator_reset(&alloc_payload);
+
     // Non-empty payload test with zero extent.
     {
         udpard_tree_t*                   root = NULL;
@@ -1183,18 +1237,21 @@ static void test_rx_slot_update(void)
     instrumented_allocator_new(&alloc_frag);
     const udpard_mem_t mem_frag = instrumented_allocator_make_resource(&alloc_frag);
 
+    instrumented_allocator_t alloc_slot = { 0 };
+    instrumented_allocator_new(&alloc_slot);
+    const udpard_mem_t mem_slot = instrumented_allocator_make_resource(&alloc_slot);
+
     instrumented_allocator_t alloc_payload = { 0 };
     instrumented_allocator_new(&alloc_payload);
     const udpard_mem_t     mem_payload = instrumented_allocator_make_resource(&alloc_payload);
     const udpard_deleter_t del_payload = instrumented_allocator_make_deleter(&alloc_payload);
 
-    uint64_t errors_oom                = 0;
-    uint64_t errors_transfer_malformed = 0;
+    uint64_t errors_oom = 0;
 
-    // Test 1: Initialize slot from idle state (slot->state != rx_slot_busy branch)
+    // Test 1: Initialize slot from idle state.
     {
-        rx_slot_t slot = { 0 };
-        slot.state     = rx_slot_idle;
+        rx_slot_t* slot = rx_slot_new(mem_slot);
+        TEST_ASSERT_NOT_NULL(slot);
 
         rx_frame_t frame                 = { 0 };
         frame.base                       = make_frame_base(mem_payload, 0, 5, "hello");
@@ -1204,90 +1261,88 @@ static void test_rx_slot_update(void)
 
         const udpard_us_t ts = 1000;
 
-        rx_slot_update(&slot, ts, mem_frag, del_payload, &frame, 5, &errors_oom, &errors_transfer_malformed);
+        const rx_slot_update_result_t res = rx_slot_update(slot, ts, mem_frag, del_payload, &frame, 5, &errors_oom);
 
-        // Verify slot was initialized
-        TEST_ASSERT_EQUAL(rx_slot_done, slot.state); // Single-frame transfer completes immediately
-        TEST_ASSERT_EQUAL(123, slot.transfer_id);
-        TEST_ASSERT_EQUAL(ts, slot.ts_min);
-        TEST_ASSERT_EQUAL(ts, slot.ts_max);
-        TEST_ASSERT_EQUAL_size_t(5, slot.covered_prefix);
+        TEST_ASSERT_EQUAL(rx_slot_complete, res);
+        TEST_ASSERT_EQUAL(123, slot->transfer_id);
+        TEST_ASSERT_EQUAL(ts, slot->ts_min);
+        TEST_ASSERT_EQUAL(ts, slot->ts_max);
+        TEST_ASSERT_EQUAL_size_t(5, slot->covered_prefix);
         TEST_ASSERT_EQUAL(0, errors_oom);
 
-        rx_slot_reset(&slot, mem_frag);
-        rx_slot_reset(&slot, mem_frag); // idempotent
+        rx_slot_destroy(&slot, mem_frag, mem_slot);
+        TEST_ASSERT_NULL(slot);
     }
     instrumented_allocator_reset(&alloc_frag);
+    instrumented_allocator_reset(&alloc_slot);
     instrumented_allocator_reset(&alloc_payload);
 
-    // Test 2: Multi-frame transfer with timestamp updates (later/earlier branches)
+    // Test 2: Multi-frame transfer with timestamp updates.
     {
-        rx_slot_t slot = { 0 };
-        slot.state     = rx_slot_idle;
+        rx_slot_t* slot = rx_slot_new(mem_slot);
+        TEST_ASSERT_NOT_NULL(slot);
 
-        // First frame at offset 0
         rx_frame_t frame1                 = { 0 };
         frame1.base                       = make_frame_base(mem_payload, 0, 3, "abc");
         frame1.base.crc                   = 0x12345678;
         frame1.meta.transfer_id           = 456;
         frame1.meta.transfer_payload_size = 10;
 
-        const udpard_us_t ts1 = 2000;
-        rx_slot_update(&slot, ts1, mem_frag, del_payload, &frame1, 10, &errors_oom, &errors_transfer_malformed);
+        const udpard_us_t             ts1  = 2000;
+        const rx_slot_update_result_t res1 = rx_slot_update(slot, ts1, mem_frag, del_payload, &frame1, 10, &errors_oom);
 
-        TEST_ASSERT_EQUAL(rx_slot_busy, slot.state);
-        TEST_ASSERT_EQUAL(ts1, slot.ts_min);
-        TEST_ASSERT_EQUAL(ts1, slot.ts_max);
-        TEST_ASSERT_EQUAL_size_t(3, slot.covered_prefix);
-        TEST_ASSERT_EQUAL(3, slot.crc_end);
-        TEST_ASSERT_EQUAL(0x12345678, slot.crc);
+        TEST_ASSERT_EQUAL(rx_slot_incomplete, res1);
+        TEST_ASSERT_EQUAL(ts1, slot->ts_min);
+        TEST_ASSERT_EQUAL(ts1, slot->ts_max);
+        TEST_ASSERT_EQUAL_size_t(3, slot->covered_prefix);
+        TEST_ASSERT_EQUAL(3, slot->crc_end);
+        TEST_ASSERT_EQUAL(0x12345678, slot->crc);
 
-        // Second frame at offset 5, with later timestamp
         rx_frame_t frame2                 = { 0 };
         frame2.base                       = make_frame_base(mem_payload, 5, 3, "def");
         frame2.base.crc                   = 0x87654321;
         frame2.meta.transfer_id           = 456;
         frame2.meta.transfer_payload_size = 10;
 
-        const udpard_us_t ts2 = 3000; // Later than ts1
-        rx_slot_update(&slot, ts2, mem_frag, del_payload, &frame2, 10, &errors_oom, &errors_transfer_malformed);
+        const udpard_us_t             ts2  = 3000;
+        const rx_slot_update_result_t res2 = rx_slot_update(slot, ts2, mem_frag, del_payload, &frame2, 10, &errors_oom);
 
-        TEST_ASSERT_EQUAL(rx_slot_busy, slot.state);
-        TEST_ASSERT_EQUAL(ts1, slot.ts_min);              // Unchanged (ts2 is later)
-        TEST_ASSERT_EQUAL(ts2, slot.ts_max);              // Updated to later time
-        TEST_ASSERT_EQUAL_size_t(3, slot.covered_prefix); // Still 3 due to gap at [3-5)
-        TEST_ASSERT_EQUAL(8, slot.crc_end);               // Updated to end of frame2
-        TEST_ASSERT_EQUAL(0x87654321, slot.crc);          // Updated to frame2's CRC
+        TEST_ASSERT_EQUAL(rx_slot_incomplete, res2);
+        TEST_ASSERT_EQUAL(ts1, slot->ts_min);
+        TEST_ASSERT_EQUAL(ts2, slot->ts_max);
+        TEST_ASSERT_EQUAL_size_t(3, slot->covered_prefix);
+        TEST_ASSERT_EQUAL(8, slot->crc_end);
+        TEST_ASSERT_EQUAL(0x87654321, slot->crc);
 
-        // Third frame at offset 3 (fills gap), with earlier timestamp
         rx_frame_t frame3                 = { 0 };
         frame3.base                       = make_frame_base(mem_payload, 3, 2, "XX");
         frame3.base.crc                   = 0xAABBCCDD;
         frame3.meta.transfer_id           = 456;
         frame3.meta.transfer_payload_size = 10;
 
-        const udpard_us_t ts3 = 1500; // Earlier than ts1
-        rx_slot_update(&slot, ts3, mem_frag, del_payload, &frame3, 10, &errors_oom, &errors_transfer_malformed);
+        const udpard_us_t             ts3  = 1500;
+        const rx_slot_update_result_t res3 = rx_slot_update(slot, ts3, mem_frag, del_payload, &frame3, 10, &errors_oom);
 
-        TEST_ASSERT_EQUAL(rx_slot_busy, slot.state);
-        TEST_ASSERT_EQUAL(ts3, slot.ts_min);              // Updated to earlier time
-        TEST_ASSERT_EQUAL(ts2, slot.ts_max);              // Unchanged (ts3 is earlier)
-        TEST_ASSERT_EQUAL_size_t(8, slot.covered_prefix); // Now contiguous 0-8
-        TEST_ASSERT_EQUAL(8, slot.crc_end);               // Unchanged (frame3 doesn't extend beyond frame2)
-        TEST_ASSERT_EQUAL(0x87654321, slot.crc);          // Unchanged (crc_end didn't increase)
+        TEST_ASSERT_EQUAL(rx_slot_incomplete, res3);
+        TEST_ASSERT_EQUAL(ts3, slot->ts_min);
+        TEST_ASSERT_EQUAL(ts2, slot->ts_max);
+        TEST_ASSERT_EQUAL_size_t(8, slot->covered_prefix);
+        TEST_ASSERT_EQUAL(8, slot->crc_end);
+        TEST_ASSERT_EQUAL(0x87654321, slot->crc);
 
-        rx_slot_reset(&slot, mem_frag);
+        rx_slot_destroy(&slot, mem_frag, mem_slot);
+        TEST_ASSERT_NULL(slot);
     }
     instrumented_allocator_reset(&alloc_frag);
+    instrumented_allocator_reset(&alloc_slot);
     instrumented_allocator_reset(&alloc_payload);
 
-    // Test 3: OOM handling (tree_res == rx_fragment_tree_oom branch)
+    // Test 3: OOM handling.
     {
-        rx_slot_t slot = { 0 };
-        slot.state     = rx_slot_idle;
-        errors_oom     = 0;
+        rx_slot_t* slot = rx_slot_new(mem_slot);
+        TEST_ASSERT_NOT_NULL(slot);
+        errors_oom = 0;
 
-        // Limit allocations to trigger OOM
         alloc_frag.limit_fragments = 0;
 
         rx_frame_t frame                 = { 0 };
@@ -1296,58 +1351,49 @@ static void test_rx_slot_update(void)
         frame.meta.transfer_id           = 789;
         frame.meta.transfer_payload_size = 5;
 
-        rx_slot_update(&slot, 5000, mem_frag, del_payload, &frame, 5, &errors_oom, &errors_transfer_malformed);
+        const rx_slot_update_result_t res = rx_slot_update(slot, 5000, mem_frag, del_payload, &frame, 5, &errors_oom);
 
-        // Verify OOM error was counted
+        TEST_ASSERT_EQUAL(rx_slot_incomplete, res);
         TEST_ASSERT_EQUAL(1, errors_oom);
-        TEST_ASSERT_EQUAL(rx_slot_busy, slot.state);      // Slot initialized but fragment not added
-        TEST_ASSERT_EQUAL_size_t(0, slot.covered_prefix); // No fragments accepted
+        TEST_ASSERT_EQUAL_size_t(0, slot->covered_prefix);
 
-        // Restore allocation limit
-        alloc_frag.limit_fragments = SIZE_MAX;
-
-        rx_slot_reset(&slot, mem_frag);
+        rx_slot_destroy(&slot, mem_frag, mem_slot);
+        TEST_ASSERT_NULL(slot);
     }
     instrumented_allocator_reset(&alloc_frag);
+    instrumented_allocator_reset(&alloc_slot);
     instrumented_allocator_reset(&alloc_payload);
 
-    // Test 4: Malformed transfer handling (CRC failure in rx_fragment_tree_finalize)
+    // Test 4: Malformed transfer handling (CRC failure).
     {
-        rx_slot_t slot            = { 0 };
-        slot.state                = rx_slot_idle;
-        errors_transfer_malformed = 0;
+        rx_slot_t* slot = rx_slot_new(mem_slot);
+        TEST_ASSERT_NOT_NULL(slot);
+        errors_oom = 0;
 
-        // Single-frame transfer with incorrect CRC
         rx_frame_t frame                 = { 0 };
         frame.base                       = make_frame_base(mem_payload, 0, 4, "test");
         frame.base.crc                   = 0xDEADBEEF; // Incorrect CRC
         frame.meta.transfer_id           = 999;
         frame.meta.transfer_payload_size = 4;
 
-        rx_slot_update(&slot, 6000, mem_frag, del_payload, &frame, 4, &errors_oom, &errors_transfer_malformed);
+        const rx_slot_update_result_t res = rx_slot_update(slot, 6000, mem_frag, del_payload, &frame, 4, &errors_oom);
 
-        // Verify malformed error was counted and slot was reset
-        TEST_ASSERT_EQUAL(1, errors_transfer_malformed);
-        TEST_ASSERT_EQUAL(rx_slot_idle, slot.state); // Slot reset after CRC failure
-        TEST_ASSERT_EQUAL_size_t(0, slot.covered_prefix);
-        TEST_ASSERT_NULL(slot.fragments);
+        TEST_ASSERT_EQUAL(rx_slot_failure, res);
 
-        rx_slot_reset(&slot, mem_frag);
+        rx_slot_destroy(&slot, mem_frag, mem_slot);
+        TEST_ASSERT_NULL(slot);
     }
     instrumented_allocator_reset(&alloc_frag);
+    instrumented_allocator_reset(&alloc_slot);
     instrumented_allocator_reset(&alloc_payload);
 
-    // Test 5: Successful completion with correct CRC (tree_res == rx_fragment_tree_done, CRC pass)
+    // Test 5: Successful completion with correct CRC.
     {
-        rx_slot_t slot            = { 0 };
-        slot.state                = rx_slot_idle;
-        errors_transfer_malformed = 0;
-        errors_oom                = 0;
+        rx_slot_t* slot = rx_slot_new(mem_slot);
+        TEST_ASSERT_NOT_NULL(slot);
+        errors_oom = 0;
 
-        // Single-frame transfer with correct CRC
-        // CRC calculation for "test": using Python pycyphal.transport.commons.crc.CRC32C
-        // >>> from pycyphal.transport.commons.crc import CRC32C
-        // >>> hex(CRC32C.new(b"test").value)
+        // CRC value computed from "test".
         const uint32_t correct_crc = 0x86a072c0UL;
 
         rx_frame_t frame                 = { 0 };
@@ -1356,75 +1402,80 @@ static void test_rx_slot_update(void)
         frame.meta.transfer_id           = 1111;
         frame.meta.transfer_payload_size = 4;
 
-        rx_slot_update(&slot, 7000, mem_frag, del_payload, &frame, 4, &errors_oom, &errors_transfer_malformed);
+        const rx_slot_update_result_t res = rx_slot_update(slot, 7000, mem_frag, del_payload, &frame, 4, &errors_oom);
 
-        // Verify successful completion
-        TEST_ASSERT_EQUAL(0, errors_transfer_malformed);
-        TEST_ASSERT_EQUAL(rx_slot_done, slot.state); // Successfully completed
-        TEST_ASSERT_EQUAL_size_t(4, slot.covered_prefix);
-        TEST_ASSERT_NOT_NULL(slot.fragments);
+        TEST_ASSERT_EQUAL(rx_slot_complete, res);
+        TEST_ASSERT_EQUAL(0, errors_oom);
+        TEST_ASSERT_EQUAL_size_t(4, slot->covered_prefix);
+        TEST_ASSERT_NOT_NULL(slot->fragments);
 
-        rx_slot_reset(&slot, mem_frag);
+        rx_slot_destroy(&slot, mem_frag, mem_slot);
+        TEST_ASSERT_NULL(slot);
     }
     instrumented_allocator_reset(&alloc_frag);
+    instrumented_allocator_reset(&alloc_slot);
     instrumented_allocator_reset(&alloc_payload);
 
-    // Test 6: CRC end update only when crc_end >= slot->crc_end
+    // Test 6: CRC end update rules.
     {
-        rx_slot_t slot            = { 0 };
-        slot.state                = rx_slot_idle;
-        errors_transfer_malformed = 0;
-        errors_oom                = 0;
+        rx_slot_t* slot = rx_slot_new(mem_slot);
+        TEST_ASSERT_NOT_NULL(slot);
+        errors_oom = 0;
 
-        // Frame 1 at offset 5 (will set crc_end to 10)
         rx_frame_t frame1                 = { 0 };
         frame1.base                       = make_frame_base(mem_payload, 5, 5, "world");
         frame1.base.crc                   = 0xAAAAAAAA;
         frame1.meta.transfer_id           = 2222;
         frame1.meta.transfer_payload_size = 20;
 
-        rx_slot_update(&slot, 8000, mem_frag, del_payload, &frame1, 20, &errors_oom, &errors_transfer_malformed);
+        const rx_slot_update_result_t res1 =
+          rx_slot_update(slot, 8000, mem_frag, del_payload, &frame1, 20, &errors_oom);
 
-        TEST_ASSERT_EQUAL(10, slot.crc_end);
-        TEST_ASSERT_EQUAL(0xAAAAAAAA, slot.crc);
+        TEST_ASSERT_EQUAL(rx_slot_incomplete, res1);
+        TEST_ASSERT_EQUAL(10, slot->crc_end);
+        TEST_ASSERT_EQUAL(0xAAAAAAAA, slot->crc);
 
-        // Frame 2 at offset 0 (crc_end would be 3, less than current 10, so CRC shouldn't update)
         rx_frame_t frame2                 = { 0 };
         frame2.base                       = make_frame_base(mem_payload, 0, 3, "abc");
         frame2.base.crc                   = 0xBBBBBBBB;
         frame2.meta.transfer_id           = 2222;
         frame2.meta.transfer_payload_size = 20;
 
-        rx_slot_update(&slot, 8100, mem_frag, del_payload, &frame2, 20, &errors_oom, &errors_transfer_malformed);
+        const rx_slot_update_result_t res2 =
+          rx_slot_update(slot, 8100, mem_frag, del_payload, &frame2, 20, &errors_oom);
 
-        TEST_ASSERT_EQUAL(10, slot.crc_end);     // Unchanged
-        TEST_ASSERT_EQUAL(0xAAAAAAAA, slot.crc); // Unchanged (frame2 didn't update it)
+        TEST_ASSERT_EQUAL(rx_slot_incomplete, res2);
+        TEST_ASSERT_EQUAL(10, slot->crc_end);
+        TEST_ASSERT_EQUAL(0xAAAAAAAA, slot->crc);
 
-        // Frame 3 at offset 10 (crc_end would be 15, greater than current 10, so CRC should update)
         rx_frame_t frame3                 = { 0 };
         frame3.base                       = make_frame_base(mem_payload, 10, 5, "hello");
         frame3.base.crc                   = 0xCCCCCCCC;
         frame3.meta.transfer_id           = 2222;
         frame3.meta.transfer_payload_size = 20;
 
-        rx_slot_update(&slot, 8200, mem_frag, del_payload, &frame3, 20, &errors_oom, &errors_transfer_malformed);
+        const rx_slot_update_result_t res3 =
+          rx_slot_update(slot, 8200, mem_frag, del_payload, &frame3, 20, &errors_oom);
 
-        TEST_ASSERT_EQUAL(15, slot.crc_end);     // Updated
-        TEST_ASSERT_EQUAL(0xCCCCCCCC, slot.crc); // Updated
+        TEST_ASSERT_EQUAL(rx_slot_incomplete, res3);
+        TEST_ASSERT_EQUAL(15, slot->crc_end);
+        TEST_ASSERT_EQUAL(0xCCCCCCCC, slot->crc);
 
-        rx_slot_reset(&slot, mem_frag);
+        rx_slot_destroy(&slot, mem_frag, mem_slot);
+        TEST_ASSERT_NULL(slot);
     }
     instrumented_allocator_reset(&alloc_frag);
+    instrumented_allocator_reset(&alloc_slot);
     instrumented_allocator_reset(&alloc_payload);
 
-    // Test 7: Inconsistent frame fields; suspicious transfer rejected.
+    // Test 7: Inconsistent frame fields.
     {
-        rx_slot_t slot            = { 0 };
-        slot.state                = rx_slot_idle;
-        errors_transfer_malformed = 0;
-        errors_oom                = 0;
+        errors_oom = 0;
 
-        // First frame initializes the slot with transfer_payload_size=20 and priority=udpard_prio_high
+        // Total size mismatch.
+        rx_slot_t* slot = rx_slot_new(mem_slot);
+        TEST_ASSERT_NOT_NULL(slot);
+
         rx_frame_t frame1                 = { 0 };
         frame1.base                       = make_frame_base(mem_payload, 0, 5, "hello");
         frame1.base.crc                   = 0x12345678;
@@ -1432,34 +1483,28 @@ static void test_rx_slot_update(void)
         frame1.meta.transfer_payload_size = 20;
         frame1.meta.priority              = udpard_prio_high;
 
-        rx_slot_update(&slot, 9000, mem_frag, del_payload, &frame1, 20, &errors_oom, &errors_transfer_malformed);
+        const rx_slot_update_result_t res1 =
+          rx_slot_update(slot, 9000, mem_frag, del_payload, &frame1, 20, &errors_oom);
+        TEST_ASSERT_EQUAL(rx_slot_incomplete, res1);
 
-        TEST_ASSERT_EQUAL(rx_slot_busy, slot.state);
-        TEST_ASSERT_EQUAL(20, slot.total_size);
-        TEST_ASSERT_EQUAL(udpard_prio_high, slot.priority);
-        TEST_ASSERT_EQUAL_size_t(5, slot.covered_prefix);
-        TEST_ASSERT_EQUAL(0, errors_transfer_malformed);
-
-        // Second frame with DIFFERENT transfer_payload_size (should trigger the branch and reset the slot)
         rx_frame_t frame2                 = { 0 };
         frame2.base                       = make_frame_base(mem_payload, 5, 5, "world");
         frame2.base.crc                   = 0xABCDEF00;
         frame2.meta.transfer_id           = 3333;
-        frame2.meta.transfer_payload_size = 25; // DIFFERENT from frame1's 20
+        frame2.meta.transfer_payload_size = 25;
         frame2.meta.priority              = udpard_prio_high;
 
-        rx_slot_update(&slot, 9100, mem_frag, del_payload, &frame2, 25, &errors_oom, &errors_transfer_malformed);
+        const rx_slot_update_result_t res2 =
+          rx_slot_update(slot, 9100, mem_frag, del_payload, &frame2, 25, &errors_oom);
+        TEST_ASSERT_EQUAL(rx_slot_failure, res2);
 
-        // Verify that the malformed error was counted and slot was reset
-        TEST_ASSERT_EQUAL(1, errors_transfer_malformed);
-        TEST_ASSERT_EQUAL(rx_slot_idle, slot.state); // Slot reset due to inconsistent total_size
-        TEST_ASSERT_EQUAL_size_t(0, slot.covered_prefix);
-        TEST_ASSERT_NULL(slot.fragments);
+        rx_slot_destroy(&slot, mem_frag, mem_slot);
+        TEST_ASSERT_NULL(slot);
 
-        // Reset counters
-        errors_transfer_malformed = 0;
+        // Priority mismatch.
+        slot = rx_slot_new(mem_slot);
+        TEST_ASSERT_NOT_NULL(slot);
 
-        // Third frame initializes the slot again with transfer_payload_size=30 and priority=udpard_prio_low
         rx_frame_t frame3                 = { 0 };
         frame3.base                       = make_frame_base(mem_payload, 0, 5, "test1");
         frame3.base.crc                   = 0x11111111;
@@ -1467,34 +1512,28 @@ static void test_rx_slot_update(void)
         frame3.meta.transfer_payload_size = 30;
         frame3.meta.priority              = udpard_prio_low;
 
-        rx_slot_update(&slot, 9200, mem_frag, del_payload, &frame3, 30, &errors_oom, &errors_transfer_malformed);
+        const rx_slot_update_result_t res3 =
+          rx_slot_update(slot, 9200, mem_frag, del_payload, &frame3, 30, &errors_oom);
+        TEST_ASSERT_EQUAL(rx_slot_incomplete, res3);
 
-        TEST_ASSERT_EQUAL(rx_slot_busy, slot.state);
-        TEST_ASSERT_EQUAL(30, slot.total_size);
-        TEST_ASSERT_EQUAL(udpard_prio_low, slot.priority);
-        TEST_ASSERT_EQUAL_size_t(5, slot.covered_prefix);
-        TEST_ASSERT_EQUAL(0, errors_transfer_malformed);
-
-        // Fourth frame with DIFFERENT priority (should trigger the branch and reset the slot)
         rx_frame_t frame4                 = { 0 };
         frame4.base                       = make_frame_base(mem_payload, 5, 5, "test2");
         frame4.base.crc                   = 0x22222222;
         frame4.meta.transfer_id           = 4444;
-        frame4.meta.transfer_payload_size = 30;               // Same as frame3
-        frame4.meta.priority              = udpard_prio_high; // DIFFERENT from frame3's udpard_prio_low
+        frame4.meta.transfer_payload_size = 30;
+        frame4.meta.priority              = udpard_prio_high;
 
-        rx_slot_update(&slot, 9300, mem_frag, del_payload, &frame4, 30, &errors_oom, &errors_transfer_malformed);
+        const rx_slot_update_result_t res4 =
+          rx_slot_update(slot, 9300, mem_frag, del_payload, &frame4, 30, &errors_oom);
+        TEST_ASSERT_EQUAL(rx_slot_failure, res4);
 
-        // Verify that the malformed error was counted and slot was reset
-        TEST_ASSERT_EQUAL(1, errors_transfer_malformed);
-        TEST_ASSERT_EQUAL(rx_slot_idle, slot.state); // Slot reset due to inconsistent priority
-        TEST_ASSERT_EQUAL_size_t(0, slot.covered_prefix);
-        TEST_ASSERT_NULL(slot.fragments);
+        rx_slot_destroy(&slot, mem_frag, mem_slot);
+        TEST_ASSERT_NULL(slot);
 
-        // Reset counters
-        errors_transfer_malformed = 0;
+        // Total size and priority mismatch.
+        slot = rx_slot_new(mem_slot);
+        TEST_ASSERT_NOT_NULL(slot);
 
-        // Fifth frame initializes the slot again
         rx_frame_t frame5                 = { 0 };
         frame5.base                       = make_frame_base(mem_payload, 0, 5, "test3");
         frame5.base.crc                   = 0x33333333;
@@ -1502,96 +1541,42 @@ static void test_rx_slot_update(void)
         frame5.meta.transfer_payload_size = 40;
         frame5.meta.priority              = udpard_prio_nominal;
 
-        rx_slot_update(&slot, 9400, mem_frag, del_payload, &frame5, 40, &errors_oom, &errors_transfer_malformed);
+        const rx_slot_update_result_t res5 =
+          rx_slot_update(slot, 9400, mem_frag, del_payload, &frame5, 40, &errors_oom);
+        TEST_ASSERT_EQUAL(rx_slot_incomplete, res5);
 
-        TEST_ASSERT_EQUAL(rx_slot_busy, slot.state);
-        TEST_ASSERT_EQUAL(40, slot.total_size);
-        TEST_ASSERT_EQUAL(udpard_prio_nominal, slot.priority);
-        TEST_ASSERT_EQUAL_size_t(5, slot.covered_prefix);
-        TEST_ASSERT_EQUAL(0, errors_transfer_malformed);
-
-        // Sixth frame with BOTH different transfer_payload_size AND priority (should still trigger the branch)
         rx_frame_t frame6                 = { 0 };
         frame6.base                       = make_frame_base(mem_payload, 5, 5, "test4");
         frame6.base.crc                   = 0x44444444;
         frame6.meta.transfer_id           = 5555;
-        frame6.meta.transfer_payload_size = 50;               // DIFFERENT from frame5's 40
-        frame6.meta.priority              = udpard_prio_fast; // DIFFERENT from frame5's udpard_prio_nominal
+        frame6.meta.transfer_payload_size = 50;
+        frame6.meta.priority              = udpard_prio_fast;
 
-        rx_slot_update(&slot, 9500, mem_frag, del_payload, &frame6, 50, &errors_oom, &errors_transfer_malformed);
+        const rx_slot_update_result_t res6 =
+          rx_slot_update(slot, 9500, mem_frag, del_payload, &frame6, 50, &errors_oom);
+        TEST_ASSERT_EQUAL(rx_slot_failure, res6);
 
-        // Verify that the malformed error was counted and slot was reset
-        TEST_ASSERT_EQUAL(1, errors_transfer_malformed);
-        TEST_ASSERT_EQUAL(rx_slot_idle, slot.state); // Slot reset due to both inconsistencies
-        TEST_ASSERT_EQUAL_size_t(0, slot.covered_prefix);
-        TEST_ASSERT_NULL(slot.fragments);
-
-        rx_slot_reset(&slot, mem_frag);
+        rx_slot_destroy(&slot, mem_frag, mem_slot);
+        TEST_ASSERT_NULL(slot);
     }
     instrumented_allocator_reset(&alloc_frag);
+    instrumented_allocator_reset(&alloc_slot);
     instrumented_allocator_reset(&alloc_payload);
 
-    // Verify no memory leaks
+    // Verify no memory leaks.
     TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0, alloc_slot.allocated_fragments);
     TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
 }
 
 // ---------------------------------------------  RX SESSION  ---------------------------------------------
-
-static void test_rx_transfer_id_forward_distance(void)
-{
-    // Test 1: Same value (distance is 0)
-    TEST_ASSERT_EQUAL_UINT64(0, rx_transfer_id_forward_distance(0, 0));
-    TEST_ASSERT_EQUAL_UINT64(0, rx_transfer_id_forward_distance(100, 100));
-    TEST_ASSERT_EQUAL_UINT64(0, rx_transfer_id_forward_distance(UINT64_MAX, UINT64_MAX));
-
-    // Test 2: Simple forward distance (no wraparound)
-    TEST_ASSERT_EQUAL_UINT64(1, rx_transfer_id_forward_distance(0, 1));
-    TEST_ASSERT_EQUAL_UINT64(10, rx_transfer_id_forward_distance(5, 15));
-    TEST_ASSERT_EQUAL_UINT64(100, rx_transfer_id_forward_distance(200, 300));
-    TEST_ASSERT_EQUAL_UINT64(1000, rx_transfer_id_forward_distance(1000, 2000));
-
-    // Test 3: Wraparound at UINT64_MAX
-    TEST_ASSERT_EQUAL_UINT64(1, rx_transfer_id_forward_distance(UINT64_MAX, 0));
-    TEST_ASSERT_EQUAL_UINT64(2, rx_transfer_id_forward_distance(UINT64_MAX, 1));
-    TEST_ASSERT_EQUAL_UINT64(10, rx_transfer_id_forward_distance(UINT64_MAX - 5, 4));
-    TEST_ASSERT_EQUAL_UINT64(100, rx_transfer_id_forward_distance(UINT64_MAX - 49, 50));
-
-    // Test 4: Large forward distances
-    TEST_ASSERT_EQUAL_UINT64(UINT64_MAX, rx_transfer_id_forward_distance(0, UINT64_MAX));
-    TEST_ASSERT_EQUAL_UINT64(UINT64_MAX, rx_transfer_id_forward_distance(1, 0));
-    TEST_ASSERT_EQUAL_UINT64(UINT64_MAX - 1, rx_transfer_id_forward_distance(0, UINT64_MAX - 1));
-    TEST_ASSERT_EQUAL_UINT64(UINT64_MAX, rx_transfer_id_forward_distance(2, 1));
-
-    // Test 5: Half-way point (2^63)
-    const uint64_t half = 1ULL << 63U;
-    TEST_ASSERT_EQUAL_UINT64(half, rx_transfer_id_forward_distance(0, half));
-    TEST_ASSERT_EQUAL_UINT64(half, rx_transfer_id_forward_distance(100, 100 + half));
-    TEST_ASSERT_EQUAL_UINT64(half, rx_transfer_id_forward_distance(UINT64_MAX, half - 1));
-
-    // Test 6: Backward is interpreted as large forward distance
-    // Going from 10 to 5 is actually going forward by UINT64_MAX - 4
-    TEST_ASSERT_EQUAL_UINT64(UINT64_MAX - 4, rx_transfer_id_forward_distance(10, 5));
-    TEST_ASSERT_EQUAL_UINT64(UINT64_MAX - 9, rx_transfer_id_forward_distance(100, 90));
-
-    // Test 7: Edge cases around 0
-    TEST_ASSERT_EQUAL_UINT64(UINT64_MAX, rx_transfer_id_forward_distance(1, 0));
-    TEST_ASSERT_EQUAL_UINT64(1, rx_transfer_id_forward_distance(0, 1));
-
-    // Test 8: Random large numbers
-    TEST_ASSERT_EQUAL_UINT64(0x123456789ABCDEF0ULL - 0x0FEDCBA987654321ULL,
-                             rx_transfer_id_forward_distance(0x0FEDCBA987654321ULL, 0x123456789ABCDEF0ULL));
-}
 
 // Captures ack transfers emitted into the TX pipelines.
 typedef struct
 {
     udpard_prio_t     priority;
     uint64_t          transfer_id;
-    uint64_t          topic_hash;
     udpard_udpip_ep_t destination;
-    uint64_t          acked_topic_hash;
-    uint64_t          acked_transfer_id;
 } ack_tx_info_t;
 
 typedef struct
@@ -1631,16 +1616,11 @@ static bool tx_capture_ack_p2p(udpard_tx_t* const          tx,
       &frame_offset,
       &prefix_crc,
       &payload);
-    if (ok && (frame_index == 0U) && (frame_offset == 0U) && meta.flag_acknowledgement &&
-        (payload.size >= ACK_SIZE_BYTES)) {
-        const byte_t* const  pl   = (const byte_t*)payload.data;
+    if (ok && (frame_index == 0U) && (frame_offset == 0U) && (meta.kind == frame_ack) && (payload.size == 0U)) {
         ack_tx_info_t* const info = &self->captured[self->captured_count++];
         info->priority            = meta.priority;
         info->transfer_id         = meta.transfer_id;
-        info->topic_hash          = meta.topic_hash;
         info->destination         = destination;
-        (void)deserialize_u64(pl + 0U, &info->acked_topic_hash);
-        (void)deserialize_u64(pl + 8U, &info->acked_transfer_id);
     }
     udpard_tx_refcount_dec(ejection->datagram);
     return true;
@@ -1686,11 +1666,6 @@ typedef struct
     } message;
     struct
     {
-        udpard_remote_t remote;
-        uint64_t        count;
-    } collision;
-    struct
-    {
         ack_tx_info_t last;
         uint64_t      count;
     } ack;
@@ -1712,15 +1687,7 @@ static void on_message(udpard_rx_t* const rx, udpard_rx_port_t* const port, cons
     cb_result->message.count++;
 }
 
-static void on_collision(udpard_rx_t* const rx, udpard_rx_port_t* const port, const udpard_remote_t remote)
-{
-    callback_result_t* const cb_result = (callback_result_t* const)rx->user;
-    cb_result->rx                      = rx;
-    cb_result->port                    = port;
-    cb_result->collision.remote        = remote;
-    cb_result->collision.count++;
-}
-static const udpard_rx_port_vtable_t callbacks = { &on_message, &on_collision };
+static const udpard_rx_port_vtable_t callbacks = { .on_message = &on_message };
 
 /// Checks that ack transfers are emitted into the TX queues.
 static void test_rx_ack_enqueued(void)
@@ -1738,7 +1705,7 @@ static void test_rx_ack_enqueued(void)
     const udpard_mem_t     mem_payload = instrumented_allocator_make_resource(&alloc_payload);
     const udpard_deleter_t del_payload = instrumented_allocator_make_deleter(&alloc_payload);
 
-    const udpard_rx_mem_resources_t rx_mem = { .fragment = mem_frag, .session = mem_session };
+    const udpard_rx_mem_resources_t rx_mem = { .fragment = mem_frag, .session = mem_session, .slot = mem_session };
 
     tx_fixture_t tx_fix = { 0 };
     tx_fixture_init(&tx_fix, 0xBADC0FFEE0DDF00DULL, 8);
@@ -1748,13 +1715,10 @@ static void test_rx_ack_enqueued(void)
     callback_result_t cb_result = { 0 };
     rx.user                     = &cb_result;
 
-    const uint64_t         topic_hash = 0x4E81E200CB479D4CULL;
-    udpard_rx_port_t       port;
-    const udpard_rx_mode_t mode       = udpard_rx_unordered;
-    const udpard_us_t      window     = 0;
-    const uint64_t         remote_uid = 0xA1B2C3D4E5F60718ULL;
-    const size_t           extent     = 1000;
-    TEST_ASSERT(udpard_rx_port_new(&port, topic_hash, extent, mode, window, rx_mem, &callbacks));
+    udpard_rx_port_t port;
+    const uint64_t   remote_uid = 0xA1B2C3D4E5F60718ULL;
+    const size_t     extent     = 1000;
+    TEST_ASSERT(udpard_rx_port_new(&port, extent, rx_mem, &callbacks));
     rx_session_factory_args_t fac_args = {
         .owner                 = &port,
         .sessions_by_animation = &rx.list_session_by_animation,
@@ -1769,11 +1733,10 @@ static void test_rx_ack_enqueued(void)
     TEST_ASSERT_NOT_NULL(ses);
 
     meta_t                  meta = { .priority              = udpard_prio_high,
-                                     .flag_reliable         = true,
+                                     .kind                  = frame_msg_reliable,
                                      .transfer_payload_size = 5,
                                      .transfer_id           = 77,
-                                     .sender_uid            = remote_uid,
-                                     .topic_hash            = topic_hash };
+                                     .sender_uid            = remote_uid };
     udpard_us_t             now  = 0;
     const udpard_udpip_ep_t ep0  = { .ip = 0x0A000001, .port = 0x1234 };
     now += 100;
@@ -1785,8 +1748,7 @@ static void test_rx_ack_enqueued(void)
         cb_result.ack.last = tx_fix.captured[tx_fix.captured_count - 1U];
     }
     TEST_ASSERT(cb_result.ack.count >= 1);
-    TEST_ASSERT_EQUAL_UINT64(topic_hash, cb_result.ack.last.acked_topic_hash);
-    TEST_ASSERT_EQUAL_UINT64(meta.transfer_id, cb_result.ack.last.acked_transfer_id);
+    TEST_ASSERT_EQUAL_UINT64(meta.transfer_id, cb_result.ack.last.transfer_id);
     TEST_ASSERT_EQUAL_UINT32(ep0.ip, cb_result.ack.last.destination.ip);
     TEST_ASSERT_EQUAL_UINT16(ep0.port, cb_result.ack.last.destination.port);
 
@@ -1804,154 +1766,10 @@ static void test_rx_ack_enqueued(void)
         cb_result.ack.last = tx_fix.captured[tx_fix.captured_count - 1U];
     }
     TEST_ASSERT(cb_result.ack.count >= 2); // acks on interfaces 0 and 1
-    TEST_ASSERT_EQUAL_UINT64(meta.transfer_id, cb_result.ack.last.acked_transfer_id);
+    TEST_ASSERT_EQUAL_UINT64(meta.transfer_id, cb_result.ack.last.transfer_id);
 
     udpard_rx_port_free(&rx, &port);
     tx_fixture_free(&tx_fix);
-    TEST_ASSERT_EQUAL(0, alloc_frag.allocated_fragments);
-    TEST_ASSERT_EQUAL(0, alloc_session.allocated_fragments);
-    TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments);
-    instrumented_allocator_reset(&alloc_frag);
-    instrumented_allocator_reset(&alloc_session);
-    instrumented_allocator_reset(&alloc_payload);
-}
-
-/// Tests the ORDERED reassembly mode (strictly increasing transfer-ID sequence).
-static void test_rx_session_ordered(void)
-{
-    instrumented_allocator_t alloc_frag = { 0 };
-    instrumented_allocator_new(&alloc_frag);
-    const udpard_mem_t mem_frag = instrumented_allocator_make_resource(&alloc_frag);
-
-    instrumented_allocator_t alloc_session = { 0 };
-    instrumented_allocator_new(&alloc_session);
-    const udpard_mem_t mem_session = instrumented_allocator_make_resource(&alloc_session);
-
-    instrumented_allocator_t alloc_payload = { 0 };
-    instrumented_allocator_new(&alloc_payload);
-    const udpard_mem_t     mem_payload = instrumented_allocator_make_resource(&alloc_payload);
-    const udpard_deleter_t del_payload = instrumented_allocator_make_deleter(&alloc_payload);
-
-    const udpard_rx_mem_resources_t rx_mem = { .fragment = mem_frag, .session = mem_session };
-
-    udpard_rx_t rx;
-    udpard_rx_new(&rx, NULL);
-    callback_result_t cb_result = { 0 };
-    rx.user                     = &cb_result;
-
-    udpard_us_t      now        = 0;
-    const uint64_t   remote_uid = 0xA1B2C3D4E5F60718ULL;
-    udpard_rx_port_t port;
-    TEST_ASSERT(
-      udpard_rx_port_new(&port, 0x4E81E200CB479D4CULL, 1000, udpard_rx_ordered, 20 * KILO, rx_mem, &callbacks));
-    rx_session_factory_args_t fac_args = {
-        .owner                 = &port,
-        .sessions_by_animation = &rx.list_session_by_animation,
-        .remote_uid            = remote_uid,
-        .now                   = now,
-    };
-    rx_session_t* const ses = (rx_session_t*)cavl2_find_or_insert(&port.index_session_by_remote_uid,
-                                                                  &remote_uid,
-                                                                  &cavl_compare_rx_session_by_remote_uid,
-                                                                  &fac_args,
-                                                                  &cavl_factory_rx_session_by_remote_uid);
-    TEST_ASSERT_NOT_NULL(ses);
-
-    meta_t meta = { .priority              = udpard_prio_high,
-                    .flag_reliable         = true,
-                    .transfer_payload_size = 10,
-                    .transfer_id           = 42,
-                    .sender_uid            = remote_uid,
-                    .topic_hash            = port.topic_hash };
-    now += 1000;
-    rx_session_update(ses,
-                      &rx,
-                      now,
-                      (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1234 },
-                      make_frame_ptr(meta, mem_payload, "0123456789", 5, 5),
-                      del_payload,
-                      0);
-    now += 1000;
-    rx_session_update(ses,
-                      &rx,
-                      now,
-                      (udpard_udpip_ep_t){ .ip = 0x0A000002, .port = 0x4321 },
-                      make_frame_ptr(meta, mem_payload, "0123456789", 0, 5),
-                      del_payload,
-                      2);
-    TEST_ASSERT_EQUAL(1, cb_result.message.count);
-    TEST_ASSERT_EQUAL(udpard_prio_high, cb_result.message.history[0].priority);
-    TEST_ASSERT_EQUAL(42, cb_result.message.history[0].transfer_id);
-    TEST_ASSERT_EQUAL(remote_uid, cb_result.message.history[0].remote.uid);
-    TEST_ASSERT(transfer_payload_verify(&cb_result.message.history[0], 10, "0123456789", 10));
-    udpard_fragment_free_all(cb_result.message.history[0].payload, udpard_make_deleter(mem_frag));
-    cb_result.message.history[0].payload = NULL;
-    cb_result.message.history[0].payload = NULL;
-    cb_result.message.history[0].payload = NULL;
-
-    meta.flag_reliable = false;
-    now += 500;
-    rx_session_update(ses,
-                      &rx,
-                      now,
-                      (udpard_udpip_ep_t){ .ip = 0x0A000003, .port = 0x1111 },
-                      make_frame_ptr(meta, mem_payload, "abcdef", 0, 6),
-                      del_payload,
-                      1);
-    TEST_ASSERT_EQUAL(1, cb_result.message.count);
-    TEST_ASSERT_EQUAL(0, alloc_frag.allocated_fragments);
-    TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments);
-
-    meta.flag_reliable         = true;
-    meta.transfer_payload_size = 3;
-    meta.transfer_id           = 44;
-    now += 500;
-    rx_session_update(ses,
-                      &rx,
-                      now,
-                      (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1234 },
-                      make_frame_ptr(meta, mem_payload, "444", 0, 3),
-                      del_payload,
-                      0);
-    TEST_ASSERT_EQUAL(1, cb_result.message.count);
-    TEST_ASSERT_EQUAL(1, alloc_frag.allocated_fragments);
-    TEST_ASSERT_EQUAL(1, alloc_payload.allocated_fragments);
-
-    meta.transfer_id = 43;
-    now += 500;
-    rx_session_update(ses,
-                      &rx,
-                      now,
-                      (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1234 },
-                      make_frame_ptr(meta, mem_payload, "433", 0, 3),
-                      del_payload,
-                      0);
-    udpard_rx_poll(&rx, now);
-    TEST_ASSERT_EQUAL(3, cb_result.message.count);
-    TEST_ASSERT_EQUAL(44, cb_result.message.history[0].transfer_id);
-    TEST_ASSERT(transfer_payload_verify(&cb_result.message.history[0], 3, "444", 3));
-    TEST_ASSERT_EQUAL(43, cb_result.message.history[1].transfer_id);
-    TEST_ASSERT(transfer_payload_verify(&cb_result.message.history[1], 3, "433", 3));
-    udpard_fragment_free_all(cb_result.message.history[0].payload, udpard_make_deleter(mem_frag));
-    cb_result.message.history[0].payload = NULL;
-    udpard_fragment_free_all(cb_result.message.history[1].payload, udpard_make_deleter(mem_frag));
-    TEST_ASSERT_EQUAL(0, alloc_frag.allocated_fragments);
-    TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments);
-
-    now += 25 * KILO;
-    meta.transfer_id = 41;
-    rx_session_update(ses,
-                      &rx,
-                      now,
-                      (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1234 },
-                      make_frame_ptr(meta, mem_payload, "old", 0, 3),
-                      del_payload,
-                      0);
-    TEST_ASSERT_EQUAL(3, cb_result.message.count);
-    TEST_ASSERT_EQUAL(0, alloc_frag.allocated_fragments);
-    TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments);
-
-    udpard_rx_port_free(&rx, &port);
     TEST_ASSERT_EQUAL(0, alloc_frag.allocated_fragments);
     TEST_ASSERT_EQUAL(0, alloc_session.allocated_fragments);
     TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments);
@@ -1973,16 +1791,15 @@ static void test_rx_session_unordered(void)
     const udpard_mem_t              mem_session = instrumented_allocator_make_resource(&alloc_session);
     const udpard_mem_t              mem_payload = instrumented_allocator_make_resource(&alloc_payload);
     const udpard_deleter_t          del_payload = instrumented_allocator_make_deleter(&alloc_payload);
-    const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
+    const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session, .slot = mem_session };
 
     udpard_rx_t rx;
     udpard_rx_new(&rx, NULL);
     callback_result_t cb_result = { 0 };
     rx.user                     = &cb_result;
 
-    const uint64_t   topic_hash = 0xC3C8E4974254E1F5ULL;
-    udpard_rx_port_t port       = { 0 };
-    TEST_ASSERT(udpard_rx_port_new(&port, topic_hash, SIZE_MAX, udpard_rx_unordered, 0, rx_mem, &callbacks));
+    udpard_rx_port_t port = { 0 };
+    TEST_ASSERT(udpard_rx_port_new(&port, SIZE_MAX, rx_mem, &callbacks));
 
     udpard_us_t               now        = 0;
     const uint64_t            remote_uid = 0xA1B2C3D4E5F60718ULL;
@@ -2001,11 +1818,10 @@ static void test_rx_session_unordered(void)
 
     // Single-frame transfer is ejected immediately.
     meta_t meta = { .priority              = udpard_prio_high,
-                    .flag_reliable         = false,
+                    .kind                  = frame_msg_best,
                     .transfer_payload_size = 5,
                     .transfer_id           = 100,
-                    .sender_uid            = remote_uid,
-                    .topic_hash            = port.topic_hash };
+                    .sender_uid            = remote_uid };
     now += 1000;
     rx_session_update(ses,
                       &rx,
@@ -2066,7 +1882,7 @@ static void test_rx_session_unordered(void)
     meta.transfer_id           = 200;
     meta.transfer_payload_size = 10;
     meta.priority              = udpard_prio_fast;
-    meta.flag_reliable         = true;
+    meta.kind                  = frame_msg_reliable;
     now += 500;
     rx_session_update(ses,
                       &rx,
@@ -2115,7 +1931,7 @@ static void test_rx_session_unordered_reject_old(void)
     instrumented_allocator_new(&alloc_payload);
     const udpard_mem_t              mem_payload = instrumented_allocator_make_resource(&alloc_payload);
     const udpard_deleter_t          del_payload = instrumented_allocator_make_deleter(&alloc_payload);
-    const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
+    const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session, .slot = mem_session };
 
     tx_fixture_t tx_fix = { 0 };
     tx_fixture_init(&tx_fix, 0xF00DCAFEF00DCAFEULL, 4);
@@ -2124,9 +1940,8 @@ static void test_rx_session_unordered_reject_old(void)
     callback_result_t cb_result = { 0 };
     rx.user                     = &cb_result;
 
-    const uint64_t   local_uid = 0xFACEB00CFACEB00CULL;
-    udpard_rx_port_t port      = { 0 };
-    TEST_ASSERT(udpard_rx_port_new(&port, local_uid, SIZE_MAX, udpard_rx_unordered, 0, rx_mem, &callbacks));
+    udpard_rx_port_t port = { 0 };
+    TEST_ASSERT(udpard_rx_port_new(&port, SIZE_MAX, rx_mem, &callbacks));
 
     udpard_us_t               now        = 0;
     const uint64_t            remote_uid = 0x0123456789ABCDEFULL;
@@ -2144,11 +1959,10 @@ static void test_rx_session_unordered_reject_old(void)
     TEST_ASSERT_NOT_NULL(ses);
 
     meta_t meta = { .priority              = udpard_prio_fast,
-                    .flag_reliable         = false,
+                    .kind                  = frame_msg_best,
                     .transfer_payload_size = 3,
                     .transfer_id           = 10,
-                    .sender_uid            = remote_uid,
-                    .topic_hash            = local_uid };
+                    .sender_uid            = remote_uid };
     now += 1000;
     rx_session_update(ses,
                       &rx,
@@ -2178,7 +1992,7 @@ static void test_rx_session_unordered_reject_old(void)
 
     meta.transfer_id           = 10;
     meta.transfer_payload_size = 3;
-    meta.flag_reliable         = true;
+    meta.kind                  = frame_msg_reliable;
     now += 1000;
     rx_session_update(ses,
                       &rx,
@@ -2194,8 +2008,8 @@ static void test_rx_session_unordered_reject_old(void)
         cb_result.ack.last = tx_fix.captured[tx_fix.captured_count - 1U];
     }
     TEST_ASSERT_GREATER_OR_EQUAL_UINT64(1, cb_result.ack.count);
-    TEST_ASSERT_EQUAL_UINT64(10, cb_result.ack.last.acked_transfer_id);
-    TEST_ASSERT_EQUAL_UINT64(port.topic_hash, cb_result.ack.last.acked_topic_hash);
+    TEST_ASSERT_EQUAL_UINT64(10, cb_result.ack.last.transfer_id);
+    TEST_ASSERT_EQUAL_UINT64(meta.transfer_id, cb_result.ack.last.transfer_id);
 
     udpard_rx_port_free(&rx, &port);
     tx_fixture_free(&tx_fix);
@@ -2220,7 +2034,7 @@ static void test_rx_session_unordered_duplicates(void)
     const udpard_mem_t              mem_session = instrumented_allocator_make_resource(&alloc_session);
     const udpard_mem_t              mem_payload = instrumented_allocator_make_resource(&alloc_payload);
     const udpard_deleter_t          del_payload = instrumented_allocator_make_deleter(&alloc_payload);
-    const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
+    const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session, .slot = mem_session };
 
     udpard_rx_t rx;
     udpard_rx_new(&rx, NULL);
@@ -2228,7 +2042,7 @@ static void test_rx_session_unordered_duplicates(void)
     rx.user                     = &cb_result;
 
     udpard_rx_port_t port = { 0 };
-    TEST_ASSERT(udpard_rx_port_new(&port, 0xFEE1DEADBEEFF00DULL, SIZE_MAX, udpard_rx_unordered, 0, rx_mem, &callbacks));
+    TEST_ASSERT(udpard_rx_port_new(&port, SIZE_MAX, rx_mem, &callbacks));
 
     udpard_us_t               now        = 0;
     const uint64_t            remote_uid = 0xAABBCCDDEEFF0011ULL;
@@ -2246,11 +2060,10 @@ static void test_rx_session_unordered_duplicates(void)
     TEST_ASSERT_NOT_NULL(ses);
 
     meta_t meta = { .priority              = udpard_prio_nominal,
-                    .flag_reliable         = false,
+                    .kind                  = frame_msg_best,
                     .transfer_payload_size = 2,
                     .transfer_id           = 5,
-                    .sender_uid            = remote_uid,
-                    .topic_hash            = port.topic_hash };
+                    .sender_uid            = remote_uid };
     now += 1000;
     rx_session_update(ses,
                       &rx,
@@ -2282,20 +2095,23 @@ static void test_rx_session_unordered_duplicates(void)
     instrumented_allocator_reset(&alloc_payload);
 }
 
-static void test_rx_session_ordered_reject_stale_after_jump(void)
+static void test_rx_session_malformed(void)
 {
-    // Ordered session releases interned transfers once gaps are filled.
+    // Malformed transfer increments error counter and drops slot.
     instrumented_allocator_t alloc_frag = { 0 };
     instrumented_allocator_new(&alloc_frag);
     instrumented_allocator_t alloc_session = { 0 };
     instrumented_allocator_new(&alloc_session);
+    instrumented_allocator_t alloc_slot = { 0 };
+    instrumented_allocator_new(&alloc_slot);
     instrumented_allocator_t alloc_payload = { 0 };
     instrumented_allocator_new(&alloc_payload);
     const udpard_mem_t              mem_frag    = instrumented_allocator_make_resource(&alloc_frag);
     const udpard_mem_t              mem_session = instrumented_allocator_make_resource(&alloc_session);
+    const udpard_mem_t              mem_slot    = instrumented_allocator_make_resource(&alloc_slot);
     const udpard_mem_t              mem_payload = instrumented_allocator_make_resource(&alloc_payload);
     const udpard_deleter_t          del_payload = instrumented_allocator_make_deleter(&alloc_payload);
-    const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
+    const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session, .slot = mem_slot };
 
     udpard_rx_t rx;
     udpard_rx_new(&rx, NULL);
@@ -2303,16 +2119,14 @@ static void test_rx_session_ordered_reject_stale_after_jump(void)
     rx.user                     = &cb_result;
 
     udpard_rx_port_t port = { 0 };
-    TEST_ASSERT(
-      udpard_rx_port_new(&port, 0x123456789ABCDEF0ULL, 1000, udpard_rx_ordered, 20 * KILO, rx_mem, &callbacks));
+    TEST_ASSERT(udpard_rx_port_new(&port, 64, rx_mem, &callbacks));
 
-    udpard_us_t               now        = 0;
-    const uint64_t            remote_uid = 0xCAFEBEEFFACEFEEDULL;
+    const uint64_t            remote_uid = 0xABCDEF1234567890ULL;
     rx_session_factory_args_t fac_args   = {
           .owner                 = &port,
           .sessions_by_animation = &rx.list_session_by_animation,
           .remote_uid            = remote_uid,
-          .now                   = now,
+          .now                   = 0,
     };
     rx_session_t* const ses = (rx_session_t*)cavl2_find_or_insert(&port.index_session_by_remote_uid,
                                                                   &remote_uid,
@@ -2321,166 +2135,43 @@ static void test_rx_session_ordered_reject_stale_after_jump(void)
                                                                   &cavl_factory_rx_session_by_remote_uid);
     TEST_ASSERT_NOT_NULL(ses);
 
-    meta_t meta = { .priority              = udpard_prio_nominal,
-                    .flag_reliable         = false,
-                    .transfer_payload_size = 2,
-                    .transfer_id           = 10,
-                    .sender_uid            = remote_uid,
-                    .topic_hash            = port.topic_hash };
-    now += 1000;
+    meta_t      meta = { .priority              = udpard_prio_nominal,
+                         .kind                  = frame_msg_best,
+                         .transfer_payload_size = 8,
+                         .transfer_id           = 1,
+                         .sender_uid            = remote_uid };
+    udpard_us_t now  = 0;
     rx_session_update(ses,
                       &rx,
                       now,
-                      (udpard_udpip_ep_t){ .ip = 0x01010101, .port = 0x1111 },
-                      make_frame_ptr(meta, mem_payload, "aa", 0, 2),
+                      (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1111 },
+                      make_frame_ptr(meta, mem_payload, "ABCDEFGH", 0, 4),
                       del_payload,
                       0);
-    TEST_ASSERT_EQUAL(1, cb_result.message.count);
-    udpard_fragment_free_all(cb_result.message.history[0].payload, udpard_make_deleter(mem_frag));
-    cb_result.message.history[0].payload = NULL;
+    TEST_ASSERT_EQUAL_UINT64(0, rx.errors_transfer_malformed);
+    TEST_ASSERT_EQUAL(0, cb_result.message.count);
+    TEST_ASSERT_EQUAL_size_t(1, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(1, alloc_slot.allocated_fragments);
 
-    // Intern two transfers out of order.
-    meta.transfer_id = 12;
-    now += 100;
-    rx_session_update(ses,
-                      &rx,
-                      now,
-                      (udpard_udpip_ep_t){ .ip = 0x02020202, .port = 0x2222 },
-                      make_frame_ptr(meta, mem_payload, "bb", 0, 2),
-                      del_payload,
-                      1);
-    // Depending on implementation, the jump may be dropped or interned.
-    TEST_ASSERT(cb_result.message.count >= 1);
-    meta.transfer_id = 11;
-    now += 100;
-    rx_session_update(ses,
-                      &rx,
-                      now,
-                      (udpard_udpip_ep_t){ .ip = 0x03030303, .port = 0x3333 },
-                      make_frame_ptr(meta, mem_payload, "cc", 0, 2),
-                      del_payload,
-                      0);
-    TEST_ASSERT_EQUAL(3, cb_result.message.count);
-    TEST_ASSERT_EQUAL(12, cb_result.message.history[0].transfer_id);
-    TEST_ASSERT_EQUAL(11, cb_result.message.history[1].transfer_id);
-    udpard_fragment_free_all(cb_result.message.history[0].payload, udpard_make_deleter(mem_frag));
-    cb_result.message.history[0].payload = NULL;
-    udpard_fragment_free_all(cb_result.message.history[1].payload, udpard_make_deleter(mem_frag));
-    cb_result.message.history[1].payload = NULL;
-
-    // Very old transfer is still accepted once the head has advanced.
-    meta.transfer_id = 5;
-    now += 100;
-    rx_session_update(ses,
-                      &rx,
-                      now,
-                      (udpard_udpip_ep_t){ .ip = 0x04040404, .port = 0x4444 },
-                      make_frame_ptr(meta, mem_payload, "dd", 0, 2),
-                      del_payload,
-                      2);
-    if ((cb_result.message.count > 0) && (cb_result.message.history[0].payload != NULL)) {
-        udpard_fragment_free_all(cb_result.message.history[0].payload, udpard_make_deleter(mem_frag));
-        cb_result.message.history[0].payload = NULL;
-    }
-    TEST_ASSERT_EQUAL(0, alloc_payload.allocated_fragments);
-
-    udpard_rx_port_free(&rx, &port);
-    instrumented_allocator_reset(&alloc_frag);
-    instrumented_allocator_reset(&alloc_session);
-    instrumented_allocator_reset(&alloc_payload);
-}
-
-static void test_rx_session_ordered_zero_reordering_window(void)
-{
-    // Zero window ordered session should only accept strictly sequential IDs.
-    instrumented_allocator_t alloc_frag = { 0 };
-    instrumented_allocator_new(&alloc_frag);
-    instrumented_allocator_t alloc_session = { 0 };
-    instrumented_allocator_new(&alloc_session);
-    instrumented_allocator_t alloc_payload = { 0 };
-    instrumented_allocator_new(&alloc_payload);
-    const udpard_mem_t              mem_frag    = instrumented_allocator_make_resource(&alloc_frag);
-    const udpard_mem_t              mem_session = instrumented_allocator_make_resource(&alloc_session);
-    const udpard_mem_t              mem_payload = instrumented_allocator_make_resource(&alloc_payload);
-    const udpard_deleter_t          del_payload = instrumented_allocator_make_deleter(&alloc_payload);
-    const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
-
-    udpard_rx_t rx;
-    udpard_rx_new(&rx, NULL);
-    callback_result_t cb_result = { 0 };
-    rx.user                     = &cb_result;
-
-    udpard_rx_port_t port = { 0 };
-    TEST_ASSERT(udpard_rx_port_new(&port, 0x0F0E0D0C0B0A0908ULL, 256, udpard_rx_ordered, 0, rx_mem, &callbacks));
-
-    udpard_us_t               now        = 0;
-    const uint64_t            remote_uid = 0x0102030405060708ULL;
-    rx_session_factory_args_t fac_args   = {
-          .owner                 = &port,
-          .sessions_by_animation = &rx.list_session_by_animation,
-          .remote_uid            = remote_uid,
-          .now                   = now,
-    };
-    rx_session_t* const ses = (rx_session_t*)cavl2_find_or_insert(&port.index_session_by_remote_uid,
-                                                                  &remote_uid,
-                                                                  &cavl_compare_rx_session_by_remote_uid,
-                                                                  &fac_args,
-                                                                  &cavl_factory_rx_session_by_remote_uid);
-    TEST_ASSERT_NOT_NULL(ses);
-
-    meta_t meta = { .priority              = udpard_prio_nominal,
-                    .flag_reliable         = false,
-                    .transfer_payload_size = 2,
-                    .transfer_id           = 1,
-                    .sender_uid            = remote_uid,
-                    .topic_hash            = port.topic_hash };
-    now += 1000;
-    rx_session_update(ses,
-                      &rx,
-                      now,
-                      (udpard_udpip_ep_t){ .ip = 0xAA000001, .port = 0x1111 },
-                      make_frame_ptr(meta, mem_payload, "x1", 0, 2),
-                      del_payload,
-                      0);
-    TEST_ASSERT(cb_result.message.count >= 1);
-    udpard_fragment_free_all(cb_result.message.history[0].payload, udpard_make_deleter(mem_frag));
-    cb_result.message.history[0].payload = NULL;
-
-    // Jump is dropped with zero window.
-    meta.transfer_id = 3;
+    meta.priority = udpard_prio_high;
     now += 10;
     rx_session_update(ses,
                       &rx,
                       now,
-                      (udpard_udpip_ep_t){ .ip = 0xAA000001, .port = 0x1111 },
-                      make_frame_ptr(meta, mem_payload, "x3", 0, 2),
-                      del_payload,
-                      1);
-    TEST_ASSERT(cb_result.message.count >= 1);
-
-    // Next expected transfer is accepted.
-    meta.transfer_id = 2;
-    now += 10;
-    rx_session_update(ses,
-                      &rx,
-                      now,
-                      (udpard_udpip_ep_t){ .ip = 0xAA000001, .port = 0x1111 },
-                      make_frame_ptr(meta, mem_payload, "x2", 0, 2),
+                      (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1111 },
+                      make_frame_ptr(meta, mem_payload, "ABCDEFGH", 4, 4),
                       del_payload,
                       0);
-    TEST_ASSERT(cb_result.message.count >= 1);
-    if (cb_result.message.history[0].payload != NULL) {
-        udpard_fragment_free_all(cb_result.message.history[0].payload, udpard_make_deleter(mem_frag));
-        cb_result.message.history[0].payload = NULL;
-    }
-    if ((cb_result.message.count > 1) && (cb_result.message.history[1].payload != NULL)) {
-        udpard_fragment_free_all(cb_result.message.history[1].payload, udpard_make_deleter(mem_frag));
-        cb_result.message.history[1].payload = NULL;
-    }
+    TEST_ASSERT_EQUAL_UINT64(1, rx.errors_transfer_malformed);
+    TEST_ASSERT_EQUAL(0, cb_result.message.count);
+    TEST_ASSERT_EQUAL_size_t(0, alloc_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0, alloc_slot.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0, alloc_payload.allocated_fragments);
 
     udpard_rx_port_free(&rx, &port);
     instrumented_allocator_reset(&alloc_frag);
     instrumented_allocator_reset(&alloc_session);
+    instrumented_allocator_reset(&alloc_slot);
     instrumented_allocator_reset(&alloc_payload);
 }
 
@@ -2497,27 +2188,25 @@ static void test_rx_port(void)
     const udpard_mem_t              mem_session = instrumented_allocator_make_resource(&alloc_session);
     const udpard_mem_t              mem_payload = instrumented_allocator_make_resource(&alloc_payload);
     const udpard_deleter_t          del_payload = instrumented_allocator_make_deleter(&alloc_payload);
-    const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
+    const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session, .slot = mem_session };
 
     udpard_rx_t rx;
     udpard_rx_new(&rx, NULL);
     callback_result_t cb_result = { 0 };
     rx.user                     = &cb_result;
 
-    const uint64_t   local_uid = 0xCAFED00DCAFED00DULL;
-    udpard_rx_port_t port      = { 0 };
-    TEST_ASSERT(udpard_rx_port_new(&port, local_uid, 64, udpard_rx_unordered, 0, rx_mem, &callbacks));
+    udpard_rx_port_t port = { 0 };
+    TEST_ASSERT(udpard_rx_port_new_p2p(&port, 64, rx_mem, &callbacks));
 
     // Compose a P2P response datagram without a P2P header.
     const uint64_t resp_tid   = 55;
     const uint8_t  payload[3] = { 'a', 'b', 'c' };
 
     meta_t      meta  = { .priority              = udpard_prio_fast,
-                          .flag_reliable         = false,
+                          .kind                  = frame_msg_best,
                           .transfer_payload_size = sizeof(payload),
                           .transfer_id           = resp_tid,
-                          .sender_uid            = 0x0BADF00D0BADF00DULL,
-                          .topic_hash            = port.topic_hash };
+                          .sender_uid            = 0x0BADF00D0BADF00DULL };
     rx_frame_t* frame = make_frame_ptr(meta, mem_payload, payload, 0, sizeof(payload));
     byte_t      dgram[HEADER_SIZE_BYTES + sizeof(payload)];
     header_serialize(dgram, meta, 0, 0, frame->base.crc);
@@ -2565,7 +2254,7 @@ static void test_rx_port_timeouts(void)
     const udpard_mem_t              mem_session = instrumented_allocator_make_resource(&alloc_session);
     const udpard_mem_t              mem_payload = instrumented_allocator_make_resource(&alloc_payload);
     const udpard_deleter_t          del_payload = instrumented_allocator_make_deleter(&alloc_payload);
-    const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
+    const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session, .slot = mem_session };
 
     udpard_rx_t rx;
     udpard_rx_new(&rx, NULL);
@@ -2573,15 +2262,13 @@ static void test_rx_port_timeouts(void)
     rx.user                     = &cb_result;
 
     udpard_rx_port_t port = { 0 };
-    TEST_ASSERT(
-      udpard_rx_port_new(&port, 0xBADC0FFEE0DDF00DULL, 128, udpard_rx_ordered, 20 * KILO, rx_mem, &callbacks));
+    TEST_ASSERT(udpard_rx_port_new(&port, 128, rx_mem, &callbacks));
 
     meta_t       meta            = { .priority              = udpard_prio_nominal,
-                                     .flag_reliable         = false,
+                                     .kind                  = frame_msg_best,
                                      .transfer_payload_size = 4,
                                      .transfer_id           = 1,
-                                     .sender_uid            = 0x1111222233334444ULL,
-                                     .topic_hash            = port.topic_hash };
+                                     .sender_uid            = 0x1111222233334444ULL };
     rx_frame_t*  frame           = make_frame_ptr(meta, mem_payload, "ping", 0, 4);
     const byte_t payload_bytes[] = { 'p', 'i', 'n', 'g' };
     byte_t       dgram[HEADER_SIZE_BYTES + sizeof(payload_bytes)];
@@ -2629,7 +2316,7 @@ static void test_rx_port_oom(void)
     const udpard_mem_t              mem_session = instrumented_allocator_make_resource(&alloc_session);
     const udpard_mem_t              mem_payload = instrumented_allocator_make_resource(&alloc_payload);
     const udpard_deleter_t          del_payload = instrumented_allocator_make_deleter(&alloc_payload);
-    const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
+    const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session, .slot = mem_session };
 
     udpard_rx_t rx;
     udpard_rx_new(&rx, NULL);
@@ -2637,14 +2324,13 @@ static void test_rx_port_oom(void)
     rx.user                     = &cb_result;
 
     udpard_rx_port_t port = { 0 };
-    TEST_ASSERT(udpard_rx_port_new(&port, 0xCAFEBABECAFEBABEULL, 64, udpard_rx_unordered, 0, rx_mem, &callbacks));
+    TEST_ASSERT(udpard_rx_port_new(&port, 64, rx_mem, &callbacks));
 
     meta_t       meta            = { .priority              = udpard_prio_nominal,
-                                     .flag_reliable         = false,
+                                     .kind                  = frame_msg_best,
                                      .transfer_payload_size = 4,
                                      .transfer_id           = 1,
-                                     .sender_uid            = 0x0101010101010101ULL,
-                                     .topic_hash            = port.topic_hash };
+                                     .sender_uid            = 0x0101010101010101ULL };
     rx_frame_t*  frame           = make_frame_ptr(meta, mem_payload, "oom!", 0, 4);
     const byte_t payload_bytes[] = { 'o', 'o', 'm', '!' };
     byte_t       dgram[HEADER_SIZE_BYTES + sizeof(payload_bytes)];
@@ -2671,6 +2357,67 @@ static void test_rx_port_oom(void)
     instrumented_allocator_reset(&alloc_frag);
     instrumented_allocator_reset(&alloc_session);
     instrumented_allocator_reset(&alloc_payload);
+
+    // Slot allocation failure should be reported gracefully.
+    instrumented_allocator_t alloc_frag_slot = { 0 };
+    instrumented_allocator_new(&alloc_frag_slot);
+    instrumented_allocator_t alloc_session_slot = { 0 };
+    instrumented_allocator_new(&alloc_session_slot);
+    instrumented_allocator_t alloc_slot = { 0 };
+    instrumented_allocator_new(&alloc_slot);
+    alloc_slot.limit_fragments                  = 0; // force slot allocation failure
+    instrumented_allocator_t alloc_payload_slot = { 0 };
+    instrumented_allocator_new(&alloc_payload_slot);
+    const udpard_mem_t              mem_frag_slot    = instrumented_allocator_make_resource(&alloc_frag_slot);
+    const udpard_mem_t              mem_session_slot = instrumented_allocator_make_resource(&alloc_session_slot);
+    const udpard_mem_t              mem_slot         = instrumented_allocator_make_resource(&alloc_slot);
+    const udpard_mem_t              mem_payload_slot = instrumented_allocator_make_resource(&alloc_payload_slot);
+    const udpard_deleter_t          del_payload_slot = instrumented_allocator_make_deleter(&alloc_payload_slot);
+    const udpard_rx_mem_resources_t rx_mem_slot      = { .fragment = mem_frag_slot,
+                                                         .session  = mem_session_slot,
+                                                         .slot     = mem_slot };
+
+    udpard_rx_t rx_slot;
+    udpard_rx_new(&rx_slot, NULL);
+    callback_result_t cb_result_slot = { 0 };
+    rx_slot.user                     = &cb_result_slot;
+
+    udpard_rx_port_t port_slot = { 0 };
+    TEST_ASSERT(udpard_rx_port_new(&port_slot, 64, rx_mem_slot, &callbacks));
+
+    meta_t       meta_slot      = { .priority              = udpard_prio_nominal,
+                                    .kind                  = frame_msg_best,
+                                    .transfer_payload_size = 4,
+                                    .transfer_id           = 1,
+                                    .sender_uid            = 0x0202020202020202ULL };
+    rx_frame_t*  frame_slot     = make_frame_ptr(meta_slot, mem_payload_slot, "oom!", 0, 4);
+    const byte_t payload_slot[] = { 'o', 'o', 'm', '!' };
+    byte_t       dgram_slot[HEADER_SIZE_BYTES + sizeof(payload_slot)];
+    header_serialize(dgram_slot, meta_slot, 0, 0, frame_slot->base.crc);
+    memcpy(dgram_slot + HEADER_SIZE_BYTES, payload_slot, sizeof(payload_slot));
+    mem_free(mem_payload_slot, frame_slot->base.origin.size, frame_slot->base.origin.data);
+    void* payload_buf_slot = mem_res_alloc(mem_payload_slot, sizeof(dgram_slot));
+    memcpy(payload_buf_slot, dgram_slot, sizeof(dgram_slot));
+
+    now = 0;
+    TEST_ASSERT(udpard_rx_port_push(&rx_slot,
+                                    &port_slot,
+                                    now,
+                                    (udpard_udpip_ep_t){ .ip = 0x0A000001, .port = 0x1234 },
+                                    (udpard_bytes_mut_t){ .data = payload_buf_slot, .size = sizeof(dgram_slot) },
+                                    del_payload_slot,
+                                    0));
+    TEST_ASSERT_GREATER_THAN_UINT64(0, rx_slot.errors_oom);
+    TEST_ASSERT_EQUAL(1, alloc_session_slot.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, alloc_slot.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, alloc_frag_slot.allocated_fragments);
+    TEST_ASSERT_EQUAL(0, alloc_payload_slot.allocated_fragments);
+    udpard_rx_port_free(&rx_slot, &port_slot);
+    TEST_ASSERT_EQUAL(0, alloc_session_slot.allocated_fragments);
+    instrumented_allocator_reset(&alloc_frag_slot);
+    instrumented_allocator_reset(&alloc_session_slot);
+    instrumented_allocator_reset(&alloc_slot);
+    instrumented_allocator_reset(&alloc_payload_slot);
 }
 
 static void test_rx_port_free_loop(void)
@@ -2686,7 +2433,7 @@ static void test_rx_port_free_loop(void)
     const udpard_mem_t              mem_session = instrumented_allocator_make_resource(&alloc_session);
     const udpard_mem_t              mem_payload = instrumented_allocator_make_resource(&alloc_payload);
     const udpard_deleter_t          del_payload = instrumented_allocator_make_deleter(&alloc_payload);
-    const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session };
+    const udpard_rx_mem_resources_t rx_mem      = { .fragment = mem_frag, .session = mem_session, .slot = mem_session };
 
     udpard_rx_t rx;
     udpard_rx_new(&rx, NULL);
@@ -2694,11 +2441,9 @@ static void test_rx_port_free_loop(void)
     rx.user                     = &cb_result;
 
     udpard_rx_port_t port_p2p = { 0 };
-    TEST_ASSERT(
-      udpard_rx_port_new(&port_p2p, 0xCAFED00DCAFED00DULL, SIZE_MAX, udpard_rx_unordered, 0, rx_mem, &callbacks));
-    udpard_rx_port_t port_extra       = { 0 };
-    const uint64_t   topic_hash_extra = 0xDEADBEEFF00D1234ULL;
-    TEST_ASSERT(udpard_rx_port_new(&port_extra, topic_hash_extra, 1000, udpard_rx_ordered, 5000, rx_mem, &callbacks));
+    TEST_ASSERT(udpard_rx_port_new_p2p(&port_p2p, SIZE_MAX, rx_mem, &callbacks));
+    udpard_rx_port_t port_extra = { 0 };
+    TEST_ASSERT(udpard_rx_port_new(&port_extra, 1000, rx_mem, &callbacks));
 
     udpard_us_t now = 0;
 
@@ -2706,11 +2451,10 @@ static void test_rx_port_free_loop(void)
     {
         const char* payload = "INCOMPLETE";
         meta_t      meta    = { .priority              = udpard_prio_slow,
-                                .flag_reliable         = false,
+                                .kind                  = frame_msg_best,
                                 .transfer_payload_size = (uint32_t)strlen(payload),
                                 .transfer_id           = 10,
-                                .sender_uid            = 0xAAAAULL,
-                                .topic_hash            = port_p2p.topic_hash };
+                                .sender_uid            = 0xAAAAULL };
         rx_frame_t* frame   = make_frame_ptr(meta, mem_payload, payload, 0, 4);
         byte_t      dgram[HEADER_SIZE_BYTES + 4];
         header_serialize(dgram, meta, 0, 0, frame->base.crc);
@@ -2732,11 +2476,10 @@ static void test_rx_port_free_loop(void)
     {
         const char* payload = "FRAGMENTS";
         meta_t      meta    = { .priority              = udpard_prio_fast,
-                                .flag_reliable         = false,
+                                .kind                  = frame_msg_best,
                                 .transfer_payload_size = (uint32_t)strlen(payload),
                                 .transfer_id           = 20,
-                                .sender_uid            = 0xBBBBULL,
-                                .topic_hash            = topic_hash_extra };
+                                .sender_uid            = 0xBBBBULL };
         rx_frame_t* frame   = make_frame_ptr(meta, mem_payload, payload, 0, 3);
         byte_t      dgram[HEADER_SIZE_BYTES + 3];
         header_serialize(dgram, meta, 0, 0, frame->base.crc);
@@ -2767,20 +2510,10 @@ static void test_rx_port_free_loop(void)
     instrumented_allocator_reset(&alloc_payload);
 }
 
-static size_t g_collision_count = 0; // NOLINT(*-avoid-non-const-global-variables)
-
 static void stub_on_message(udpard_rx_t* const rx, udpard_rx_port_t* const port, const udpard_rx_transfer_t transfer)
 {
     (void)rx;
     udpard_fragment_free_all(transfer.payload, udpard_make_deleter(port->memory.fragment));
-}
-
-static void stub_on_collision(udpard_rx_t* const rx, udpard_rx_port_t* const port, const udpard_remote_t remote)
-{
-    (void)rx;
-    (void)port;
-    (void)remote;
-    g_collision_count++;
 }
 
 static udpard_udpip_ep_t make_ep(const uint32_t ip) { return (udpard_udpip_ep_t){ .ip = ip, .port = 1U }; }
@@ -2792,6 +2525,7 @@ static void test_rx_additional_coverage(void)
     instrumented_allocator_new(&alloc_frag);
     instrumented_allocator_new(&alloc_ses);
     const udpard_rx_mem_resources_t mem = { .session  = instrumented_allocator_make_resource(&alloc_ses),
+                                            .slot     = instrumented_allocator_make_resource(&alloc_ses),
                                             .fragment = instrumented_allocator_make_resource(&alloc_frag) };
     // Memory validation rejects missing hooks.
     const udpard_mem_vtable_t vtable_no_free  = { .base = { .free = NULL }, .alloc = dummy_alloc };
@@ -2806,90 +2540,38 @@ static void test_rx_additional_coverage(void)
     TEST_ASSERT_FALSE(rx_validate_mem_resources(bad_mem));
     bad_mem.fragment.vtable = &vtable_no_alloc;
     TEST_ASSERT_FALSE(rx_validate_mem_resources(bad_mem));
+    bad_mem             = mem;
+    bad_mem.slot.vtable = &vtable_no_free;
+    TEST_ASSERT_FALSE(rx_validate_mem_resources(bad_mem));
+    bad_mem.slot.vtable = &vtable_no_alloc;
+    TEST_ASSERT_FALSE(rx_validate_mem_resources(bad_mem));
 
     // Session helpers and free paths.
-    udpard_rx_port_t port = { .memory            = mem,
-                              .vtable            = &(udpard_rx_port_vtable_t){ .on_message   = stub_on_message,
-                                                                               .on_collision = stub_on_collision },
-                              .mode              = udpard_rx_ordered,
-                              .reordering_window = 10,
-                              .topic_hash        = 1 };
-    rx_session_t*    ses  = mem_res_alloc(mem.session, sizeof(rx_session_t));
+    const udpard_rx_port_vtable_t vtb  = { .on_message = stub_on_message };
+    udpard_rx_port_t              port = { 0 };
+    TEST_ASSERT_TRUE(udpard_rx_port_new(&port, 8, mem, &vtb));
+    udpard_list_t             anim_list = { 0 };
+    rx_session_factory_args_t fac_args  = {
+         .owner = &port, .sessions_by_animation = &anim_list, .remote_uid = 77, .now = 0
+    };
+    rx_session_t* const ses = (rx_session_t*)cavl2_find_or_insert(&port.index_session_by_remote_uid,
+                                                                  &fac_args.remote_uid,
+                                                                  &cavl_compare_rx_session_by_remote_uid,
+                                                                  &fac_args,
+                                                                  &cavl_factory_rx_session_by_remote_uid);
     TEST_ASSERT_NOT_NULL(ses);
-    mem_zero(sizeof(*ses), ses);
-    ses->port                 = &port;
-    ses->remote.uid           = 77;
-    ses->slots[0].state       = rx_slot_done;
-    ses->slots[0].transfer_id = 5;
-    TEST_ASSERT_TRUE(rx_session_is_transfer_interned(ses, 5));
-    ses->reordering_window_deadline = 5;
-    // Comparator smoke-test with stable key.
-    const rx_reordering_key_t dl_key = { .deadline = 5, .remote_uid = ses->remote.uid };
-    (void)cavl_compare_rx_session_by_reordering_deadline(&dl_key, &ses->index_reordering_window);
-    // Comparator branches for UID and deadline ordering.
+    for (size_t i = 0; i < RX_TRANSFER_HISTORY_COUNT; i++) {
+        ses->history[i] = 1;
+    }
+    ses->history[0] = 5;
+    TEST_ASSERT_TRUE(rx_session_is_transfer_ejected(ses, 5));
+    TEST_ASSERT_FALSE(rx_session_is_transfer_ejected(ses, 6));
     TEST_ASSERT_EQUAL(-1, cavl_compare_rx_session_by_remote_uid(&(uint64_t){ 10 }, &ses->index_remote_uid));
     TEST_ASSERT_EQUAL(1, cavl_compare_rx_session_by_remote_uid(&(uint64_t){ 100 }, &ses->index_remote_uid));
-    rx_reordering_key_t dl_key_hi = { .deadline = 10, .remote_uid = ses->remote.uid + 1U };
-    TEST_ASSERT_EQUAL(1, cavl_compare_rx_session_by_reordering_deadline(&dl_key_hi, &ses->index_reordering_window));
-    rx_reordering_key_t dl_key_lo = { .deadline = 1, .remote_uid = ses->remote.uid - 1U };
-    TEST_ASSERT_EQUAL(-1, cavl_compare_rx_session_by_reordering_deadline(&dl_key_lo, &ses->index_reordering_window));
-    rx_reordering_key_t dl_key_uid_lo = { .deadline = 5, .remote_uid = ses->remote.uid - 1U };
-    TEST_ASSERT_EQUAL(-1,
-                      cavl_compare_rx_session_by_reordering_deadline(&dl_key_uid_lo, &ses->index_reordering_window));
-    rx_reordering_key_t dl_key_uid_hi = { .deadline = 5, .remote_uid = ses->remote.uid + 1U };
-    TEST_ASSERT_EQUAL(1, cavl_compare_rx_session_by_reordering_deadline(&dl_key_uid_hi, &ses->index_reordering_window));
-    udpard_list_t  anim_list  = { 0 };
-    udpard_tree_t* by_reorder = NULL;
-    cavl2_find_or_insert(&port.index_session_by_remote_uid,
-                         &ses->remote.uid,
-                         cavl_compare_rx_session_by_remote_uid,
-                         &ses->index_remote_uid,
-                         cavl2_trivial_factory);
-    ses->reordering_window_deadline         = 3;
-    const rx_reordering_key_t  reorder_key  = { .deadline   = ses->reordering_window_deadline,
-                                                .remote_uid = ses->remote.uid };
-    const udpard_tree_t* const tree_reorder = cavl2_find_or_insert(&by_reorder,
-                                                                   &reorder_key,
-                                                                   cavl_compare_rx_session_by_reordering_deadline,
-                                                                   &ses->index_reordering_window,
-                                                                   cavl2_trivial_factory);
-    TEST_ASSERT_EQUAL_PTR(&ses->index_reordering_window, tree_reorder);
-    enlist_head(&anim_list, &ses->list_by_animation);
-    rx_session_free(ses, &anim_list, &by_reorder);
+    rx_session_free(ses, &anim_list);
 
-    // Ordered scan cleans late busy slots.
-    rx_session_t ses_busy;
-    mem_zero(sizeof(ses_busy), &ses_busy);
-    ses_busy.port                 = &port;
-    ses_busy.history[0]           = 10;
-    ses_busy.slots[0].state       = rx_slot_busy;
-    ses_busy.slots[0].transfer_id = 10;
-    ses_busy.slots[0].ts_min      = 0;
-    ses_busy.slots[0].ts_max      = 0;
-    udpard_rx_t rx                = { 0 };
-    rx_session_ordered_scan_slots(&ses_busy, &rx, 10, false);
-
-    // Ordered scan resets late busy slots.
-    rx_session_t ses_late;
-    mem_zero(sizeof(ses_late), &ses_late);
-    ses_late.port                 = &port;
-    ses_late.history[0]           = 42;
-    ses_late.slots[0].state       = rx_slot_busy;
-    ses_late.slots[0].transfer_id = 42;
-    rx_session_ordered_scan_slots(&ses_late, &rx, 10, false);
-    TEST_ASSERT_EQUAL(rx_slot_idle, ses_late.slots[0].state);
-
-    // Forced scan ejects a done slot.
-    rx_session_t ses_force;
-    mem_zero(sizeof(ses_force), &ses_force);
-    ses_force.port                 = &port;
-    ses_force.history[0]           = 1;
-    ses_force.slots[0].state       = rx_slot_done;
-    ses_force.slots[0].transfer_id = 100;
-    rx_session_ordered_scan_slots(&ses_force, &rx, 0, true);
-    TEST_ASSERT_EQUAL(rx_slot_idle, ses_force.slots[0].state);
-
-    // Slot acquisition covers stale busy, busy eviction, and done eviction.
+    // Slot acquisition covers stale cleanup and eviction.
+    udpard_rx_t  rx = { 0 };
     rx_session_t ses_slots;
     mem_zero(sizeof(ses_slots), &ses_slots);
     ses_slots.port            = &port;
@@ -2897,59 +2579,35 @@ static void test_rx_additional_coverage(void)
     for (size_t i = 0; i < RX_TRANSFER_HISTORY_COUNT; i++) {
         ses_slots.history[i] = 1;
     }
-    ses_slots.slots[0].state       = rx_slot_busy;
-    ses_slots.slots[0].ts_max      = 0;
-    ses_slots.slots[0].transfer_id = 1;
-    rx_slot_t* slot                = rx_session_get_slot(&ses_slots, &rx, SESSION_LIFETIME + 1, 99);
-    TEST_ASSERT_NOT_NULL(slot);
+    // Allocate one slot to simulate a stale in-progress transfer.
+    ses_slots.slots[0] = rx_slot_new(mem.slot);
+    TEST_ASSERT_NOT_NULL(ses_slots.slots[0]);
+    ses_slots.slots[0]->ts_max      = 0;
+    ses_slots.slots[0]->transfer_id = 1;
+    rx_slot_t** slot_ref            = rx_session_get_slot(&ses_slots, SESSION_LIFETIME + 1, 99);
+    TEST_ASSERT_NOT_NULL(slot_ref);
+    TEST_ASSERT_NOT_NULL(*slot_ref);
+    // Fill all slots to exercise eviction.
     for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
-        ses_slots.slots[i].state  = (i == 0) ? rx_slot_busy : rx_slot_done;
-        ses_slots.slots[i].ts_max = 10 + (udpard_us_t)i;
+        if (ses_slots.slots[i] == NULL) {
+            ses_slots.slots[i] = rx_slot_new(mem.slot);
+        }
+        TEST_ASSERT_NOT_NULL(ses_slots.slots[i]);
+        ses_slots.slots[i]->ts_max = 10 + (udpard_us_t)i;
     }
-    slot = rx_session_get_slot(&ses_slots, &rx, 50, 2);
-    TEST_ASSERT_NOT_NULL(slot);
+    slot_ref = rx_session_get_slot(&ses_slots, 50, 2);
+    TEST_ASSERT_NOT_NULL(slot_ref);
+    TEST_ASSERT_NOT_NULL(*slot_ref);
+    // Release slot allocations from the helper session.
     for (size_t i = 0; i < RX_SLOT_COUNT; i++) {
-        ses_slots.slots[i].state       = rx_slot_done;
-        ses_slots.slots[i].transfer_id = i + 1U;
-        ses_slots.slots[i].ts_min      = (udpard_us_t)i;
-        ses_slots.slots[i].ts_max      = (udpard_us_t)i;
+        if (ses_slots.slots[i] != NULL) {
+            rx_slot_destroy(&ses_slots.slots[i], mem.fragment, mem.slot);
+        }
     }
-    port.vtable = &(udpard_rx_port_vtable_t){ .on_message = stub_on_message, .on_collision = stub_on_collision };
-    slot        = rx_session_get_slot(&ses_slots, &rx, 60, 3);
-    TEST_ASSERT_NOT_NULL(slot);
-
-    // Ordered update retransmits ACK for ejected transfers.
-    rx_session_t ses_ack;
-    mem_zero(sizeof(ses_ack), &ses_ack);
-    ses_ack.port        = &port;
-    ses_ack.remote.uid  = 55;
-    ses_ack.history[0]  = 7;
-    ses_ack.initialized = true;
-    rx_frame_t ack_frame;
-    mem_zero(sizeof(ack_frame), &ack_frame);
-    void* ack_buf = mem_res_alloc(mem.fragment, ACK_SIZE_BYTES);
-    TEST_ASSERT_NOT_NULL(ack_buf);
-    memset(ack_buf, 0, ACK_SIZE_BYTES);
-    ack_frame.base.payload               = (udpard_bytes_t){ .data = ack_buf, .size = ACK_SIZE_BYTES };
-    ack_frame.base.origin                = (udpard_bytes_mut_t){ .data = ack_buf, .size = ACK_SIZE_BYTES };
-    ack_frame.base.offset                = 0;
-    ack_frame.meta.priority              = udpard_prio_nominal;
-    ack_frame.meta.flag_reliable         = true;
-    ack_frame.meta.transfer_payload_size = ACK_SIZE_BYTES;
-    ack_frame.meta.transfer_id           = 7;
-    ack_frame.meta.sender_uid            = ses_ack.remote.uid;
-    ack_frame.meta.topic_hash            = port.topic_hash;
-    rx.errors_ack_tx                     = 0;
-    rx.tx                                = NULL;
-    rx_session_update_ordered(&ses_ack, &rx, 0, &ack_frame, instrumented_allocator_make_deleter(&alloc_frag));
-    TEST_ASSERT_EQUAL_UINT64(1U, rx.errors_ack_tx);
 
     // Stateless accept success, OOM, malformed.
-    g_collision_count = 0;
-    port.vtable       = &(udpard_rx_port_vtable_t){ .on_message = stub_on_message, .on_collision = stub_on_collision };
-    port.extent       = 8;
-    port.mode         = udpard_rx_stateless;
-    port.reordering_window = 0;
+    udpard_rx_port_t port_stateless = { 0 };
+    TEST_ASSERT_TRUE(udpard_rx_port_new_stateless(&port_stateless, 8, mem, &vtb));
     rx_frame_t frame;
     byte_t     payload[4] = { 1, 2, 3, 4 };
     mem_zero(sizeof(frame), &frame);
@@ -2958,19 +2616,23 @@ static void test_rx_additional_coverage(void)
     frame.base.payload               = (udpard_bytes_t){ .data = payload_buf, .size = sizeof(payload) };
     frame.base.origin                = (udpard_bytes_mut_t){ .data = payload_buf, .size = sizeof(payload) };
     frame.base.crc                   = crc_full(frame.base.payload.size, frame.base.payload.data);
+    frame.meta.priority              = udpard_prio_nominal;
     frame.meta.transfer_payload_size = (uint32_t)frame.base.payload.size;
     frame.meta.sender_uid            = 9;
     frame.meta.transfer_id           = 11;
-    rx_port_accept_stateless(&rx, &port, 0, make_ep(1), &frame, instrumented_allocator_make_deleter(&alloc_frag), 0);
+    rx_port_accept_stateless(
+      &rx, &port_stateless, 0, make_ep(1), &frame, instrumented_allocator_make_deleter(&alloc_frag), 0);
     alloc_frag.limit_fragments = 0;
     frame.base.payload.data    = payload;
     frame.base.payload.size    = sizeof(payload);
     frame.base.origin          = (udpard_bytes_mut_t){ 0 };
     frame.base.crc             = crc_full(frame.base.payload.size, frame.base.payload.data);
-    rx_port_accept_stateless(&rx, &port, 0, make_ep(1), &frame, instrumented_allocator_make_deleter(&alloc_frag), 0);
+    rx_port_accept_stateless(
+      &rx, &port_stateless, 0, make_ep(1), &frame, instrumented_allocator_make_deleter(&alloc_frag), 0);
     frame.base.payload.size          = 0;
     frame.meta.transfer_payload_size = 8;
-    rx_port_accept_stateless(&rx, &port, 0, make_ep(1), &frame, instrumented_allocator_make_deleter(&alloc_frag), 0);
+    rx_port_accept_stateless(
+      &rx, &port_stateless, 0, make_ep(1), &frame, instrumented_allocator_make_deleter(&alloc_frag), 0);
     // Stateless accept rejects nonzero offsets.
     alloc_frag.limit_fragments = SIZE_MAX;
     void* payload_buf2         = mem_res_alloc(mem.fragment, sizeof(payload));
@@ -2980,40 +2642,30 @@ static void test_rx_additional_coverage(void)
     frame.base.origin                = (udpard_bytes_mut_t){ .data = payload_buf2, .size = sizeof(payload) };
     frame.base.offset                = 1U;
     frame.meta.transfer_payload_size = (uint32_t)sizeof(payload);
-    rx_port_accept_stateless(&rx, &port, 0, make_ep(1), &frame, instrumented_allocator_make_deleter(&alloc_frag), 0);
-    frame.base.offset                   = 0;
-    udpard_rx_port_t port_stateless_new = { 0 };
-    TEST_ASSERT_TRUE(udpard_rx_port_new(&port_stateless_new, 22, 8, udpard_rx_stateless, 0, mem, port.vtable));
-    TEST_ASSERT_NOT_NULL(port_stateless_new.vtable_private);
-    udpard_rx_port_free(&rx, &port_stateless_new);
-    instrumented_allocator_reset(&alloc_frag);
+    rx_port_accept_stateless(
+      &rx, &port_stateless, 0, make_ep(1), &frame, instrumented_allocator_make_deleter(&alloc_frag), 0);
+    frame.base.offset = 0;
+    udpard_rx_port_free(&rx, &port_stateless);
 
-    // Port push collision and malformed header.
+    // ACK frames are rejected on non-P2P ports.
     udpard_rx_port_t port_normal = { 0 };
-    TEST_ASSERT_TRUE(udpard_rx_port_new(&port_normal, 1, 8, udpard_rx_ordered, 10, mem, port.vtable));
-    udpard_bytes_mut_t bad_payload = { .data = mem_res_alloc(mem.fragment, 4), .size = 4 };
+    TEST_ASSERT_TRUE(udpard_rx_port_new(&port_normal, 8, mem, &vtb));
+    byte_t ack_dgram[HEADER_SIZE_BYTES] = { 0 };
+    meta_t ack_meta                     = { .priority              = udpard_prio_nominal,
+                                            .kind                  = frame_ack,
+                                            .transfer_payload_size = 0,
+                                            .transfer_id           = 1,
+                                            .sender_uid            = 2 };
+    header_serialize(ack_dgram, ack_meta, 0, 0, crc_full(0, NULL));
+    udpard_bytes_mut_t ack_payload = { .data = mem_res_alloc(mem.fragment, sizeof(ack_dgram)),
+                                       .size = sizeof(ack_dgram) };
+    memcpy(ack_payload.data, ack_dgram, sizeof(ack_dgram));
+    const uint64_t malformed_before = rx.errors_frame_malformed;
     TEST_ASSERT(udpard_rx_port_push(
-      &rx, &port_normal, 0, make_ep(2), bad_payload, instrumented_allocator_make_deleter(&alloc_frag), 0));
-    byte_t good_dgram[HEADER_SIZE_BYTES + 1] = { 0 };
-    meta_t meta                              = { .priority              = udpard_prio_nominal,
-                                                 .flag_reliable         = false,
-                                                 .transfer_payload_size = 1,
-                                                 .transfer_id           = 1,
-                                                 .sender_uid            = 2,
-                                                 .topic_hash            = 99 };
-    good_dgram[HEADER_SIZE_BYTES]            = 0xAA;
-    header_serialize(good_dgram, meta, 0, 0, crc_full(1, &good_dgram[HEADER_SIZE_BYTES]));
-    udpard_bytes_mut_t good_payload = { .data = mem_res_alloc(mem.fragment, sizeof(good_dgram)),
-                                        .size = sizeof(good_dgram) };
-    memcpy(good_payload.data, good_dgram, sizeof(good_dgram));
-    TEST_ASSERT(udpard_rx_port_push(
-      &rx, &port_normal, 0, make_ep(3), good_payload, instrumented_allocator_make_deleter(&alloc_frag), 1));
-    TEST_ASSERT_GREATER_THAN_UINT64(0, g_collision_count);
+      &rx, &port_normal, 0, make_ep(3), ack_payload, instrumented_allocator_make_deleter(&alloc_frag), 0));
+    TEST_ASSERT_EQUAL_UINT64(malformed_before + 1U, rx.errors_frame_malformed);
     udpard_rx_port_free(&rx, &port_normal);
-    // Short ACK messages are ignored.
-    rx.errors_ack_tx = 0;
-    rx_accept_ack(&rx, (udpard_bytes_t){ .data = payload, .size = 1U });
-    TEST_ASSERT_EQUAL_UINT64(0, rx.errors_ack_tx);
+
     instrumented_allocator_reset(&alloc_frag);
     instrumented_allocator_reset(&alloc_ses);
 }
@@ -3032,15 +2684,12 @@ int main(void)
 
     RUN_TEST(test_rx_slot_update);
 
-    RUN_TEST(test_rx_transfer_id_forward_distance);
     RUN_TEST(test_rx_ack_enqueued);
 
-    RUN_TEST(test_rx_session_ordered);
     RUN_TEST(test_rx_session_unordered);
     RUN_TEST(test_rx_session_unordered_reject_old);
-    RUN_TEST(test_rx_session_ordered_reject_stale_after_jump);
     RUN_TEST(test_rx_session_unordered_duplicates);
-    RUN_TEST(test_rx_session_ordered_zero_reordering_window);
+    RUN_TEST(test_rx_session_malformed);
 
     RUN_TEST(test_rx_port);
     RUN_TEST(test_rx_port_timeouts);

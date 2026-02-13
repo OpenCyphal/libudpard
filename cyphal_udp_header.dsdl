@@ -1,0 +1,40 @@
+# All Cyphal/UDP traffic is sent to port 9382.
+# The subject multicast group address is composed as 239.0.0.0 (=0xEF000000) + subject_id (23 bits).
+# All frames of a transfer must share the same field values unless otherwise noted.
+# Frames may arrive out-of-order, possibly interleaved with neighboring transfers; implementations must cope.
+
+uint5 version                   #=2 in this version.
+uint3 priority                  # 0=highest, 7=lowest.
+
+uint2 KIND_MSG_BEST_EFFORT = 0  # No ack must be sent.
+uint2 KIND_MSG_RELIABLE    = 1  # Remote must acknowledge reception by sending an ACK frame back.
+uint2 KIND_ACK             = 2  # Sent P2P; the transfer_id is of the acknowledged frame. Payload empty/ignored.
+uint2 kind
+uint6 reserved_incompat         # Discard frame if any incompatibility flags are set that are not understood.
+
+void16                          # Reserved for compatibility flags and fields (transmit zero, ignore on reception).
+
+# Payload reassembly information.
+# We provide both the frame index and the frame payload offset to allow various reassembly strategies depending on the
+# preferences of the implementation. The provided information is sufficient for zero-copy out-of-order reassembly.
+# Offset 4 bytes.
+
+uint24 frame_index              # Zero-based index of the payload fragment carried by this frame.
+void8
+uint32 frame_payload_offset     # The offset of the frame payload relative to the start of the transfer payload.
+uint32 transfer_payload_size    # Total for all frames.
+
+# Transfer identification information.
+# The transfer-ID is a single field that segregates transfers by topic hash and epoch (publisher sequence restarts).
+# Offset 16 bytes.
+
+uint64 transfer_id              # For multi-frame reassembly and dedup. ACK specifies the acked tfer here.
+uint64 sender_uid               # Origin identifier ensures invariance to the source IP address for reassembly.
+
+# Integrity checking information.
+# Offset 32 bytes.
+
+uint32 prefix_crc32c            # crc32c(payload[0:(frame_payload_offset+payload_size)])
+uint32 header_crc32c            # Covers all fields above. Same as the transfer payload CRC.
+
+# End of header at 40 bytes. Payload follows.

@@ -11,11 +11,10 @@ static void test_header_v2(void)
     byte_t buffer[64];
     meta_t meta_in = {
         .priority              = udpard_prio_high,
-        .flag_reliable         = false,
+        .kind                  = frame_msg_best,
         .transfer_payload_size = 0xDEADBEEF,
         .transfer_id           = 0xAABBCCDDEEFF0011ULL,
         .sender_uid            = 0x1122334455667788ULL,
-        .topic_hash            = 0x99AABBCCDDEEFF00ULL,
     };
     // For a first frame (frame_payload_offset=0), frame_index must also be 0
     // Compute the correct prefix_crc from the payload
@@ -42,14 +41,13 @@ static void test_header_v2(void)
     TEST_ASSERT_EQUAL(&buffer[HEADER_SIZE_BYTES], payload_out.data);
 
     TEST_ASSERT_EQUAL_UINT8(meta_in.priority, meta_out.priority);
-    TEST_ASSERT_FALSE(meta_out.flag_reliable);
+    TEST_ASSERT_EQUAL_UINT32(meta_in.kind, meta_out.kind);
     TEST_ASSERT_EQUAL_UINT32(0, frame_index);          // First frame has index 0
     TEST_ASSERT_EQUAL_UINT32(0, frame_payload_offset); // First frame has offset 0
     TEST_ASSERT_EQUAL_UINT32(payload_crc, prefix_crc); // For first frame, prefix_crc equals payload CRC
     TEST_ASSERT_EQUAL_UINT32(meta_in.transfer_payload_size, meta_out.transfer_payload_size);
     TEST_ASSERT_EQUAL_UINT64(meta_in.transfer_id, meta_out.transfer_id);
     TEST_ASSERT_EQUAL_UINT64(meta_in.sender_uid, meta_out.sender_uid);
-    TEST_ASSERT_EQUAL_UINT64(meta_in.topic_hash, meta_out.topic_hash);
 
     TEST_ASSERT_FALSE(header_deserialize((udpard_bytes_mut_t){ .size = 23, .data = buffer },
                                          &meta_out,
@@ -78,11 +76,10 @@ static void test_header_deserialize_edge_cases(void)
     byte_t buffer[64];
     meta_t meta_in = {
         .priority              = udpard_prio_nominal,
-        .flag_reliable         = true,
+        .kind                  = frame_msg_reliable,
         .transfer_payload_size = 1000,
         .transfer_id           = 0x1234567890ABCDEFULL,
         .sender_uid            = 0xFEDCBA9876543210ULL,
-        .topic_hash            = 0xAAAAAAAAAAAAAAAAULL,
     };
 
     meta_t         meta_out;
@@ -150,7 +147,7 @@ static void test_header_deserialize_edge_cases(void)
                                          &prefix_crc,
                                          &payload_out));
 
-    // Test valid case with reliable flag (first frame, so prefix_crc must match payload)
+    // Test valid case with reliable kind (first frame, so prefix_crc must match payload)
     const uint32_t payload_crc_v4 = crc_full(sizeof(buffer) - HEADER_SIZE_BYTES, &buffer[HEADER_SIZE_BYTES]);
     header_serialize(buffer, meta_in, 0, 0, payload_crc_v4);
     TEST_ASSERT(header_deserialize((udpard_bytes_mut_t){ .size = sizeof(buffer), .data = buffer },
@@ -159,12 +156,11 @@ static void test_header_deserialize_edge_cases(void)
                                    &frame_payload_offset,
                                    &prefix_crc,
                                    &payload_out));
-    TEST_ASSERT_TRUE(meta_out.flag_reliable);
+    TEST_ASSERT_EQUAL_UINT32(frame_msg_reliable, meta_out.kind);
     TEST_ASSERT_EQUAL_UINT32(payload_crc_v4, prefix_crc);
 
     // Reject ACK frames with nonzero offset.
-    meta_in.flag_reliable        = false;
-    meta_in.flag_acknowledgement = true;
+    meta_in.kind = frame_ack;
     header_serialize(buffer, meta_in, 1, 1, 0U);
     TEST_ASSERT_FALSE(header_deserialize((udpard_bytes_mut_t){ .size = sizeof(buffer), .data = buffer },
                                          &meta_out,
@@ -173,10 +169,15 @@ static void test_header_deserialize_edge_cases(void)
                                          &prefix_crc,
                                          &payload_out));
 
-    // Reject ACK + reliable flag combination.
-    meta_in.flag_reliable        = true;
-    meta_in.flag_acknowledgement = true;
+    // Reject invalid kind.
+    meta_in.kind = frame_msg_best;
     header_serialize(buffer, meta_in, 0, 0, payload_crc_v4);
+    buffer[1]                     = 0xFFU;
+    const uint32_t new_crc3       = crc_full(HEADER_SIZE_BYTES - CRC_SIZE_BYTES, buffer);
+    buffer[HEADER_SIZE_BYTES - 4] = (byte_t)(new_crc3 & 0xFFU);
+    buffer[HEADER_SIZE_BYTES - 3] = (byte_t)((new_crc3 >> 8U) & 0xFFU);
+    buffer[HEADER_SIZE_BYTES - 2] = (byte_t)((new_crc3 >> 16U) & 0xFFU);
+    buffer[HEADER_SIZE_BYTES - 1] = (byte_t)((new_crc3 >> 24U) & 0xFFU);
     TEST_ASSERT_FALSE(header_deserialize((udpard_bytes_mut_t){ .size = sizeof(buffer), .data = buffer },
                                          &meta_out,
                                          &frame_index,
