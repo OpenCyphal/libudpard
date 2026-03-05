@@ -467,7 +467,7 @@ static void* ptr_unbias(const void* const ptr, const size_t offset)
 #define HEADER_VERSION    2U
 
 /// The transfer-ID is designed to be unique per pending transfer. The uniqueness is achieved by randomization.
-/// For extra entropy, P2P transfers may have their transfer-ID mixed with the destination UID.
+/// For extra entropy, unicast transfers may have their transfer-ID mixed with the destination UID.
 typedef struct
 {
     udpard_prio_t priority;
@@ -892,7 +892,7 @@ static bool tx_push(udpard_tx_t* const             tx,
 
 bool udpard_tx_new(udpard_tx_t* const              self,
                    const uint64_t                  local_uid,
-                   const uint64_t                  p2p_transfer_id_seed,
+                   const uint64_t                  unicast_transfer_id_seed,
                    const size_t                    enqueued_frames_limit,
                    const udpard_tx_mem_resources_t memory,
                    const udpard_tx_vtable_t* const vtable)
@@ -903,7 +903,7 @@ bool udpard_tx_new(udpard_tx_t* const              self,
         mem_zero(sizeof(*self), self);
         self->vtable                = vtable;
         self->local_uid             = local_uid;
-        self->p2p_transfer_id       = p2p_transfer_id_seed + local_uid; // extra entropy
+        self->unicast_transfer_id   = unicast_transfer_id_seed + local_uid; // extra entropy
         self->enqueued_frames_limit = enqueued_frames_limit;
         self->enqueued_frames_count = 0;
         self->memory                = memory;
@@ -952,13 +952,13 @@ bool udpard_tx_push(udpard_tx_t* const             self,
     return ok;
 }
 
-bool udpard_tx_push_p2p(udpard_tx_t* const             self,
-                        const udpard_us_t              now,
-                        const udpard_us_t              deadline,
-                        const udpard_prio_t            priority,
-                        const udpard_udpip_ep_t        endpoints[UDPARD_IFACE_COUNT_MAX],
-                        const udpard_bytes_scattered_t payload,
-                        void* const                    user)
+bool udpard_tx_push_unicast(udpard_tx_t* const             self,
+                            const udpard_us_t              now,
+                            const udpard_us_t              deadline,
+                            const udpard_prio_t            priority,
+                            const udpard_udpip_ep_t        endpoints[UDPARD_IFACE_COUNT_MAX],
+                            const udpard_bytes_scattered_t payload,
+                            void* const                    user)
 {
     bool ok = (self != NULL) && (deadline >= now) && (now >= 0) && (self->local_uid != 0) &&
               (valid_ep_bitmap(endpoints) != 0) && (priority < UDPARD_PRIORITY_COUNT) &&
@@ -967,7 +967,7 @@ bool udpard_tx_push_p2p(udpard_tx_t* const             self,
         const meta_t meta = {
             .priority              = priority,
             .transfer_payload_size = (uint32_t)bytes_scattered_size(payload),
-            .transfer_id           = self->p2p_transfer_id++,
+            .transfer_id           = self->unicast_transfer_id++,
             .sender_uid            = self->local_uid,
         };
         ok = tx_push(self, now, deadline, meta, endpoints, payload, user);
@@ -1465,7 +1465,7 @@ static rx_slot_update_result_t rx_slot_update(rx_slot_t* const       slot,
 typedef struct rx_session_t
 {
     udpard_tree_t   index_remote_uid; ///< Must be the first member.
-    udpard_remote_t remote;           ///< Most recent discovered reverse path for P2P to the sender.
+    udpard_remote_t remote;           ///< Most recent discovered reverse path for unicast to the sender.
 
     /// LRU last animated list for automatic retirement of stale sessions.
     udpard_listed_t list_by_animation;
@@ -1786,7 +1786,7 @@ bool udpard_rx_port_new(udpard_rx_port_t* const              self,
     if (ok) {
         mem_zero(sizeof(*self), self);
         self->extent                      = extent;
-        self->is_p2p                      = false;
+        self->is_unicast                  = false;
         self->memory                      = memory;
         self->index_session_by_remote_uid = NULL;
         self->vtable                      = vtable;
@@ -1808,13 +1808,13 @@ bool udpard_rx_port_new_stateless(udpard_rx_port_t* const              self,
     return false;
 }
 
-bool udpard_rx_port_new_p2p(udpard_rx_port_t* const              self,
-                            const size_t                         extent,
-                            const udpard_rx_mem_resources_t      memory,
-                            const udpard_rx_port_vtable_t* const vtable)
+bool udpard_rx_port_new_unicast(udpard_rx_port_t* const              self,
+                                const size_t                         extent,
+                                const udpard_rx_mem_resources_t      memory,
+                                const udpard_rx_port_vtable_t* const vtable)
 {
     if (udpard_rx_port_new(self, extent, memory, vtable)) {
-        self->is_p2p = true;
+        self->is_unicast = true;
         return true;
     }
     return false;

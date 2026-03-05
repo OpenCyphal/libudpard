@@ -151,7 +151,7 @@ typedef struct udpard_udpip_ep_t
     uint16_t port;
 } udpard_udpip_ep_t;
 
-/// The remote information can be used for sending P2P responses back to the sender, if needed.
+/// The remote information can be used for sending unicast responses back to the sender, if needed.
 /// The RX pipeline will attempt to discover the sender's UDP/IP endpoint per redundant interface
 /// based on the source address of the received UDP datagrams. If the sender's endpoint could not be discovered
 /// for a certain interface (e.g., if the sender is not connected to that interface), the corresponding entry in
@@ -172,7 +172,7 @@ bool udpard_is_valid_endpoint(const udpard_udpip_ep_t ep);
 /// Returns the destination multicast UDP/IP endpoint for the given subject-ID.
 /// The application should use this function when setting up subscription sockets or sending datagrams.
 /// If the subject-ID exceeds UDPARD_IPv4_SUBJECT_ID_MAX, the excessive bits are masked out.
-/// For P2P use the unicast node address directly instead, as provided by the RX pipeline per received transfer.
+/// For unicast use the node address directly instead, as provided by the RX pipeline per received transfer.
 udpard_udpip_ep_t udpard_make_subject_endpoint(const uint32_t subject_id);
 
 /// The memory resource semantics are similar to malloc/free.
@@ -273,7 +273,7 @@ size_t udpard_fragment_gather(const udpard_fragment_t** cursor,
 // =====================================================================================================================
 
 /// Graphically, the transmission pipeline is arranged as shown below.
-/// There is a single pipeline instance that serves all topics, P2P, and all network interfaces.
+/// There is a single pipeline instance that serves all topics, unicast, and all network interfaces.
 ///
 ///                                   +---> REDUNDANT INTERFACE A
 ///                                   |
@@ -343,9 +343,9 @@ struct udpard_tx_t
     /// The globally unique identifier of the local node. Must not change after initialization.
     uint64_t local_uid;
 
-    /// A random-initialized counter for outgoing P2P transfers. Must not be changed by the application.
-    /// The shared counter for all P2P transfers ensures uniqueness of the transfer-ID per remote node.
-    uint64_t p2p_transfer_id;
+    /// A random-initialized counter for outgoing unicast transfers. Must not be changed by the application.
+    /// The shared counter for all unicast transfers ensures uniqueness of the transfer-ID per remote node.
+    uint64_t unicast_transfer_id;
 
     /// The maximum number of Cyphal transfer payload bytes per UDP datagram. See UDPARD_MTU_*.
     /// The Cyphal/UDP header is added to this value to obtain the total UDP datagram payload size.
@@ -396,7 +396,7 @@ struct udpard_tx_t
 /// The local UID should be a globally unique EUI-64 identifier assigned to the local node. It may be a random EUI-64,
 /// which is especially useful for short-lived software nodes.
 ///
-/// The p2p_transfer_id_seed value must be chosen randomly such that it is likely to be distinct per startup.
+/// The unicast_transfer_id_seed value must be chosen randomly such that it is likely to be distinct per startup.
 /// See the transfer-ID counter requirements in udpard_tx_push() for details. Excess most significant bits are ignored.
 ///
 /// The enqueued_frames_limit should be large enough to accommodate the expected burstiness of the application traffic.
@@ -406,7 +406,7 @@ struct udpard_tx_t
 /// True on success, false if any of the arguments are invalid.
 bool udpard_tx_new(udpard_tx_t* const              self,
                    const uint64_t                  local_uid,
-                   const uint64_t                  p2p_transfer_id_seed,
+                   const uint64_t                  unicast_transfer_id_seed,
                    const size_t                    enqueued_frames_limit,
                    const udpard_tx_mem_resources_t memory,
                    const udpard_tx_vtable_t* const vtable);
@@ -445,16 +445,16 @@ bool udpard_tx_push(udpard_tx_t* const             self,
                     const udpard_bytes_scattered_t payload,
                     void* const                    user);
 
-/// This is a specialization of the general push function for P2P transfers.
+/// This is a specialization of the general push function for unicast transfers.
 /// The transfer-ID counter is managed automatically.
 /// Endpoints may be empty (zero) for some ifaces, in which case no transmission over those ifaces will be attempted.
-bool udpard_tx_push_p2p(udpard_tx_t* const             self,
-                        const udpard_us_t              now,
-                        const udpard_us_t              deadline,
-                        const udpard_prio_t            priority,
-                        const udpard_udpip_ep_t        endpoints[UDPARD_IFACE_COUNT_MAX],
-                        const udpard_bytes_scattered_t payload,
-                        void* const                    user);
+bool udpard_tx_push_unicast(udpard_tx_t* const             self,
+                            const udpard_us_t              now,
+                            const udpard_us_t              deadline,
+                            const udpard_prio_t            priority,
+                            const udpard_udpip_ep_t        endpoints[UDPARD_IFACE_COUNT_MAX],
+                            const udpard_bytes_scattered_t payload,
+                            void* const                    user);
 
 /// This should be invoked whenever the socket/NIC of this queue becomes ready to accept new datagrams for transmission.
 /// It is fine to also invoke it periodically unconditionally to drive the transmission process.
@@ -481,7 +481,7 @@ void udpard_tx_free(udpard_tx_t* const self);
 // =================================================    RX PIPELINE    =================================================
 // =====================================================================================================================
 
-/// The reception (RX) pipeline is used to subscribe to subjects and to receive P2P transfers.
+/// The reception (RX) pipeline is used to subscribe to subjects and to receive unicast transfers.
 /// The reception pipeline is highly robust and is able to accept datagrams with arbitrary MTU distinct per interface,
 /// delivered out-of-order (OOO) with duplication and arbitrary interleaving between transfers.
 /// All redundant interfaces are pooled together into a single fragment stream per RX port,
@@ -495,7 +495,7 @@ void udpard_tx_free(udpard_tx_t* const self);
 /// The application needs to listen to all these sockets simultaneously and pass the received UDP datagrams to the
 /// corresponding RX port instance as they arrive.
 ///
-/// P2P transfers are handled in a similar way, except that the UDP/IP endpoints are unicast instead of multicast.
+/// Unicast transfers are handled in a similar way, except that the UDP/IP endpoints are unicast instead of multicast.
 ///
 /// Graphically, the subscription pipeline is arranged per port as shown below.
 /// Remember that the application with N RX ports would have N such pipelines, one per port.
@@ -506,7 +506,7 @@ void udpard_tx_free(udpard_tx_t* const self);
 ///                                              |
 ///                                       ... ---+
 
-/// The application will have a single RX instance to manage all subscriptions and P2P ports.
+/// The application will have a single RX instance to manage all subscriptions and unicast ports.
 typedef struct udpard_rx_t
 {
     udpard_list_t list_session_by_animation; ///< Oldest at the tail.
@@ -533,7 +533,7 @@ typedef struct udpard_rx_port_t     udpard_rx_port_t;
 typedef struct udpard_rx_transfer_t udpard_rx_transfer_t;
 
 /// Provided by the application per port instance to specify the callbacks to be invoked on certain events.
-/// This design allows distinct callbacks per port, which is especially useful for the P2P port.
+/// This design allows distinct callbacks per port, which is especially useful for the unicast port.
 typedef struct udpard_rx_port_vtable_t
 {
     /// A new message is received on a port. The handler takes ownership of the payload; it must free it after use.
@@ -547,9 +547,9 @@ struct udpard_rx_port_t
     /// The total size of the received payload may still exceed this extent setting by some small margin.
     size_t extent;
 
-    /// True if this port is used for P2P transfers, false for subject subscriptions.
-    /// There shall be exactly one P2P port per RX instance.
-    bool is_p2p;
+    /// True if this port is used for unicast transfers, false for subject subscriptions.
+    /// There shall be exactly one unicast port per RX instance.
+    bool is_unicast;
 
     udpard_rx_mem_resources_t memory;
 
@@ -642,7 +642,7 @@ void udpard_rx_poll(udpard_rx_t* const self, const udpard_us_t now);
 ///     2. Per redundant network interface:
 ///        - Create a new RX socket bound to the IP multicast group address and UDP port number returned by
 ///          udpard_make_subject_endpoint() for the desired subject-ID.
-///          For P2P transfer ports use ordinary unicast sockets.
+///          For unicast transfer ports use ordinary unicast sockets.
 ///     3. Read data from the sockets continuously and forward each datagram to udpard_rx_port_push(),
 ///        along with the index of the redundant interface the datagram was received on.
 ///
@@ -669,11 +669,11 @@ bool udpard_rx_port_new_stateless(udpard_rx_port_t* const              self,
                                   const udpard_rx_mem_resources_t      memory,
                                   const udpard_rx_port_vtable_t* const vtable);
 
-/// The P2P counterpart. There must be exactly one P2P port per node.
-bool udpard_rx_port_new_p2p(udpard_rx_port_t* const              self,
-                            const size_t                         extent,
-                            const udpard_rx_mem_resources_t      memory,
-                            const udpard_rx_port_vtable_t* const vtable);
+/// The unicast counterpart. There must be exactly one unicast port per node.
+bool udpard_rx_port_new_unicast(udpard_rx_port_t* const              self,
+                                const size_t                         extent,
+                                const udpard_rx_mem_resources_t      memory,
+                                const udpard_rx_port_vtable_t* const vtable);
 
 /// Returns all memory allocated for the sessions, slots, fragments, etc of the given port.
 /// Does not free the port itself since it is allocated by the application rather than the library,
