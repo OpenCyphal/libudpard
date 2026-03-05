@@ -214,7 +214,7 @@ static void test_rx_malformed_frame(void)
     instrumented_allocator_reset(&alloc_dgram);
 }
 
-static void test_rx_p2p_remote_endpoint_tracking(void)
+static void test_rx_unicast_remote_endpoint_tracking(void)
 {
     // Prepare RX and allocators.
     instrumented_allocator_t alloc_rx_frag = { 0 };
@@ -231,13 +231,13 @@ static void test_rx_p2p_remote_endpoint_tracking(void)
     const udpard_mem_t     dgram_mem = instrumented_allocator_make_resource(&alloc_dgram);
     const udpard_deleter_t dgram_del = instrumented_allocator_make_deleter(&alloc_dgram);
 
-    // Create RX and one P2P port.
+    // Create RX and one unicast port.
     capture_t        cap  = { 0 };
     udpard_rx_t      rx   = { 0 };
     udpard_rx_port_t port = { 0 };
     udpard_rx_new(&rx);
     rx.user = &cap;
-    TEST_ASSERT_TRUE(udpard_rx_port_new_p2p(&port, 1024U, rx_mem, &callbacks));
+    TEST_ASSERT_TRUE(udpard_rx_port_new_unicast(&port, 1024U, rx_mem, &callbacks));
 
     // Push a frame from iface 1 and verify endpoint discovery.
     static const byte_t      payload[]  = { 0x10, 0x20, 0x30 };
@@ -274,6 +274,6 @@ int main(void)
     RUN_TEST(test_rx_single_frame);
     RUN_TEST(test_rx_duplicate_rejected_and_freed);
     RUN_TEST(test_rx_malformed_frame);
-    RUN_TEST(test_rx_p2p_remote_endpoint_tracking);
+    RUN_TEST(test_rx_unicast_remote_endpoint_tracking);
     return UNITY_END();
 }

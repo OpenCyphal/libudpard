@@ -10,7 +10,7 @@
 # The origin UID is a 64-bit globally unique identifier (e.g., EUI-64). It allows nodes to use redundant interfaces
 # without source address ambiguity, and also allows live interface migration.
 #
-# P2P traffic is sent directly to the source endpoint of the destination node, which is discovered dynamically.
+# Unicast traffic is sent directly to the source endpoint of the destination node, which is discovered dynamically.
 # The destination UID is not included explicitly since the IP endpoint is considered adequate for node identification.
 
 uint5 version                   #=2 in this version.

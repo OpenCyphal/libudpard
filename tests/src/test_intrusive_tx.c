@@ -106,9 +106,9 @@ static void test_tx_subject_ejection(void)
     fixture_fini(&fx);
 }
 
-static void test_tx_p2p_endpoints(void)
+static void test_tx_unicast_endpoints(void)
 {
-    // Push one P2P transfer and verify only valid endpoints are used.
+    // Push one unicast transfer and verify only valid endpoints are used.
     tx_fixture_t fx = { 0 };
     fixture_init(&fx, 8U, 128U, true);
     const byte_t                   data[]                      = { 9, 8, 7 };
@@ -116,7 +116,7 @@ static void test_tx_p2p_endpoints(void)
     udpard_udpip_ep_t              eps[UDPARD_IFACE_COUNT_MAX] = { 0 };
     eps[0] = (udpard_udpip_ep_t){ .ip = 0x0A000001U, .port = 8001U };
     eps[2] = (udpard_udpip_ep_t){ .ip = 0x0A000003U, .port = 8003U };
-    TEST_ASSERT_TRUE(udpard_tx_push_p2p(&fx.tx, 0, 10000, udpard_prio_nominal, eps, payload, NULL));
+    TEST_ASSERT_TRUE(udpard_tx_push_unicast(&fx.tx, 0, 10000, udpard_prio_nominal, eps, payload, NULL));
     TEST_ASSERT_EQUAL_UINT16((1U << 0U) | (1U << 2U), udpard_tx_pending_ifaces(&fx.tx));
 
     udpard_tx_poll(&fx.tx, 1, UDPARD_IFACE_BITMAP_ALL);
@@ -191,7 +191,7 @@ int main(void)
 {
     UNITY_BEGIN();
     RUN_TEST(test_tx_subject_ejection);
-    RUN_TEST(test_tx_p2p_endpoints);
+    RUN_TEST(test_tx_unicast_endpoints);
     RUN_TEST(test_tx_expiration);
     RUN_TEST(test_tx_sacrifice_oldest);
     RUN_TEST(test_tx_transfer_id_masking);

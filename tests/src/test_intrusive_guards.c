@@ -113,7 +113,7 @@ static void test_tx_push_guards(void)
     udpard_tx_free(&tx);
 }
 
-static void test_tx_push_p2p_guards(void)
+static void test_tx_push_unicast_guards(void)
 {
     // Prepare a valid TX instance.
     static byte_t                   transfer_pool[1024];
@@ -125,15 +125,15 @@ static void test_tx_push_p2p_guards(void)
     udpard_tx_t tx = { 0 };
     TEST_ASSERT_TRUE(udpard_tx_new(&tx, 2U, 2U, 4U, mem_ok, &tx_vtable));
 
-    // Validate argument checks for P2P push.
+    // Validate argument checks for unicast push.
     const udpard_bytes_scattered_t empty_payload                     = make_scattered("", 0U);
     udpard_udpip_ep_t              endpoints[UDPARD_IFACE_COUNT_MAX] = { 0 };
     endpoints[0] = (udpard_udpip_ep_t){ .ip = 0x0A000001U, .port = 9000U };
-    TEST_ASSERT_FALSE(udpard_tx_push_p2p(NULL, 0, 1, udpard_prio_nominal, endpoints, empty_payload, NULL));
-    TEST_ASSERT_FALSE(udpard_tx_push_p2p(&tx, 2, 1, udpard_prio_nominal, endpoints, empty_payload, NULL));
-    TEST_ASSERT_TRUE(udpard_tx_push_p2p(&tx, 0, 1, udpard_prio_nominal, endpoints, empty_payload, NULL));
+    TEST_ASSERT_FALSE(udpard_tx_push_unicast(NULL, 0, 1, udpard_prio_nominal, endpoints, empty_payload, NULL));
+    TEST_ASSERT_FALSE(udpard_tx_push_unicast(&tx, 2, 1, udpard_prio_nominal, endpoints, empty_payload, NULL));
+    TEST_ASSERT_TRUE(udpard_tx_push_unicast(&tx, 0, 1, udpard_prio_nominal, endpoints, empty_payload, NULL));
     endpoints[0] = (udpard_udpip_ep_t){ .ip = 0U, .port = 0U };
-    TEST_ASSERT_FALSE(udpard_tx_push_p2p(&tx, 0, 1, udpard_prio_nominal, endpoints, empty_payload, NULL));
+    TEST_ASSERT_FALSE(udpard_tx_push_unicast(&tx, 0, 1, udpard_prio_nominal, endpoints, empty_payload, NULL));
     udpard_tx_free(&tx);
 }
 
@@ -189,7 +189,7 @@ int main(void)
     RUN_TEST(test_misc_guards);
     RUN_TEST(test_tx_new_guards);
     RUN_TEST(test_tx_push_guards);
-    RUN_TEST(test_tx_push_p2p_guards);
+    RUN_TEST(test_tx_push_unicast_guards);
     RUN_TEST(test_rx_port_push_guards);
     return UNITY_END();
 }

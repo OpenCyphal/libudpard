@@ -97,7 +97,7 @@ void deliver(const CapturedFrame&    frame,
       rx, port, 5000, src, udpard_bytes_mut_t{ .size = frame.bytes.size(), .data = dgram }, del, frame.iface_index));
 }
 
-void test_p2p_response_roundtrip()
+void test_unicast_response_roundtrip()
 {
     seed_prng();
 
@@ -115,7 +115,7 @@ void test_p2p_response_roundtrip()
     b_tx.mtu[2] = 256U;
     b_tx.user   = &b_frames;
 
-    // Configure A (receiver) RX P2P port.
+    // Configure A (receiver) RX unicast port.
     instrumented_allocator_t a_rx_session{};
     instrumented_allocator_t a_rx_fragment{};
     instrumented_allocator_new(&a_rx_session);
@@ -123,31 +123,32 @@ void test_p2p_response_roundtrip()
     const auto             rx_mem = make_rx_mem(a_rx_session, a_rx_fragment);
     const udpard_deleter_t del    = instrumented_allocator_make_deleter(&a_rx_fragment);
     udpard_rx_t            a_rx{};
-    udpard_rx_port_t       a_p2p{};
+    udpard_rx_port_t       a_unicast{};
     RxState                a_state{};
     udpard_rx_new(&a_rx);
     a_rx.user = &a_state;
-    TEST_ASSERT_TRUE(udpard_rx_port_new_p2p(&a_p2p, 1024U, rx_mem, &rx_vtable));
+    TEST_ASSERT_TRUE(udpard_rx_port_new_unicast(&a_unicast, 1024U, rx_mem, &rx_vtable));
 
-    // Emit one P2P response from B to A on iface 0.
+    // Emit one unicast response from B to A on iface 0.
     const udpard_udpip_ep_t a_endpoint                        = { .ip = 0x0A0000A1U, .port = 9382U };
     udpard_udpip_ep_t       endpoints[UDPARD_IFACE_COUNT_MAX] = {};
     endpoints[0]                                              = a_endpoint;
     const std::vector<uint8_t> response_payload{ 0xDE, 0xAD, 0xBE, 0xEF };
-    TEST_ASSERT_TRUE(udpard_tx_push_p2p(&b_tx,
-                                        1000,
-                                        100000,
-                                        udpard_prio_high,
-                                        endpoints,
-                                        make_scattered(response_payload.data(), response_payload.size()),
-                                        nullptr));
+    TEST_ASSERT_TRUE(udpard_tx_push_unicast(&b_tx,
+                                            1000,
+                                            100000,
+                                            udpard_prio_high,
+                                            endpoints,
+                                            make_scattered(response_payload.data(), response_payload.size()),
+                                            nullptr));
     udpard_tx_poll(&b_tx, 1001, UDPARD_IFACE_BITMAP_ALL);
     TEST_ASSERT_EQUAL_size_t(1, b_frames.size());
     TEST_ASSERT_EQUAL_UINT32(a_endpoint.ip, b_frames[0].destination.ip);
     TEST_ASSERT_EQUAL_UINT16(a_endpoint.port, b_frames[0].destination.port);
 
     // Deliver and verify A has received the response.
-    deliver(b_frames[0], rx_mem.fragment, del, &a_rx, &a_p2p, udpard_udpip_ep_t{ .ip = 0x0A0000B2U, .port = 9382U });
+    deliver(
+      b_frames[0], rx_mem.fragment, del, &a_rx, &a_unicast, udpard_udpip_ep_t{ .ip = 0x0A0000B2U, .port = 9382U });
     udpard_rx_poll(&a_rx, 6000);
     TEST_ASSERT_EQUAL_size_t(1, a_state.count);
     TEST_ASSERT_EQUAL_size_t(response_payload.size(), a_state.payload.size());
@@ -155,7 +156,7 @@ void test_p2p_response_roundtrip()
     TEST_ASSERT_EQUAL_UINT64(0xBBBBBBBBBBBBBBBBULL, a_state.remote.uid);
 
     // Release all resources.
-    udpard_rx_port_free(&a_rx, &a_p2p);
+    udpard_rx_port_free(&a_rx, &a_unicast);
     udpard_tx_free(&b_tx);
     TEST_ASSERT_EQUAL_size_t(0, b_tx_transfer.allocated_fragments);
     TEST_ASSERT_EQUAL_size_t(0, b_tx_payload.allocated_fragments);
@@ -175,6 +176,6 @@ void tearDown() {}
 int main()
 {
     UNITY_BEGIN();
-    RUN_TEST(test_p2p_response_roundtrip);
+    RUN_TEST(test_unicast_response_roundtrip);
     return UNITY_END();
 }
