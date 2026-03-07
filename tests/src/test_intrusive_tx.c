@@ -311,6 +311,115 @@ static void test_tx_validate_and_compare_deadlines(void)
     instrumented_allocator_reset(&payload_alloc);
 }
 
+static void test_tx_transfer_alloc_oom(void)
+{
+    // Fail transfer-object allocation before any payload spool is attempted.
+    tx_fixture_t fx = { 0 };
+    fixture_init(&fx, 4U, 128U, true);
+    fx.transfer_alloc.limit_fragments = 0U;
+    const byte_t data[]               = { 0x5AU };
+    TEST_ASSERT_FALSE(udpard_tx_push(&fx.tx,
+                                     0,
+                                     10000,
+                                     1U,
+                                     udpard_prio_nominal,
+                                     10U,
+                                     udpard_make_subject_endpoint(777U),
+                                     make_scattered(data, sizeof(data)),
+                                     NULL));
+    TEST_ASSERT_EQUAL_UINT64(1U, fx.tx.errors_oom);
+    TEST_ASSERT_EQUAL_size_t(0U, fx.transfer_alloc.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0U, fx.payload_alloc.allocated_fragments);
+    fixture_fini(&fx);
+}
+
+static void test_tx_eject_stall(void)
+{
+    // If ejection makes no progress, pending queues should remain intact.
+    tx_fixture_t fx = { 0 };
+    fixture_init(&fx, 8U, 128U, false);
+    const byte_t data[] = { 0x11U, 0x22U };
+    TEST_ASSERT_TRUE(udpard_tx_push(&fx.tx,
+                                    0,
+                                    100000,
+                                    1U,
+                                    udpard_prio_nominal,
+                                    11U,
+                                    udpard_make_subject_endpoint(778U),
+                                    make_scattered(data, sizeof(data)),
+                                    NULL));
+    TEST_ASSERT_EQUAL_UINT16(1U, udpard_tx_pending_ifaces(&fx.tx));
+    udpard_tx_poll(&fx.tx, 1, UDPARD_IFACE_BITMAP_ALL);
+    TEST_ASSERT_EQUAL_size_t(0U, fx.eject.count);
+    TEST_ASSERT_EQUAL_UINT16(1U, udpard_tx_pending_ifaces(&fx.tx));
+    fixture_fini(&fx);
+}
+
+static void test_tx_sharing_branches(void)
+{
+    // Exercise shareability and prediction logic with mixed allocators.
+    instrumented_allocator_t alloc_a = { 0 };
+    instrumented_allocator_t alloc_b = { 0 };
+    instrumented_allocator_new(&alloc_a);
+    instrumented_allocator_new(&alloc_b);
+    const udpard_mem_t mem_a = instrumented_allocator_make_resource(&alloc_a);
+    const udpard_mem_t mem_b = instrumented_allocator_make_resource(&alloc_b);
+    TEST_ASSERT_TRUE(tx_spool_shareable(128U, mem_a, 128U, mem_a, 120U));
+    TEST_ASSERT_TRUE(tx_spool_shareable(256U, mem_a, 128U, mem_a, 120U));
+    TEST_ASSERT_FALSE(tx_spool_shareable(256U, mem_a, 128U, mem_a, 200U));
+    TEST_ASSERT_FALSE(tx_spool_shareable(128U, mem_a, 128U, mem_b, 120U));
+
+    const size_t       mtu[UDPARD_IFACE_COUNT_MAX]          = { 128U, 128U, 128U };
+    const udpard_mem_t mem[UDPARD_IFACE_COUNT_MAX]          = { mem_a, mem_b, mem_a };
+    const size_t       predicted_nonshareable               = tx_predict_frame_count(mtu, mem, 0x7U, 10U);
+    const udpard_mem_t mem_all_same[UDPARD_IFACE_COUNT_MAX] = { mem_a, mem_a, mem_a };
+    const size_t       predicted_shareable                  = tx_predict_frame_count(mtu, mem_all_same, 0x7U, 10U);
+    TEST_ASSERT_EQUAL_size_t(2U, predicted_nonshareable);
+    TEST_ASSERT_EQUAL_size_t(1U, predicted_shareable);
+
+    // Push over two interfaces backed by different payload memory resources to prevent deduplication.
+    instrumented_allocator_t alloc_transfer = { 0 };
+    instrumented_allocator_t alloc_p0       = { 0 };
+    instrumented_allocator_t alloc_p1       = { 0 };
+    instrumented_allocator_t alloc_p2       = { 0 };
+    instrumented_allocator_new(&alloc_transfer);
+    instrumented_allocator_new(&alloc_p0);
+    instrumented_allocator_new(&alloc_p1);
+    instrumented_allocator_new(&alloc_p2);
+    const udpard_tx_mem_resources_t tx_mem = {
+        .transfer = instrumented_allocator_make_resource(&alloc_transfer),
+        .payload  = { instrumented_allocator_make_resource(&alloc_p0),
+                      instrumented_allocator_make_resource(&alloc_p1),
+                      instrumented_allocator_make_resource(&alloc_p2) },
+    };
+    udpard_tx_t tx = { 0 };
+    TEST_ASSERT_TRUE(udpard_tx_new(&tx, 0x0102030405060708ULL, 42U, 8U, tx_mem, &tx_vtable));
+    tx.user   = NULL;
+    tx.mtu[0] = tx.mtu[1] = tx.mtu[2] = 128U;
+    const byte_t p[]                  = { 0xABU };
+    TEST_ASSERT_TRUE(udpard_tx_push(&tx,
+                                    0,
+                                    10000,
+                                    (1U << 0U) | (1U << 1U),
+                                    udpard_prio_nominal,
+                                    12U,
+                                    udpard_make_subject_endpoint(779U),
+                                    make_scattered(p, 1U),
+                                    NULL));
+    TEST_ASSERT_EQUAL_size_t(2U, tx.enqueued_frames_count);
+    udpard_tx_free(&tx);
+    TEST_ASSERT_EQUAL_size_t(0U, alloc_transfer.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0U, alloc_p0.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0U, alloc_p1.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0U, alloc_p2.allocated_fragments);
+    instrumented_allocator_reset(&alloc_transfer);
+    instrumented_allocator_reset(&alloc_p0);
+    instrumented_allocator_reset(&alloc_p1);
+    instrumented_allocator_reset(&alloc_p2);
+    instrumented_allocator_reset(&alloc_a);
+    instrumented_allocator_reset(&alloc_b);
+}
+
 void setUp(void) {}
 void tearDown(void) {}
 
@@ -326,5 +435,8 @@ int main(void)
     RUN_TEST(test_tx_spool_oom_rollback);
     RUN_TEST(test_tx_refcount_retention);
     RUN_TEST(test_tx_validate_and_compare_deadlines);
+    RUN_TEST(test_tx_transfer_alloc_oom);
+    RUN_TEST(test_tx_eject_stall);
+    RUN_TEST(test_tx_sharing_branches);
     return UNITY_END();
 }

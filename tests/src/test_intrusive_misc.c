@@ -192,6 +192,11 @@ static void test_misc_helpers(void)
     endpoints[1]                                        = (udpard_udpip_ep_t){ .ip = 0x0A000001U, .port = 9999U };
     TEST_ASSERT_TRUE(mem_same(mem_frag, mem_frag));
     TEST_ASSERT_FALSE(mem_same(mem_frag, mem_payload));
+    // Use same context with different vtables to force the second mem_same() predicate.
+    const udpard_mem_vtable_t alt_vtable              = { .base  = { .free = instrumented_allocator_free },
+                                                          .alloc = instrumented_allocator_alloc };
+    const udpard_mem_t        alt_vtable_same_context = { .vtable = &alt_vtable, .context = mem_frag.context };
+    TEST_ASSERT_FALSE(mem_same(mem_frag, alt_vtable_same_context));
     TEST_ASSERT_EQUAL_UINT16(0U, valid_ep_bitmap(NULL));
     TEST_ASSERT_EQUAL_UINT16((uint16_t)(1U << 1U), valid_ep_bitmap(endpoints));
     mem_free_payload(del_payload, (udpard_bytes_mut_t){ 0 });
@@ -224,6 +229,27 @@ static void test_misc_helpers(void)
     TEST_ASSERT_EQUAL_INT32(0, cavl_compare_fragment_end(&key, &probe.index_offset));
     key = 9U;
     TEST_ASSERT_EQUAL_INT32(+1, cavl_compare_fragment_end(&key, &probe.index_offset));
+
+    // Exercise fragment helpers on null inputs.
+    char                     sink        = 0;
+    const udpard_fragment_t* null_cursor = NULL;
+    TEST_ASSERT_NULL(udpard_fragment_seek(NULL, 0U));
+    TEST_ASSERT_NULL(udpard_fragment_next(NULL));
+    TEST_ASSERT_EQUAL_size_t(0U, udpard_fragment_gather(NULL, 0U, 1U, &sink));
+    TEST_ASSERT_EQUAL_size_t(0U, udpard_fragment_gather(&null_cursor, 0U, 1U, &sink));
+
+    // Drive each disjunct in is_listed().
+    udpard_list_t   list   = { .head = NULL, .tail = NULL };
+    udpard_listed_t member = { .next = NULL, .prev = NULL };
+    TEST_ASSERT_FALSE(is_listed(&list, &member));
+    member.next = &member;
+    TEST_ASSERT_TRUE(is_listed(&list, &member));
+    member.next = NULL;
+    member.prev = &member;
+    TEST_ASSERT_TRUE(is_listed(&list, &member));
+    member.prev = NULL;
+    list.head   = &member;
+    TEST_ASSERT_TRUE(is_listed(&list, &member));
 
     // Free a small tree starting from a child to cover descent and ascent.
     udpard_fragment_t* const root = make_fragment(mem_frag, mem_payload, del_payload, 2U, "BB", 2U);

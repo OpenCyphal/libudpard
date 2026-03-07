@@ -481,6 +481,31 @@ static void test_rx_stateless_first_frame_extent_handling(void)
     rx_mem_fixture_fini(&fx);
 }
 
+static void test_rx_stateless_nonzero_offset_rejected(void)
+{
+    // Stateless mode requires the accepted frame to start at offset zero.
+    rx_mem_fixture_t fx = { 0 };
+    rx_mem_fixture_init(&fx);
+    capture_t        cap  = { 0 };
+    udpard_rx_t      rx   = { 0 };
+    udpard_rx_port_t port = { 0 };
+    udpard_rx_new(&rx);
+    rx.user = &cap;
+    TEST_ASSERT_TRUE(udpard_rx_port_new_stateless(&port, 10U, fx.rx_mem, &callbacks));
+
+    static const byte_t      payload[] = { 0xAAU, 0xBBU, 0xCCU, 0xDDU };
+    const udpard_bytes_mut_t dgram =
+      make_datagram(fx.dgram_mem, udpard_prio_nominal, 704U, 0x2222333344445555ULL, 8U, payload, sizeof(payload));
+    TEST_ASSERT_TRUE(udpard_rx_port_push(
+      &rx, &port, 8100, (udpard_udpip_ep_t){ .ip = 0x0A000008U, .port = 7710U }, dgram, fx.dgram_del, 0U));
+    TEST_ASSERT_EQUAL_size_t(0U, cap.count);
+    TEST_ASSERT_EQUAL_UINT64(1U, rx.errors_transfer_malformed);
+    TEST_ASSERT_EQUAL_size_t(0U, fx.alloc_dgram.allocated_fragments);
+
+    udpard_rx_port_free(&rx, &port);
+    rx_mem_fixture_fini(&fx);
+}
+
 static void test_rx_stateless_fragment_oom(void)
 {
     // Fail the stateless fragment allocation and report OOM.
@@ -542,9 +567,10 @@ static void test_rx_session_get_slot_paths(void)
         full.slots[i]->transfer_id = (uint64_t)i;
         full.slots[i]->ts_max      = 100LL + (udpard_us_t)i;
     }
-    TEST_ASSERT_EQUAL_PTR(&full.slots[0], rx_session_get_slot(&full, 10U, 99U));
-    TEST_ASSERT_NOT_NULL(full.slots[0]);
-    TEST_ASSERT_EQUAL(HEAT_DEATH, full.slots[0]->ts_min);
+    full.slots[2]->ts_max = 1U;
+    TEST_ASSERT_EQUAL_PTR(&full.slots[2], rx_session_get_slot(&full, 10U, 99U));
+    TEST_ASSERT_NOT_NULL(full.slots[2]);
+    TEST_ASSERT_EQUAL(HEAT_DEATH, full.slots[2]->ts_min);
     for (size_t i = 0U; i < RX_SLOT_COUNT; i++) {
         rx_slot_destroy(&full.slots[i], port.memory.fragment, port.memory.slot);
     }
@@ -558,6 +584,11 @@ static void test_rx_slot_update_paths(void)
     rx_mem_fixture_t fx = { 0 };
     rx_mem_fixture_init(&fx);
 
+    // Force slot allocation failure.
+    fx.alloc_rx_ses.limit_fragments = 0U;
+    TEST_ASSERT_NULL(rx_slot_new(fx.rx_mem.slot));
+    fx.alloc_rx_ses.limit_fragments = SIZE_MAX;
+
     rx_slot_t* slot = rx_slot_new(fx.rx_mem.slot);
     TEST_ASSERT_NOT_NULL(slot);
     static const byte_t mismatch_payload[] = { 0x01U };
@@ -570,6 +601,22 @@ static void test_rx_slot_update_paths(void)
     uint64_t errors_oom = 0U;
     TEST_ASSERT_EQUAL(rx_slot_failure,
                       rx_slot_update(slot, 0U, fx.rx_mem.fragment, fx.dgram_del, &mismatch, 16U, &errors_oom));
+    TEST_ASSERT_EQUAL_size_t(0U, fx.alloc_dgram.allocated_fragments);
+    rx_slot_destroy(&slot, fx.rx_mem.fragment, fx.rx_mem.slot);
+
+    // Trigger partial-initialization branch and priority-only mismatch.
+    slot = rx_slot_new(fx.rx_mem.slot);
+    TEST_ASSERT_NOT_NULL(slot);
+    static const byte_t prio_payload[] = { 0x7EU };
+    rx_frame_t          prio_mismatch =
+      make_frame(fx.dgram_mem, udpard_prio_nominal, 803U, 4U, 0U, 1U, prio_payload, sizeof(prio_payload), 0U);
+    slot->ts_min     = HEAT_DEATH;
+    slot->ts_max     = 0U;
+    slot->total_size = prio_mismatch.meta.transfer_payload_size;
+    slot->priority   = udpard_prio_high;
+    errors_oom       = 0U;
+    TEST_ASSERT_EQUAL(rx_slot_failure,
+                      rx_slot_update(slot, 0U, fx.rx_mem.fragment, fx.dgram_del, &prio_mismatch, 16U, &errors_oom));
     TEST_ASSERT_EQUAL_size_t(0U, fx.alloc_dgram.allocated_fragments);
     rx_slot_destroy(&slot, fx.rx_mem.fragment, fx.rx_mem.slot);
 
@@ -598,6 +645,94 @@ static void test_rx_slot_update_paths(void)
                       rx_slot_update(slot, 2U, fx.rx_mem.fragment, fx.dgram_del, &crc_bad, 16U, &errors_oom));
     rx_slot_destroy(&slot, fx.rx_mem.fragment, fx.rx_mem.slot);
 
+    rx_mem_fixture_fini(&fx);
+}
+
+static void test_rx_session_update_failure_paths(void)
+{
+    // Cover compare, slot-OOM, and slot-update failure branches.
+    rx_mem_fixture_t fx = { 0 };
+    rx_mem_fixture_init(&fx);
+    udpard_rx_t rx = { 0 };
+    udpard_rx_new(&rx);
+    udpard_rx_port_t port = { 0 };
+    port.memory           = fx.rx_mem;
+    port.extent           = 64U;
+    port.vtable           = &callbacks;
+
+    // Directly cover uid_a < uid_b comparator branch.
+    const uint64_t key = 1U;
+    rx_session_t   cmp = { 0 };
+    cmp.remote.uid     = 2U;
+    TEST_ASSERT_EQUAL_INT32(-1, cavl_compare_rx_session_by_remote_uid(&key, &cmp.index_remote_uid));
+
+    // Force slot allocation failure in rx_session_update().
+    rx_session_t ses_oom            = { 0 };
+    ses_oom.port                    = &port;
+    ses_oom.remote.uid              = 10U;
+    fx.alloc_rx_ses.limit_fragments = 0U;
+    static const byte_t p0[]        = { 0x44U };
+    rx_frame_t          f0 =
+      make_frame(fx.dgram_mem, udpard_prio_nominal, 1000U, ses_oom.remote.uid, 0U, 1U, p0, sizeof(p0), 0U);
+    rx_session_update(
+      &ses_oom, &rx, 100U, (udpard_udpip_ep_t){ .ip = 0x0A000009U, .port = 7720U }, &f0, fx.dgram_del, 0U);
+    TEST_ASSERT_EQUAL_UINT64(1U, rx.errors_oom);
+    TEST_ASSERT_EQUAL_size_t(0U, fx.alloc_dgram.allocated_fragments);
+    fx.alloc_rx_ses.limit_fragments = SIZE_MAX;
+
+    // Force rx_slot_update() failure path in rx_session_update().
+    rx_session_t ses_fail = { 0 };
+    ses_fail.port         = &port;
+    ses_fail.remote.uid   = 11U;
+    ses_fail.slots[0]     = rx_slot_new(port.memory.slot);
+    TEST_ASSERT_NOT_NULL(ses_fail.slots[0]);
+    ses_fail.slots[0]->transfer_id = 2000U;
+    ses_fail.slots[0]->ts_min      = 0U;
+    ses_fail.slots[0]->ts_max      = 0U;
+    ses_fail.slots[0]->total_size  = 2U;
+    ses_fail.slots[0]->priority    = udpard_prio_nominal;
+    static const byte_t p1[]       = { 0x55U };
+    rx_frame_t          f1 =
+      make_frame(fx.dgram_mem, udpard_prio_nominal, 2000U, ses_fail.remote.uid, 0U, 1U, p1, sizeof(p1), 0U);
+    rx_session_update(
+      &ses_fail, &rx, 101U, (udpard_udpip_ep_t){ .ip = 0x0A00000AU, .port = 7730U }, &f1, fx.dgram_del, 0U);
+    TEST_ASSERT_EQUAL_UINT64(1U, rx.errors_transfer_malformed);
+    TEST_ASSERT_NULL(ses_fail.slots[0]);
+    TEST_ASSERT_EQUAL_size_t(0U, fx.alloc_dgram.allocated_fragments);
+
+    rx_mem_fixture_fini(&fx);
+}
+
+static void test_rx_port_free_with_incomplete_transfer(void)
+{
+    // Ensure rx_port_free() destroys sessions containing unfinished slots.
+    rx_mem_fixture_t fx = { 0 };
+    rx_mem_fixture_init(&fx);
+    capture_t        cap  = { 0 };
+    udpard_rx_t      rx   = { 0 };
+    udpard_rx_port_t port = { 0 };
+    udpard_rx_new(&rx);
+    rx.user = &cap;
+    TEST_ASSERT_TRUE(udpard_rx_port_new(&port, 1024U, fx.rx_mem, &callbacks));
+
+    static const byte_t payload[] = {
+        0x10U, 0x11U, 0x12U, 0x13U, 0x14U, 0x15U, 0x16U, 0x17U, 0x18U, 0x19U, 0x1AU, 0x1BU, 0x1CU, 0x1DU, 0x1EU, 0x1FU,
+        0x20U, 0x21U, 0x22U, 0x23U, 0x24U, 0x25U, 0x26U, 0x27U, 0x28U, 0x29U, 0x2AU, 0x2BU, 0x2CU, 0x2DU, 0x2EU, 0x2FU,
+    };
+    const udpard_bytes_mut_t dgram = make_first_frame_datagram(
+      fx.dgram_mem, udpard_prio_nominal, 3000U, 0xDEADBEEF00112233ULL, 64U, payload, sizeof(payload));
+    TEST_ASSERT_TRUE(udpard_rx_port_push(
+      &rx, &port, 9000, (udpard_udpip_ep_t){ .ip = 0x0A00000BU, .port = 7740U }, dgram, fx.dgram_del, 0U));
+    TEST_ASSERT_EQUAL_size_t(0U, cap.count);
+    TEST_ASSERT_NOT_NULL(port.index_session_by_remote_uid);
+
+    udpard_rx_port_free(&rx, &port);
+    TEST_ASSERT_NULL(port.index_session_by_remote_uid);
+    TEST_ASSERT_NULL(rx.list_session_by_animation.head);
+    TEST_ASSERT_NULL(rx.list_session_by_animation.tail);
+    TEST_ASSERT_EQUAL_size_t(0U, fx.alloc_rx_ses.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0U, fx.alloc_rx_frag.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0U, fx.alloc_dgram.allocated_fragments);
     rx_mem_fixture_fini(&fx);
 }
 
@@ -683,9 +818,12 @@ int main(void)
     RUN_TEST(test_rx_stateful_session_oom);
     RUN_TEST(test_rx_idle_session_retirement);
     RUN_TEST(test_rx_stateless_first_frame_extent_handling);
+    RUN_TEST(test_rx_stateless_nonzero_offset_rejected);
     RUN_TEST(test_rx_stateless_fragment_oom);
     RUN_TEST(test_rx_session_get_slot_paths);
     RUN_TEST(test_rx_slot_update_paths);
+    RUN_TEST(test_rx_session_update_failure_paths);
+    RUN_TEST(test_rx_port_free_with_incomplete_transfer);
     RUN_TEST(test_rx_fragment_tree_update_paths);
     return UNITY_END();
 }
