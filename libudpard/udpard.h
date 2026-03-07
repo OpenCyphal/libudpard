@@ -661,9 +661,9 @@ bool udpard_rx_port_new(udpard_rx_port_t* const              self,
                         const udpard_rx_mem_resources_t      memory,
                         const udpard_rx_port_vtable_t* const vtable);
 
-/// A specialization of udpard_rx_port_new() for scalable stateless subscriptions, where only single-frame transfers
-/// are accepted, and no attempt at deduplication is made. This is useful for the heartbeat topic mostly, and perhaps
-/// other topics with a great number of publishers and/or very high traffic.
+/// A specialization of udpard_rx_port_new() for scalable stateless subscriptions, where only the prefix up to the
+/// configured extent is accepted from the first frame, and no attempt at deduplication is made. This is useful for
+/// the heartbeat topic mostly, and perhaps other topics with a great number of publishers and/or very high traffic.
 bool udpard_rx_port_new_stateless(udpard_rx_port_t* const              self,
                                   const size_t                         extent,
                                   const udpard_rx_mem_resources_t      memory,

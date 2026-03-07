@@ -118,7 +118,7 @@ void test_subject_roundtrip()
     TEST_ASSERT_TRUE(udpard_rx_port_new(&port, 1024U, rx_mem, &rx_vtable));
 
     // Send one multi-frame transfer over two interfaces.
-    std::vector<uint8_t> payload(300U);
+    std::vector<uint8_t> payload(600U);
     for (std::size_t i = 0; i < payload.size(); i++) {
         payload[i] = static_cast<uint8_t>(i);
     }
@@ -133,7 +133,7 @@ void test_subject_roundtrip()
                                     make_scattered(payload.data(), payload.size()),
                                     nullptr));
     udpard_tx_poll(&tx, 1001, UDPARD_IFACE_BITMAP_ALL);
-    TEST_ASSERT_TRUE(!frames.empty());
+    TEST_ASSERT_TRUE(frames.size() > 1U);
 
     // Deliver the first interface copy only.
     for (const auto& frame : frames) {

@@ -199,7 +199,7 @@ void test_out_of_order_multiframe_reassembly()
     TEST_ASSERT_TRUE(udpard_rx_port_new(&port, 4096U, rx_mem, &rx_vtable));
 
     // Send a payload that spans multiple frames.
-    std::vector<std::uint8_t> payload(280U);
+    std::vector<std::uint8_t> payload(600U);
     for (std::size_t i = 0; i < payload.size(); i++) {
         payload[i] = static_cast<std::uint8_t>(i ^ 0x5AU);
     }
@@ -214,7 +214,7 @@ void test_out_of_order_multiframe_reassembly()
                                     make_scattered(payload.data(), payload.size()),
                                     nullptr));
     udpard_tx_poll(&tx, 1001, UDPARD_IFACE_BITMAP_ALL);
-    TEST_ASSERT_TRUE(!frames.empty());
+    TEST_ASSERT_TRUE(frames.size() > 1U);
 
     // Deliver frames in reverse order to exercise out-of-order reassembly.
     std::reverse(frames.begin(), frames.end());
@@ -243,6 +243,155 @@ void test_out_of_order_multiframe_reassembly()
     instrumented_allocator_reset(&rx_alloc_fragment);
 }
 
+void test_stateless_single_frame_acceptance()
+{
+    seed_prng();
+
+    // Configure TX and RX.
+    instrumented_allocator_t tx_alloc_transfer{};
+    instrumented_allocator_t tx_alloc_payload{};
+    instrumented_allocator_t rx_alloc_session{};
+    instrumented_allocator_t rx_alloc_fragment{};
+    instrumented_allocator_new(&tx_alloc_transfer);
+    instrumented_allocator_new(&tx_alloc_payload);
+    instrumented_allocator_new(&rx_alloc_session);
+    instrumented_allocator_new(&rx_alloc_fragment);
+
+    udpard_tx_t                tx{};
+    std::vector<CapturedFrame> frames;
+    TEST_ASSERT_TRUE(udpard_tx_new(
+      &tx, 0x1234123412341234ULL, 777U, 8U, make_tx_mem(tx_alloc_transfer, tx_alloc_payload), &tx_vtable));
+    tx.mtu[0] = 128U;
+    tx.mtu[1] = 128U;
+    tx.mtu[2] = 128U;
+    tx.user   = &frames;
+
+    const auto             rx_mem = make_rx_mem(rx_alloc_session, rx_alloc_fragment);
+    const udpard_deleter_t del    = instrumented_allocator_make_deleter(&rx_alloc_fragment);
+    udpard_rx_t            rx{};
+    udpard_rx_port_t       port{};
+    RxState                state{};
+    udpard_rx_new(&rx);
+    rx.user = &state;
+    TEST_ASSERT_TRUE(udpard_rx_port_new_stateless(&port, 1U, rx_mem, &rx_vtable));
+
+    // Send and deliver one single-frame transfer.
+    const std::vector<std::uint8_t> payload{ 0x10U, 0x20U, 0x30U, 0x40U };
+    TEST_ASSERT_TRUE(udpard_tx_push(&tx,
+                                    100U,
+                                    10000U,
+                                    1U,
+                                    udpard_prio_nominal,
+                                    88U,
+                                    udpard_make_subject_endpoint(66U),
+                                    make_scattered(payload.data(), payload.size()),
+                                    nullptr));
+    udpard_tx_poll(&tx, 101U, UDPARD_IFACE_BITMAP_ALL);
+    TEST_ASSERT_EQUAL_size_t(1U, frames.size());
+
+    deliver(frames.front(), rx_mem.fragment, del, &rx, &port, 200U);
+    udpard_rx_poll(&rx, 201U);
+    TEST_ASSERT_EQUAL_size_t(1U, state.count);
+    TEST_ASSERT_EQUAL_size_t(payload.size(), state.payload.size());
+    TEST_ASSERT_EQUAL_MEMORY(payload.data(), state.payload.data(), payload.size());
+    TEST_ASSERT_EQUAL_UINT64(0U, rx.errors_transfer_malformed);
+
+    // Release all resources.
+    udpard_rx_port_free(&rx, &port);
+    udpard_tx_free(&tx);
+    TEST_ASSERT_EQUAL_size_t(0U, tx_alloc_transfer.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0U, tx_alloc_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0U, rx_alloc_session.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0U, rx_alloc_fragment.allocated_fragments);
+    instrumented_allocator_reset(&tx_alloc_transfer);
+    instrumented_allocator_reset(&tx_alloc_payload);
+    instrumented_allocator_reset(&rx_alloc_session);
+    instrumented_allocator_reset(&rx_alloc_fragment);
+}
+
+void test_stateless_multiframe_first_frame_handling(const std::size_t extent, const bool expect_accept)
+{
+    seed_prng();
+
+    // Configure TX and RX.
+    instrumented_allocator_t tx_alloc_transfer{};
+    instrumented_allocator_t tx_alloc_payload{};
+    instrumented_allocator_t rx_alloc_session{};
+    instrumented_allocator_t rx_alloc_fragment{};
+    instrumented_allocator_new(&tx_alloc_transfer);
+    instrumented_allocator_new(&tx_alloc_payload);
+    instrumented_allocator_new(&rx_alloc_session);
+    instrumented_allocator_new(&rx_alloc_fragment);
+
+    udpard_tx_t                tx{};
+    std::vector<CapturedFrame> frames;
+    TEST_ASSERT_TRUE(udpard_tx_new(
+      &tx, 0x5555666677778888ULL, 999U, 16U, make_tx_mem(tx_alloc_transfer, tx_alloc_payload), &tx_vtable));
+    tx.mtu[0] = 128U;
+    tx.mtu[1] = 128U;
+    tx.mtu[2] = 128U;
+    tx.user   = &frames;
+
+    const auto             rx_mem = make_rx_mem(rx_alloc_session, rx_alloc_fragment);
+    const udpard_deleter_t del    = instrumented_allocator_make_deleter(&rx_alloc_fragment);
+    udpard_rx_t            rx{};
+    udpard_rx_port_t       port{};
+    RxState                state{};
+    udpard_rx_new(&rx);
+    rx.user = &state;
+    TEST_ASSERT_TRUE(udpard_rx_port_new_stateless(&port, extent, rx_mem, &rx_vtable));
+
+    // Emit a transfer that is guaranteed to span multiple frames.
+    std::vector<std::uint8_t> payload(600U);
+    for (std::size_t i = 0; i < payload.size(); i++) {
+        payload[i] = static_cast<std::uint8_t>(i);
+    }
+    TEST_ASSERT_TRUE(udpard_tx_push(&tx,
+                                    1000U,
+                                    100000U,
+                                    1U,
+                                    udpard_prio_nominal,
+                                    99U,
+                                    udpard_make_subject_endpoint(67U),
+                                    make_scattered(payload.data(), payload.size()),
+                                    nullptr));
+    udpard_tx_poll(&tx, 1001U, UDPARD_IFACE_BITMAP_ALL);
+    TEST_ASSERT_TRUE(frames.size() > 1U);
+
+    // Deliver only the first frame. Stateless mode may accept it if the configured extent is already covered.
+    deliver(frames.front(), rx_mem.fragment, del, &rx, &port, 2000U);
+    udpard_rx_poll(&rx, 2001U);
+    if (expect_accept) {
+        TEST_ASSERT_EQUAL_size_t(1U, state.count);
+        TEST_ASSERT_EQUAL_UINT64(0U, rx.errors_transfer_malformed);
+        TEST_ASSERT_EQUAL_size_t(payload.size(), state.payload_size_wire);
+        TEST_ASSERT_GREATER_OR_EQUAL_size_t(std::min(extent, payload.size()), state.payload.size());
+        TEST_ASSERT_LESS_THAN_size_t(payload.size(), state.payload.size());
+        TEST_ASSERT_EQUAL_MEMORY(payload.data(), state.payload.data(), state.payload.size());
+    } else {
+        TEST_ASSERT_EQUAL_size_t(0U, state.count);
+        TEST_ASSERT_EQUAL_UINT64(1U, rx.errors_transfer_malformed);
+    }
+
+    // Release all resources.
+    udpard_rx_port_free(&rx, &port);
+    udpard_tx_free(&tx);
+    TEST_ASSERT_EQUAL_size_t(0U, tx_alloc_transfer.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0U, tx_alloc_payload.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0U, rx_alloc_session.allocated_fragments);
+    TEST_ASSERT_EQUAL_size_t(0U, rx_alloc_fragment.allocated_fragments);
+    instrumented_allocator_reset(&tx_alloc_transfer);
+    instrumented_allocator_reset(&tx_alloc_payload);
+    instrumented_allocator_reset(&rx_alloc_session);
+    instrumented_allocator_reset(&rx_alloc_fragment);
+}
+
+void test_stateless_multiframe_truncation_small_extent() { test_stateless_multiframe_first_frame_handling(10U, true); }
+
+void test_stateless_multiframe_truncation_zero_extent() { test_stateless_multiframe_first_frame_handling(0U, true); }
+
+void test_stateless_multiframe_rejection_large_extent() { test_stateless_multiframe_first_frame_handling(600U, false); }
+
 } // namespace
 
 void setUp() {}
@@ -253,5 +402,9 @@ int main()
     UNITY_BEGIN();
     RUN_TEST(test_zero_payload_transfer);
     RUN_TEST(test_out_of_order_multiframe_reassembly);
+    RUN_TEST(test_stateless_single_frame_acceptance);
+    RUN_TEST(test_stateless_multiframe_truncation_small_extent);
+    RUN_TEST(test_stateless_multiframe_truncation_zero_extent);
+    RUN_TEST(test_stateless_multiframe_rejection_large_extent);
     return UNITY_END();
 }
