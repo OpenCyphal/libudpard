@@ -53,7 +53,7 @@ typedef unsigned char byte_t; ///< For compatibility with platforms where byte s
 /// The number of most recent transfers to keep in the history for duplicate rejection.
 /// Should be a power of two to allow replacement of modulo operation with a bitwise AND.
 ///
-/// Implementation node: we used to store bitmap windows instead of a full list of recent transfer-IDs, but they
+/// Implementation note: we used to store bitmap windows instead of a full list of recent transfer-IDs, but they
 /// were found to offer no advantage except in the perfect scenario of non-restarting senders, and an increased
 /// implementation complexity (more branches, more lines of code), so they were replaced with a simple list.
 /// The list works equally well given a non-contiguous transfer-ID stream, unlike the bitmap, thus more robust.
@@ -1584,7 +1584,7 @@ static void rx_session_eject(rx_session_t* const self, udpard_rx_t* const rx, rx
     rx_slot_destroy(slot_ref, self->port->memory.fragment, self->port->memory.slot);
 }
 
-/// Finds an existing in-progress slot with the specified transfer-ID, or allocates a new one. Returns NULL of OOM.
+/// Finds an existing in-progress slot with the specified transfer-ID, or allocates a new one. Returns NULL on OOM.
 /// We return a pointer to pointer to allow the caller to NULL out the slot on destruction.
 static rx_slot_t** rx_session_get_slot(rx_session_t* const self, const udpard_us_t ts, const uint64_t transfer_id)
 {
