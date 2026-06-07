@@ -3,7 +3,6 @@
 ## Standards
 
 The library shall be implemented in ISO C99/C11 following MISRA C:2012.
-The MISRA compliance is enforced by Clang-Tidy and SonarQube.
 Deviations are documented directly in the source code as follows:
 
 ```c
