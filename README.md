@@ -3,8 +3,6 @@
 # Cyphal/UDP transport in C
 
 [![Main Workflow](https://github.com/OpenCyphal-Garage/libudpard/actions/workflows/main.yml/badge.svg)](https://github.com/OpenCyphal-Garage/libudpard/actions/workflows/main.yml)
-[![Reliability Rating](https://sonarcloud.io/api/project_badges/measure?project=libudpard&metric=reliability_rating)](https://sonarcloud.io/summary?id=libudpard)
-[![Coverage](https://sonarcloud.io/api/project_badges/measure?project=libudpard&metric=coverage)](https://sonarcloud.io/summary?id=libudpard)
 [![Forum](https://img.shields.io/discourse/users.svg?server=https%3A%2F%2Fforum.opencyphal.org&color=1700b3)](https://forum.opencyphal.org)
 
 </div>
@@ -66,11 +64,10 @@ standards-compliant C99 compiler is available.
 
 ## Revisions
 
-### v3.0 -- WORK IN PROGRESS
+### v3.0.alpha
 
 The library has been redesigned from scratch to support Cyphal v1.1 and named topics.
-No porting guide is provided since the changes are too significant;
-please refer to the new API docs in `libudpard/udpard.h`.
+The main intended use case is with [**Cy**](https://github.com/OpenCyphal-Garage/cy) rather than standalone.
 
 ### v2.0
 

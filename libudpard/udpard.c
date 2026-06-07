@@ -19,15 +19,15 @@
 /// To disable assertion checks completely, make it expand into `(void)(0)`.
 #ifndef UDPARD_ASSERT
 // Intentional violation of MISRA: assertion macro cannot be replaced with a function definition.
-#define UDPARD_ASSERT(x) assert(x) // NOSONAR
+#define UDPARD_ASSERT(x) assert(x)
 #endif
 
 #if __STDC_VERSION__ < 201112L
 // Intentional violation of MISRA: static assertion macro cannot be replaced with a function definition.
-#define static_assert(x, ...)   typedef char _static_assert_gl(_static_assertion_, __LINE__)[(x) ? 1 : -1] // NOSONAR
-#define _static_assert_gl(a, b) _static_assert_gl_impl(a, b)                                               // NOSONAR
+#define static_assert(x, ...)   typedef char _static_assert_gl(_static_assertion_, __LINE__)[(x) ? 1 : -1]
+#define _static_assert_gl(a, b) _static_assert_gl_impl(a, b)
 // Intentional violation of MISRA: the paste operator ## cannot be avoided in this context.
-#define _static_assert_gl_impl(a, b) a##b // NOSONAR
+#define _static_assert_gl_impl(a, b) a##b
 #endif
 
 #if !defined(__STDC_VERSION__) || (__STDC_VERSION__ < 199901L)
@@ -36,8 +36,8 @@
 
 #define CAVL2_T         udpard_tree_t
 #define CAVL2_RELATION  int32_t
-#define CAVL2_ASSERT(x) UDPARD_ASSERT(x) // NOSONAR
-#include "cavl2.h"                       // NOSONAR
+#define CAVL2_ASSERT(x) UDPARD_ASSERT(x)
+#include "cavl2.h"
 
 typedef unsigned char byte_t; ///< For compatibility with platforms where byte size is not 8 bits.
 
@@ -135,7 +135,7 @@ static const byte_t* deserialize_u32(const byte_t* ptr, uint32_t* const out_valu
     UDPARD_ASSERT((ptr != NULL) && (out_value != NULL));
     *out_value = 0;
     for (size_t i = 0; i < 4U; i++) {
-        *out_value |= (uint32_t)((uint32_t)*ptr << (i * 8U)); // NOLINT(google-readability-casting) NOSONAR
+        *out_value |= (uint32_t)((uint32_t)*ptr << (i * 8U)); // NOLINT(google-readability-casting)
         ptr++;
     }
     return ptr;
