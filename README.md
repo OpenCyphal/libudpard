@@ -66,11 +66,10 @@ standards-compliant C99 compiler is available.
 
 ## Revisions
 
-### v3.0 -- WORK IN PROGRESS
+### v3.0.alpha
 
 The library has been redesigned from scratch to support Cyphal v1.1 and named topics.
-No porting guide is provided since the changes are too significant;
-please refer to the new API docs in `libudpard/udpard.h`.
+The main intended use case is with [**Cy**](https://github.com/OpenCyphal-Garage/cy) rather than standalone.
 
 ### v2.0
 
