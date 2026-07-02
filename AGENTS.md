@@ -2,7 +2,7 @@
 
 Please read `README.md` for general information about LibUDPard, and `CONTRIBUTING.md` for development-related notes.
 
-Keep the code and comments very brief. Be sure every significant code block is preceded with a brief comment.
+DO NOT COMMENT THE CODE unless comments add critical information that is impossible to infer from reading the code (design rationale, gotchas, etc), in which case extremely terse comments are allowed.
 
 If you need a build directory, create one in the project root named with a `build` prefix;
 you can also use existing build directories if you prefer so,

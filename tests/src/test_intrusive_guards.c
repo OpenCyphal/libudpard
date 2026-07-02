@@ -82,10 +82,10 @@ static void test_tx_new_guards(void)
 
     // Validate constructor argument checks.
     udpard_tx_t tx = { 0 };
-    TEST_ASSERT_FALSE(udpard_tx_new(NULL, 1U, 1U, 1U, mem_ok, &tx_vtable));
-    TEST_ASSERT_FALSE(udpard_tx_new(&tx, 0U, 1U, 1U, mem_ok, &tx_vtable));
-    TEST_ASSERT_FALSE(udpard_tx_new(&tx, 1U, 1U, 1U, mem_ok, NULL));
-    TEST_ASSERT_FALSE(udpard_tx_new(&tx, 1U, 1U, 1U, mem_ok, &tx_vtable_null_eject));
+    TEST_ASSERT_FALSE(udpard_tx_new(NULL, 1U, 1U, 1U, UDPARD_IFACE_BITMAP_ALL, mem_ok, &tx_vtable));
+    TEST_ASSERT_FALSE(udpard_tx_new(&tx, 0U, 1U, 1U, UDPARD_IFACE_BITMAP_ALL, mem_ok, &tx_vtable));
+    TEST_ASSERT_FALSE(udpard_tx_new(&tx, 1U, 1U, 1U, UDPARD_IFACE_BITMAP_ALL, mem_ok, NULL));
+    TEST_ASSERT_FALSE(udpard_tx_new(&tx, 1U, 1U, 1U, UDPARD_IFACE_BITMAP_ALL, mem_ok, &tx_vtable_null_eject));
 
     // Reject invalid payload memory resources.
     const udpard_mem_vtable_t       bad_alloc       = { .base = { .free = free_heap }, .alloc = NULL };
@@ -93,9 +93,14 @@ static void test_tx_new_guards(void)
         .transfer = make_mem(transfer_pool),
         .payload  = { make_mem(payload_pool), { .vtable = &bad_alloc, .context = NULL }, make_mem(payload_pool) },
     };
-    TEST_ASSERT_FALSE(udpard_tx_new(&tx, 1U, 1U, 1U, mem_bad_payload, &tx_vtable));
+    TEST_ASSERT_FALSE(udpard_tx_new(&tx, 1U, 1U, 1U, UDPARD_IFACE_BITMAP_ALL, mem_bad_payload, &tx_vtable));
 
-    TEST_ASSERT_TRUE(udpard_tx_new(&tx, 1U, 1U, 4U, mem_ok, &tx_vtable));
+    TEST_ASSERT_FALSE(udpard_tx_new(&tx, 1U, 1U, 4U, (uint16_t)(1U << UDPARD_IFACE_COUNT_MAX), mem_ok, &tx_vtable));
+    TEST_ASSERT_FALSE(udpard_tx_new(&tx, 1U, 1U, 4U, 0xFFFFU, mem_ok, &tx_vtable));
+    TEST_ASSERT_TRUE(udpard_tx_new(&tx, 1U, 1U, 4U, 0U, mem_ok, &tx_vtable));
+    TEST_ASSERT_TRUE(udpard_tx_new(&tx, 1U, 1U, 4U, 1U, mem_ok, &tx_vtable));
+
+    TEST_ASSERT_TRUE(udpard_tx_new(&tx, 1U, 1U, 4U, UDPARD_IFACE_BITMAP_ALL, mem_ok, &tx_vtable));
     udpard_tx_free(&tx);
 }
 
@@ -109,7 +114,7 @@ static void test_tx_push_guards(void)
         .payload  = { make_mem(payload_pool), make_mem(payload_pool), make_mem(payload_pool) },
     };
     udpard_tx_t tx = { 0 };
-    TEST_ASSERT_TRUE(udpard_tx_new(&tx, 1U, 1U, 4U, mem_ok, &tx_vtable));
+    TEST_ASSERT_TRUE(udpard_tx_new(&tx, 1U, 1U, 4U, UDPARD_IFACE_BITMAP_ALL, mem_ok, &tx_vtable));
 
     // Validate argument checks for subject push.
     const udpard_bytes_scattered_t empty_payload       = make_scattered("", 0U);
@@ -148,7 +153,7 @@ static void test_tx_push_unicast_guards(void)
         .payload  = { make_mem(payload_pool), make_mem(payload_pool), make_mem(payload_pool) },
     };
     udpard_tx_t tx = { 0 };
-    TEST_ASSERT_TRUE(udpard_tx_new(&tx, 2U, 2U, 4U, mem_ok, &tx_vtable));
+    TEST_ASSERT_TRUE(udpard_tx_new(&tx, 2U, 2U, 4U, UDPARD_IFACE_BITMAP_ALL, mem_ok, &tx_vtable));
 
     // Validate argument checks for unicast push.
     const udpard_bytes_scattered_t empty_payload       = make_scattered("", 0U);
@@ -180,10 +185,12 @@ static void test_tx_poll_and_free_guards(void)
         .payload  = { make_mem(payload_pool), make_mem(payload_pool), make_mem(payload_pool) },
     };
     udpard_tx_t tx = { 0 };
-    TEST_ASSERT_TRUE(udpard_tx_new(&tx, 10U, 11U, 4U, mem_ok, &tx_vtable));
+    TEST_ASSERT_TRUE(udpard_tx_new(&tx, 10U, 11U, 4U, UDPARD_IFACE_BITMAP_ALL, mem_ok, &tx_vtable));
     udpard_tx_poll(NULL, 0, UDPARD_IFACE_BITMAP_ALL);
     udpard_tx_poll(&tx, -1, UDPARD_IFACE_BITMAP_ALL);
     TEST_ASSERT_EQUAL_UINT16(0U, udpard_tx_pending_ifaces(NULL));
+    udpard_rx_poll(NULL, 0);
+    udpard_rx_poll(NULL, 1000);
     udpard_tx_free(&tx);
     udpard_tx_free(NULL);
 }

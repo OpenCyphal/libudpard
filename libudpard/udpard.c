@@ -481,7 +481,7 @@ static byte_t* header_serialize(byte_t* const  buffer,
                                 const uint32_t frame_payload_offset,
                                 const uint32_t prefix_crc)
 {
-    assert(meta.priority < 8U);
+    UDPARD_ASSERT(meta.priority < 8U);
     byte_t* ptr = buffer;
     *ptr++      = (byte_t)(HEADER_VERSION | (meta.priority << 5U));
     *ptr++      = 0;
@@ -643,13 +643,21 @@ static void tx_transfer_retire(udpard_tx_t* const tx, tx_transfer_t* const tr)
 /// The heuristics are subject to review and improvement.
 static tx_transfer_t* tx_sacrifice(udpard_tx_t* const tx) { return LIST_TAIL(tx->agewise, tx_transfer_t, agewise); }
 
+/// Zero if the count already reached the limit, which can happen if the limit was lowered at runtime.
+static size_t tx_queue_vacancy(const udpard_tx_t* const tx)
+{
+    return (tx->enqueued_frames_count < tx->enqueued_frames_limit)
+             ? (tx->enqueued_frames_limit - tx->enqueued_frames_count)
+             : 0U;
+}
+
 /// True on success, false if not possible to reclaim enough space.
 static bool tx_ensure_queue_space(udpard_tx_t* const tx, const size_t total_frames_needed)
 {
     if (total_frames_needed > tx->enqueued_frames_limit) {
         return false; // not gonna happen
     }
-    while (total_frames_needed > (tx->enqueued_frames_limit - tx->enqueued_frames_count)) {
+    while (total_frames_needed > tx_queue_vacancy(tx)) {
         tx_transfer_t* const tr = tx_sacrifice(tx);
         if (tr == NULL) {
             break; // We may have no transfers anymore but the NIC TX driver could still be holding some frames.
@@ -657,7 +665,7 @@ static bool tx_ensure_queue_space(udpard_tx_t* const tx, const size_t total_fram
         tx_transfer_retire(tx, tr);
         tx->errors_sacrifice++;
     }
-    return total_frames_needed <= (tx->enqueued_frames_limit - tx->enqueued_frames_count);
+    return total_frames_needed <= tx_queue_vacancy(tx);
 }
 
 static int32_t tx_cavl_compare_deadline(const void* const user, const udpard_tree_t* const node)
@@ -792,9 +800,11 @@ static bool tx_push(udpard_tx_t* const             tx,
     UDPARD_ASSERT(now <= deadline);
     UDPARD_ASSERT(tx != NULL);
 
-    const uint16_t iface_bitmap = valid_ep_bitmap(endpoints);
+    uint16_t iface_bitmap = valid_ep_bitmap(endpoints);
     UDPARD_ASSERT((iface_bitmap & UDPARD_IFACE_BITMAP_ALL) != 0);
     UDPARD_ASSERT((iface_bitmap & UDPARD_IFACE_BITMAP_ALL) == iface_bitmap);
+    iface_bitmap &= tx->iface_bitmap;
+    UDPARD_ASSERT(iface_bitmap != 0U);
 
     // Purge expired transfers before accepting a new one to make room in the queue.
     tx_purge_expired_transfers(tx, now);
@@ -894,11 +904,12 @@ bool udpard_tx_new(udpard_tx_t* const              self,
                    const uint64_t                  local_uid,
                    const uint64_t                  unicast_transfer_id_seed,
                    const size_t                    enqueued_frames_limit,
+                   const uint16_t                  iface_bitmap,
                    const udpard_tx_mem_resources_t memory,
                    const udpard_tx_vtable_t* const vtable)
 {
-    const bool ok = (NULL != self) && (local_uid != 0) && tx_validate_mem_resources(memory) && (vtable != NULL) &&
-                    (vtable->eject != NULL);
+    const bool ok = (NULL != self) && (local_uid != 0) && ((iface_bitmap & UDPARD_IFACE_BITMAP_ALL) == iface_bitmap) &&
+                    tx_validate_mem_resources(memory) && (vtable != NULL) && (vtable->eject != NULL);
     if (ok) {
         mem_zero(sizeof(*self), self);
         self->vtable                = vtable;
@@ -906,6 +917,7 @@ bool udpard_tx_new(udpard_tx_t* const              self,
         self->unicast_transfer_id   = unicast_transfer_id_seed + local_uid; // extra entropy
         self->enqueued_frames_limit = enqueued_frames_limit;
         self->enqueued_frames_count = 0;
+        self->iface_bitmap          = iface_bitmap;
         self->memory                = memory;
         self->index_deadline        = NULL;
         self->agewise               = (udpard_list_t){ NULL, NULL };
@@ -931,9 +943,11 @@ bool udpard_tx_push(udpard_tx_t* const             self,
                     const udpard_bytes_scattered_t payload,
                     void* const                    user)
 {
+    // Only the head payload fragment is validated; inner fragments of the caller-owned chain are not checked.
     bool ok = (self != NULL) && (deadline >= now) && (now >= 0) && (self->local_uid != 0) &&
-              ((iface_bitmap & UDPARD_IFACE_BITMAP_ALL) != 0) && (priority < UDPARD_PRIORITY_COUNT) &&
-              udpard_is_valid_endpoint(endpoint) && ((payload.bytes.data != NULL) || (payload.bytes.size == 0U));
+              ((iface_bitmap & UDPARD_IFACE_BITMAP_ALL & self->iface_bitmap) != 0) &&
+              (priority < UDPARD_PRIORITY_COUNT) && udpard_is_valid_endpoint(endpoint) &&
+              ((payload.bytes.data != NULL) || (payload.bytes.size == 0U));
     if (ok) {
         const meta_t meta = {
             .priority              = priority,
@@ -960,8 +974,9 @@ bool udpard_tx_push_unicast(udpard_tx_t* const             self,
                             const udpard_bytes_scattered_t payload,
                             void* const                    user)
 {
+    // Only the head payload fragment is validated; inner fragments of the caller-owned chain are not checked.
     bool ok = (self != NULL) && (deadline >= now) && (now >= 0) && (self->local_uid != 0) &&
-              (valid_ep_bitmap(endpoints) != 0) && (priority < UDPARD_PRIORITY_COUNT) &&
+              ((valid_ep_bitmap(endpoints) & self->iface_bitmap) != 0) && (priority < UDPARD_PRIORITY_COUNT) &&
               ((payload.bytes.data != NULL) || (payload.bytes.size == 0U));
     if (ok) {
         const meta_t meta = {
@@ -1093,6 +1108,8 @@ void udpard_tx_free(udpard_tx_t* const self)
         while (self->agewise.tail != NULL) {
             tx_transfer_retire(self, LIST_TAIL(self->agewise, tx_transfer_t, agewise));
         }
+        // Datagram references retained via udpard_tx_refcount_inc() must be released before discarding.
+        UDPARD_ASSERT(self->enqueued_frames_count == 0U);
     }
 }
 
@@ -1567,7 +1584,6 @@ static void rx_session_eject(rx_session_t* const self, udpard_rx_t* const rx, rx
     self->history_current                = (self->history_current + 1U) % RX_TRANSFER_HISTORY_COUNT;
     self->history[self->history_current] = slot->transfer_id;
 
-    // Construct the arguments and invoke the callback.
     const udpard_rx_transfer_t transfer = {
         .timestamp           = slot->ts_min,
         .priority            = slot->priority,
@@ -1577,11 +1593,13 @@ static void rx_session_eject(rx_session_t* const self, udpard_rx_t* const rx, rx
         .payload_size_wire   = slot->total_size,
         .payload             = (udpard_fragment_t*)slot->fragments,
     };
-    self->port->vtable->on_message(rx, self->port, transfer);
 
-    // Finally, destroy the slot to reclaim memory.
+    // Destroy the slot before the callback: a re-entrant udpard_rx_port_push() could otherwise evict and
+    // free this slot, whose fragments are now owned by the application.
     slot->fragments = NULL; // Transfer ownership to the application.
     rx_slot_destroy(slot_ref, self->port->memory.fragment, self->port->memory.slot);
+
+    self->port->vtable->on_message(rx, self->port, transfer);
 }
 
 /// Finds an existing in-progress slot with the specified transfer-ID, or allocates a new one. Returns NULL on OOM.
@@ -1771,10 +1789,12 @@ void udpard_rx_new(udpard_rx_t* const self)
 
 void udpard_rx_poll(udpard_rx_t* const self, const udpard_us_t now)
 {
-    // Retire at most one per poll to avoid burstiness.
-    rx_session_t* const ses = LIST_TAIL(self->list_session_by_animation, rx_session_t, list_by_animation);
-    if ((ses != NULL) && (now >= (ses->last_animated_ts + SESSION_LIFETIME))) {
-        rx_session_free(ses, &self->list_session_by_animation);
+    if (self != NULL) {
+        // Retire at most one per poll to avoid burstiness.
+        rx_session_t* const ses = LIST_TAIL(self->list_session_by_animation, rx_session_t, list_by_animation);
+        if ((ses != NULL) && (now >= (ses->last_animated_ts + SESSION_LIFETIME))) {
+            rx_session_free(ses, &self->list_session_by_animation);
+        }
     }
 }
 

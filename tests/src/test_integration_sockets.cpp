@@ -114,8 +114,13 @@ void test_reordered_multiframe_delivery()
     instrumented_allocator_new(&tx_alloc_payload);
     udpard_tx_t                tx{};
     std::vector<CapturedFrame> frames;
-    TEST_ASSERT_TRUE(
-      udpard_tx_new(&tx, 0xAAAAAAAABBBBBBBBULL, 1U, 32U, make_tx_mem(tx_alloc_transfer, tx_alloc_payload), &tx_vtable));
+    TEST_ASSERT_TRUE(udpard_tx_new(&tx,
+                                   0xAAAAAAAABBBBBBBBULL,
+                                   1U,
+                                   32U,
+                                   UDPARD_IFACE_BITMAP_ALL,
+                                   make_tx_mem(tx_alloc_transfer, tx_alloc_payload),
+                                   &tx_vtable));
     tx.mtu[0] = 96U;
     tx.mtu[1] = 96U;
     tx.mtu[2] = 96U;
@@ -198,10 +203,20 @@ void test_two_publishers()
     udpard_tx_t                b_tx{};
     std::vector<CapturedFrame> a_frames;
     std::vector<CapturedFrame> b_frames;
-    TEST_ASSERT_TRUE(
-      udpard_tx_new(&a_tx, 0x1111111111111111ULL, 2U, 16U, make_tx_mem(a_tx_transfer, a_tx_payload), &tx_vtable));
-    TEST_ASSERT_TRUE(
-      udpard_tx_new(&b_tx, 0x2222222222222222ULL, 3U, 16U, make_tx_mem(b_tx_transfer, b_tx_payload), &tx_vtable));
+    TEST_ASSERT_TRUE(udpard_tx_new(&a_tx,
+                                   0x1111111111111111ULL,
+                                   2U,
+                                   16U,
+                                   UDPARD_IFACE_BITMAP_ALL,
+                                   make_tx_mem(a_tx_transfer, a_tx_payload),
+                                   &tx_vtable));
+    TEST_ASSERT_TRUE(udpard_tx_new(&b_tx,
+                                   0x2222222222222222ULL,
+                                   3U,
+                                   16U,
+                                   UDPARD_IFACE_BITMAP_ALL,
+                                   make_tx_mem(b_tx_transfer, b_tx_payload),
+                                   &tx_vtable));
     a_tx.mtu[0] = 128U;
     a_tx.mtu[1] = 128U;
     a_tx.mtu[2] = 128U;

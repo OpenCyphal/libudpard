@@ -805,6 +805,84 @@ static void test_rx_fragment_tree_update_paths(void)
     rx_mem_fixture_fini(&fx);
 }
 
+typedef struct
+{
+    udpard_mem_t      dgram_mem;
+    udpard_deleter_t  dgram_del;
+    udpard_udpip_ep_t src;
+    uint64_t          uid;
+    size_t            count;
+    uint64_t          last_tid;
+    bool              reentered;
+} reentr_state_t;
+
+// On first delivery, re-enters udpard_rx_port_push() while all slots are occupied -- the pre-fix UAF trigger.
+static void on_message_reentrant(udpard_rx_t* const         rx,
+                                 udpard_rx_port_t* const    port,
+                                 const udpard_rx_transfer_t transfer)
+{
+    reentr_state_t* const st = (reentr_state_t*)rx->user;
+    TEST_ASSERT_NOT_NULL(st);
+    st->count++;
+    st->last_tid = transfer.transfer_id;
+    if (!st->reentered) {
+        st->reentered            = true;
+        const byte_t       pl[8] = { 1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U };
+        udpard_bytes_mut_t d =
+          make_first_frame_datagram(st->dgram_mem, udpard_prio_nominal, 200U, st->uid, 4000U, pl, sizeof(pl));
+        (void)udpard_rx_port_push(rx, port, 2000, st->src, d, st->dgram_del, 0U);
+    }
+    // Touch the delivered payload; pre-fix it was freed by the re-entrant push.
+    if (transfer.payload_size_stored > 0U) {
+        const udpard_fragment_t* cursor  = transfer.payload;
+        byte_t                   tmp[16] = { 0 };
+        TEST_ASSERT_EQUAL_size_t(transfer.payload_size_stored,
+                                 udpard_fragment_gather(&cursor, 0, transfer.payload_size_stored, tmp));
+    }
+    udpard_fragment_free_all(transfer.payload, udpard_make_deleter(port->memory.fragment));
+}
+static const udpard_rx_port_vtable_t callbacks_reentrant = { .on_message = on_message_reentrant };
+
+static void test_rx_reentrant_push_in_callback(void)
+{
+    // Complete a transfer whose callback re-enters the RX push while all slots are occupied.
+    rx_mem_fixture_t fx;
+    rx_mem_fixture_init(&fx);
+    udpard_rx_t rx;
+    udpard_rx_new(&rx);
+    udpard_rx_port_t port;
+    TEST_ASSERT_TRUE(udpard_rx_port_new(&port, 65536U, fx.rx_mem, &callbacks_reentrant));
+    const udpard_udpip_ep_t src = { .ip = 0x0A000001U, .port = 7000U };
+    const uint64_t          uid = 0xABCDEFU;
+    reentr_state_t          st  = { .dgram_mem = fx.dgram_mem,
+                                    .dgram_del = fx.dgram_del,
+                                    .src       = src,
+                                    .uid       = uid,
+                                    .count     = 0U,
+                                    .last_tid  = 0U,
+                                    .reentered = false };
+    rx.user                     = &st;
+
+    // Fill all but one slot with incomplete transfers at a large timestamp.
+    const byte_t pl[8] = { 9U, 8U, 7U, 6U, 5U, 4U, 3U, 2U };
+    for (uint64_t tid = 1U; tid < RX_SLOT_COUNT; tid++) {
+        udpard_bytes_mut_t d =
+          make_first_frame_datagram(fx.dgram_mem, udpard_prio_nominal, tid, uid, 4000U, pl, sizeof(pl));
+        TEST_ASSERT_TRUE(udpard_rx_port_push(&rx, &port, 1000, src, d, fx.dgram_del, 0U));
+    }
+    // Complete a transfer at the smallest timestamp so it becomes the eviction victim during the re-entry.
+    udpard_bytes_mut_t done =
+      make_first_frame_datagram(fx.dgram_mem, udpard_prio_nominal, 100U, uid, sizeof(pl), pl, sizeof(pl));
+    TEST_ASSERT_TRUE(udpard_rx_port_push(&rx, &port, 1, src, done, fx.dgram_del, 0U));
+
+    TEST_ASSERT_EQUAL_size_t(1U, st.count);
+    TEST_ASSERT_EQUAL_UINT64(100U, st.last_tid);
+    TEST_ASSERT_TRUE(st.reentered);
+
+    udpard_rx_port_free(&rx, &port);
+    rx_mem_fixture_fini(&fx);
+}
+
 void setUp(void) {}
 void tearDown(void) {}
 
@@ -825,5 +903,6 @@ int main(void)
     RUN_TEST(test_rx_session_update_failure_paths);
     RUN_TEST(test_rx_port_free_with_incomplete_transfer);
     RUN_TEST(test_rx_fragment_tree_update_paths);
+    RUN_TEST(test_rx_reentrant_push_in_callback);
     return UNITY_END();
 }
