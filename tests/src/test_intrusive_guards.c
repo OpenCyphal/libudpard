@@ -184,6 +184,8 @@ static void test_tx_poll_and_free_guards(void)
     udpard_tx_poll(NULL, 0, UDPARD_IFACE_BITMAP_ALL);
     udpard_tx_poll(&tx, -1, UDPARD_IFACE_BITMAP_ALL);
     TEST_ASSERT_EQUAL_UINT16(0U, udpard_tx_pending_ifaces(NULL));
+    udpard_rx_poll(NULL, 0);
+    udpard_rx_poll(NULL, 1000);
     udpard_tx_free(&tx);
     udpard_tx_free(NULL);
 }

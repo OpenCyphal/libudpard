@@ -271,11 +271,12 @@ static void test_tx_refcount_retention(void)
     udpard_tx_refcount_inc((udpard_bytes_t){ 0 });
     udpard_tx_refcount_dec((udpard_bytes_t){ 0 });
 
-    udpard_tx_free(&fx.tx);
-    TEST_ASSERT_EQUAL_size_t(0U, fx.transfer_alloc.allocated_fragments);
+    // Release the retained reference before udpard_tx_free(), which asserts none remain.
     TEST_ASSERT_EQUAL_size_t(1U, fx.payload_alloc.allocated_fragments);
     udpard_tx_refcount_dec(fx.eject.held);
     TEST_ASSERT_EQUAL_size_t(0U, fx.payload_alloc.allocated_fragments);
+    udpard_tx_free(&fx.tx);
+    TEST_ASSERT_EQUAL_size_t(0U, fx.transfer_alloc.allocated_fragments);
     instrumented_allocator_reset(&fx.transfer_alloc);
     instrumented_allocator_reset(&fx.payload_alloc);
 }
@@ -420,6 +421,68 @@ static void test_tx_sharing_branches(void)
     instrumented_allocator_reset(&alloc_b);
 }
 
+// Retains a reference to every ejected frame (via tx->user) to keep enqueued_frames_count pinned.
+typedef struct
+{
+    udpard_bytes_t held[16];
+    size_t         count;
+} retain_all_state_t;
+static bool eject_retain_all(udpard_tx_t* const tx, udpard_tx_ejection_t* const ejection)
+{
+    retain_all_state_t* const st = (retain_all_state_t*)tx->user;
+    TEST_ASSERT_NOT_NULL(st);
+    if (st->count < (sizeof(st->held) / sizeof(st->held[0]))) {
+        st->held[st->count++] = ejection->datagram;
+        udpard_tx_refcount_inc(ejection->datagram);
+    }
+    return true;
+}
+static const udpard_tx_vtable_t tx_vtable_retain_all = { .eject = eject_retain_all };
+
+static void test_tx_queue_limit_lowered_below_count(void)
+{
+    // Lowering the frame limit below the in-flight count must not underflow the vacancy check.
+    retain_all_state_t held = { 0 };
+    tx_fixture_t       fx   = { 0 };
+    fixture_init(&fx, 8U, 128U, true);
+    fx.tx.vtable      = &tx_vtable_retain_all;
+    fx.tx.user        = &held;
+    byte_t data[2000] = { 0 };
+    TEST_ASSERT_TRUE(udpard_tx_push(&fx.tx,
+                                    0,
+                                    10000,
+                                    1U,
+                                    udpard_prio_nominal,
+                                    1U,
+                                    udpard_make_subject_endpoint(700U),
+                                    make_scattered(data, sizeof(data)),
+                                    NULL));
+    udpard_tx_poll(&fx.tx, 1, 1U);
+    const size_t pinned = fx.tx.enqueued_frames_count;
+    TEST_ASSERT_TRUE(pinned > 2U);
+    TEST_ASSERT_EQUAL_size_t(pinned, held.count);
+
+    fx.tx.enqueued_frames_limit = 2U;
+    const byte_t small[]        = { 0xABU };
+    TEST_ASSERT_FALSE(udpard_tx_push(&fx.tx,
+                                     2,
+                                     10000,
+                                     1U,
+                                     udpard_prio_nominal,
+                                     2U,
+                                     udpard_make_subject_endpoint(701U),
+                                     make_scattered(small, sizeof(small)),
+                                     NULL));
+    TEST_ASSERT_EQUAL_UINT64(1U, fx.tx.errors_capacity);
+    TEST_ASSERT_EQUAL_size_t(pinned, fx.tx.enqueued_frames_count);
+
+    for (size_t i = 0; i < held.count; i++) {
+        udpard_tx_refcount_dec(held.held[i]);
+    }
+    TEST_ASSERT_EQUAL_size_t(0U, fx.tx.enqueued_frames_count);
+    fixture_fini(&fx);
+}
+
 void setUp(void) {}
 void tearDown(void) {}
 
@@ -438,5 +501,6 @@ int main(void)
     RUN_TEST(test_tx_transfer_alloc_oom);
     RUN_TEST(test_tx_eject_stall);
     RUN_TEST(test_tx_sharing_branches);
+    RUN_TEST(test_tx_queue_limit_lowered_below_count);
     return UNITY_END();
 }

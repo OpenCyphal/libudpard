@@ -309,7 +309,7 @@ typedef struct udpard_tx_ejection_t
 
     /// Specifies when the frame should be considered expired and dropped if not yet transmitted by then;
     /// it is optional to use depending on the implementation of the NIC driver (most traditional drivers ignore it).
-    /// The library guarantees that now >= deadline at the time of ejection -- expired frames are purged beforehand.
+    /// The library guarantees that now <= deadline at the time of ejection -- expired frames are purged beforehand.
     udpard_us_t deadline;
 
     udpard_udpip_ep_t destination;
@@ -475,6 +475,7 @@ void udpard_tx_refcount_inc(const udpard_bytes_t tx_payload_view);
 void udpard_tx_refcount_dec(const udpard_bytes_t tx_payload_view);
 
 /// Drops all enqueued items; afterward, the instance is safe to discard.
+/// Any references retained via udpard_tx_refcount_inc() must be released beforehand.
 void udpard_tx_free(udpard_tx_t* const self);
 
 // =====================================================================================================================
