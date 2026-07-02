@@ -108,8 +108,13 @@ void test_unicast_response_roundtrip()
     instrumented_allocator_new(&b_tx_payload);
     udpard_tx_t                b_tx{};
     std::vector<CapturedFrame> b_frames;
-    TEST_ASSERT_TRUE(
-      udpard_tx_new(&b_tx, 0xBBBBBBBBBBBBBBBBULL, 10U, 16U, make_tx_mem(b_tx_transfer, b_tx_payload), &tx_vtable));
+    TEST_ASSERT_TRUE(udpard_tx_new(&b_tx,
+                                   0xBBBBBBBBBBBBBBBBULL,
+                                   10U,
+                                   16U,
+                                   UDPARD_IFACE_BITMAP_ALL,
+                                   make_tx_mem(b_tx_transfer, b_tx_payload),
+                                   &tx_vtable));
     b_tx.mtu[0] = 256U;
     b_tx.mtu[1] = 256U;
     b_tx.mtu[2] = 256U;

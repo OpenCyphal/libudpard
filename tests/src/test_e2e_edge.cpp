@@ -117,8 +117,13 @@ void test_zero_payload_transfer()
 
     udpard_tx_t                tx{};
     std::vector<CapturedFrame> frames;
-    TEST_ASSERT_TRUE(udpard_tx_new(
-      &tx, 0x1111222233334444ULL, 123U, 8U, make_tx_mem(tx_alloc_transfer, tx_alloc_payload), &tx_vtable));
+    TEST_ASSERT_TRUE(udpard_tx_new(&tx,
+                                   0x1111222233334444ULL,
+                                   123U,
+                                   8U,
+                                   UDPARD_IFACE_BITMAP_ALL,
+                                   make_tx_mem(tx_alloc_transfer, tx_alloc_payload),
+                                   &tx_vtable));
     tx.mtu[0] = 128U;
     tx.mtu[1] = 128U;
     tx.mtu[2] = 128U;
@@ -182,8 +187,13 @@ void test_out_of_order_multiframe_reassembly()
 
     udpard_tx_t                tx{};
     std::vector<CapturedFrame> frames;
-    TEST_ASSERT_TRUE(udpard_tx_new(
-      &tx, 0xAAAABBBBCCCCDDDDULL, 321U, 32U, make_tx_mem(tx_alloc_transfer, tx_alloc_payload), &tx_vtable));
+    TEST_ASSERT_TRUE(udpard_tx_new(&tx,
+                                   0xAAAABBBBCCCCDDDDULL,
+                                   321U,
+                                   32U,
+                                   UDPARD_IFACE_BITMAP_ALL,
+                                   make_tx_mem(tx_alloc_transfer, tx_alloc_payload),
+                                   &tx_vtable));
     tx.mtu[0] = 96U;
     tx.mtu[1] = 96U;
     tx.mtu[2] = 96U;
@@ -259,8 +269,13 @@ void test_stateless_single_frame_acceptance()
 
     udpard_tx_t                tx{};
     std::vector<CapturedFrame> frames;
-    TEST_ASSERT_TRUE(udpard_tx_new(
-      &tx, 0x1234123412341234ULL, 777U, 8U, make_tx_mem(tx_alloc_transfer, tx_alloc_payload), &tx_vtable));
+    TEST_ASSERT_TRUE(udpard_tx_new(&tx,
+                                   0x1234123412341234ULL,
+                                   777U,
+                                   8U,
+                                   UDPARD_IFACE_BITMAP_ALL,
+                                   make_tx_mem(tx_alloc_transfer, tx_alloc_payload),
+                                   &tx_vtable));
     tx.mtu[0] = 128U;
     tx.mtu[1] = 128U;
     tx.mtu[2] = 128U;
@@ -325,8 +340,13 @@ void test_stateless_multiframe_first_frame_handling(const std::size_t extent, co
 
     udpard_tx_t                tx{};
     std::vector<CapturedFrame> frames;
-    TEST_ASSERT_TRUE(udpard_tx_new(
-      &tx, 0x5555666677778888ULL, 999U, 16U, make_tx_mem(tx_alloc_transfer, tx_alloc_payload), &tx_vtable));
+    TEST_ASSERT_TRUE(udpard_tx_new(&tx,
+                                   0x5555666677778888ULL,
+                                   999U,
+                                   16U,
+                                   UDPARD_IFACE_BITMAP_ALL,
+                                   make_tx_mem(tx_alloc_transfer, tx_alloc_payload),
+                                   &tx_vtable));
     tx.mtu[0] = 128U;
     tx.mtu[1] = 128U;
     tx.mtu[2] = 128U;

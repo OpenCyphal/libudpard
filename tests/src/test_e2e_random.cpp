@@ -118,8 +118,13 @@ void test_randomized_deduplication()
     instrumented_allocator_new(&tx_alloc_payload);
     udpard_tx_t                tx{};
     std::vector<CapturedFrame> frames;
-    TEST_ASSERT_TRUE(udpard_tx_new(
-      &tx, 0x1010101010101010ULL, 123U, 512U, make_tx_mem(tx_alloc_transfer, tx_alloc_payload), &tx_vtable));
+    TEST_ASSERT_TRUE(udpard_tx_new(&tx,
+                                   0x1010101010101010ULL,
+                                   123U,
+                                   512U,
+                                   UDPARD_IFACE_BITMAP_ALL,
+                                   make_tx_mem(tx_alloc_transfer, tx_alloc_payload),
+                                   &tx_vtable));
     tx.mtu[0] = 192U;
     tx.mtu[1] = 192U;
     tx.mtu[2] = 192U;

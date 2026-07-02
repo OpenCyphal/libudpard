@@ -92,7 +92,7 @@ void test_subject_roundtrip()
         res = instrumented_allocator_make_resource(&tx_alloc_payload);
     }
     udpard_tx_t tx{};
-    TEST_ASSERT_TRUE(udpard_tx_new(&tx, 0x1010101010101010ULL, 123U, 32U, tx_mem, &tx_vtable));
+    TEST_ASSERT_TRUE(udpard_tx_new(&tx, 0x1010101010101010ULL, 123U, 32U, UDPARD_IFACE_BITMAP_ALL, tx_mem, &tx_vtable));
     tx.mtu[0] = 256U;
     tx.mtu[1] = 256U;
     tx.mtu[2] = 256U;

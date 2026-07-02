@@ -800,9 +800,11 @@ static bool tx_push(udpard_tx_t* const             tx,
     UDPARD_ASSERT(now <= deadline);
     UDPARD_ASSERT(tx != NULL);
 
-    const uint16_t iface_bitmap = valid_ep_bitmap(endpoints);
+    uint16_t iface_bitmap = valid_ep_bitmap(endpoints);
     UDPARD_ASSERT((iface_bitmap & UDPARD_IFACE_BITMAP_ALL) != 0);
     UDPARD_ASSERT((iface_bitmap & UDPARD_IFACE_BITMAP_ALL) == iface_bitmap);
+    iface_bitmap &= tx->iface_bitmap;
+    UDPARD_ASSERT(iface_bitmap != 0U);
 
     // Purge expired transfers before accepting a new one to make room in the queue.
     tx_purge_expired_transfers(tx, now);
@@ -902,11 +904,12 @@ bool udpard_tx_new(udpard_tx_t* const              self,
                    const uint64_t                  local_uid,
                    const uint64_t                  unicast_transfer_id_seed,
                    const size_t                    enqueued_frames_limit,
+                   const uint16_t                  iface_bitmap,
                    const udpard_tx_mem_resources_t memory,
                    const udpard_tx_vtable_t* const vtable)
 {
-    const bool ok = (NULL != self) && (local_uid != 0) && tx_validate_mem_resources(memory) && (vtable != NULL) &&
-                    (vtable->eject != NULL);
+    const bool ok = (NULL != self) && (local_uid != 0) && ((iface_bitmap & UDPARD_IFACE_BITMAP_ALL) == iface_bitmap) &&
+                    tx_validate_mem_resources(memory) && (vtable != NULL) && (vtable->eject != NULL);
     if (ok) {
         mem_zero(sizeof(*self), self);
         self->vtable                = vtable;
@@ -914,6 +917,7 @@ bool udpard_tx_new(udpard_tx_t* const              self,
         self->unicast_transfer_id   = unicast_transfer_id_seed + local_uid; // extra entropy
         self->enqueued_frames_limit = enqueued_frames_limit;
         self->enqueued_frames_count = 0;
+        self->iface_bitmap          = iface_bitmap;
         self->memory                = memory;
         self->index_deadline        = NULL;
         self->agewise               = (udpard_list_t){ NULL, NULL };
@@ -941,8 +945,9 @@ bool udpard_tx_push(udpard_tx_t* const             self,
 {
     // Only the head payload fragment is validated; inner fragments of the caller-owned chain are not checked.
     bool ok = (self != NULL) && (deadline >= now) && (now >= 0) && (self->local_uid != 0) &&
-              ((iface_bitmap & UDPARD_IFACE_BITMAP_ALL) != 0) && (priority < UDPARD_PRIORITY_COUNT) &&
-              udpard_is_valid_endpoint(endpoint) && ((payload.bytes.data != NULL) || (payload.bytes.size == 0U));
+              ((iface_bitmap & UDPARD_IFACE_BITMAP_ALL & self->iface_bitmap) != 0) &&
+              (priority < UDPARD_PRIORITY_COUNT) && udpard_is_valid_endpoint(endpoint) &&
+              ((payload.bytes.data != NULL) || (payload.bytes.size == 0U));
     if (ok) {
         const meta_t meta = {
             .priority              = priority,
@@ -971,7 +976,7 @@ bool udpard_tx_push_unicast(udpard_tx_t* const             self,
 {
     // Only the head payload fragment is validated; inner fragments of the caller-owned chain are not checked.
     bool ok = (self != NULL) && (deadline >= now) && (now >= 0) && (self->local_uid != 0) &&
-              (valid_ep_bitmap(endpoints) != 0) && (priority < UDPARD_PRIORITY_COUNT) &&
+              ((valid_ep_bitmap(endpoints) & self->iface_bitmap) != 0) && (priority < UDPARD_PRIORITY_COUNT) &&
               ((payload.bytes.data != NULL) || (payload.bytes.size == 0U));
     if (ok) {
         const meta_t meta = {

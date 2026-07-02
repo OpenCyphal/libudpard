@@ -300,7 +300,6 @@ typedef struct udpard_tx_mem_resources_t
 } udpard_tx_mem_resources_t;
 
 /// Request to transmit a UDP datagram over the specified interface.
-/// Which interface indexes are available is determined by the user when pushing the transfer.
 /// If Berkeley sockets or similar API is used, the application should use a dedicated socket per redundant interface.
 typedef struct udpard_tx_ejection_t
 {
@@ -356,6 +355,9 @@ struct udpard_tx_t
     /// able to avoid frame duplication and instead reuse each frame across all interfaces.
     size_t mtu[UDPARD_IFACE_COUNT_MAX];
 
+    /// Transfers are enqueued only on this subset of UDPARD_IFACE_BITMAP_ALL (applied at push); zero = listen-only.
+    uint16_t iface_bitmap;
+
     /// Optional user-managed mapping from the Cyphal priority level in [0,7] (highest priority at index 0)
     /// to the IP DSCP field value for use by the application when transmitting. By default, all entries are zero.
     uint_least8_t dscp_value_per_priority[UDPARD_PRIORITY_COUNT];
@@ -403,11 +405,14 @@ struct udpard_tx_t
 /// If the limit is reached, the library will apply heuristics to sacrifice some older transfers to make room
 /// for the new one. This behavior allows the library to make progress even when some interfaces are stalled.
 ///
+/// iface_bitmap must be a subset of UDPARD_IFACE_BITMAP_ALL (zero = listen-only); see its field docs.
+///
 /// True on success, false if any of the arguments are invalid.
 bool udpard_tx_new(udpard_tx_t* const              self,
                    const uint64_t                  local_uid,
                    const uint64_t                  unicast_transfer_id_seed,
                    const size_t                    enqueued_frames_limit,
+                   const uint16_t                  iface_bitmap,
                    const udpard_tx_mem_resources_t memory,
                    const udpard_tx_vtable_t* const vtable);
 
@@ -425,7 +430,7 @@ bool udpard_tx_new(udpard_tx_t* const              self,
 /// Excess most significant bits are ignored.
 /// Related thread on random transfer-ID init: https://forum.opencyphal.org/t/improve-the-transfer-id-timeout/2375
 ///
-/// The enqueued transfer will be emitted over all interfaces specified in the iface_bitmap.
+/// The transfer is emitted over iface_bitmap masked by udpard_tx_t.iface_bitmap; an empty result returns false.
 ///
 /// The user context value is carried through to the callbacks.
 ///
@@ -448,6 +453,7 @@ bool udpard_tx_push(udpard_tx_t* const             self,
 /// This is a specialization of the general push function for unicast transfers.
 /// The transfer-ID counter is managed automatically.
 /// Endpoints may be empty (zero) for some ifaces, in which case no transmission over those ifaces will be attempted.
+/// The iface set is also masked by udpard_tx_t.iface_bitmap.
 bool udpard_tx_push_unicast(udpard_tx_t* const             self,
                             const udpard_us_t              now,
                             const udpard_us_t              deadline,
@@ -466,7 +472,7 @@ void udpard_tx_poll(udpard_tx_t* const self, const udpard_us_t now, const uint16
 
 /// Returns a bitmap of interfaces that have pending transmissions. This is useful for IO multiplexing loops.
 /// Zero indicates that there are no pending transmissions.
-/// Which interfaces are usable is defined by the remote endpoints provided when pushing transfers.
+/// Which interfaces can carry transfers is set at push time by the remote endpoints and udpard_tx_t.iface_bitmap.
 uint16_t udpard_tx_pending_ifaces(const udpard_tx_t* const self);
 
 /// When a datagram is ejected and the application opts to keep it, these functions must be used to manage the
